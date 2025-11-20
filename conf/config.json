@@ -1,0 +1,181 @@
+{
+  "listener": {
+    "socks5_port": 1080,
+    "dns_port": 1053,
+    "ipv6_enabled": false
+  },
+  "socks5": {
+    "nat_mode": "full_core",
+    "enable_auth": false,
+    "auth_users": [
+      {
+        "username": "admin",
+        "enabled": true,
+        "password": "password123"
+      },
+      {
+        "username": "user",
+        "password_hash": "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8",
+        "enabled": true
+      }
+    ],
+    "max_connections": 1000,
+    "cleanup_interval": 300
+  },
+  "web_interface": {
+    "enabled": true,
+    "port": 8080
+  },
+  "chnroutes": {
+    "enable": true,
+    "path": "conf/chnroutes.txt"
+  },
+  "smart_proxy": {
+    "enable": true,
+    "timeout_ms": 3000,
+    "blacklist_expiry_minutes": 360
+  },
+  "memory_pool": {
+    "size_mb": 16,
+    "block_sizes": [
+      "4096",
+      "16384",
+      "65536",
+      "262144"
+    ],
+    "auto_adjust": true
+  },
+  "zero_copy": {
+    "enabled": true,
+    "buffer_size": 65536
+  },
+  "connection_pool": {
+    "enabled": true,
+    "max_per_host": 50,
+    "max_idle": 300,
+    "max_age": 3600
+  },
+  "dns": {
+    "groups": {
+      "cn": [
+        "223.5.5.5:53",
+        "119.29.29.29:53"
+      ],
+      "foreign": [
+        "8.8.8.8:53",
+        "1.1.1.1:53"
+      ]
+    },
+    "cache": {
+      "max_size": 2000,
+      "default_ttl": 300,
+      "cleanup_interval": 60
+    },
+    "hijack_rules": [
+      {
+        "pattern": "api.dev.local",
+        "target": "127.0.0.1",
+        "description": "本地API服务"
+      },
+      {
+        "pattern": "dev.database",
+        "target": "192.168.1.50",
+        "description": "开发数据库服务器"
+      },
+      {
+        "pattern": "*.test.staging",
+        "target": "127.0.0.1",
+        "description": "测试环境本地化"
+      }
+    ]
+  },
+  "connection_settings": {
+    "tcp_timeout_seconds": 60,
+    "udp_timeout_seconds": 300
+  },
+  "node_health_check": {
+    "interval_seconds": 600
+  },
+  "proxy_nodes": [
+    {
+      "identifier": "local_socks5",
+      "protocol": "socks5",
+      "ip": "127.0.0.1",
+      "port": 1081,
+      "weight": 5,
+      "enabled": true,
+      "auth_method": "none"
+    }
+  ],
+  "acl_rules": [
+    {
+      "action": "deny",
+      "pattern": "25",
+      "description": "SMTP端口走代理"
+    },
+    {
+      "action": "allow",
+      "pattern": "*.cn",
+      "description": "中国域名直连"
+    },
+    {
+      "action": "allow",
+      "pattern": "192.168.0.0/16",
+      "description": "IPv4内网直连"
+    },
+    {
+      "action": "allow",
+      "pattern": "127.0.0.1",
+      "description": "IPv4本地回环直连"
+    },
+    {
+      "action": "allow",
+      "pattern": "::1",
+      "description": "IPv6本地回环直连"
+    },
+    {
+      "action": "block",
+      "pattern": "1.2.3.0/24",
+      "description": "恶意IP网段屏蔽"
+    },
+    {
+      "action": "block",
+      "pattern": "2001:db8::/32",
+      "description": "示例IPv6网段屏蔽"
+    }
+  ],
+  "proxy_bind_rules": [
+    {
+      "pattern": "*.google.com",
+      "target": "us_proxy",
+      "description": "谷歌服务强制走美国代理"
+    },
+    {
+      "pattern": "443",
+      "target": "https_proxy",
+      "description": "HTTPS流量绑定到专用代理"
+    },
+    {
+      "pattern": "[8080,8443]",
+      "target": "dev_proxy",
+      "description": "开发端口绑定到开发代理"
+    }
+  ],
+  "dns_hijack_rules": [
+    {
+      "pattern": "api.dev.local",
+      "target": "127.0.0.1",
+      "description": "本地API服务"
+    },
+    {
+      "pattern": "dev.database",
+      "target": "192.168.1.50",
+      "description": "开发数据库服务器"
+    },
+    {
+      "pattern": "*.test.staging",
+      "target": "127.0.0.1",
+      "description": "测试环境本地化"
+    }
+  ]
+}
