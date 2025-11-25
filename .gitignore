@@ -1,0 +1,52 @@
+# Go 编译产物
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+socks5proxy
+smartproxy
+
+# Go 测试和临时文件
+*.test
+*.out
+go.work
+go.work.sum
+
+# IDE 文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志文件
+*.log
+proxy.log
+
+# 临时文件
+tmp/
+temp/
+
+# 配置文件 (如果包含敏感信息)
+config.local.json
+secrets.json
+
+# Python 遗留文件 (清理中)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+
+# 备份文件
+*.bak
+*.backup
+*.old

@@ -5,26 +5,14 @@
     "ipv6_enabled": false
   },
   "socks5": {
-    "nat_mode": "full_core",
-    "enable_auth": false,
-    "auth_users": [
-      {
-        "username": "admin",
-        "enabled": true,
-        "password": "password123"
-      },
-      {
-        "username": "user",
-        "password_hash": "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8",
-        "enabled": true
-      }
-    ],
     "max_connections": 1000,
-    "cleanup_interval": 300
+    "cleanup_interval": 300,
+    "enable_auth": false,
+    "auth_users": []
   },
   "web_interface": {
-    "enabled": true,
-    "port": 8080
+    "port": 8080,
+    "enabled": true
   },
   "chnroutes": {
     "enable": true,
@@ -33,7 +21,20 @@
   "smart_proxy": {
     "enable": true,
     "timeout_ms": 3000,
-    "blacklist_expiry_minutes": 360
+    "blacklist_expiry_minutes": 360,
+    "enhanced_probing": {
+      "enable": true,
+      "sni_extraction": true,
+      "http_validation": true,
+      "max_initial_data_size": 4096,
+      "validation_timeout_ms": 3000,
+      "probing_ports": [
+        80,
+        443,
+        8080,
+        8443
+      ]
+    }
   },
   "memory_pool": {
     "size_mb": 16,
@@ -56,6 +57,11 @@
     "max_age": 3600
   },
   "dns": {
+    "cache": {
+      "max_size": 2000,
+      "default_ttl": 300,
+      "cleanup_interval": 60
+    },
     "groups": {
       "cn": [
         "223.5.5.5:53",
@@ -65,11 +71,6 @@
         "8.8.8.8:53",
         "1.1.1.1:53"
       ]
-    },
-    "cache": {
-      "max_size": 2000,
-      "default_ttl": 300,
-      "cleanup_interval": 60
     },
     "hijack_rules": [
       {
@@ -104,10 +105,33 @@
       "port": 1081,
       "weight": 5,
       "enabled": true,
-      "auth_method": "none"
+      "username": null,
+      "password": null,
+      "auth_method": "none",
+      "timeout": 30
     }
   ],
   "acl_rules": [
+    {
+      "action": "block",
+      "pattern": "*.facebook.com",
+      "description": "阻止访问Facebook域名"
+    },
+    {
+      "action": "deny",
+      "pattern": "*.twitter.com",
+      "description": "拒绝访问Twitter域名(走代理)"
+    },
+    {
+      "action": "block",
+      "pattern": "1.2.3.4",
+      "description": "阻止特定IP地址"
+    },
+    {
+      "action": "deny",
+      "pattern": "5.6.7.8",
+      "description": "拒绝特定IP地址(走代理)"
+    },
     {
       "action": "deny",
       "pattern": "25",

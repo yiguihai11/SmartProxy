@@ -5,7 +5,9 @@
       "Bash(timeout:*)",
       "Bash(pkill:*)",
       "Bash(lsof:*)",
-      "Bash(netstat:*)"
+      "Bash(netstat:*)",
+      "Bash(curl:*)",
+      "Bash(xargs:*)"
     ],
     "deny": [],
     "ask": []
