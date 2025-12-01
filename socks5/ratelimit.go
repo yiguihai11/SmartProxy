@@ -12,9 +12,9 @@ import (
 type RateLimitType string
 
 const (
-	RateLimitTypeGlobal   RateLimitType = "global"   // 全局限速
-	RateLimitTypeUser     RateLimitType = "user"     // 用户限速
-	RateLimitTypeIP       RateLimitType = "ip"       // IP限速
+	RateLimitTypeGlobal     RateLimitType = "global"     // 全局限速
+	RateLimitTypeUser       RateLimitType = "user"       // 用户限速
+	RateLimitTypeIP         RateLimitType = "ip"         // IP限速
 	RateLimitTypeConnection RateLimitType = "connection" // 连接限速
 )
 
@@ -29,32 +29,32 @@ const (
 
 // RateLimitRule 限速规则
 type RateLimitRule struct {
-	ID           string        `json:"id"`
-	Type         RateLimitType `json:"type"`
-	Key          string        `json:"key"`          // 限速键 (用户名/IP等)
-	UploadLimit  int64         `json:"upload_limit"`  // 上传限速 (bps)
-	DownloadLimit int64        `json:"download_limit"` // 下载限速 (bps)
-	BurstSize    int64         `json:"burst_size"`    // 突发大小 (bytes)
-	Enabled      bool          `json:"enabled"`
-	Priority     int           `json:"priority"`      // 优先级
+	ID            string        `json:"id"`
+	Type          RateLimitType `json:"type"`
+	Key           string        `json:"key"`            // 限速键 (用户名/IP等)
+	UploadLimit   int64         `json:"upload_limit"`   // 上传限速 (bps)
+	DownloadLimit int64         `json:"download_limit"` // 下载限速 (bps)
+	BurstSize     int64         `json:"burst_size"`     // 突发大小 (bytes)
+	Enabled       bool          `json:"enabled"`
+	Priority      int           `json:"priority"` // 优先级
 }
 
 // RateLimitStats 限速统计
 type RateLimitStats struct {
-	TotalBytes     int64 `json:"total_bytes"`
-	AllowedBytes   int64 `json:"allowed_bytes"`
-	ThrottledBytes int64 `json:"throttled_bytes"`
-	DroppedBytes   int64 `json:"dropped_bytes"`
+	TotalBytes     int64     `json:"total_bytes"`
+	AllowedBytes   int64     `json:"allowed_bytes"`
+	ThrottledBytes int64     `json:"throttled_bytes"`
+	DroppedBytes   int64     `json:"dropped_bytes"`
 	LastUpdate     time.Time `json:"last_update"`
 }
 
 // TokenBucket 令牌桶实现
 type TokenBucket struct {
-	capacity      int64     // 桶容量 (bytes)
-	tokens        int64     // 当前令牌数
-	refillRate    int64     // 每秒填充速率 (bytes)
-	lastRefill    time.Time // 上次填充时间
-	mu            sync.Mutex
+	capacity   int64     // 桶容量 (bytes)
+	tokens     int64     // 当前令牌数
+	refillRate int64     // 每秒填充速率 (bytes)
+	lastRefill time.Time // 上次填充时间
+	mu         sync.Mutex
 }
 
 // NewTokenBucket 创建新的令牌桶
@@ -133,14 +133,14 @@ func (tb *TokenBucket) Available() int64 {
 
 // RateLimiter 限速器
 type RateLimiter struct {
-	rules         map[string]*RateLimitRule
-	uploadBuckets map[string]*TokenBucket
+	rules           map[string]*RateLimitRule
+	uploadBuckets   map[string]*TokenBucket
 	downloadBuckets map[string]*TokenBucket
-	globalUpload   *TokenBucket
-	globalDownload *TokenBucket
-	stats          map[string]*RateLimitStats
-	mu             sync.RWMutex
-	logger         Logger
+	globalUpload    *TokenBucket
+	globalDownload  *TokenBucket
+	stats           map[string]*RateLimitStats
+	mu              sync.RWMutex
+	logger          Logger
 }
 
 // NewRateLimiter 创建新的限速器

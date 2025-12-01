@@ -15,50 +15,60 @@ import (
 type Action string
 
 const (
-	ActionAllow Action = "allow"  // 直连
-	ActionDeny  Action = "deny"   // 走代理
-	ActionBlock Action = "block"  // 屏蔽
+	ActionAllow Action = "allow" // 直连
+	ActionDeny  Action = "deny"  // 走代理
+	ActionProxy Action = "proxy" // 通过指定代理节点
+	ActionBlock Action = "block" // 屏蔽
 )
 
 type Rule struct {
-	Action      Action `json:"action"`
-	Pattern     string `json:"pattern"`
-	Description string `json:"description"`
+	Action      Action   `json:"action"`
+	Patterns    []string `json:"patterns"`   // 域名/IP/端口模式列表
+	ProxyNode   string   `json:"proxy_node"` // 指定代理节点名称
+	Description string   `json:"description"`
 }
 
 type RouterConfig struct {
-	ACLRules       []Rule `json:"acl_rules"`
-	ChinaRoutes    bool   `json:"china_routes_enable"`
-	ChinaRoutesPath string `json:"china_routes_path"`
+	ACLRules        []Rule      `json:"rules"`
+	ChinaRoutes     bool        `json:"chnroutes.enable"`
+	ChinaRoutesPath string      `json:"chnroutes.path"`
+	ProxyNodes      []ProxyNode `json:"proxy_nodes"`
 }
 
 type Router struct {
-	rules         []Rule
-	domains       map[string]bool
-	domainTrie    *RadixTrie        // 域名基数树（将域名转换为IP后存储）
-	ipTrie        *RadixTrie        // IP基数树
-	chinaTrie     *RadixTrie        // 中国IP基数树
-	configPath    string
-	supportsIPv4  bool
-	supportsIPv6  bool
+	rules []Rule
+	// 域名规则哈希表 - 高速查找
+	exactDomains    map[string]*Rule // 精确域名匹配: "example.com" -> Rule
+	wildcardDomains map[string]*Rule // 通配符域名匹配: "*.google.com" -> Rule
+	suffixDomains   map[string]*Rule // 后缀域名匹配: ".cn" -> Rule
+	// IP规则基数树 - IP网段匹配仍然有用
+	ipTrie       *RadixTrie // IP基数树
+	chinaTrie    *RadixTrie // 中国IP基数树
+	configPath   string
+	supportsIPv4 bool
+	supportsIPv6 bool
+	proxyNodes   *ProxyNodes // 代理节点管理器
 }
 
 type MatchResult struct {
-	Action Action
-	Match  bool
-	Rule   *Rule
+	Action    Action
+	Match     bool
+	Rule      *Rule
+	ProxyNode string // 匹配到的代理节点名称
 }
 
 func NewRouter(configPath string) (*Router, error) {
 	r := &Router{
-		rules:        make([]Rule, 0),
-		domains:      make(map[string]bool),
-		domainTrie:   NewRadixTrie(),
-		ipTrie:       NewRadixTrie(),
-		chinaTrie:    NewRadixTrie(),
-		configPath:   configPath,
-		supportsIPv4: true,
-		supportsIPv6: true,
+		rules:           make([]Rule, 0),
+		exactDomains:    make(map[string]*Rule),
+		wildcardDomains: make(map[string]*Rule),
+		suffixDomains:   make(map[string]*Rule),
+		ipTrie:          NewRadixTrie(),
+		chinaTrie:       NewRadixTrie(),
+		configPath:      configPath,
+		supportsIPv4:    true,
+		supportsIPv6:    true,
+		proxyNodes:      NewProxyNodes(nil),
 	}
 
 	if err := r.loadConfig(); err != nil {
@@ -80,8 +90,15 @@ func (r *Router) loadConfig() error {
 		return fmt.Errorf("failed to parse config: %v", err)
 	}
 
-	// 加载 ACL 规则
+	// 加载路由规则
 	r.rules = config.ACLRules
+
+	// 加载代理节点
+	if len(config.ProxyNodes) > 0 {
+		if err := r.proxyNodes.LoadFromJSON(data); err != nil {
+			return fmt.Errorf("failed to load proxy nodes: %v", err)
+		}
+	}
 
 	// 加载中国 IP 段
 	if config.ChinaRoutes && config.ChinaRoutesPath != "" {
@@ -114,7 +131,7 @@ func (r *Router) loadChinaRoutes(filePath string) error {
 		// 直接将IP网段添加到中国IP基数树中，标记为allow
 		if err := r.chinaTrie.Insert(line, ActionAllow, &Rule{
 			Action:      ActionAllow,
-			Pattern:     line,
+			Patterns:    []string{line},
 			Description: "中国IP段直连",
 		}); err != nil {
 			// 如果解析失败，跳过这一行
@@ -160,84 +177,256 @@ func (r *Router) precompileRules() {
 	for i := range r.rules {
 		rule := &r.rules[i]
 
-		// 判断是否为域名
-		if strings.Contains(rule.Pattern, "*") || strings.Contains(rule.Pattern, ".") {
-			if !strings.Contains(rule.Pattern, "/") && net.ParseIP(rule.Pattern) == nil {
-				r.domains[rule.Pattern] = true
+		for _, pattern := range rule.Patterns {
+			if pattern == "" {
+				continue
 			}
-		}
 
-		// 将IP规则添加到基数树中
-		if strings.Contains(rule.Pattern, "/") || net.ParseIP(rule.Pattern) != nil {
-			r.ipTrie.Insert(rule.Pattern, rule.Action, rule)
+			// IP规则 - 使用基数树（网段匹配仍然需要）
+			if strings.Contains(pattern, "/") || net.ParseIP(pattern) != nil {
+				r.ipTrie.Insert(pattern, rule.Action, rule)
+				continue
+			}
+
+			// 端口规则 - 跳过（在matchRule中处理）
+			if _, err := strconv.Atoi(pattern); err == nil {
+				continue
+			}
+
+			// 域名规则 - 使用哈希表分类
+			r.classifyDomainRule(pattern, rule)
 		}
 	}
 }
 
+// classifyDomainRule 将域名规则分类到不同的哈希表中
+func (r *Router) classifyDomainRule(pattern string, rule *Rule) {
+	lowerPattern := strings.ToLower(pattern)
+
+	// 通配符域名: *.example.com
+	if strings.HasPrefix(lowerPattern, "*.") {
+		domain := lowerPattern[2:] // 移除 "*."
+		r.wildcardDomains[domain] = rule
+		return
+	}
+
+	// 后缀域名: .cn, .com.cn
+	if strings.HasPrefix(lowerPattern, ".") {
+		r.suffixDomains[lowerPattern] = rule
+		return
+	}
+
+	// 精确域名: example.com
+	if strings.Contains(lowerPattern, ".") {
+		r.exactDomains[lowerPattern] = rule
+		return
+	}
+}
+
+// ShouldBlockPreDetection SNI/Host检测前判断是否应该屏蔽（仅IP、CIDR、端口规则）
+func (r *Router) ShouldBlockPreDetection(host string, port int) bool {
+	result := r.matchRulePreDetection(host, port)
+	return result.Action == ActionBlock
+}
+
+// ShouldDirectPreDetection SNI/Host检测前判断是否应该直连（仅IP、CIDR、端口规则）
+func (r *Router) ShouldDirectPreDetection(host string, port int) bool {
+	result := r.matchRulePreDetection(host, port)
+	return result.Action == ActionAllow
+}
+
+// ShouldProxyPreDetection SNI/Host检测前判断是否应该走代理（仅IP、CIDR、端口规则）
+func (r *Router) ShouldProxyPreDetection(host string, port int) bool {
+	result := r.matchRulePreDetection(host, port)
+	return result.Action == ActionDeny
+}
+
+// ShouldBlockPostDetection SNI/Host检测后判断是否应该屏蔽（仅域名规则）
+func (r *Router) ShouldBlockPostDetection(hostname string) bool {
+	result := r.matchRulePostDetection(hostname)
+	return result.Action == ActionBlock
+}
+
+// ShouldDirectPostDetection SNI/Host检测后判断是否应该直连（仅域名规则）
+func (r *Router) ShouldDirectPostDetection(hostname string) bool {
+	result := r.matchRulePostDetection(hostname)
+	return result.Action == ActionAllow
+}
+
+// ShouldProxyPostDetection SNI/Host检测后判断是否应该走代理（仅域名规则）
+func (r *Router) ShouldProxyPostDetection(hostname string) bool {
+	result := r.matchRulePostDetection(hostname)
+	return result.Action == ActionDeny
+}
+
+// ShouldBlock 兼容性函数，保持原有接口
 func (r *Router) ShouldBlock(host string, port int) bool {
 	result := r.matchRule(host, port)
 	return result.Action == ActionBlock
 }
 
+// ShouldDirect 兼容性函数，保持原有接口
 func (r *Router) ShouldDirect(host string, port int) bool {
 	result := r.matchRule(host, port)
 	return result.Action == ActionAllow || (result.Action == "" && r.isChinaIP(host))
 }
 
+// ShouldProxy 兼容性函数，保持原有接口
 func (r *Router) ShouldProxy(host string, port int) bool {
 	result := r.matchRule(host, port)
 	return result.Action == ActionDeny
 }
 
-func (r *Router) matchRule(host string, port int) MatchResult {
-	// 1. 首先检查IP基数树（最高优先级）
+// matchRulePreDetection SNI/Host检测前的路由匹配（仅IP、CIDR、端口规则）
+func (r *Router) matchRulePreDetection(host string, port int) MatchResult {
+	// 1. IP地址匹配 - 使用基数树（最高优先级）
 	if ip := net.ParseIP(host); ip != nil {
 		if action, found, rule := r.ipTrie.Lookup(host); found {
 			return MatchResult{
-				Action: action,
-				Match:  true,
-				Rule:   rule,
+				Action:    action,
+				Match:     true,
+				Rule:      rule,
+				ProxyNode: rule.ProxyNode,
 			}
 		}
-	}
 
-	// 2. 检查中国IP基数树
-	if ip := net.ParseIP(host); ip != nil {
+		// 2. 中国IP检查
 		if action, found, rule := r.chinaTrie.Lookup(host); found {
 			return MatchResult{
-				Action: action,
-				Match:  true,
-				Rule:   rule,
+				Action:    action,
+				Match:     true,
+				Rule:      rule,
+				ProxyNode: rule.ProxyNode,
 			}
 		}
 	}
 
-	// 3. 检查域名规则
+	// 3. 端口规则匹配 - 快速检查
 	portStr := strconv.Itoa(port)
 	for i := range r.rules {
 		rule := &r.rules[i]
-
-		if r.matchPattern(rule.Pattern, host, portStr) {
+		if r.matchPortRule(rule, portStr) {
 			return MatchResult{
-				Action: rule.Action,
-				Match:  true,
-				Rule:   rule,
+				Action:    rule.Action,
+				Match:     true,
+				Rule:      rule,
+				ProxyNode: rule.ProxyNode,
 			}
 		}
 	}
 
-	// 4. 默认行为：如果没有匹配规则，检查是否为中国域名
-	if r.isChinaDomain(host) {
+	// 检测前阶段：如果没有匹配到IP/CIDR/端口规则，返回未匹配状态
+	// 不进行域名匹配，等待SNI/Host检测
+	return MatchResult{
+		Action: ActionDeny,
+		Match:  false,
+	}
+}
+
+// matchRulePostDetection SNI/Host检测后的路由匹配（仅域名规则）
+func (r *Router) matchRulePostDetection(hostname string) MatchResult {
+	if hostname == "" {
+		// 如果没有检测到hostname，使用默认行为
+		return MatchResult{
+			Action: ActionDeny,
+			Match:  false,
+		}
+	}
+
+	// 1. 域名匹配 - 使用哈希表 O(1) 查找
+	if rule := r.matchDomainRule(hostname); rule != nil {
+		return MatchResult{
+			Action:    rule.Action,
+			Match:     true,
+			Rule:      rule,
+			ProxyNode: rule.ProxyNode,
+		}
+	}
+
+	// 2. 中国域名检查
+	if r.isChinaDomain(hostname) {
 		return MatchResult{
 			Action: ActionAllow,
 			Match:  true,
 		}
 	}
 
+	// 3. 默认行为（无域名规则匹配）
 	return MatchResult{
 		Action: ActionDeny,
 		Match:  false,
 	}
+}
+
+// matchRule 兼容性函数，保持原有接口
+func (r *Router) matchRule(host string, port int) MatchResult {
+	// 先尝试检测前匹配
+	if result := r.matchRulePreDetection(host, port); result.Match {
+		return result
+	}
+
+	// 如果检测前没有匹配，尝试域名匹配
+	if result := r.matchRulePostDetection(host); result.Match {
+		return result
+	}
+
+	// 默认行为
+	return MatchResult{
+		Action: ActionDeny,
+		Match:  false,
+	}
+}
+
+// matchPortRule 检查端口规则
+func (r *Router) matchPortRule(rule *Rule, portStr string) bool {
+	for _, pattern := range rule.Patterns {
+		if pattern == portStr {
+			return true
+		}
+	}
+	return false
+}
+
+// matchDomainRule 使用哈希表进行高速域名匹配
+func (r *Router) matchDomainRule(host string) *Rule {
+	if host == "" {
+		return nil
+	}
+
+	lowerHost := strings.ToLower(host)
+
+	// 1. 精确匹配 - O(1)
+	if rule, exists := r.exactDomains[lowerHost]; exists {
+		return rule
+	}
+
+	// 2. 通配符匹配 - O(n) 其中n是域名层级数
+	hostParts := strings.Split(lowerHost, ".")
+	for i := 1; i < len(hostParts); i++ {
+		domain := strings.Join(hostParts[i:], ".")
+		if rule, exists := r.wildcardDomains[domain]; exists {
+			return rule
+		}
+	}
+
+	// 3. 后缀匹配 - O(m) 其中m是后缀规则数
+	for suffix, rule := range r.suffixDomains {
+		if strings.HasSuffix(lowerHost, suffix) {
+			return rule
+		}
+	}
+
+	return nil
+}
+
+// GetProxyNode 根据名称获取代理节点
+func (r *Router) GetProxyNode(name string) *ProxyNode {
+	return r.proxyNodes.GetProxyNodeForRoute(name)
+}
+
+// GetDefaultProxy 获取默认代理节点
+func (r *Router) GetDefaultProxy() *ProxyNode {
+	return r.proxyNodes.GetDefaultProxy()
 }
 
 func (r *Router) matchPattern(pattern, host, port string) bool {
@@ -294,15 +483,6 @@ func (r *Router) isChinaDomain(host string) bool {
 		}
 	}
 
-	// 检查知名中国域名
-	chinaDomains := []string{"baidu.com", "qq.com", "taobao.com", "tmall.com", "jd.com", "163.com", "sina.com.cn", "sohu.com", "weibo.com", "alipay.com", "360.cn", "pinduoduo.com"}
-
-	for _, domain := range chinaDomains {
-		if strings.HasSuffix(strings.ToLower(host), domain) {
-			return true
-		}
-	}
-
 	return false
 }
 
@@ -314,7 +494,7 @@ func (r *Router) GetStats() map[string]int {
 		stats[string(rule.Action)]++
 	}
 
-	// 获取基数树统计信息
+	// 获取基数树统计信息（IP规则仍然使用基数树）
 	ipv4Nodes, ipv6Nodes, ipRules := r.ipTrie.GetStats()
 	chinaIPv4Nodes, chinaIPv6Nodes, chinaRules := r.chinaTrie.GetStats()
 
@@ -325,6 +505,11 @@ func (r *Router) GetStats() map[string]int {
 	stats["china_ipv4_nodes"] = chinaIPv4Nodes
 	stats["china_ipv6_nodes"] = chinaIPv6Nodes
 	stats["china_rules"] = chinaRules
+
+	// 哈希表统计 - 新的域名匹配系统
+	stats["exact_domains"] = len(r.exactDomains)
+	stats["wildcard_domains"] = len(r.wildcardDomains)
+	stats["suffix_domains"] = len(r.suffixDomains)
 	stats["supports_ipv4"] = 1
 	stats["supports_ipv6"] = 1
 

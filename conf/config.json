@@ -1,33 +1,174 @@
 {
   "listener": {
     "socks5_port": 1080,
+    "web_port": 8080,
     "dns_port": 1053,
-    "ipv6_enabled": false
+    "ipv6_enabled": true
   },
   "socks5": {
     "max_connections": 1000,
     "cleanup_interval": 300,
-    "enable_auth": false,
-    "auth_users": []
+    "enable_auth": true,
+    "auth_users": [
+      {
+        "username": "admin",
+        "password": "admin123",
+        "enabled": true,
+        "user_groups": [
+          "admin"
+        ],
+        "rate_limit": {
+          "upload_bps": 10485760,
+          "download_bps": 10485760,
+          "burst_size": 52428800
+        },
+        "connection_limit": {
+          "max_connections": 10,
+          "expires_after_minutes": 1440,
+          "allow_from_ips": [
+            "127.0.0.1",
+            "::1",
+            "192.168.0.0/16"
+          ],
+          "block_from_ips": [
+            "10.0.0.1"
+          ],
+          "time_restriction": {
+            "allowed_hours": [
+              "09:00-18:00"
+            ],
+            "allowed_days": [
+              "monday-friday"
+            ],
+            "timezone": "Asia/Shanghai"
+          }
+        }
+      }
+    ]
   },
-  "web_interface": {
-    "port": 8080,
-    "enabled": true
+  "router": {
+    "chnroutes": {
+      "enable": true,
+      "path": "conf/chnroutes.txt"
+    },
+    "rules": [
+      {
+        "action": "block",
+        "patterns": [
+          "*.facebook.com",
+          "*.fbcdn.net",
+          "1.2.3.4",
+          "1.2.3.0/24",
+          "2001:db8::/32",
+          "2001:4860::/32",
+          "2607:f8b0::/32",
+          "2001:db8::/32",
+          "2001:4860::/32",
+          "2001:db8::/32"
+        ],
+        "description": "阻止访问恶意域名和IP（包含IPv6网段）"
+      },
+      {
+        "action": "proxy",
+        "patterns": [
+          "*.twitter.com",
+          "x.com",
+          "api.twitter.com"
+        ],
+        "proxy_node": "proxy1",
+        "description": "Twitter/X相关域名通过proxy1代理"
+      },
+      {
+        "action": "allow",
+        "patterns": [
+          "*.cn",
+          "*.com.cn",
+          "*.net.cn",
+          "*.org.cn",
+          "*.gov.cn",
+          "*.edu.cn",
+          "*.ac.cn"
+        ],
+        "description": "中国域名直连"
+      },
+      {
+        "action": "allow",
+        "patterns": [
+          "192.168.0.0/16",
+          "10.0.0.0/8",
+          "172.16.0.0/12",
+          "127.0.0.1",
+          "::1",
+          "fc00::/7",
+          "fe80::/10",
+          "::ffff:0:0/96"
+        ],
+        "description": "私有网络和本地回环直连（包含IPv6私有地址）"
+      },
+      {
+        "action": "deny",
+        "patterns": [
+          "25",
+          "587",
+          "110",
+          "143",
+          "993",
+          "995"
+        ],
+        "description": "邮件和代理服务端口走代理"
+      },
+      {
+        "action": "proxy",
+        "patterns": [
+          "*.gmail.com",
+          "*.google.com",
+          "outlook.com",
+          "*.office365.com",
+          "*.yahoo.com",
+          "*.qq.com",
+          "*.163.com",
+          "*.126.com"
+        ],
+        "proxy_node": "proxy3",
+        "description": "邮件服务通过proxy3代理"
+      },
+      {
+        "action": "allow",
+        "patterns": [
+          "8081",
+          "8082",
+          "8888",
+          "9000",
+          "9001",
+          "3000",
+          "5000",
+          "6379"
+        ],
+        "description": "开发和服务端口示例（可直连）"
+      },
+      {
+        "action": "proxy",
+        "patterns": [
+          "3389",
+          "5432",
+          "3306",
+          "1433",
+          "22"
+        ],
+        "proxy_node": "proxy2",
+        "description": "远程管理和数据库端口通过proxy2代理"
+      }
+    ],
+    "proxy_nodes": null
   },
-  "chnroutes": {
-    "enable": true,
-    "path": "conf/chnroutes.txt"
-  },
-  "smart_proxy": {
-    "enable": true,
-    "timeout_ms": 3000,
-    "blacklist_expiry_minutes": 360,
+  "traffic_detection": {
+    "enabled": true,
     "enhanced_probing": {
       "enable": true,
       "sni_extraction": true,
       "http_validation": true,
       "max_initial_data_size": 4096,
-      "validation_timeout_ms": 3000,
+      "validation_timeout_ms": 1500,
       "probing_ports": [
         80,
         443,
@@ -36,27 +177,8 @@
       ]
     }
   },
-  "memory_pool": {
-    "size_mb": 16,
-    "block_sizes": [
-      "4096",
-      "16384",
-      "65536",
-      "262144"
-    ],
-    "auto_adjust": true
-  },
-  "zero_copy": {
-    "enabled": true,
-    "buffer_size": 65536
-  },
-  "connection_pool": {
-    "enabled": true,
-    "max_per_host": 50,
-    "max_idle": 300,
-    "max_age": 3600
-  },
   "dns": {
+    "enabled": true,
     "cache": {
       "max_size": 2000,
       "default_ttl": 300,
@@ -75,18 +197,58 @@
     "hijack_rules": [
       {
         "pattern": "api.dev.local",
-        "target": "127.0.0.1",
+        "target": "127.0.0.1:8080",
         "description": "本地API服务"
       },
       {
         "pattern": "dev.database",
-        "target": "192.168.1.50",
+        "target": "192.168.1.50:3306",
         "description": "开发数据库服务器"
       },
       {
         "pattern": "*.test.staging",
-        "target": "127.0.0.1",
+        "target": "127.0.0.1:3000",
         "description": "测试环境本地化"
+      },
+      {
+        "pattern": "redis.cache.local",
+        "target": "127.0.0.1:6379",
+        "description": "Redis缓存服务"
+      },
+      {
+        "pattern": "mongodb.local",
+        "target": "127.0.0.1:27017",
+        "description": "MongoDB数据库"
+      },
+      {
+        "pattern": "debug.proxy",
+        "target": "127.0.0.1:1080",
+        "description": "调试代理服务器"
+      },
+      {
+        "pattern": "*.internal.msvc",
+        "target": "[2001:db8::/32]:443",
+        "description": "内部微服务集群"
+      },
+      {
+        "pattern": "gateway.ipv6.lan",
+        "target": "[fe80::1]:8080",
+        "description": "IPv6网关服务"
+      },
+      {
+        "pattern": "docker.ipv6.registry",
+        "target": "[fd00::1]:5000",
+        "description": "IPv6 Docker镜像仓库"
+      },
+      {
+        "pattern": "ads.example.com",
+        "target": "0.0.0.0",
+        "description": "广告域名劫持到空地址(屏蔽)"
+      },
+      {
+        "pattern": "tracker.malicious.com",
+        "target": "127.0.0.1",
+        "description": "恶意跟踪域名劫持到本地"
       }
     ]
   },
@@ -94,112 +256,10 @@
     "tcp_timeout_seconds": 60,
     "udp_timeout_seconds": 300
   },
-  "node_health_check": {
-    "interval_seconds": 600
-  },
-  "proxy_nodes": [
-    {
-      "identifier": "local_socks5",
-      "protocol": "socks5",
-      "ip": "127.0.0.1",
-      "port": 1081,
-      "weight": 5,
-      "enabled": true,
-      "username": null,
-      "password": null,
-      "auth_method": "none",
-      "timeout": 30
-    }
-  ],
-  "acl_rules": [
-    {
-      "action": "block",
-      "pattern": "*.facebook.com",
-      "description": "阻止访问Facebook域名"
-    },
-    {
-      "action": "deny",
-      "pattern": "*.twitter.com",
-      "description": "拒绝访问Twitter域名(走代理)"
-    },
-    {
-      "action": "block",
-      "pattern": "1.2.3.4",
-      "description": "阻止特定IP地址"
-    },
-    {
-      "action": "deny",
-      "pattern": "5.6.7.8",
-      "description": "拒绝特定IP地址(走代理)"
-    },
-    {
-      "action": "deny",
-      "pattern": "25",
-      "description": "SMTP端口走代理"
-    },
-    {
-      "action": "allow",
-      "pattern": "*.cn",
-      "description": "中国域名直连"
-    },
-    {
-      "action": "allow",
-      "pattern": "192.168.0.0/16",
-      "description": "IPv4内网直连"
-    },
-    {
-      "action": "allow",
-      "pattern": "127.0.0.1",
-      "description": "IPv4本地回环直连"
-    },
-    {
-      "action": "allow",
-      "pattern": "::1",
-      "description": "IPv6本地回环直连"
-    },
-    {
-      "action": "block",
-      "pattern": "1.2.3.0/24",
-      "description": "恶意IP网段屏蔽"
-    },
-    {
-      "action": "block",
-      "pattern": "2001:db8::/32",
-      "description": "示例IPv6网段屏蔽"
-    }
-  ],
-  "proxy_bind_rules": [
-    {
-      "pattern": "*.google.com",
-      "target": "us_proxy",
-      "description": "谷歌服务强制走美国代理"
-    },
-    {
-      "pattern": "443",
-      "target": "https_proxy",
-      "description": "HTTPS流量绑定到专用代理"
-    },
-    {
-      "pattern": "[8080,8443]",
-      "target": "dev_proxy",
-      "description": "开发端口绑定到开发代理"
-    }
-  ],
-  "dns_hijack_rules": [
-    {
-      "pattern": "api.dev.local",
-      "target": "127.0.0.1",
-      "description": "本地API服务"
-    },
-    {
-      "pattern": "dev.database",
-      "target": "192.168.1.50",
-      "description": "开发数据库服务器"
-    },
-    {
-      "pattern": "*.test.staging",
-      "target": "127.0.0.1",
-      "description": "测试环境本地化"
-    }
-  ]
+  "logging": {
+    "level": "info",
+    "enable_user_logs": true,
+    "enable_access_logs": true,
+    "log_file": "proxy.log"
+  }
 }

@@ -6,10 +6,10 @@ import (
 
 // TrieNode 基数树节点
 type TrieNode struct {
-	children [2]*TrieNode  // 0 和 1 两个子节点
-	isRule   bool          // 是否是规则节点
-	action   Action        // 动作类型
-	rule     *Rule         // 规则信息
+	children [2]*TrieNode // 0 和 1 两个子节点
+	isRule   bool         // 是否是规则节点
+	action   Action       // 动作类型
+	rule     *Rule        // 规则信息
 }
 
 // RadixTrie 基数树，用于高效的IP网段匹配

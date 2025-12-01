@@ -274,17 +274,17 @@ func (p *PasswordHasher) GetHashInfo(hashString string) map[string]interface{} {
 	algorithm, iterations, salt, hashBytes, err := p.parseHashString(hashString)
 	if err != nil {
 		return map[string]interface{}{
-			"error":    err.Error(),
+			"error":     err.Error(),
 			"is_secure": false,
 		}
 	}
 
 	return map[string]interface{}{
-		"algorithm":       algorithm,
-		"iterations":      iterations,
-		"salt_length":     len(salt),
-		"hash_length":     len(hashBytes),
-		"is_secure":       iterations >= MinIterations && strings.HasPrefix(algorithm, "pbkdf2-"),
+		"algorithm":            algorithm,
+		"iterations":           iterations,
+		"salt_length":          len(salt),
+		"hash_length":          len(hashBytes),
+		"is_secure":            iterations >= MinIterations && strings.HasPrefix(algorithm, "pbkdf2-"),
 		"estimated_crack_time": p.estimateCrackTime(iterations),
 	}
 }
@@ -317,14 +317,28 @@ type User struct {
 	Role         string
 	Enabled      bool
 	LastLogin    time.Time
+
+	// 新增：连接和时间限制
+	MaxConnections int
+	ExpiresAfter   int // 分钟数
+	AllowFrom      []string
+	BlockFrom      []string
+	AllowedHours   []int
+	AllowedDays    []int
+	Timezone       string
+
+	// 运行时统计
+	CurrentConnections int
+	TotalConnections   int64
+	LastActivity       time.Time
 }
 
 // AuthManager 认证管理器
 type AuthManager struct {
-	users        map[string]*User
-	hasher       *PasswordHasher
-	requireAuth  bool
-	logger       *log.Logger
+	users       map[string]*User
+	hasher      *PasswordHasher
+	requireAuth bool
+	logger      *log.Logger
 }
 
 // NewAuthManager 创建认证管理器
@@ -341,7 +355,7 @@ func NewAuthManager(requireAuth bool, hasher *PasswordHasher, logger *log.Logger
 	}
 }
 
-// AddUser 添加用户
+// AddUser 添加用户（简化版）
 func (a *AuthManager) AddUser(username, password, role string) error {
 	if len(username) == 0 {
 		return &SecurityError{"Username cannot be empty"}
@@ -354,11 +368,21 @@ func (a *AuthManager) AddUser(username, password, role string) error {
 	}
 
 	user := &User{
-		Username:     username,
-		PasswordHash: hash,
-		Role:         role,
-		Enabled:      true,
-		LastLogin:    time.Time{},
+		Username:           username,
+		PasswordHash:       hash,
+		Role:               role,
+		Enabled:            true,
+		LastLogin:          time.Time{},
+		MaxConnections:     0,     // 默认无限制
+		ExpiresAfter:       0,     // 默认永不过期
+		AllowFrom:          nil,   // 默认允许所有IP
+		BlockFrom:          nil,   // 默认不阻止任何IP
+		AllowedHours:       nil,   // 默认所有时间
+		AllowedDays:        nil,   // 默认所有日期
+		Timezone:           "UTC", // 默认UTC
+		CurrentConnections: 0,
+		TotalConnections:   0,
+		LastActivity:       time.Time{},
 	}
 
 	a.users[username] = user
@@ -366,8 +390,51 @@ func (a *AuthManager) AddUser(username, password, role string) error {
 	return nil
 }
 
+// AddUserWithConfig 添加用户（完整配置版）
+func (a *AuthManager) AddUserWithConfig(username, password, role string, config *struct {
+	MaxConnections int
+	ExpiresAfter   int
+	AllowFrom      []string
+	BlockFrom      []string
+	AllowedHours   []int
+	AllowedDays    []int
+	Timezone       string
+}) error {
+	if len(username) == 0 {
+		return &SecurityError{"Username cannot be empty"}
+	}
+
+	// 生成密码哈希
+	hash, err := a.hasher.HashPassword(password)
+	if err != nil {
+		return err
+	}
+
+	user := &User{
+		Username:           username,
+		PasswordHash:       hash,
+		Role:               role,
+		Enabled:            true,
+		LastLogin:          time.Time{},
+		MaxConnections:     config.MaxConnections,
+		ExpiresAfter:       config.ExpiresAfter,
+		AllowFrom:          config.AllowFrom,
+		BlockFrom:          config.BlockFrom,
+		AllowedHours:       config.AllowedHours,
+		AllowedDays:        config.AllowedDays,
+		Timezone:           config.Timezone,
+		CurrentConnections: 0,
+		TotalConnections:   0,
+		LastActivity:       time.Time{},
+	}
+
+	a.users[username] = user
+	a.logger.Printf("User '%s' added with full config (max_conn=%d, expires=%d min)", username, config.MaxConnections, config.ExpiresAfter)
+	return nil
+}
+
 // VerifyUser 验证用户
-func (a *AuthManager) VerifyUser(username, password string) (*User, error) {
+func (a *AuthManager) VerifyUser(username, password string, clientIP string) (*User, error) {
 	if !a.requireAuth {
 		// 不需要认证，返回默认用户
 		return &User{
@@ -390,10 +457,53 @@ func (a *AuthManager) VerifyUser(username, password string) (*User, error) {
 		return nil, &SecurityError{"Invalid password"}
 	}
 
-	// 更新最后登录时间
-	user.LastLogin = time.Now()
+	// 检查账户过期时间
+	if user.ExpiresAfter > 0 {
+		expireTime := user.LastLogin.Add(time.Duration(user.ExpiresAfter) * time.Minute)
+		if time.Now().After(expireTime) {
+			return nil, &SecurityError{"Account expired"}
+		}
+	}
 
-	a.logger.Printf("User '%s' authenticated successfully", username)
+	// 检查IP限制
+	if len(user.BlockFrom) > 0 {
+		for _, blockedIP := range user.BlockFrom {
+			if clientIP == blockedIP {
+				return nil, &SecurityError{"IP blocked"}
+			}
+		}
+	}
+
+	if len(user.AllowFrom) > 0 {
+		allowed := false
+		for _, allowedIP := range user.AllowFrom {
+			if clientIP == allowedIP {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return nil, &SecurityError{"IP not allowed"}
+		}
+	}
+
+	// 检查时间限制
+	if !a.isTimeAllowed(user) {
+		return nil, &SecurityError{"Time restriction"}
+	}
+
+	// 检查连接数限制
+	if user.MaxConnections > 0 && user.CurrentConnections >= user.MaxConnections {
+		return nil, &SecurityError{"Connection limit exceeded"}
+	}
+
+	// 更新最后登录时间和活动统计
+	user.LastLogin = time.Now()
+	user.LastActivity = time.Now()
+	user.CurrentConnections++
+
+	a.logger.Printf("User '%s' authenticated successfully (IP: %s, Connections: %d/%d)",
+		username, clientIP, user.CurrentConnections, user.MaxConnections)
 	return user, nil
 }
 
@@ -552,7 +662,11 @@ func (a *AuthManager) HandleAuthentication(clientConn net.Conn) (string, error) 
 		}
 
 		// 验证用户
-		user, err := a.VerifyUser(string(username), string(password))
+		clientIP, _, err := net.SplitHostPort(clientConn.RemoteAddr().String())
+		if err != nil {
+			clientIP = clientConn.RemoteAddr().String() // Fallback if SplitHostPort fails
+		}
+		user, err := a.VerifyUser(string(username), string(password), clientIP)
 		if err != nil {
 			// 认证失败
 			response := []byte{0x01, 0x01} // 版本1, 认证失败
@@ -611,4 +725,105 @@ func (l *LegacyHashMigrator) NeedsMigration(users map[string]interface{}) bool {
 		}
 	}
 	return false
+}
+
+// isTimeAllowed 检查时间是否允许
+func (a *AuthManager) isTimeAllowed(user *User) bool {
+	if len(user.AllowedHours) == 0 && len(user.AllowedDays) == 0 {
+		return true // 无时间限制
+	}
+
+	now := time.Now()
+
+	// 检查时区
+	loc, err := time.LoadLocation(user.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	localNow := now.In(loc)
+
+	// 检查星期几限制
+	if len(user.AllowedDays) > 0 {
+		currentDay := int(localNow.Weekday())
+		allowed := false
+		for _, allowedDay := range user.AllowedDays {
+			if currentDay == allowedDay {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return false
+		}
+	}
+
+	// 检查小时限制
+	if len(user.AllowedHours) > 0 {
+		currentHour := localNow.Hour()
+		allowed := false
+		for _, allowedHour := range user.AllowedHours {
+			if currentHour == allowedHour {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return false
+		}
+	}
+
+	return true
+}
+
+// DecrementConnection 减少用户连接数
+func (a *AuthManager) DecrementConnection(username string) {
+	if user, exists := a.users[username]; exists {
+		if user.CurrentConnections > 0 {
+			user.CurrentConnections--
+			user.LastActivity = time.Now()
+		}
+	}
+}
+
+// IncrementConnection 增加用户连接数
+func (a *AuthManager) IncrementConnection(username string) error {
+	user, exists := a.users[username]
+	if !exists {
+		return &SecurityError{"User not found"}
+	}
+
+	// 检查连接数限制
+	if user.MaxConnections > 0 {
+		if user.CurrentConnections >= user.MaxConnections {
+			return &SecurityError{"Connection limit exceeded"}
+		}
+	}
+
+	user.CurrentConnections++
+	user.LastActivity = time.Now()
+	return nil
+}
+
+// GetUserInfo 获取用户信息
+func (a *AuthManager) GetUserInfo(username string) map[string]interface{} {
+	if user, exists := a.users[username]; exists {
+		return map[string]interface{}{
+			"username":            user.Username,
+			"enabled":             user.Enabled,
+			"current_connections": user.CurrentConnections,
+			"total_connections":   user.TotalConnections,
+			"max_connections":     user.MaxConnections,
+			"expires_after":       user.ExpiresAfter,
+			"last_login":          user.LastLogin.Format("2006-01-02 15:04:05"),
+			"last_activity":       user.LastActivity.Format("2006-01-02 15:04:05"),
+			"allowed_hours":       user.AllowedHours,
+			"allowed_days":        user.AllowedDays,
+			"allowed_from":        user.AllowFrom,
+			"blocked_from":        user.BlockFrom,
+			"timezone":            user.Timezone,
+		}
+	}
+	return map[string]interface{}{
+		"error": "User not found",
+	}
 }

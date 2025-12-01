@@ -20,13 +20,13 @@ const (
 
 // DetectionResult 检测结果
 type DetectionResult struct {
-	Type        TrafficType
-	Hostname    string
-	Method      string
-	Path        string
-	UserAgent   string
-	SNI         string
-	RawHeaders  string
+	Type       TrafficType
+	Hostname   string
+	Method     string
+	Path       string
+	UserAgent  string
+	SNI        string
+	RawHeaders string
 }
 
 // TrafficDetector 流量检测器
@@ -104,15 +104,12 @@ func (td *TrafficDetector) parseHTTPRequest(data []byte) *DetectionResult {
 		// 提取路径
 		if strings.HasPrefix(requestParts[1], "http://") {
 			// 绝对 URL: http://example.com/path
-			if idx := strings.Index(requestParts[1], "//"); idx != -1 {
-				hostStart := idx + 2
-				if hostEnd := strings.Index(requestParts[1][hostStart:], "/"); hostEnd != -1 {
-					result.Hostname = requestParts[1][hostStart : hostStart+hostEnd]
-					result.Path = requestParts[1][hostStart+hostEnd:]
-				} else {
-					result.Hostname = requestParts[1][hostStart:]
-				}
-			}
+			// 注意：对于绝对URL，优先使用Host头，不从URL中提取Host
+			result.Path = requestParts[1]
+		} else if strings.HasPrefix(requestParts[1], "https://") {
+			// 绝对 HTTPS URL: https://example.com/path
+			// 注意：对于绝对URL，优先使用Host头，不从URL中提取Host
+			result.Path = requestParts[1]
 		} else {
 			// 相对路径: /path
 			result.Path = requestParts[1]

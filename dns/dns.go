@@ -2,8 +2,9 @@ package dns
 
 import (
 	"context"
-	"encoding/binary"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"math/rand"
 	"net"
@@ -13,13 +14,14 @@ import (
 	"time"
 
 	"github.com/miekg/dns"
+	"smartproxy/socks5"
 )
 
 // CacheEntry 缓存条目
 type CacheEntry struct {
-	Msg     *dns.Msg
-	Expiry  time.Time
-	Access  time.Time
+	Msg    *dns.Msg
+	Expiry time.Time
+	Access time.Time
 }
 
 // DNSCache DNS缓存系统
@@ -101,9 +103,9 @@ func (dc *DNSCache) Put(key string, msg *dns.Msg) {
 	}
 
 	entry := &CacheEntry{
-		Msg:     msg.Copy(),
-		Expiry:  time.Now().Add(time.Duration(minTTL) * time.Second),
-		Access:  time.Now(),
+		Msg:    msg.Copy(),
+		Expiry: time.Now().Add(time.Duration(minTTL) * time.Second),
+		Access: time.Now(),
 	}
 
 	dc.cache[key] = entry
@@ -168,23 +170,34 @@ type HijackRule struct {
 
 // Config DNS配置
 type Config struct {
-	CNServers    []string
-	ForeignServers []string
-	HijackRules  []HijackRule
-	CacheSize    int
+	CNServers       []string
+	ForeignServers  []string
+	HijackRules     []HijackRule
+	CacheSize       int
 	CleanupInterval time.Duration
+	ProxyNodes      []ProxyNode // SOCKS5代理节点
+}
+
+// ProxyNode SOCKS5代理节点配置
+type ProxyNode struct {
+	Name     string
+	Address  string
+	Username string
+	Password string
+	Enabled  bool
 }
 
 // Resolver DNS解析器
 type Resolver struct {
-	config     *Config
-	cache      *DNSCache
-	client     *dns.Client
-	logger     *log.Logger
+	config *Config
+	cache  *DNSCache
+	client *dns.Client
+	logger *log.Logger
+	router *socks5.Router
 }
 
 // NewResolver 创建新的DNS解析器
-func NewResolver(config *Config, logger *log.Logger) *Resolver {
+func NewResolver(config *Config, logger *log.Logger, router *socks5.Router) *Resolver {
 	cache := NewDNSCache(config.CacheSize, config.CleanupInterval, logger)
 
 	return &Resolver{
@@ -194,6 +207,7 @@ func NewResolver(config *Config, logger *log.Logger) *Resolver {
 			Timeout: 2 * time.Second,
 		},
 		logger: logger,
+		router: router,
 	}
 }
 
@@ -245,31 +259,16 @@ func (r *Resolver) extractIPs(msg *dns.Msg) []string {
 	return ips
 }
 
-// isChinaIP 检查IP是否为中国IP (简化版本)
+// isChinaIP 检查IP是否为中国IP (使用Router的chnroutes结果)
 func (r *Resolver) isChinaIP(ipStr string) bool {
-	ip := net.ParseIP(ipStr)
-	if ip == nil {
+	if r.router == nil {
+		r.logger.Printf("Router not initialized, falling back to default IP check for %s", ipStr)
 		return false
 	}
 
-	// 这里应该集成中国路由管理器
-	// 为了演示，使用简单的IP段检查
-	if ip4 := ip.To4(); ip4 != nil {
-		// 一些常见的中国IP段
-		chinaRanges := []string{
-			"1.0.1.0/24", "1.0.2.0/23", "1.0.8.0/21", "1.0.32.0/19",
-			"1.0.128.0/17", "1.1.0.0/8", "1.2.0.0/15", "1.4.0.0/12",
-		}
-
-		for _, cidr := range chinaRanges {
-			_, network, _ := net.ParseCIDR(cidr)
-			if network.Contains(ip) {
-				return true
-			}
-		}
-	}
-
-	return false
+	// 使用Router的ShouldDirect方法来检查是否为中国IP
+	// ShouldDirect对于中国IP会返回true，表示应该直连
+	return r.router.ShouldDirect(ipStr, 0)
 }
 
 // querySingleServer 查询单个DNS服务器
@@ -334,6 +333,226 @@ func (r *Resolver) queryConcurrent(msg *dns.Msg, servers []string) (*dns.Msg, er
 	return nil, fmt.Errorf("all DNS queries failed")
 }
 
+// queryThroughProxyNodes 通过SOCKS5代理节点查询DNS
+func (r *Resolver) queryThroughProxyNodes(msg *dns.Msg, servers []string) (*dns.Msg, error) {
+	if len(servers) == 0 {
+		return nil, fmt.Errorf("no servers available")
+	}
+
+	// 获取可用的代理节点
+	var enabledNodes []ProxyNode
+	for _, node := range r.config.ProxyNodes {
+		if node.Enabled {
+			enabledNodes = append(enabledNodes, node)
+		}
+	}
+
+	if len(enabledNodes) == 0 {
+		r.logger.Printf("No enabled proxy nodes available, falling back to direct query")
+		return r.queryConcurrent(msg, servers)
+	}
+
+	r.logger.Printf("Using %d proxy nodes for DNS query", len(enabledNodes))
+
+	type result struct {
+		msg  *dns.Msg
+		err  error
+		node ProxyNode
+	}
+
+	results := make(chan result, len(enabledNodes))
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second) // 增加超时时间
+	defer cancel()
+
+	// 通过每个代理节点并发查询
+	for _, node := range enabledNodes {
+		go func(n ProxyNode) {
+			resp, err := r.queryThroughSingleProxy(msg, n)
+			select {
+			case results <- result{resp, err, n}:
+			case <-ctx.Done():
+			}
+		}(node)
+	}
+
+	// 等待第一个成功的结果
+	for i := 0; i < len(enabledNodes); i++ {
+		select {
+		case res := <-results:
+			if res.err == nil {
+				r.logger.Printf("Successfully queried through proxy node: %s", res.node.Name)
+				return res.msg, nil
+			}
+		case <-ctx.Done():
+			return nil, fmt.Errorf("all proxy queries timed out")
+		}
+	}
+
+	return nil, fmt.Errorf("all proxy queries failed")
+}
+
+// queryThroughSingleProxy 通过单个SOCKS5代理查询DNS
+func (r *Resolver) queryThroughSingleProxy(msg *dns.Msg, proxyNode ProxyNode) (*dns.Msg, error) {
+	r.logger.Printf("Querying through proxy node %s (%s)", proxyNode.Name, proxyNode.Address)
+
+	// 创建SOCKS5代理连接
+	proxyConn, err := net.Dial("tcp", proxyNode.Address)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to proxy node %s: %v", proxyNode.Name, err)
+	}
+	defer proxyConn.Close()
+
+	// SOCKS5握手
+	proxyAuth := ""
+	if proxyNode.Username != "" && proxyNode.Password != "" {
+		proxyAuth = fmt.Sprintf("\x05%s%s",
+			string([]byte{byte(len(proxyNode.Username))}),
+			proxyNode.Username,
+			proxyNode.Password)
+	}
+
+	// SOCKS5认证
+	if _, err := proxyConn.Write([]byte("\x05" + proxyAuth)); err != nil {
+		return nil, fmt.Errorf("SOCKS5 auth failed: %v", err)
+	}
+
+	// 读取响应
+	response := make([]byte, 2)
+	if _, err := proxyConn.Read(response); err != nil {
+		return nil, fmt.Errorf("failed to read SOCKS5 auth response: %v", err)
+	}
+
+	if response[0] != 0x05 || response[1] != 0x00 {
+		return nil, fmt.Errorf("SOCKS5 auth failed: %v", response)
+	}
+
+	// 为每个DNS服务器创建连接和查询
+	type proxyResult struct {
+		msg    *dns.Msg
+		err    error
+		server string
+	}
+
+	// 通过代理并发查询所有DNS服务器
+	foreignServers := r.config.ForeignServers
+	proxyResults := make(chan proxyResult, len(foreignServers))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, server := range foreignServers {
+		go func(s string) {
+			resp, err := r.querySingleServerThroughProxy(msg, s, proxyConn)
+			select {
+			case proxyResults <- proxyResult{resp, err, s}:
+			case <-ctx.Done():
+			}
+		}(server)
+	}
+
+	// 等待第一个成功的结果
+	for i := 0; i < len(foreignServers); i++ {
+		select {
+		case res := <-proxyResults:
+			if res.err == nil {
+				r.logger.Printf("Successfully queried through proxy: %s -> %s", proxyNode.Name, res.server)
+				return res.msg, nil
+			}
+		case <-ctx.Done():
+			return nil, fmt.Errorf("proxy queries timed out")
+		}
+	}
+
+	return nil, fmt.Errorf("all proxy queries failed")
+}
+
+// querySingleServerThroughProxy 通过SOCKS5代理查询单个DNS服务器
+func (r *Resolver) querySingleServerThroughProxy(msg *dns.Msg, server string, proxyConn net.Conn) (*dns.Msg, error) {
+	// 解析服务器地址
+	host, portStr, err := net.SplitHostPort(server)
+	if err != nil {
+		host = server
+		portStr = "53"
+	}
+
+	// 将端口字符串转换为整数
+	port := 53
+	if p, err := net.LookupPort("tcp", portStr); err == nil {
+		port = p
+	}
+
+	// SOCKS5 CONNECT请求
+	connectReq := []byte{0x05, 0x01, 0x00, 0x03}               // VER=5, CMD=CONNECT, RSV=0, ATYP=domain
+	connectReq = append(connectReq, byte(len(host)))           // 域名长度
+	connectReq = append(connectReq, []byte(host)...)           // 域名
+	connectReq = append(connectReq, byte(port>>8), byte(port)) // 端口
+
+	if _, err := proxyConn.Write(connectReq); err != nil {
+		return nil, fmt.Errorf("failed to send SOCKS5 CONNECT request: %v", err)
+	}
+
+	// 读取CONNECT响应
+	connectResp := make([]byte, 10)
+	if _, err := proxyConn.Read(connectResp); err != nil {
+		return nil, fmt.Errorf("failed to read SOCKS5 CONNECT response: %v", err)
+	}
+
+	if connectResp[0] != 0x05 || connectResp[1] != 0x00 {
+		return nil, fmt.Errorf("SOCKS5 CONNECT failed: %v", connectResp)
+	}
+
+	// 现在通过代理发送DNS查询
+	return r.querySingleServerWithConn(msg, server, proxyConn)
+}
+
+// querySingleServerWithConn 使用现有连接查询单个DNS服务器
+func (r *Resolver) querySingleServerWithConn(msg *dns.Msg, server string, conn net.Conn) (*dns.Msg, error) {
+	// 使用miekg/dns的UDP客户端通过代理发送查询
+	// 由于SOCKS5代理建立的是TCP连接，我们需要特殊处理
+	// 这里我们发送原始UDP DNS查询包
+
+	// 构建UDP代理请求
+	udpMsg := msg.Copy()
+	data, err := udpMsg.Pack()
+	if err != nil {
+		return nil, fmt.Errorf("failed to pack DNS message: %v", err)
+	}
+
+	// SOCKS5 UDP关联
+	udpAssociate := []byte{0x05, 0x03, 0x00, 0x03, 0x01, 0x08, 0x00, 0x00, 0x00, 0x01} // ATYP=IPv4
+	if _, err := conn.Write(udpAssociate); err != nil {
+		return nil, fmt.Errorf("failed to send UDP associate request: %v", err)
+	}
+
+	// 读取UDP关联响应
+	udpResp := make([]byte, 10)
+	if _, err := conn.Read(udpResp); err != nil {
+		return nil, fmt.Errorf("failed to read UDP associate response: %v", err)
+	}
+
+	if udpResp[0] != 0x05 || udpResp[1] != 0x00 {
+		return nil, fmt.Errorf("SOCKS5 UDP associate failed: %v", udpResp)
+	}
+
+	// 发送DNS查询数据
+	if _, err := conn.Write(data); err != nil {
+		return nil, fmt.Errorf("failed to send DNS query through proxy: %v", err)
+	}
+
+	// 读取DNS响应
+	response := make([]byte, 2048) // 足过足够的缓冲区
+	n, err := conn.Read(response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read DNS response from proxy: %v", err)
+	}
+
+	// 解析DNS响应
+	resp := new(dns.Msg)
+	if err := resp.Unpack(response[:n]); err != nil {
+		return nil, fmt.Errorf("failed to unpack DNS response: %v", err)
+	}
+
+	return resp, nil
+}
+
 // hijackQuery 处理DNS劫持
 func (r *Resolver) hijackQuery(msg *dns.Msg, domain string) (*dns.Msg, bool) {
 	domain = strings.TrimSuffix(domain, ".")
@@ -347,28 +566,72 @@ func (r *Resolver) hijackQuery(msg *dns.Msg, domain string) (*dns.Msg, bool) {
 			reply.Response = true
 			reply.Authoritative = true
 
-			// 检查目标是否为IP地址
+			// 检查目标是否为纯IP地址（直接返回该IP）
 			if ip := net.ParseIP(rule.Target); ip != nil {
-				rr := new(dns.A)
-				rr.Hdr = dns.RR_Header{
-					Name:   msg.Question[0].Name,
-					Rrtype: dns.TypeA,
-					Class:  dns.ClassINET,
-					Ttl:    60,
+				r.logger.Printf("Hijacking '%s' to IP address: %s", domain, rule.Target)
+
+				// 根据查询类型创建相应的DNS记录
+				question := msg.Question[0]
+				switch question.Qtype {
+				case dns.TypeA:
+					if ip4 := ip.To4(); ip4 != nil {
+						rr := new(dns.A)
+						rr.Hdr = dns.RR_Header{
+							Name:   question.Name,
+							Rrtype: dns.TypeA,
+							Class:  dns.ClassINET,
+							Ttl:    60,
+						}
+						rr.A = ip4
+						reply.Answer = append(reply.Answer, rr)
+					}
+				case dns.TypeAAAA:
+					if ip.To4() == nil { // IPv6 address
+						rr := new(dns.AAAA)
+						rr.Hdr = dns.RR_Header{
+							Name:   question.Name,
+							Rrtype: dns.TypeAAAA,
+							Class:  dns.ClassINET,
+							Ttl:    60,
+						}
+						rr.AAAA = ip
+						reply.Answer = append(reply.Answer, rr)
+					}
 				}
-				rr.A = ip
-				reply.Answer = append(reply.Answer, rr)
 				return reply, true
 			}
 
-			// 如果是域名，转发到指定服务器
-			resp, err := r.querySingleServer(msg, rule.Target)
-			if err != nil {
-				r.logger.Printf("Failed to forward hijacked query to %s: %v", rule.Target, err)
-				return nil, false
+			// 检查目标是否为IP:Port格式（转发到指定DNS服务器）
+			if host, _, err := net.SplitHostPort(rule.Target); err == nil {
+				if net.ParseIP(host) != nil {
+					dnsServer := rule.Target // 直接使用完整的 host:port
+					r.logger.Printf("Forwarding hijacked query for '%s' to DNS server: %s", domain, dnsServer)
+
+					resp, err := r.querySingleServer(msg, dnsServer)
+					if err != nil {
+						r.logger.Printf("Failed to forward hijacked query to %s: %v", dnsServer, err)
+						return nil, false
+					}
+					return resp, true
+				}
 			}
 
-			return resp, true
+			// 如果是域名格式，尝试添加默认DNS端口53
+			if net.ParseIP(rule.Target) == nil {
+				dnsServer := rule.Target + ":53"
+				r.logger.Printf("Forwarding hijacked query for '%s' to DNS server: %s", domain, dnsServer)
+
+				resp, err := r.querySingleServer(msg, dnsServer)
+				if err != nil {
+					r.logger.Printf("Failed to forward hijacked query to %s: %v", dnsServer, err)
+					return nil, false
+				}
+				return resp, true
+			}
+
+			// 如果目标格式无法识别，记录错误
+			r.logger.Printf("Invalid hijack target format for rule '%s': %s", rule.Pattern, rule.Target)
+			return nil, false
 		}
 	}
 
@@ -432,13 +695,19 @@ func (r *Resolver) Resolve(msg *dns.Msg) (*dns.Msg, error) {
 		}
 	}
 
-	// 如果中国服务器失败或被污染，查询外国服务器
+	// 如果中国服务器失败或被污染，通过SOCKS5代理查询外国服务器
 	if resp == nil && len(r.config.ForeignServers) > 0 {
-		r.logger.Printf("Querying Foreign DNS servers for %s", domain)
-		resp, err = r.queryConcurrent(msg, r.config.ForeignServers)
+		r.logger.Printf("Querying Foreign DNS servers for %s through SOCKS5 proxy", domain)
+		resp, err = r.queryThroughProxyNodes(msg, r.config.ForeignServers)
 		if err != nil {
-			r.logger.Printf("Foreign DNS query failed for %s: %v", domain, err)
-			return nil, err
+			r.logger.Printf("Foreign DNS query through proxy failed for %s: %v", domain, err)
+			// 如果代理查询也失败，尝试直连外国服务器
+			r.logger.Printf("Attempting direct foreign DNS query for %s", domain)
+			resp, err = r.queryConcurrent(msg, r.config.ForeignServers)
+			if err != nil {
+				r.logger.Printf("Direct foreign DNS query failed for %s: %v", domain, err)
+				return nil, err
+			}
 		}
 	}
 
@@ -468,19 +737,26 @@ type SmartDNSServer struct {
 }
 
 // NewSmartDNSServer 创建新的智能DNS服务器
-func NewSmartDNSServer(config *Config, port int, logger *log.Logger) *SmartDNSServer {
-	resolver := NewResolver(config, logger)
+func NewSmartDNSServer(config *Config, port int, logger *log.Logger, router *socks5.Router) *SmartDNSServer {
+	resolver := NewResolver(config, logger, router)
 
-	return &SmartDNSServer{
+	// 检查是否启用IPv6
+	listenAddr := fmt.Sprintf(":%d", port)
+	if isIPv6EnabledDNS() {
+		listenAddr = fmt.Sprintf("[::]:%d", port)
+	}
+
+	server := &SmartDNSServer{
 		config:   config,
 		resolver: resolver,
 		logger:   logger,
 		server: &dns.Server{
-			Addr:    fmt.Sprintf(":%d", port),
-			Net:     "udp",
-			Handler: dns.HandlerFunc(r.handleDNSRequest),
+			Addr: listenAddr,
+			Net:  "udp",
 		},
 	}
+	server.server.Handler = dns.HandlerFunc(server.handleDNSRequest)
+	return server
 }
 
 // handleDNSRequest 处理DNS请求
@@ -517,4 +793,26 @@ func (s *SmartDNSServer) Stop() error {
 		return s.server.Shutdown()
 	}
 	return nil
+}
+
+// isIPv6EnabledDNS 检查是否应该为DNS服务器启用IPv6监听
+func isIPv6EnabledDNS() bool {
+	// 读取配置文件检查ipv6_enabled设置
+	configPath := "conf/config.json"
+	data, err := ioutil.ReadFile(configPath)
+	if err != nil {
+		return false // 无法读取配置，默认使用IPv4
+	}
+
+	var config struct {
+		Listener struct {
+			IPv6Enabled bool `json:"ipv6_enabled"`
+		} `json:"listener"`
+	}
+
+	if err := json.Unmarshal(data, &config); err != nil {
+		return false // 无法解析配置，默认使用IPv4
+	}
+
+	return config.Listener.IPv6Enabled
 }

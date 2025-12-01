@@ -17,16 +17,16 @@ const (
 
 // ConnectionInfo 连接信息
 type ConnectionInfo struct {
-	ID              string          `json:"id"`
-	Type            ConnectionType  `json:"type"`
-	CreatedAt       time.Time       `json:"created_at"`
-	LastActivity    time.Time       `json:"last_activity"`
-	TargetPort      int             `json:"target_port"`
-	BytesTransferred int64          `json:"bytes_transferred"`
-	PacketCount     int64           `json:"packet_count"`
-	ErrorCount      int             `json:"error_count"`
-	IsIdle          bool            `json:"is_idle"`
-	AdditionalInfo  map[string]interface{} `json:"additional_info,omitempty"`
+	ID               string                 `json:"id"`
+	Type             ConnectionType         `json:"type"`
+	CreatedAt        time.Time              `json:"created_at"`
+	LastActivity     time.Time              `json:"last_activity"`
+	TargetPort       int                    `json:"target_port"`
+	BytesTransferred int64                  `json:"bytes_transferred"`
+	PacketCount      int64                  `json:"packet_count"`
+	ErrorCount       int                    `json:"error_count"`
+	IsIdle           bool                   `json:"is_idle"`
+	AdditionalInfo   map[string]interface{} `json:"additional_info,omitempty"`
 }
 
 // ConnectionStats 连接统计信息
@@ -52,13 +52,13 @@ type TimeoutConfig interface {
 
 // ConnectionTimeoutManager 连接超时管理器
 type ConnectionTimeoutManager struct {
-	config           TimeoutConfig
-	logger           Logger
-	activeConnections map[string]*ConnectionInfo
-	connectionStats   ConnectionStats
-	adaptiveTimeouts map[string]int
+	config             TimeoutConfig
+	logger             Logger
+	activeConnections  map[string]*ConnectionInfo
+	connectionStats    ConnectionStats
+	adaptiveTimeouts   map[string]int
 	connectionPatterns map[string]interface{}
-	mu               sync.RWMutex
+	mu                 sync.RWMutex
 }
 
 // NewConnectionTimeoutManager 创建连接超时管理器
@@ -68,8 +68,8 @@ func NewConnectionTimeoutManager(config TimeoutConfig, logger Logger) *Connectio
 	}
 
 	ctm := &ConnectionTimeoutManager{
-		config:           config,
-		logger:           logger,
+		config:            config,
+		logger:            logger,
 		activeConnections: make(map[string]*ConnectionInfo),
 		connectionStats:   ConnectionStats{},
 		adaptiveTimeouts: map[string]int{
@@ -80,10 +80,10 @@ func NewConnectionTimeoutManager(config TimeoutConfig, logger Logger) *Connectio
 			"udp_idle":   180, // 空闲UDP会话超时
 		},
 		connectionPatterns: map[string]interface{}{
-			"http_ports":         []int{80, 443, 8080, 8443},
-			"streaming_ports":    []int{1935, 8000, 9000},
-			"gaming_ports":       []int{}, // 使用范围检查
-			"bittorrent_ports":   []int{6881, 6882, 6883, 6884, 6885, 6886, 6887, 6888, 6889},
+			"http_ports":       []int{80, 443, 8080, 8443},
+			"streaming_ports":  []int{1935, 8000, 9000},
+			"gaming_ports":     []int{}, // 使用范围检查
+			"bittorrent_ports": []int{6881, 6882, 6883, 6884, 6885, 6886, 6887, 6888, 6889},
 		},
 	}
 
@@ -429,6 +429,6 @@ func (ctm *ConnectionTimeoutManager) GetTimeoutStats() map[string]interface{} {
 	return map[string]interface{}{
 		"adaptive_timeouts": ctm.adaptiveTimeouts,
 		"connection_stats":  ctm.connectionStats,
-		"total_connections":  len(ctm.activeConnections),
+		"total_connections": len(ctm.activeConnections),
 	}
 }
