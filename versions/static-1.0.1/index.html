@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <title>SmartProxy - 智能代理管理控制台</title>
+    <!-- layui CSS -->
+    <link href="layui-v2.13.1/layui/css/layui.css" rel="stylesheet">
+    <!-- 自定义样式 -->
+    <link href="styles.css" rel="stylesheet">
+</head>
+<body>
+    <header class="app-header">
+        <div class="header-content">
+            <h1 class="logo">
+                SmartProxy <span style="font-size: 12px; font-weight: 400; color: #666;">智能代理，安全上网</span>
+            </h1>
+            <div class="status-badge">
+                <span id="status-dot" class="status-dot checking"></span>
+                <span id="status-text">检查中...</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="main-container">
+        <!-- 统计卡片 -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div class="stat-value" id="active-connections">-</div>
+                    <div class="stat-icon primary">
+                        <i class="layui-icon layui-icon-link"></i>
+                    </div>
+                </div>
+                <div class="stat-label">活跃连接</div>
+                <div class="stat-change">
+                    <i class="layui-icon layui-icon-up"></i>
+                    <span>实时更新</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div class="stat-value" id="proxy-nodes">-</div>
+                    <div class="stat-icon success">
+                        <i class="layui-icon layui-icon-component"></i>
+                    </div>
+                </div>
+                <div class="stat-label">代理节点</div>
+                <div class="stat-change">
+                    <i class="layui-icon layui-icon-ok-circle"></i>
+                    <span>运行正常</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div class="stat-value" id="dns-queries">-</div>
+                    <div class="stat-icon info">
+                        <i class="layui-icon layui-icon-template-1"></i>
+                    </div>
+                </div>
+                <div class="stat-label">DNS查询</div>
+                <div class="stat-change">
+                    <i class="layui-icon layui-icon-refresh"></i>
+                    <span>自动更新</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <div class="stat-value" id="uptime">-</div>
+                    <div class="stat-icon warning">
+                        <i class="layui-icon layui-icon-time"></i>
+                    </div>
+                </div>
+                <div class="stat-label">运行时间</div>
+                <div class="stat-change">
+                    <i class="layui-icon layui-icon-rate"></i>
+                    <span>系统稳定</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 配置标签页 -->
+        <div class="config-tabs">
+            <div class="tab-nav">
+                <button class="tab-btn active" onclick="switchTab('basic', event)">
+                    <i class="layui-icon layui-icon-set"></i>
+                    基础配置
+                </button>
+                <button class="tab-btn" onclick="switchTab('network', event)">
+                    <i class="layui-icon layui-icon-wifi"></i>
+                    网络设置
+                </button>
+                <button class="tab-btn" onclick="switchTab('dns', event)">
+                    <i class="layui-icon layui-icon-template-1"></i>
+                    DNS配置
+                </button>
+                <button class="tab-btn" onclick="switchTab('smart', event)">
+                    <i class="layui-icon layui-icon-light"></i>
+                    智能代理
+                </button>
+                <button class="tab-btn" onclick="switchTab('chnroutes', event)">
+                    <i class="layui-icon layui-icon-theme"></i>
+                    中国路由
+                </button>
+                <button class="tab-btn" onclick="switchTab('performance', event)">
+                    <i class="layui-icon layui-icon-engine"></i>
+                    性能优化
+                </button>
+                <button class="tab-btn" onclick="switchTab('proxy', event)">
+                    <i class="layui-icon layui-icon-component"></i>
+                    代理节点
+                </button>
+                <button class="tab-btn" onclick="switchTab('acl', event)">
+                    <i class="layui-icon layui-icon-password"></i>
+                    ACL规则
+                </button>
+                <button class="tab-btn" onclick="switchTab('bind', event)">
+                    <i class="layui-icon layui-icon-link"></i>
+                    绑定规则
+                </button>
+                <button class="tab-btn" onclick="switchTab('hijack', event)">
+                    <i class="layui-icon layui-icon-username"></i>
+                    DNS劫持
+                </button>
+            </div>
+        </div>
+
+        <!-- 基础配置 -->
+        <div id="basic-config" class="config-content active">
+            <div class="config-section slide-up">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <i class="layui-icon layui-icon-template"></i>
+                        监听设置
+                    </h3>
+                </div>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label class="form-label">SOCKS5 端口</label>
+                        <input type="number" class="form-input" id="socks5_port" placeholder="1080" min="1" max="65535" oninput="checkPortWarning(this)">
+                        <div class="port-warning" id="socks5-port-warning">
+                            <i class="layui-icon layui-icon-warning"></i>
+                            <span>小于1024的端口可能需要root权限</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">DNS 端口</label>
+                        <input type="number" class="form-input" id="dns_port" placeholder="53" min="1" max="65535" oninput="checkPortWarning(this)">
+                        <div class="port-warning" id="dns-port-warning">
+                            <i class="layui-icon layui-icon-warning"></i>
+                            <span>小于1024的端口可能需要root权限</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Web 管理端口</label>
+                        <input type="number" class="form-input" id="web_port" placeholder="8080" min="1" max="65535" oninput="checkPortWarning(this)">
+                        <div class="port-warning" id="web-port-warning">
+                            <i class="layui-icon layui-icon-warning"></i>
+                            <span>小于1024的端口可能需要root权限</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">IPv6 支持</label>
+                        <div class="d-flex align-items-center gap-2">
+                            <label class="form-switch">
+                                <input type="checkbox" id="ipv6_enabled">
+                                <span class="form-switch-slider"></span>
+                            </label>
+                            <span>启用IPv6协议支持</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="config-section slide-up" style="animation-delay: 0.1s;">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <i class="layui-icon layui-icon-util"></i>
+                        SOCK5 配置
+                    </h3>
+                </div>
+
+                <!-- 连接限制 -->
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label class="form-label">最大连接数</label>
+                        <input type="number" class="form-input" id="max_connections" placeholder="1000" min="10" max="10000">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">清理间隔 (秒)</label>
+                        <input type="number" class="form-input" id="cleanup_interval" placeholder="300" min="60" max="3600">
+                    </div>
+                </div>
+
+                <!-- 身份验证 -->
+                <div class="form-group">
+                    <label class="form-label">启用身份验证</label>
+                    <div class="d-flex align-items-center gap-2">
+                        <label class="form-switch">
+                            <input type="checkbox" id="enable_auth" lay-filter="enable_auth" lay-skin="switch"
+                                   onchange="handleAuthToggle(this)">
+                            <span class="form-switch-slider"></span>
+                        </label>
+                        <span>SOCKS5监听端口需要认证</span>
+                    </div>
+                </div>
+
+                <!-- 身份验证用户管理 -->
+                <div class="form-group" id="auth-users-section">
+                    <div class="section-header">
+                        <h3 class="section-title">
+                            <i class="layui-icon layui-icon-user"></i>
+                            认证用户管理
+                        </h3>
+                        <button class="btn btn-primary" onclick="addAuthUser()">
+                            <i class="layui-icon layui-icon-add-1"></i>
+                            添加用户
+                        </button>
+                    </div>
+                    <div class="card">
+                        <div class="card-body">
+                            <div class="table-responsive">
+                                <table class="table table-hover" style="margin-bottom: 0;">
+                                    <thead>
+                                        <tr>
+                                            <th>用户</th>
+                                            <th>状态</th>
+                                            <th>最大连接</th>
+                                            <th>下载限速</th>
+                                            <th>上传限速</th>
+                                            <th>操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="auth-users-tbody">
+                                        <!-- 动态填充用户列表 -->
+                                    </tbody>
+                                </table>
+                                <!-- 空状态提示 -->
+                                <div id="auth-users-empty" class="empty-state" style="display: none; padding: 40px; text-align: center; color: #999;">
+                                    <i class="layui-icon layui-icon-user" style="font-size: 48px; margin-bottom: 16px; display: block;"></i>
+                                    <div style="font-size: 16px; margin-bottom: 8px;">暂无认证用户</div>
+                                    <div style="font-size: 14px;">点击"添加用户"按钮创建第一个用户</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 网络配置 -->
+        <div id="network-config" class="config-content">
+            <div class="config-section slide-up">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <i class="layui-icon layui-icon-wifi"></i>
+                        连接设置
+                    </h3>
+                </div>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label class="form-label">TCP 超时 (秒)</label>
+                        <input type="number" class="form-input" id="tcp_timeout_seconds" placeholder="60" min="10" max="3600">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">UDP 超时 (秒)</label>
+                        <input type="number" class="form-input" id="udp_timeout_seconds" placeholder="300" min="10" max="3600">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">健康检查间隔 (秒)</label>
+                        <input type="number" class="form-input" id="node_health_check_interval_seconds" placeholder="600" min="60">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- DNS Configuration -->
+        <div id="dns-config" class="config-content">
+            <div class="config-section slide-up">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <i class="layui-icon layui-icon-file"></i>
+                        DNS 缓存设置
+                    </h3>
+                </div>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label class="form-label">最大缓存条目</label>
+                        <input type="number" class="form-input" id="dns_cache_max_size" placeholder="2000" min="100" max="10000">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">默认 TTL (秒)</label>
+                        <input type="number" class="form-input" id="dns_cache_default_ttl" placeholder="300" min="60">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">清理间隔 (秒)</label>
+                        <input type="number" class="form-input" id="dns_cache_cleanup_interval" placeholder="60" min="30">
+                    </div>
+                </div>
+            </div>
+
+            <div class="config-section slide-up" style="animation-delay: 0.1s;">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <i class="layui-icon layui-icon-server"></i>
+                        DNS 服务器
+                    </h3>
+                </div>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label class="form-label">中国 DNS 服务器</label>
+                        <textarea class="form-input" id="dns_groups_cn" rows="3" placeholder="每行一个 DNS 服务器，格式: IP:端口"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">国外 DNS 服务器</label>
+                        <textarea class="form-input" id="dns_groups_foreign" rows="3" placeholder="每行一个 DNS 服务器，格式: IP:端口"></textarea>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Smart Proxy Configuration -->
+        <div id="smart-config" class="config-content">
+            <div class="config-section slide-up">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <i class="layui-icon layui-icon-bot"></i>
+                        智能代理设置
+                    </h3>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">启用智能代理</label>
+                    <div class="d-flex align-items-center gap-2">
+                        <label class="form-switch">
+                            <input type="checkbox" id="smart_proxy_enable">
+                            <span class="form-switch-slider"></span>
+                        </label>
+                        <span>直连失败时自动回退到代理节点</span>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">超时时间 (毫秒)</label>
+                    <input type="number" class="form-input" id="smart_proxy_timeout_ms" placeholder="3000" min="1000" max="30000">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">黑名单过期时间 (分钟)</label>
+                    <input type="number" class="form-input" id="smart_proxy_blacklist_expiry_minutes" placeholder="360" min="60">
+                </div>
+            </div>
+        </div>
+
+        <!-- 中国路由配置 -->
+        <div id="chnroutes-config" class="config-content">
+            <div class="config-section slide-up">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <i class="layui-icon layui-icon-theme"></i>
+                        中国路由规则
+                    </h3>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">启用中国路由规则</label>
+                    <div class="d-flex align-items-center gap-2">
+                        <label class="form-switch">
+                            <input type="checkbox" id="chnroutes_enable">
+                            <span class="form-switch-slider"></span>
+                        </label>
+                        <span>自动识别中国 IP 地址进行直连</span>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">路由文件路径</label>
+                    <input type="text" class="form-input" id="chnroutes_path" placeholder="conf/chnroutes.txt" readonly>
+                </div>
+            </div>
+
+            <div class="config-section slide-up" style="animation-delay: 0.1s;" id="chnroutes-editor-section">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <i class="layui-icon layui-icon-file"></i>
+                        路由规则编辑
+                    </h3>
+                </div>
+                <div class="card">
+                    <div class="card-body">
+                        <div class="file-info-bar">
+                            <div class="file-details">
+                                <span class="file-path" id="chnroutes-current-path">
+                                    <i class="layui-icon layui-icon-file"></i>
+                                    conf/chnroutes.txt
+                                </span>
+                                <span class="file-size" id="chnroutes-size">
+                                    <i class="layui-icon layui-icon-template"></i>
+                                    <span id="chnroutes-size-value">计算中...</span>
+                                </span>
+                                <span class="file-lines" id="chnroutes-lines">
+                                    <i class="layui-icon layui-icon-list"></i>
+                                    总计 <span id="chnroutes-lines-value">计算中...</span> 行，数据 <span id="chnroutes-data-lines-value">计算中...</span> 行
+                                </span>
+                            </div>
+                            <div class="file-actions">
+                                <button class="btn btn-sm btn-primary" onclick="refreshChnroutesInfo()">
+                                    <i class="layui-icon layui-icon-refresh"></i>
+                                    刷新信息
+                                </button>
+                                <label class="btn btn-sm btn-secondary">
+                                    <i class="layui-icon layui-icon-upload"></i>
+                                    上传文件
+                                    <input type="file" accept=".txt,.conf" onchange="uploadChnroutesFile(this)" style="display: none;">
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="editor-container">
+                            <textarea class="form-input code-editor" id="chnroutes-editor"
+                                      placeholder="每行一个CIDR格式的IP段，例如:&#10;1.0.1.0/24&#10;1.0.2.0/23&#10;58.240.0.0/16"
+                                      rows="20"
+                                      onscroll="updateScrollProgress()"
+                                      oninput="updateDataLinesCount()"></textarea>
+                            <div class="scroll-progress-container">
+                                <div class="scroll-progress-bar" id="scroll-progress-bar"></div>
+                            </div>
+                            <div class="scroll-info">
+                                <span id="scroll-position">顶部</span>
+                                <span id="current-line">第 1 行</span>
+                                <span id="scroll-percentage">0%</span>
+                            </div>
+                        </div>
+
+                        <div class="editor-footer">
+                            <div class="editor-actions">
+                                <button class="btn btn-primary" onclick="saveChnroutesFile()">
+                                    <i class="layui-icon layui-icon-ok"></i>
+                                    保存文件
+                                </button>
+                                <button class="btn btn-secondary" onclick="downloadChnroutesFile()">
+                                    <i class="layui-icon layui-icon-download-circle"></i>
+                                    下载文件
+                                </button>
+                            </div>
+                            <div class="editor-status" id="chnroutes-status">
+                                <span class="status-indicator status-idle"></span>
+                                <span class="status-text">准备就绪</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 性能优化配置 -->
+        <div id="performance-config" class="config-content">
+            <div class="config-section slide-up">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <i class="layui-icon layui-icon-engine"></i>
+                        性能优化配置
+                    </h3>
+                </div>
+                <div class="card">
+                    <div class="card-body">
+                        <div class="alert alert-info">
+                            <i class="layui-icon layui-icon-tips"></i>
+                            <span>性能优化配置功能已被移除</span>
+                        </div>
+                        <p style="color: #666; line-height: 1.6;">
+                            原有的内存池、零拷贝、连接池等性能优化配置已从当前版本中移除，以简化配置和提升系统稳定性。
+                        </p>
+                        <p style="color: #666; line-height: 1.6;">
+                            如需性能调优，请直接调整系统级参数或联系开发者。
+                        </p>
+                        <div style="margin-top: 20px;">
+                            <h4 style="color: #333; margin-bottom: 10px;">当前版本优化策略：</h4>
+                            <ul style="color: #666; line-height: 1.8; padding-left: 20px;">
+                                <li>使用系统默认的内存管理机制</li>
+                                <li>采用标准I/O操作，确保兼容性</li>
+                                <li>依赖操作系统的网络连接管理</li>
+                                <li>通过调整基础配置参数来优化性能</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Proxy Nodes -->
+        <div id="proxy-config" class="config-content">
+            <div class="config-section slide-up">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <i class="layui-icon layui-icon-component"></i>
+                        代理节点管理
+                    </h3>
+                    <div class="section-actions">
+                        <button class="btn btn-primary btn-sm" onclick="addProxyNode()">
+                            <i class="layui-icon layui-icon-add-1"></i>
+                            添加节点
+                        </button>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="modern-table">
+                        <thead>
+                            <tr>
+                                <th>标识符</th>
+                                <th>协议</th>
+                                <th>IP 地址</th>
+                                <th>端口</th>
+                                <th>权重</th>
+                                <th>状态</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="proxy-nodes-tbody">
+                            <!-- 动态生成 -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ACL Rules -->
+        <div id="acl-config" class="config-content">
+            <div class="config-section slide-up">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <i class="layui-icon layui-icon-password"></i>
+                        ACL 访问控制
+                    </h3>
+                    <div class="section-actions">
+                        <button class="btn btn-primary btn-sm" onclick="addAclRule()">
+                            <i class="layui-icon layui-icon-add-1"></i>
+                            添加规则
+                        </button>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="modern-table">
+                        <thead>
+                            <tr>
+                                <th>动作</th>
+                                <th>模式</th>
+                                <th>描述</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="acl-rules-tbody">
+                            <!-- 动态生成 -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Proxy Bind Rules -->
+        <div id="bind-config" class="config-content">
+            <div class="config-section slide-up">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <i class="layui-icon layui-icon-link"></i>
+                        代理绑定规则
+                    </h3>
+                    <div class="section-actions">
+                        <button class="btn btn-primary btn-sm" onclick="addProxyBindRule()">
+                            <i class="layui-icon layui-icon-add-1"></i>
+                            添加规则
+                        </button>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="modern-table">
+                        <thead>
+                            <tr>
+                                <th>模式</th>
+                                <th>目标代理</th>
+                                <th>描述</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="proxy-bind-rules-tbody">
+                            <!-- 动态生成 -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- DNS Hijack Rules -->
+        <div id="hijack-config" class="config-content">
+            <div class="config-section slide-up">
+                <div class="section-header">
+                    <h3 class="section-title">
+                        <i class="layui-icon layui-icon-username"></i>
+                        DNS 劫持规则
+                    </h3>
+                    <div class="section-actions">
+                        <button class="btn btn-primary btn-sm" onclick="addDnsHijackRule()">
+                            <i class="layui-icon layui-icon-add-1"></i>
+                            添加规则
+                        </button>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="modern-table">
+                        <thead>
+                            <tr>
+                                <th>域名模式</th>
+                                <th>目标 (IP或IP:Port)</th>
+                                <th>描述</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dns-hijack-rules-tbody">
+                            <!-- JS 动态生成 -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+      </main>
+
+    <!-- DNS劫持规则模态框 -->
+    <div id="dns-hijack-rule-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">
+                    <i class="layui-icon layui-icon-username"></i>
+                    <span id="hijack-modal-title-text">添加DNS劫持规则</span>
+                </h3>
+                <button class="modal-close" onclick="closeDnsHijackRuleModal()">
+                    <i class="layui-icon layui-icon-close"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="dns-hijack-rule-form" onsubmit="event.preventDefault(); saveDnsHijackRule();">
+                    <input type="hidden" id="hijack-rule-index" value="">
+                    <div class="form-group">
+                        <label class="form-label">域名模式 *</label>
+                        <input type="text" class="form-input" id="hijack-pattern" placeholder="例如: *.google.com 或 api.dev.local" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">目标 *</label>
+                        <input type="text" class="form-input" id="hijack-target" placeholder="IP (e.g., 127.0.0.1) 或 IP:Port (e.g., 127.0.0.1:5353)" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">描述</label>
+                        <input type="text" class="form-input" id="hijack-description" placeholder="规则描述">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeDnsHijackRuleModal()">
+                    <i class="layui-icon layui-icon-close"></i>
+                    取消
+                </button>
+                <button type="button" class="btn btn-primary" onclick="saveDnsHijackRule()">
+                    <i class="layui-icon layui-icon-ok"></i>
+                    保存规则
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 代理节点模态框 -->
+    <div id="proxy-node-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">
+                    <i class="layui-icon layui-icon-component"></i>
+                    <span id="modal-title-text">添加代理节点</span>
+                </h3>
+                <button class="modal-close" onclick="closeProxyNodeModal()">
+                    <i class="layui-icon layui-icon-close"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="proxy-node-form">
+                    <input type="hidden" id="node-index" value="">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label class="form-label">标识符 *</label>
+                            <input type="text" class="form-input" id="node-identifier" placeholder="例如: us_proxy" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">协议 *</label>
+                            <div class="layui-form" lay-filter="node-protocol-form">
+                                <select name="protocol" id="node-protocol" lay-verify="required" lay-search="">
+                                    <option value="">请选择协议</option>
+                                    <option value="direct">Direct (直连)</option>
+                                    <option value="socks5">SOCKS5</option>
+                                    <option value="http">HTTP</option>
+                                    <option value="https">HTTPS</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">IP 地址 *</label>
+                            <input type="text" class="form-input" id="node-ip" placeholder="例如: 192.168.1.1" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">端口 *</label>
+                            <input type="number" class="form-input" id="node-port" placeholder="例如: 1080" min="0" max="65535" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">权重</label>
+                            <input type="number" class="form-input" id="node-weight" placeholder="1-10" min="1" max="10" value="5">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">启用状态</label>
+                            <div class="d-flex align-items-center gap-2">
+                                <label class="form-switch">
+                                    <input type="checkbox" id="node-enabled" checked>
+                                    <span class="form-switch-slider"></span>
+                                </label>
+                                <span>启用此节点</span>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeProxyNodeModal()">
+                    <i class="layui-icon layui-icon-close"></i>
+                    取消
+                </button>
+                <button class="btn btn-primary" onclick="saveProxyNode()">
+                    <i class="layui-icon layui-icon-ok"></i>
+                    保存
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 认证用户模态框 -->
+    <div id="auth-user-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">
+                    <i class="layui-icon layui-icon-user"></i>
+                    <span id="auth-modal-title-text">添加认证用户</span>
+                </h3>
+                <button class="modal-close" onclick="closeAuthUserModal()">
+                    <i class="layui-icon layui-icon-close"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="auth-user-form" onsubmit="event.preventDefault(); saveAuthUser();">
+                    <input type="hidden" id="auth-user-index" value="">
+                    
+                    <h4>基础信息</h4>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label class="form-label">用户名 *</label>
+                            <input type="text" class="form-input" id="auth-user-username" placeholder="请输入用户名" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">密码</label>
+                            <div class="password-input-wrapper">
+                                <input type="password" class="form-input" id="auth-user-password" placeholder="留空则不修改">
+                                <button type="button" class="password-toggle-btn" onclick="togglePasswordVisibility('auth-user-password')" title="显示/隐藏密码">
+                                    <i class="layui-icon layui-icon-password" id="auth-user-password-icon"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">启用状态</label>
+                            <div class="d-flex align-items-center gap-2">
+                                <label class="form-switch">
+                                    <input type="checkbox" id="auth-user-enabled" checked>
+                                    <span class="form-switch-slider"></span>
+                                </label>
+                                <span>启用此用户</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <hr class="form-divider">
+                    
+                                        <h4>访问控制 (ACLs)</h4>
+                    
+                                        <div class="form-grid">
+                    
+                                            <div class="form-group">
+                    
+                                                <label class="form-label">最大连接数</label>
+                    
+                                                <input type="number" class="form-input" id="acl-max-connections" placeholder="0" min="0">
+                    
+                                                <small class="form-text">0 表示不限制</small>
+                    
+                                            </div>
+                    
+                                            <div class="form-group">
+                    
+                                                <label class="form-label">下载限速 (KB/s)</label>
+                    
+                                                <input type="number" class="form-input" id="acl-rate-limit-down" placeholder="0" min="0">
+                    
+                                                <small class="form-text">0 表示不限制</small>
+                    
+                                            </div>
+                    
+                                            <div class="form-group">
+                    
+                                                <label class="form-label">上传限速 (KB/s)</label>
+                    
+                                                <input type="number" class="form-input" id="acl-rate-limit-up" placeholder="0" min="0">
+                    
+                                                <small class="form-text">0 表示不限制</small>
+                    
+                                            </div>
+                    
+                                             <div class="form-group">
+                    
+                                                <label class="form-label">连接有效期 (分钟)</label>
+                    
+                                                <input type="number" class="form-input" id="acl-expires-after" placeholder="0" min="0">
+                    
+                                                <small class="form-text">0 表示永不过期</small>
+                    
+                                            </div>
+                    
+                                        </div>
+                    
+                                         <div class="form-group">
+                    
+                                            <label class="form-label">用户组 (逗号分隔)</label>
+                    
+                                            <input type="text" class="form-input" id="acl-user-groups" placeholder="例如: admin,default">
+                    
+                                        </div>
+                    
+                                        <div class="form-grid">
+                    
+                                            <div class="form-group">
+                    
+                                                <label class="form-label">允许的来源IP (逗号分隔)</label>
+                    
+                                                <textarea class="form-input" id="acl-allow-from" rows="2" placeholder="例如: 192.168.1.0/24,127.0.0.1"></textarea>
+                    
+                                            </div>
+                    
+                                            <div class="form-group">
+                    
+                                                <label class="form-label">阻止的来源IP (逗号分隔)</label>
+                    
+                                                <textarea class="form-input" id="acl-block-from" rows="2" placeholder="例如: 10.0.0.1"></textarea>
+                    
+                                            </div>
+                    
+                                        </div>
+                    
+                                        
+                    
+                                        <div class="form-group">
+                    
+                                            <label class="form-label">时间规则</label>
+                        <div class="time-rule-editor">
+                            <div class="time-rule-inputs">
+                                <div class="day-selector">
+                                    <label><input type="checkbox" name="time-day" value="Mon"> 一</label>
+                                    <label><input type="checkbox" name="time-day" value="Tue"> 二</label>
+                                    <label><input type="checkbox" name="time-day" value="Wed"> 三</label>
+                                    <label><input type="checkbox" name="time-day" value="Thu"> 四</label>
+                                    <label><input type="checkbox" name="time-day" value="Fri"> 五</label>
+                                    <label><input type="checkbox" name="time-day" value="Sat"> 六</label>
+                                    <label><input type="checkbox" name="time-day" value="Sun"> 日</label>
+                                    <label><input type="checkbox" name="time-day" value="*"> 每日</label>
+                                </div>
+                                <div class="time-inputs">
+                                    <input type="text" class="form-input" id="time-rule-start" placeholder="开始时间" readonly>
+                                    <span>-</span>
+                                    <input type="text" class="form-input" id="time-rule-end" placeholder="结束时间" readonly>
+                                    <button type="button" class="btn btn-sm btn-secondary" onclick="addTimeRule()"><i class="layui-icon layui-icon-add-1"></i> 添加</button>
+                                </div>
+                            </div>
+                            <ul id="time-rules-list" class="time-rules-list">
+                                <!-- 动态添加规则 -->
+                            </ul>
+                        </div>
+                        <small class="form-text">用户只能在规则定义的时间段内访问。留空表示不限制。</small>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeAuthUserModal()">
+                    <i class="layui-icon layui-icon-close"></i>
+                    取消
+                </button>
+                <button class="btn btn-primary" onclick="saveAuthUser()">
+                    <i class="layui-icon layui-icon-ok"></i>
+                    保存
+                </button>
+            </div>
+        </div>
+    </div>
+
+
+    <style>
+        /* Modal Styles */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+            backdrop-filter: blur(5px);
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 1rem;
+            width: 90%;
+            max-width: 600px;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: var(--shadow-lg);
+            animation: slideIn 0.3s ease;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.5rem 1.5rem 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .modal-title {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin: 0;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 0.25rem;
+            transition: all 0.3s ease;
+        }
+
+        .modal-close:hover {
+            background: var(--light-bg);
+            color: var(--text-primary);
+        }
+
+        .modal-body,
+        .modal-footer {
+            padding: 1rem 1.5rem;
+        }
+
+        .modal-footer {
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.5rem;
+        }
+
+        @media (max-width: 768px) {
+            .modal-content {
+                width: 95%;
+                margin: 1rem;
+            }
+
+            .form-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Table responsive */
+        .table-responsive {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+    </style>
+
+    <!-- layui JavaScript -->
+    <script src="layui-v2.13.1/layui/layui.js"></script>
+    <!-- 应用 JavaScript -->
+    <script src="app.js"></script>
+    <script>
+        // 确认 app.js 已加载并执行
+        setTimeout(function() {
+            alert('SmartProxy 控制台已成功加载！app.js 已执行。');
+        }, 1000);
+    </script>
+
+  </body>
+</html>
