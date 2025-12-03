@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>showAlert 自适应测试</title>
+    <!-- layui CSS -->
+    <link rel="stylesheet" href="https://www.layuicdn.com/layui-v2.13.1/css/layui.css">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #f5f5f5;
+        }
+
+        .test-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .test-btn {
+            background: #5B8DEF;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            margin: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            display: inline-block;
+        }
+
+        .test-btn:hover {
+            background: #4A7CC7;
+            transform: translateY(-1px);
+        }
+
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+        }
+
+        .test-title {
+            font-weight: bold;
+            margin-bottom: 12px;
+            color: #333;
+            font-size: 16px;
+        }
+
+        .description {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 10px;
+            line-height: 1.5;
+        }
+
+        /* 右上角悬浮Toast样式 - 真正自适应 */
+        .alert-toast {
+            position: fixed;
+            top: 20px;
+            right: -450px;
+            width: fit-content; /* 真正的自适应宽度 */
+            max-width: min(90vw, 400px); /* 响应式最大宽度 */
+            min-width: fit-content; /* 最小宽度也由内容决定 */
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            backdrop-filter: blur(20px);
+            border-radius: 0.75rem;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+            z-index: 9999;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.875rem 1.125rem;
+            transform: translateX(0);
+            transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            opacity: 0;
+            font-size: 0.875rem;
+            line-height: 1.4;
+            white-space: nowrap;
+            box-sizing: border-box;
+            isolation: isolate;
+        }
+
+        .alert-toast.show {
+            right: 20px;
+            transform: translateX(0);
+            opacity: 1;
+        }
+
+        .alert-toast.hide {
+            right: -450px;
+            transform: translateX(20px);
+            opacity: 0;
+        }
+
+        .alert-toast.long-message {
+            white-space: normal;
+            width: fit-content;
+            max-width: min(80vw, 500px);
+        }
+
+        .alert-toast .alert-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.2);
+            flex-shrink: 0;
+        }
+
+        .alert-toast .alert-icon i {
+            font-size: 14px !important;
+            color: white;
+            margin: 0;
+            width: 14px;
+            height: 14px;
+            line-height: 14px;
+        }
+
+        .alert-toast .alert-message {
+            flex: 1;
+            color: white;
+            font-weight: 500;
+            word-break: break-word;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+        }
+
+        .alert-toast .alert-close {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            flex-shrink: 0;
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .alert-toast .alert-close:hover {
+            background: rgba(255, 255, 255, 0.3);
+            color: white;
+            transform: scale(1.1);
+        }
+
+        .alert-toast .alert-close i {
+            font-size: 12px !important;
+            margin: 0;
+            width: 12px;
+            height: 12px;
+            line-height: 12px;
+        }
+
+        /* 不同类型的背景色 */
+        .alert-toast.alert-success {
+            background: linear-gradient(135deg, #10B981, #059669);
+        }
+
+        .alert-toast.alert-error {
+            background: linear-gradient(135deg, #EF4444, #DC2626);
+        }
+
+        .alert-toast.alert-warning {
+            background: linear-gradient(135deg, #F59E0B, #D97706);
+        }
+
+        .alert-toast.alert-info {
+            background: linear-gradient(135deg, #3B82F6, #1E40AF);
+        }
+
+        .alert-toast.alert-autosave {
+            background: linear-gradient(135deg, #6366F1, #4F46E5);
+        }
+
+        /* 移动端适配 */
+        @media (max-width: 480px) {
+            .alert-toast {
+                top: 10px;
+                right: -350px;
+                width: fit-content;
+                max-width: calc(100vw - 40px);
+                padding: 0.75rem 1rem;
+                font-size: 0.8rem;
+                gap: 0.5rem;
+            }
+
+            .alert-toast.show {
+                right: 10px;
+            }
+
+            .alert-toast.hide {
+                right: -350px;
+            }
+
+            .alert-toast.long-message {
+                width: fit-content;
+                max-width: calc(100vw - 30px);
+                white-space: normal;
+            }
+        }
+
+        .width-display {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            z-index: 9998;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <h1>🎯 showAlert 真正自适应测试</h1>
+        <p class="description">
+            这个测试页面验证 alert 容器是否能根据内容自动调整宽度，不再出现短消息显示过长容器的问题。
+        </p>
+
+        <div class="test-section">
+            <div class="test-title">📏 宽度自适应测试</div>
+            <p class="description">测试不同长度消息的自适应效果</p>
+
+            <button class="test-btn" onclick="showAlert('success', '✓')">1字符</button>
+            <button class="test-btn" onclick="showAlert('info', '✓ 成功')">3字符</button>
+            <button class="test-btn" onclick="showAlert('warning', '操作成功完成！')">7字符</button>
+            <button class="test-btn" onclick="showAlert('error', '这是一条中等长度的消息')">12字符</button>
+            <button class="test-btn" onclick="showAlert('success', '这是一条较长的消息用来测试自适应')">19字符</button>
+            <button class="test-btn" onclick="showAlert('info', '这是一条很长的消息用来测试自适应宽度是否真的有效')">30字符</button>
+        </div>
+
+        <div class="test-section">
+            <div class="test-title">🔤 中英文混合测试</div>
+            <p class="description">测试中英文混合内容的自适应效果</p>
+
+            <button class="test-btn" onclick="showAlert('success', 'OK')">2字符</button>
+            <button class="test-btn" onclick="showAlert('info', 'Save')">4字符</button>
+            <button class="test-btn" onclick="showAlert('warning', 'Config Saved')">13字符</button>
+            <button class="test-btn" onclick="showAlert('error', 'Configuration file has been updated successfully')">47字符</button>
+        </div>
+
+        <div class="test-section">
+            <div class="test-title">🎨 不同类型消息测试</div>
+            <p class="description">测试不同类型消息的显示效果</p>
+
+            <button class="test-btn" onclick="showAlert('success', '操作成功')">成功</button>
+            <button class="test-btn" onclick="showAlert('error', '发生错误')">错误</button>
+            <button class="test-btn" onclick="showAlert('warning', '请注意')">警告</button>
+            <button class="test-btn" onclick="showAlert('info', '信息提示')">信息</button>
+            <button class="test-btn" onclick="showAlert('autosave', '自动保存完成')">自动保存</button>
+        </div>
+
+        <div class="test-section">
+            <div class="test-title">🚀 连续显示测试</div>
+            <p class="description">连续显示不同长度的消息，观察宽度变化</p>
+
+            <button class="test-btn" onclick="testSequential()">连续显示</button>
+            <button class="test-btn" onclick="clearAllAlerts()">清除所有</button>
+        </div>
+
+        <div class="test-section">
+            <div class="test-title">📐 宽度信息</div>
+            <p class="description">显示当前页面上所有 alert 的实际宽度信息（查看左下角）</p>
+            <button class="test-btn" onclick="toggleWidthDisplay()">切换宽度显示</button>
+        </div>
+    </div>
+
+    <div id="widthDisplay" class="width-display" style="display: none;">
+        <div>Alert 宽度监控</div>
+    </div>
+
+    <!-- layui JS -->
+    <script src="https://www.layuicdn.com/layui-v2.13.1/layui.js"></script>
+    <script>
+        // 完全自适应的 showAlert 函数
+        function showAlert(type, message) {
+            console.log('showAlert被调用:', type, message);
+            const alertId = 'alert-' + Date.now();
+
+            // 创建alert容器和内容
+            const alertContainer = document.createElement('div');
+            alertContainer.id = alertId;
+            alertContainer.className = `alert-toast alert-${type}`;
+
+            // 根据消息长度决定是否需要换行
+            if (message.length > 30) {
+                alertContainer.classList.add('long-message');
+            }
+
+            // 根据类型选择图标和自动隐藏时间
+            let iconClass = '';
+            let autoHide = 3000;
+            switch(type) {
+                case 'success':
+                    iconClass = 'layui-icon-ok-circle';
+                    autoHide = 3000;
+                    break;
+                case 'error':
+                    iconClass = 'layui-icon-close';
+                    autoHide = 5000;
+                    break;
+                case 'warning':
+                    iconClass = 'layui-icon-warning';
+                    autoHide = 4000;
+                    break;
+                case 'info':
+                    iconClass = 'layui-icon-about';
+                    autoHide = 3000;
+                    break;
+                case 'autosave':
+                    iconClass = 'layui-icon-refresh';
+                    autoHide = 2000;
+                    break;
+                default:
+                    iconClass = 'layui-icon-about';
+                    autoHide = 3000;
+            }
+
+            alertContainer.innerHTML = `
+                <div class="alert-icon">
+                    <i class="layui-icon ${iconClass}"></i>
+                </div>
+                <div class="alert-message">
+                    <span>${message}</span>
+                </div>
+                <div class="alert-close" onclick="this.parentElement.remove()">
+                    <i class="layui-icon layui-icon-close"></i>
+                </div>
+            `;
+
+            // 添加到页面右上角
+            document.body.appendChild(alertContainer);
+
+            // 获取实际宽度用于调试
+            const actualWidth = alertContainer.offsetWidth;
+            console.log(`Alert "${message}" 实际宽度: ${actualWidth}px`);
+
+            // 更新宽度显示
+            updateWidthDisplay();
+
+            // 触发进入动画
+            setTimeout(() => {
+                alertContainer.classList.add('show');
+            }, 50);
+
+            // 自动隐藏
+            const hideTimeout = setTimeout(() => {
+                alertContainer.classList.add('hide');
+                setTimeout(() => {
+                    if (document.getElementById(alertId)) {
+                        alertContainer.remove();
+                        updateWidthDisplay();
+                    }
+                }, 400);
+            }, autoHide);
+
+            // 鼠标悬停时取消自动隐藏
+            alertContainer.addEventListener('mouseenter', () => {
+                clearTimeout(hideTimeout);
+            });
+
+            alertContainer.addEventListener('mouseleave', () => {
+                setTimeout(() => {
+                    alertContainer.classList.add('hide');
+                    setTimeout(() => {
+                        if (document.getElementById(alertId)) {
+                            alertContainer.remove();
+                            updateWidthDisplay();
+                        }
+                    }, 400);
+                }, 1000);
+            });
+
+            return alertContainer;
+        }
+
+        function testSequential() {
+            const messages = [
+                { type: 'success', text: '✓' },
+                { type: 'info', text: '✓ 成功' },
+                { type: 'warning', text: '操作成功完成！' },
+                { type: 'error', text: '这是一条中等长度的消息' },
+                { type: 'success', text: '这是一条较长的消息用来测试自适应' },
+                { type: 'info', text: '这是一条很长的消息用来测试自适应宽度是否真的有效' }
+            ];
+
+            messages.forEach((msg, index) => {
+                setTimeout(() => {
+                    showAlert(msg.type, msg.text);
+                }, index * 1500);
+            });
+        }
+
+        function clearAllAlerts() {
+            const alerts = document.querySelectorAll('.alert-toast');
+            alerts.forEach(alert => alert.remove());
+            updateWidthDisplay();
+        }
+
+        function toggleWidthDisplay() {
+            const display = document.getElementById('widthDisplay');
+            display.style.display = display.style.display === 'none' ? 'block' : 'none';
+            updateWidthDisplay();
+        }
+
+        function updateWidthDisplay() {
+            const display = document.getElementById('widthDisplay');
+            if (display.style.display === 'none') return;
+
+            const alerts = document.querySelectorAll('.alert-toast.show');
+            let content = '<div>📐 Alert 宽度监控</div>';
+
+            if (alerts.length === 0) {
+                content += '<div>没有显示的 alert</div>';
+            } else {
+                alerts.forEach((alert, index) => {
+                    const width = alert.offsetWidth;
+                    const message = alert.querySelector('.alert-message span').textContent;
+                    content += `<div>Alert ${index + 1}: ${width}px | "${message}"</div>`;
+                });
+            }
+
+            display.innerHTML = content;
+        }
+
+        // 页面加载完成后显示欢迎消息
+        document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(() => {
+                showAlert('success', '🎯 showAlert 自适应测试页面已加载！现在容器会根据内容自动调整宽度。');
+            }, 500);
+        });
+
+        // 定期更新宽度显示
+        setInterval(updateWidthDisplay, 1000);
+    </script>
+</body>
+</html>

@@ -46,13 +46,6 @@ func main() {
 		log.Fatalf("Failed to create SOCKS5 server: %v", err)
 	}
 
-	// 创建配置管理器
-	configManager := web.NewSmartProxyConfigManager(configPath, log.New(os.Stdout, "[Config] ", log.LstdFlags))
-	if err := configManager.LoadConfig(); err != nil {
-		log.Printf("Failed to load config: %v", err)
-		// 使用默认Web配置继续运行
-	}
-
 	// 创建Web服务器配置
 	webConfig := web.WebConfig{
 		Enabled: true,
@@ -60,7 +53,7 @@ func main() {
 	}
 
 	// 创建Web服务器，传入配置管理器
-	webServer := web.NewWebServer(configManager, webConfig, log.New(os.Stdout, "[Web] ", log.LstdFlags))
+	webServer := web.NewWebServer(mainCfgManager, webConfig, log.New(os.Stdout, "[Web] ", log.LstdFlags))
 
 	// 创建DNS服务器配置（router为nil，将使用默认路由）
 	dnsConfig := &dns.Config{

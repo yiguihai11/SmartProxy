@@ -114,12 +114,8 @@
                     代理节点
                 </button>
                 <button class="tab-btn" onclick="switchTab('acl', event)">
-                    <i class="layui-icon layui-icon-password"></i>
-                    ACL规则
-                </button>
-                <button class="tab-btn" onclick="switchTab('bind', event)">
                     <i class="layui-icon layui-icon-link"></i>
-                    绑定规则
+                    路由规则
                 </button>
                 <button class="tab-btn" onclick="switchTab('hijack', event)">
                     <i class="layui-icon layui-icon-username"></i>
@@ -373,7 +369,7 @@
                 </div>
                 <div class="form-group">
                     <label class="form-label">路由文件路径</label>
-                    <input type="text" class="form-input" id="chnroutes_path" placeholder="conf/chnroutes.txt" readonly>
+                    <input type="text" class="form-input" id="chnroutes_path" placeholder="conf/chnroutes.txt">
                 </div>
             </div>
 
@@ -522,16 +518,16 @@
             </div>
         </div>
 
-        <!-- ACL Rules -->
+        <!-- Router Rules -->
         <div id="acl-config" class="config-content">
             <div class="config-section slide-up">
                 <div class="section-header">
                     <h3 class="section-title">
-                        <i class="layui-icon layui-icon-password"></i>
-                        ACL 访问控制
+                        <i class="layui-icon layui-icon-link"></i>
+                        路由规则
                     </h3>
                     <div class="section-actions">
-                        <button class="btn btn-primary btn-sm" onclick="addAclRule()">
+                        <button class="btn btn-primary btn-sm" onclick="addRouterRule()">
                             <i class="layui-icon layui-icon-add-1"></i>
                             添加规则
                         </button>
@@ -542,45 +538,13 @@
                         <thead>
                             <tr>
                                 <th>动作</th>
-                                <th>模式</th>
+                                <th>模式 (Patterns)</th>
+                                <th>代理节点</th>
                                 <th>描述</th>
                                 <th>操作</th>
                             </tr>
                         </thead>
-                        <tbody id="acl-rules-tbody">
-                            <!-- 动态生成 -->
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        <!-- Proxy Bind Rules -->
-        <div id="bind-config" class="config-content">
-            <div class="config-section slide-up">
-                <div class="section-header">
-                    <h3 class="section-title">
-                        <i class="layui-icon layui-icon-link"></i>
-                        代理绑定规则
-                    </h3>
-                    <div class="section-actions">
-                        <button class="btn btn-primary btn-sm" onclick="addProxyBindRule()">
-                            <i class="layui-icon layui-icon-add-1"></i>
-                            添加规则
-                        </button>
-                    </div>
-                </div>
-                <div class="table-responsive">
-                    <table class="modern-table">
-                        <thead>
-                            <tr>
-                                <th>模式</th>
-                                <th>目标代理</th>
-                                <th>描述</th>
-                                <th>操作</th>
-                            </tr>
-                        </thead>
-                        <tbody id="proxy-bind-rules-tbody">
+                        <tbody id="router-rules-tbody">
                             <!-- 动态生成 -->
                         </tbody>
                     </table>
@@ -658,6 +622,60 @@
                     取消
                 </button>
                 <button type="button" class="btn btn-primary" onclick="saveDnsHijackRule()">
+                    <i class="layui-icon layui-icon-ok"></i>
+                    保存规则
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 路由规则模态框 -->
+    <div id="router-rule-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">
+                    <i class="layui-icon layui-icon-link"></i>
+                    <span id="router-rule-modal-title-text">添加路由规则</span>
+                </h3>
+                <button class="modal-close" onclick="closeRouterRuleModal()">
+                    <i class="layui-icon layui-icon-close"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <form id="router-rule-form" onsubmit="event.preventDefault(); saveRouterRule();">
+                    <input type="hidden" id="router-rule-index" value="">
+                    <div class="form-group">
+                        <label class="form-label">动作 *</label>
+                        <div class="layui-form" lay-filter="router-rule-action-form">
+                            <select name="action" id="router-rule-action" lay-verify="required">
+                                <option value="">请选择Action类型</option>
+                                <option value="allow">Allow (直连)</option>
+                                <option value="deny">Deny (走代理)</option>
+                                <option value="block">Block (屏蔽)</option>
+                                <option value="proxy">Proxy (通过代理节点)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">模式 (Patterns) *</label>
+                        <textarea class="form-input" id="router-rule-patterns" rows="4" placeholder="每行一个模式, 例如:&#10;*.google.com&#10;1.2.3.4&#10;192.168.0.0/16" required></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">代理节点</label>
+                        <input type="text" class="form-input" id="router-rule-proxy-node" placeholder="例如: proxy1 (仅当动作为 'proxy' 时需要)">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">描述</label>
+                        <input type="text" class="form-input" id="router-rule-description" placeholder="规则描述">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="closeRouterRuleModal()">
+                    <i class="layui-icon layui-icon-close"></i>
+                    取消
+                </button>
+                <button type="button" class="btn btn-primary" onclick="saveRouterRule()">
                     <i class="layui-icon layui-icon-ok"></i>
                     保存规则
                 </button>
@@ -994,12 +1012,6 @@
     <script src="layui-v2.13.1/layui/layui.js"></script>
     <!-- 应用 JavaScript -->
     <script src="app.js"></script>
-    <script>
-        // 确认 app.js 已加载并执行
-        setTimeout(function() {
-            alert('SmartProxy 控制台已成功加载！app.js 已执行。');
-        }, 1000);
-    </script>
 
   </body>
 </html>

@@ -15,6 +15,7 @@ type Config struct {
 	Listener struct {
 		SOCKS5Port  int  `json:"socks5_port"`
 		WebPort     int  `json:"web_port"`
+		DNSPort     int  `json:"dns_port"`
 		IPv6Enabled bool `json:"ipv6_enabled"`
 	} `json:"listener"`
 
@@ -30,12 +31,12 @@ type Config struct {
 			Enable bool   `json:"enable"`
 			Path   string `json:"path"`
 		} `json:"chnroutes"`
-		Rules []RouterRule `json:"rules"`
+		Rules      []RouterRule `json:"rules"`
+		ProxyNodes []ProxyNode  `json:"proxy_nodes,omitempty"`
 	} `json:"router"`
 
 	TrafficDetection struct {
 		Enabled         bool `json:"enabled"`
-		TimeoutMs       int  `json:"timeout_ms"`
 		EnhancedProbing struct {
 			Enable              bool  `json:"enable"`
 			SNIExtraction       bool  `json:"sni_extraction"`
@@ -45,8 +46,6 @@ type Config struct {
 			ProbingPorts        []int `json:"probing_ports"`
 		} `json:"enhanced_probing"`
 	} `json:"traffic_detection"`
-
-	ProxyNodes []ProxyNode `json:"proxy_nodes"`
 
 	DNS struct {
 		Enabled bool `json:"enabled"`
@@ -222,9 +221,9 @@ func (m *Manager) GetConfig() *Config {
 		copy(configCopy.Router.Rules, m.config.Router.Rules)
 	}
 
-	if m.config.ProxyNodes != nil {
-		configCopy.ProxyNodes = make([]ProxyNode, len(m.config.ProxyNodes))
-		copy(configCopy.ProxyNodes, m.config.ProxyNodes)
+	if m.config.Router.ProxyNodes != nil {
+		configCopy.Router.ProxyNodes = make([]ProxyNode, len(m.config.Router.ProxyNodes))
+		copy(configCopy.Router.ProxyNodes, m.config.Router.ProxyNodes)
 	}
 
 	if m.config.SOCKS5.AuthUsers != nil {
@@ -252,25 +251,59 @@ func (m *Manager) GetConfig() *Config {
 	return &configCopy
 }
 
+// UpdateFullConfig replaces the entire configuration and saves it.
+func (m *Manager) UpdateFullConfig(newConfig *Config) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	m.config = newConfig
+
+	// ensure directory exists
+	if err := os.MkdirAll(filepath.Dir(m.configPath), 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %v", err)
+	}
+
+	data, err := json.MarshalIndent(m.config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %v", err)
+	}
+
+	// Write to a temporary file then rename, to ensure atomic operation
+	tempPath := m.configPath + ".tmp"
+	if err := ioutil.WriteFile(tempPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write temp config file: %v", err)
+	}
+
+	if err := os.Rename(tempPath, m.configPath); err != nil {
+		os.Remove(tempPath)
+		return fmt.Errorf("failed to rename temp config file: %v", err)
+	}
+
+	m.lastLoad = time.Now()
+	return nil
+}
+
 // UpdateListenerConfig 更新监听器配置
-func (m *Manager) UpdateListenerConfig(socks5Port, webPort int, ipv6Enabled bool) error {
+func (m *Manager) UpdateListenerConfig(socks5Port, webPort, dnsPort int, ipv6Enabled bool) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
 	m.config.Listener.SOCKS5Port = socks5Port
 	m.config.Listener.WebPort = webPort
+	m.config.Listener.DNSPort = dnsPort
 	m.config.Listener.IPv6Enabled = ipv6Enabled
 
 	return nil
 }
 
 // GetListenerConfig 获取监听器配置
-func (m *Manager) GetListenerConfig() (socks5Port, webPort int, ipv6Enabled bool) {
+func (m *Manager) GetListenerConfig() (socks5Port, webPort, dnsPort int, ipv6Enabled bool) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
 	return m.config.Listener.SOCKS5Port,
 		m.config.Listener.WebPort,
+		m.config.Listener.DNSPort,
 		m.config.Listener.IPv6Enabled
 }
 
@@ -350,13 +383,13 @@ func (m *Manager) AddProxyNode(node ProxyNode) error {
 	defer m.mutex.Unlock()
 
 	// 检查节点名称是否已存在
-	for _, existingNode := range m.config.ProxyNodes {
+	for _, existingNode := range m.config.Router.ProxyNodes {
 		if existingNode.Name == node.Name {
 			return fmt.Errorf("proxy node %s already exists", node.Name)
 		}
 	}
 
-	m.config.ProxyNodes = append(m.config.ProxyNodes, node)
+	m.config.Router.ProxyNodes = append(m.config.Router.ProxyNodes, node)
 	return nil
 }
 
@@ -365,9 +398,9 @@ func (m *Manager) UpdateProxyNode(name string, node ProxyNode) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	for i, existingNode := range m.config.ProxyNodes {
+	for i, existingNode := range m.config.Router.ProxyNodes {
 		if existingNode.Name == name {
-			m.config.ProxyNodes[i] = node
+			m.config.Router.ProxyNodes[i] = node
 			return nil
 		}
 	}
@@ -380,11 +413,11 @@ func (m *Manager) DeleteProxyNode(name string) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	for i, node := range m.config.ProxyNodes {
+	for i, node := range m.config.Router.ProxyNodes {
 		if node.Name == name {
-			m.config.ProxyNodes = append(
-				m.config.ProxyNodes[:i],
-				m.config.ProxyNodes[i+1:]...,
+			m.config.Router.ProxyNodes = append(
+				m.config.Router.ProxyNodes[:i],
+				m.config.Router.ProxyNodes[i+1:]...,
 			)
 			return nil
 		}
@@ -398,8 +431,8 @@ func (m *Manager) GetProxyNodes() []ProxyNode {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
-	nodes := make([]ProxyNode, len(m.config.ProxyNodes))
-	copy(nodes, m.config.ProxyNodes)
+	nodes := make([]ProxyNode, len(m.config.Router.ProxyNodes))
+	copy(nodes, m.config.Router.ProxyNodes)
 	return nodes
 }
 
@@ -536,6 +569,7 @@ func (m *Manager) createDefaultConfig() error {
 	// 设置默认值
 	defaultConfig.Listener.SOCKS5Port = 1080
 	defaultConfig.Listener.WebPort = 8080
+	defaultConfig.Listener.DNSPort = 1053
 	defaultConfig.Listener.IPv6Enabled = true
 
 	defaultConfig.SOCKS5.MaxConnections = 1000
@@ -567,7 +601,6 @@ func (m *Manager) createDefaultConfig() error {
 	}
 
 	defaultConfig.TrafficDetection.Enabled = true
-	defaultConfig.TrafficDetection.TimeoutMs = 3000
 	defaultConfig.TrafficDetection.EnhancedProbing.Enable = true
 	defaultConfig.TrafficDetection.EnhancedProbing.SNIExtraction = true
 	defaultConfig.TrafficDetection.EnhancedProbing.HTTPValidation = true
@@ -575,7 +608,7 @@ func (m *Manager) createDefaultConfig() error {
 	defaultConfig.TrafficDetection.EnhancedProbing.ValidationTimeoutMs = 3000
 	defaultConfig.TrafficDetection.EnhancedProbing.ProbingPorts = []int{80, 443, 8080, 8443}
 
-	defaultConfig.ProxyNodes = []ProxyNode{}
+	defaultConfig.Router.ProxyNodes = []ProxyNode{}
 
 	defaultConfig.DNS.Enabled = true
 	defaultConfig.DNS.Cache.MaxSize = 2000

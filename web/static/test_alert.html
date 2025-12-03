@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>showAlert 函数测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #f5f5f5;
+        }
+        .test-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        .test-btn {
+            background: #5B8DEF;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            margin: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .test-btn:hover {
+            background: #4A7CC7;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+        }
+        .test-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #333;
+        }
+    </style>
+    <!-- layui CSS -->
+    <link href="web/static/layui-v2.13.1/layui/css/layui.css" rel="stylesheet">
+    <!-- 自定义样式 -->
+    <link href="web/static/styles.css" rel="stylesheet">
+</head>
+<body>
+    <div class="test-container">
+        <h1>showAlert 函数测试页面</h1>
+
+        <div class="test-section">
+            <div class="test-title">基础类型测试</div>
+            <button class="test-btn" onclick="showAlert('success', '成功')">成功消息（极短）</button>
+            <button class="test-btn" onclick="showAlert('success', '操作成功完成！')">成功消息（短）</button>
+            <button class="test-btn" onclick="showAlert('error', '发生错误，请重试')">错误消息（中等）</button>
+            <button class="test-btn" onclick="showAlert('warning', '请注意：这是一个警告')">警告消息（中等）</button>
+            <button class="test-btn" onclick="showAlert('info', '这是一条信息提示')">信息消息（中等）</button>
+            <button class="test-btn" onclick="showAlert('autosave', '配置已自动保存')">自动保存消息（中等）</button>
+        </div>
+
+        <div class="test-section">
+            <div class="test-title">长消息测试</div>
+            <button class="test-btn" onclick="showAlert('info', '这是一条很长的消息，用来测试Alert组件的显示效果。当消息内容较长时，应该能够正确换行并保持良好的可读性，同时不会破坏页面布局。')">长消息测试</button>
+        </div>
+
+        <div class="test-section">
+            <div class="test-title">连续消息测试</div>
+            <button class="test-btn" onclick="showMultipleAlerts()">连续显示多条消息</button>
+        </div>
+
+        <div class="test-section">
+            <div class="test-title">默认类型测试</div>
+            <button class="test-btn" onclick="showAlert('unknown', '未知类型的消息')">未知类型</button>
+        </div>
+    </div>
+
+    <!-- layui JS -->
+    <script src="web/static/layui-v2.13.1/layui/layui.js"></script>
+    <!-- JavaScript -->
+    <script>
+        // 这里需要复制 showAlert 函数的实现
+        function showAlert(type, message) {
+            console.log('showAlert被调用:', type, message);
+            const alertId = 'alert-' + Date.now();
+
+            // 创建alert容器和内容
+            const alertContainer = document.createElement('div');
+            alertContainer.id = alertId;
+            alertContainer.className = `alert-toast alert-${type}`;
+
+            // 根据类型选择图标和自动隐藏时间
+            let iconClass = '';
+            let autoHide = 3000; // 默认3秒自动隐藏
+            switch(type) {
+                case 'success':
+                    iconClass = 'layui-icon-ok-circle';
+                    autoHide = 3000;
+                    break;
+                case 'error':
+                    iconClass = 'layui-icon-close';
+                    autoHide = 5000; // 错误消息显示5秒
+                    break;
+                case 'warning':
+                    iconClass = 'layui-icon-warning';
+                    autoHide = 4000; // 警告消息显示4秒
+                    break;
+                case 'info':
+                    iconClass = 'layui-icon-about';
+                    autoHide = 3000;
+                    break;
+                case 'autosave':
+                    iconClass = 'layui-icon-refresh';
+                    autoHide = 2000; // 自动保存消息只显示2秒，更简洁
+                    break;
+                default:
+                    iconClass = 'layui-icon-about';
+                    autoHide = 3000;
+            }
+
+            alertContainer.innerHTML = `
+                <div class="alert-icon">
+                    <i class="layui-icon ${iconClass}"></i>
+                </div>
+                <div class="alert-message">
+                    <span>${message}</span>
+                </div>
+                <div class="alert-close" onclick="this.parentElement.remove()">
+                    <i class="layui-icon layui-icon-close"></i>
+                </div>
+            `;
+
+            // 添加到页面右上角
+            document.body.appendChild(alertContainer);
+
+            // 触发进入动画
+            setTimeout(() => {
+                alertContainer.classList.add('show');
+            }, 50); // 增加延迟确保DOM更新完成
+
+            // 自动隐藏（点击关闭或定时）
+            const hideTimeout = setTimeout(() => {
+                alertContainer.classList.add('hide');
+                setTimeout(() => {
+                    if (document.getElementById(alertId)) {
+                        alertContainer.remove();
+                    }
+                }, 400); // 等待退出动画完成
+            }, autoHide); // 使用动态的隐藏时间
+
+            // 鼠标悬停时取消自动隐藏
+            alertContainer.addEventListener('mouseenter', () => {
+                clearTimeout(hideTimeout);
+            });
+
+            alertContainer.addEventListener('mouseleave', () => {
+                setTimeout(() => {
+                    alertContainer.classList.add('hide');
+                    setTimeout(() => {
+                        if (document.getElementById(alertId)) {
+                            alertContainer.remove();
+                        }
+                    }, 400);
+                }, 1000); // 鼠标离开后1秒隐藏
+            });
+
+            return alertContainer; // 返回容器引用，方便调试
+        }
+
+        function showMultipleAlerts() {
+            showAlert('success', '第一条消息');
+            setTimeout(() => showAlert('warning', '第二条消息'), 500);
+            setTimeout(() => showAlert('error', '第三条消息'), 1000);
+            setTimeout(() => showAlert('info', '第四条消息'), 1500);
+        }
+
+        // 页面加载完成后显示欢迎消息
+        document.addEventListener('DOMContentLoaded', function() {
+            showAlert('success', 'showAlert 函数测试页面已加载，点击按钮测试不同类型的消息！');
+        });
+    </script>
+</body>
+</html>
