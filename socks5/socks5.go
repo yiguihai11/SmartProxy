@@ -1,7 +1,6 @@
 package socks5
 
 import (
-	"bufio"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -14,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -61,29 +59,6 @@ type Logger interface {
 	Print(v ...interface{})
 }
 
-// BufferedConn is a net.Conn that allows peeking and then reading the peeked data.
-type BufferedConn struct {
-	net.Conn
-	reader *bufio.Reader
-}
-
-// NewBufferedConn creates a new BufferedConn.
-func NewBufferedConn(conn net.Conn) *BufferedConn {
-	return &BufferedConn{
-		Conn:   conn,
-		reader: bufio.NewReader(conn),
-	}
-}
-
-// Read reads data from the connection. It will first read from the buffer if data has been peeked.
-func (b *BufferedConn) Read(p []byte) (int, error) {
-	return b.reader.Read(p)
-}
-
-// Peek peeks at the connection's data.
-func (b *BufferedConn) Peek(n int) ([]byte, error) {
-	return b.reader.Peek(n)
-}
 
 // PrependingConn is a net.Conn that allows prepending data to the read stream.
 // This is useful for "pushing back" data that was read during a probe.
@@ -134,9 +109,6 @@ type Connection struct {
 	protocol     string // 协议类型 (HTTP/HTTPS/Unknown)
 }
 
-func NewSOCKS5Server(port int) (*SOCKS5Server, error) {
-	return NewSOCKS5ServerWithConfig(port, "conf/config.json", nil)
-}
 
 func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) (*SOCKS5Server, error) {
 	listener, err := net.Listen("tcp", ":"+strconv.Itoa(port))
@@ -428,154 +400,130 @@ func (c *Connection) parseAddress(atype byte) (addr string, port uint16, err err
 	return addr, port, nil
 }
 
+// executeConnectionAction 根据路由匹配结果执行连接操作
+// 返回目标连接和错误
+func (c *Connection) executeConnectionAction(result MatchResult, targetAddr string, targetPort uint16, logContext string) (net.Conn, error) {
+	accessInfo := c.getAccessInfo()
+
+	switch result.Action {
+	case ActionBlock:
+		return nil, fmt.Errorf("blocked by rule for %s", c.targetAddr)
+
+	case ActionProxy:
+		proxy := c.server.router.GetProxyNode(result.ProxyNode)
+		if proxy == nil {
+			return nil, fmt.Errorf("proxy node '%s' not found", result.ProxyNode)
+		}
+		c.logger.Printf("PROXY by %s: %s -> %s via %s", logContext, accessInfo, c.targetAddr, proxy.Name)
+		return c.connectThroughProxy(proxy, targetAddr, targetPort)
+
+	case ActionAllow:
+		c.logger.Printf("ALLOW by %s: %s -> %s", logContext, accessInfo, c.targetAddr)
+		return net.DialTimeout("tcp", formatNetworkAddress(targetAddr, targetPort), 5*time.Second)
+
+	default:
+		// 默认行为：走默认代理（包括ActionDeny和unknown action）
+		// 对于ActionDeny，如果启用智能代理且端口在探测范围内，使用选择最优连接路径
+		if result.Action == ActionDeny && c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
+			c.logger.Printf("DENY by %s, using optimal path selection: %s -> %s", logContext, accessInfo, c.targetAddr)
+			conn, connType, proxyNode, err := c.selectOptimalConnection(targetAddr, targetPort)
+			if err != nil {
+				return nil, err
+			}
+			// 记录连接类型
+			c.logConnectionChoice(connType, proxyNode, targetAddr, targetPort)
+			return conn, nil
+		}
+
+		// 获取默认代理
+		defaultProxy := c.server.router.GetDefaultProxy()
+		if defaultProxy == nil {
+			if result.Action == ActionDeny {
+				return nil, fmt.Errorf("no default proxy available")
+			}
+			return nil, fmt.Errorf("unknown action: %s", result.Action)
+		}
+
+		if result.Action == ActionDeny {
+			c.logger.Printf("DENY by %s, using proxy: %s -> %s via %s", logContext, accessInfo, c.targetAddr, defaultProxy.Name)
+		} else {
+			c.logger.Printf("Using default proxy: %s -> %s via %s", accessInfo, c.targetAddr, defaultProxy.Name)
+		}
+		return c.connectThroughProxy(defaultProxy, targetAddr, targetPort)
+	}
+}
+
 // detectAndConnect 执行 "提前响应-检测-路由-连接" 的核心逻辑
 func (c *Connection) detectAndConnect(targetAddr string, targetPort uint16) (net.Conn, error) {
-	// 1. 包装客户端连接以支持数据“回放”
+	// 1. 包装客户端连接以支持数据"回放"
 	prependingClientConn := &PrependingConn{Conn: c.clientConn}
 	c.clientConn = prependingClientConn
 
-	// 2. 发送“虚假”成功响应以解锁客户端
+	// 2. 发送"虚假"成功响应以解锁客户端
 	if err := c.sendReply(REP_SUCCESS, "0.0.0.0", 0); err != nil {
 		return nil, fmt.Errorf("failed to send temporary success reply: %v", err)
 	}
 
-	// 3. 读取初始数据包以进行SNI检测
-	buf := bufferPool.Get()
-	defer bufferPool.Put(buf)
-
-	c.clientConn.SetReadDeadline(time.Now().Add(1 * time.Second)) // 1秒超时
-	n, err := prependingClientConn.Conn.Read(buf)                 // 从底层连接读取
-	c.clientConn.SetReadDeadline(time.Time{})                    // 清除超时
-
-	// 3a. 将读到的数据“预置”回连接，以便后续relay
-	if n > 0 {
-		prependingClientConn.mu.Lock()
-		prependingClientConn.prependedData = buf[:n]
-		prependingClientConn.mu.Unlock()
-	}
-
-	// 3b. 处理读取错误
-	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("could not read initial data for detection: %v", err)
-	}
-
-	// 4. 从数据中检测主机名
+	// 3. 只对 probing_ports 中的端口进行流量检测
 	var detectedHost string
-	if n > 0 {
-		if result := c.server.detector.DetectTraffic(buf[:n]); result != nil {
-			hostname := ""
-			if result.Type == TrafficTypeHTTPS && result.SNI != "" {
-				hostname = result.SNI
-			} else if result.Type == TrafficTypeHTTP && result.Hostname != "" {
-				hostname = result.Hostname
-			}
-			if hostname != "" {
-				c.logger.Printf("SNI/Host detected before routing: %s", hostname)
-				detectedHost = hostname
-				c.detectedHost = hostname
+	shouldProbe := c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort))
+
+	if shouldProbe {
+		// 3a. 读取初始数据包以进行SNI检测
+		buf := bufferPool.Get()
+		defer bufferPool.Put(buf)
+
+		c.clientConn.SetReadDeadline(time.Now().Add(1300 * time.Millisecond)) // 1.3秒超时
+		n, err := prependingClientConn.Conn.Read(buf)                 // 从底层连接读取
+		c.clientConn.SetReadDeadline(time.Time{})                    // 清除超时
+
+		// 3b. 将读到的数据"预置"回连接，以便后续relay
+		if n > 0 {
+			prependingClientConn.mu.Lock()
+			prependingClientConn.prependedData = buf[:n]
+			prependingClientConn.mu.Unlock()
+		}
+
+		// 3c. 处理读取错误
+		if err != nil && err != io.EOF {
+			return nil, fmt.Errorf("could not read initial data for detection: %v", err)
+		}
+
+		// 3d. 从数据中检测主机名
+		if n > 0 {
+			if result := c.server.detector.DetectTraffic(buf[:n]); result != nil {
+				hostname := ""
+				if result.Type == TrafficTypeHTTPS && result.SNI != "" {
+					hostname = result.SNI
+				} else if result.Type == TrafficTypeHTTP && result.Hostname != "" {
+					hostname = result.Hostname
+				}
+				if hostname != "" {
+					c.logger.Printf("SNI/Host detected for port %d: %s", targetPort, hostname)
+					detectedHost = hostname
+					c.detectedHost = hostname
+				}
 			}
 		}
 	}
 
-	// 5. 预检测阶段的路由决策（仅IP、CIDR、端口规则）
-	preResult := c.server.router.MatchRulePreDetection(targetAddr, int(targetPort))
+	// 4. 统一的路由匹配决策（支持预检测和后检测）
+	result := c.server.router.MatchRule(targetAddr, detectedHost, int(targetPort))
 
-	// 6. 根据预检测结果执行连接
-	var finalTargetConn net.Conn
-	var connErr error
-	accessInfo := c.getAccessInfo()
-
-	if preResult.Match {
-		// 预检测阶段已匹配规则，直接执行对应的动作
-		switch preResult.Action {
-		case ActionBlock:
-			connErr = fmt.Errorf("blocked by pre-detection rule for %s", c.targetAddr)
-			c.logger.Printf("BLOCKED by pre-detection rule: %s -> %s", accessInfo, c.targetAddr)
-
-		case ActionProxy:
-			proxy := c.server.router.GetProxyNode(preResult.ProxyNode)
-			if proxy == nil {
-				connErr = fmt.Errorf("proxy node '%s' not found", preResult.ProxyNode)
-			} else {
-				c.logger.Printf("PROXY by pre-detection rule: %s -> %s via %s", accessInfo, c.targetAddr, proxy.Name)
-				finalTargetConn, connErr = c.connectThroughProxy(proxy, targetAddr, targetPort)
-			}
-
-		case ActionDeny:
-			// 规则要求走代理 (deny在配置中表示走代理)
-			// 如果启用智能代理且端口在探测范围内，使用选择最优连接路径
-			if c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
-				c.logger.Printf("DENY by pre-detection rule, using optimal path selection: %s -> %s", accessInfo, c.targetAddr)
-				finalTargetConn, connErr = c.attemptDirectAndSniff(targetAddr, targetPort)
-			} else {
-				// 否则直接走默认代理
-				defaultProxy := c.server.router.GetDefaultProxy()
-				if defaultProxy == nil {
-					connErr = fmt.Errorf("no default proxy available")
-				} else {
-					c.logger.Printf("DENY by pre-detection rule, using proxy: %s -> %s via %s", accessInfo, c.targetAddr, defaultProxy.Name)
-					finalTargetConn, connErr = c.connectThroughProxy(defaultProxy, targetAddr, targetPort)
-				}
-			}
-
-		case ActionAllow:
-			// 规则要求直连
-			c.logger.Printf("ALLOW by pre-detection rule: %s -> %s", accessInfo, c.targetAddr)
-			finalTargetConn, connErr = net.DialTimeout("tcp", formatNetworkAddress(targetAddr, targetPort), 5*time.Second)
+	// 6. 根据匹配结果执行连接
+	logContext := "rule"
+	if result.Match {
+		// 匹配到规则
+		if detectedHost != "" {
+			logContext += " (detected: " + detectedHost + ")"
 		}
 	} else {
-		// 7. 预检测未匹配，进行后检测（域名规则）
-		postResult := c.server.router.MatchRulePostDetection(detectedHost)
-		if postResult.Match {
-			// 后检测阶段匹配了域名规则
-			switch postResult.Action {
-			case ActionBlock:
-				connErr = fmt.Errorf("blocked by post-detection rule for %s (detected: %s)", c.targetAddr, detectedHost)
-				c.logger.Printf("BLOCKED by post-detection rule: %s -> %s (detected: %s)", accessInfo, c.targetAddr, detectedHost)
-
-			case ActionProxy:
-				proxy := c.server.router.GetProxyNode(postResult.ProxyNode)
-				if proxy == nil {
-					connErr = fmt.Errorf("proxy node '%s' not found", postResult.ProxyNode)
-				} else {
-					c.logger.Printf("PROXY by post-detection rule: %s -> %s via %s (detected: %s)", accessInfo, c.targetAddr, proxy.Name, detectedHost)
-					finalTargetConn, connErr = c.connectThroughProxy(proxy, targetAddr, targetPort)
-				}
-
-			case ActionDeny:
-				// 规则要求走代理
-				defaultProxy := c.server.router.GetDefaultProxy()
-				if defaultProxy == nil {
-					connErr = fmt.Errorf("no default proxy available")
-				} else {
-					c.logger.Printf("DENY by post-detection rule, using proxy: %s -> %s via %s (detected: %s)", accessInfo, c.targetAddr, defaultProxy.Name, detectedHost)
-					finalTargetConn, connErr = c.connectThroughProxy(defaultProxy, targetAddr, targetPort)
-				}
-
-			case ActionAllow:
-				c.logger.Printf("ALLOW by post-detection rule: %s -> %s (detected: %s)", accessInfo, c.targetAddr, detectedHost)
-				finalTargetConn, connErr = net.DialTimeout("tcp", formatNetworkAddress(targetAddr, targetPort), 5*time.Second)
-			}
-		} else {
-			// 8. 都没有匹配，使用智能代理或默认行为
-			if c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
-				// 启用智能代理且端口在探测范围内，使用智能路径选择
-				c.logger.Printf("Using optimal path selection: %s -> %s", accessInfo, c.targetAddr)
-				finalTargetConn, connErr = c.attemptDirectAndSniff(targetAddr, targetPort)
-			} else {
-				// 默认走代理
-				defaultProxy := c.server.router.GetDefaultProxy()
-				if defaultProxy == nil {
-					connErr = fmt.Errorf("no default proxy available")
-				} else {
-					c.logger.Printf("Using default proxy: %s -> %s via %s", accessInfo, c.targetAddr, defaultProxy.Name)
-					finalTargetConn, connErr = c.connectThroughProxy(defaultProxy, targetAddr, targetPort)
-				}
-			}
-		}
+		// 没有匹配到规则，使用默认ActionDeny行为
+		logContext = "default"
+		result.Action = ActionDeny // 触发默认代理或智能路径选择逻辑
 	}
 
-	return finalTargetConn, connErr
+	return c.executeConnectionAction(result, targetAddr, targetPort, logContext)
 }
 
 func (c *Connection) sendReply(rep byte, bindAddr string, bindPort int) error {
@@ -678,13 +626,10 @@ func (c *Connection) relay() error {
 	return nil
 }
 
-// relayClientToTarget 处理客户端到目标的数据流，支持动态代理切换
+// relayClientToTarget 处理客户端到目标的数据流
 func (c *Connection) relayClientToTarget(ctx context.Context, done chan error) {
 	buf := bufferPool.Get()
 	defer bufferPool.Put(buf)
-	detectionDone := false
-	pendingData := []byte{}
-	lastDataTransferTime := time.Now()
 
 	for {
 		select {
@@ -700,103 +645,15 @@ func (c *Connection) relayClientToTarget(ctx context.Context, done chan error) {
 			return
 		}
 
-		// 记录数据传输时间
-		lastDataTransferTime = time.Now()
-
-		// 只对前几个数据包进行SNI/Host检测
-		if !detectionDone {
-			if detectedHost := c.detectHostnameFromData(buf[:n]); detectedHost != "" {
-				c.detectedHost = detectedHost
-				detectionDone = true
-
-				// 检查PostDetection规则
-				if newProxy, err := c.checkProxySwitch(detectedHost); err != nil {
-					// Block规则或其他错误情况，终止连接
-					c.logger.Printf("Connection blocked by post-detection rule: %v", err)
-					done <- err
-					return
-				} else if newProxy != nil {
-					// 需要切换到代理
-					if newConn, switchErr := c.switchToProxy(newProxy, pendingData, buf[:n]); switchErr == nil {
-						c.targetConn.Close()
-						c.targetConn = newConn
-						c.logger.Printf("Switched to proxy %s based on host %s", newProxy.Name, detectedHost)
-						pendingData = []byte{}
-					} else {
-						c.logger.Printf("Failed to switch proxy: %v", switchErr)
-						done <- switchErr
-						return
-					}
-				}
-				// ActionAllow或未匹配规则：继续当前连接方式
-			}
-		}
-
 		// 应用上传限速
 		if !c.applyUploadRateLimit(int64(n)) {
 			continue // 超过限速，丢弃数据
 		}
 
-		// 转发数据到目标，并检测可能的GFW干扰
+		// 转发数据到目标
 		if _, err := c.targetConn.Write(buf[:n]); err != nil {
-			// 检测是否是GFW重置
-			if c.isGFWDetected(err) {
-				c.logger.Printf("GFW reset detected during data transfer, switching to proxy")
-				// 触发动态代理切换
-				defaultProxy := c.server.router.GetDefaultProxy()
-				if defaultProxy != nil {
-					newConn, switchErr := c.switchToProxy(defaultProxy, pendingData, buf[:n])
-					if switchErr == nil {
-						c.targetConn.Close()
-						c.targetConn = newConn
-						c.logger.Printf("Switched to default proxy due to GFW reset")
-						pendingData = []byte{}
-					} else {
-						c.logger.Printf("Failed to switch to proxy due to GFW reset: %v", switchErr)
-						done <- switchErr
-						return
-					}
-				} else {
-					c.logger.Printf("No default proxy available for GFW reset fallback")
-					done <- err
-					return
-				}
-			} else {
-				done <- err
-				return
-			}
-		}
-
-		// 检测数据传输响应（检测无响应的超时情况）
-		if err := c.checkDataTransferTimeout(lastDataTransferTime); err != nil {
-			c.logger.Printf("Data transfer timeout detected, switching to proxy")
-			defaultProxy := c.server.router.GetDefaultProxy()
-			if defaultProxy != nil {
-				newConn, switchErr := c.switchToProxy(defaultProxy, pendingData, buf[:n])
-				if switchErr == nil {
-					c.targetConn.Close()
-					c.targetConn = newConn
-					c.logger.Printf("Switched to default proxy due to transfer timeout")
-					pendingData = []byte{}
-				} else {
-					c.logger.Printf("Failed to switch to proxy due to timeout: %v", switchErr)
-					done <- switchErr
-					return
-				}
-			} else {
-				c.logger.Printf("No default proxy available for timeout fallback")
-				done <- err
-				return
-			}
-		}
-
-		// 保存未决数据用于可能的代理切换
-		if !detectionDone {
-			pendingData = append(pendingData, buf[:n]...)
-			// 限制pending data大小
-			if len(pendingData) > 8192 {
-				pendingData = pendingData[len(pendingData)-4096:]
-			}
+			done <- err
+			return
 		}
 	}
 }
@@ -842,102 +699,7 @@ func (c *Connection) relayTargetToClient(ctx context.Context, done chan error) {
 	}
 }
 
-// detectHostnameFromData 从数据中检测主机名
-func (c *Connection) detectHostnameFromData(data []byte) string {
-	if c.server.detector == nil {
-		return ""
-	}
 
-	result := c.server.detector.DetectTraffic(data)
-	if result == nil {
-		return ""
-	}
-
-	// 优先使用SNI，其次使用HTTP Host
-	if result.Type == TrafficTypeHTTPS && result.SNI != "" {
-		return result.SNI
-	}
-
-	if result.Type == TrafficTypeHTTP && result.Hostname != "" {
-		return result.Hostname
-	}
-
-	return ""
-}
-
-// checkProxySwitch 检查PostDetection规则并返回处理结果
-func (c *Connection) checkProxySwitch(hostname string) (*ProxyNode, error) {
-	if c.server.router == nil {
-		return nil, nil
-	}
-
-	accessInfo := c.getAccessInfo()
-
-	// 检查域名规则
-	rule := c.server.router.matchDomainRule(hostname)
-	if rule != nil {
-		switch rule.Action {
-		case ActionBlock:
-			// 规则要求阻止连接
-			c.logger.Printf("BLOCKED by post-detection rule: %s (detected: %s)", accessInfo, hostname)
-			return nil, fmt.Errorf("connection blocked by rule for host %s", hostname)
-
-		case ActionProxy:
-			// 规则要求走指定代理节点（必须指定，不回退到默认代理）
-			if rule.ProxyNode != "" {
-				proxy := c.server.router.GetProxyNode(rule.ProxyNode)
-				if proxy != nil {
-					c.logger.Printf("PROXY by post-detection rule: %s (detected: %s) via %s", accessInfo, hostname, proxy.Name)
-					return proxy, nil
-				} else {
-					c.logger.Printf("Proxy node '%s' not found for host %s", rule.ProxyNode, hostname)
-					return nil, fmt.Errorf("proxy node '%s' not found for host %s", rule.ProxyNode, hostname)
-				}
-			}
-			// ActionProxy 必须指定代理节点，不允许回退
-			c.logger.Printf("ActionProxy rule matched but no proxy node specified for host %s", hostname)
-			return nil, fmt.Errorf("ActionProxy requires a specific proxy node to be specified for host %s", hostname)
-
-		case ActionDeny:
-			// 规则要求走代理 (deny在配置中表示走代理)
-			defaultProxy := c.server.router.GetDefaultProxy()
-			if defaultProxy != nil {
-				c.logger.Printf("DENY by post-detection rule, using proxy: %s (detected: %s) via %s", accessInfo, hostname, defaultProxy.Name)
-				return defaultProxy, nil
-			}
-			c.logger.Printf("DENY rule matched but no default proxy available for host %s", hostname)
-			return nil, fmt.Errorf("no default proxy available for host %s", hostname)
-
-		case ActionAllow:
-			// 规则要求直连，不需要切换代理
-			c.logger.Printf("ALLOW by post-detection rule: %s (detected: %s) - direct connection", accessInfo, hostname)
-			return nil, nil
-		}
-	}
-
-	// 没有匹配规则，返回nil（不切换代理）
-	return nil, nil
-}
-
-// switchToProxy 切换到指定的代理
-func (c *Connection) switchToProxy(proxy *ProxyNode, pendingData, currentData []byte) (net.Conn, error) {
-	// 解析目标地址和端口
-	targetHost, targetPort, err := net.SplitHostPort(c.targetAddr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse target address: %v", err)
-	}
-
-	port, err := strconv.Atoi(targetPort)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse target port: %v", err)
-	}
-
-	// 合并待发送的数据
-	allData := append(pendingData, currentData...)
-
-	// 通过代理建立连接
-	return c.connectThroughProxyWithData(proxy, targetHost, uint16(port), allData)
-}
 
 // applyUploadRateLimit 应用上传限速
 func (c *Connection) applyUploadRateLimit(bytes int64) bool {
@@ -1021,23 +783,6 @@ func (c *Connection) handleAuthentication() error {
 	return nil
 }
 
-// updateRoutingBasedOnDetection 基于检测结果更新路由
-func (c *Connection) updateRoutingBasedOnDetection(result *DetectionResult) {
-	// 这里可以根据检测结果动态调整路由策略
-	// 例如，如果检测到特定的Host，可以调整QoS或监控策略
-
-	if result.Type == TrafficTypeHTTP {
-		// HTTP 流量的特殊处理
-		clientInfo := c.getClientInfo()
-		c.logger.Printf("HTTP traffic detected for host: %s | User: %s | Target: %s (%s)",
-			result.Hostname, clientInfo, c.targetAddr, c.targetHost)
-	} else if result.Type == TrafficTypeHTTPS && result.SNI != "" {
-		// HTTPS 流量的 SNI 处理
-		clientInfo := c.getClientInfo()
-		c.logger.Printf("HTTPS SNI detected: %s | User: %s | Target: %s (%s)",
-			result.SNI, clientInfo, c.targetAddr, c.targetHost)
-	}
-}
 
 // GetRateLimiter 获取限速器实例
 func (s *SOCKS5Server) GetRateLimiter() *RateLimiter {
@@ -1140,15 +885,8 @@ func (s *SOCKS5Server) isProbingPort(port int) bool {
 	return false
 }
 
-
-
 // connectThroughProxy 通过指定的代理节点建立连接
 func (c *Connection) connectThroughProxy(proxy *ProxyNode, targetAddr string, targetPort uint16) (net.Conn, error) {
-	return c.connectThroughProxyWithData(proxy, targetAddr, targetPort, nil)
-}
-
-// connectThroughProxyWithData 通过指定的代理节点建立连接，并转发已读取的客户端数据
-func (c *Connection) connectThroughProxyWithData(proxy *ProxyNode, targetAddr string, targetPort uint16, clientData []byte) (net.Conn, error) {
 	if proxy == nil {
 		return nil, fmt.Errorf("proxy node is nil")
 	}
@@ -1272,31 +1010,9 @@ func (c *Connection) connectThroughProxyWithData(proxy *ProxyNode, targetAddr st
 	}
 	c.logger.Printf("DEBUG: Proxy connection established successfully")
 
-	// 如果有客户端数据需要转发，立即写入代理连接
-	if len(clientData) > 0 {
-		if _, err := proxyConn.Write(clientData); err != nil {
-			proxyConn.Close()
-			return nil, fmt.Errorf("failed to write client data to proxy: %v", err)
-		}
-		c.logger.Printf("DEBUG: Forwarded %d bytes of client data to proxy", len(clientData))
-	}
-
 	return proxyConn, nil
 }
 
-// attemptDirectAndSniff 智能连接：并行尝试直连和代理，选择最优路径
-func (c *Connection) attemptDirectAndSniff(targetAddr string, targetPort uint16) (net.Conn, error) {
-	// 使用智能连接选择最优路径
-	conn, connType, proxyNode, err := c.selectOptimalConnection(targetAddr, targetPort)
-	if err != nil {
-		return nil, err
-	}
-
-	// 记录连接类型
-	c.logConnectionChoice(connType, proxyNode, targetAddr, targetPort)
-
-	return conn, nil
-}
 
 // selectOptimalConnection 选择最优连接路径
 func (c *Connection) selectOptimalConnection(targetAddr string, targetPort uint16) (net.Conn, string, *ProxyNode, error) {
@@ -1394,44 +1110,3 @@ func (c *Connection) tryProxyConnection(targetAddr string, targetPort uint16, re
 	resultChan <- &connectionAttempt{success: true, conn: conn, proxy: proxy}
 }
 
-// isGFWDetected 传输层系统错误码检测 + 应用层字符串检测
-func (c *Connection) isGFWDetected(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	// 优先使用传输层系统错误码检测（更准确）
-	if opErr, ok := err.(*net.OpError); ok {
-		if sysErr, ok := opErr.Err.(*os.SyscallError); ok {
-			if errno, ok := sysErr.Err.(syscall.Errno); ok {
-				// 系统错误码 104 = ECONNRESET = GFW重置
-				if errno == syscall.ECONNRESET {
-					c.logger.Printf("GFW reset detected by system error code: ECONNRESET(104)")
-					return true
-				}
-				// 系统错误码 32 = EPIPE = 也是GFW重置的常见模式
-				if errno == syscall.EPIPE {
-					c.logger.Printf("GFW reset detected by system error code: EPIPE(32)")
-					return true
-				}
-			}
-		}
-	}
-
-	// 作为fallback，使用应用层字符串匹配
-	if strings.Contains(err.Error(), "connection reset by peer") {
-		c.logger.Printf("GFW reset detected by string matching")
-		return true
-	}
-
-	return false
-}
-
-// checkDataTransferTimeout 检测数据传输超时
-func (c *Connection) checkDataTransferTimeout(lastTransfer time.Time) error {
-	timeoutDuration := time.Duration(c.server.smartProxyTimeoutMs) * time.Millisecond
-	if time.Since(lastTransfer) > timeoutDuration {
-		return fmt.Errorf("data transfer timeout after %v", timeoutDuration)
-	}
-	return nil
-}

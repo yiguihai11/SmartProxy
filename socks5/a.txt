@@ -1,0 +1,32 @@
+       1138 -  // isGFWDetected 传输层系统错误码检测 + 应用层字符串检测
+       1139 -  func (c *Connection) isGFWDetected(err error) bool {
+       1140 -    if err == nil {
+       1141 -      return false
+       1142 -    }
+       1143 -
+       1144 -    // 优先使用传输层系统错误码检测（更准确）
+       1145 -    if opErr, ok := err.(*net.OpError); ok {
+       1146 -      if sysErr, ok := opErr.Err.(*os.SyscallError); ok {
+       1147 -        if errno, ok := sysErr.Err.(syscall.Errno); ok {
+       1148 -          // 系统错误码 104 = ECONNRESET = GFW重置
+       1149 -          if errno == syscall.ECONNRESET {
+       1150 -            c.logger.Printf("GFW reset detected by system error code: ECONNRESET(104)")
+       1151 -            return true
+       1152 -          }
+       1153 -          // 系统错误码 32 = EPIPE = 也是GFW重置的常见模式
+       1154 -          if errno == syscall.EPIPE {
+       1155 -            c.logger.Printf("GFW reset detected by system error code: EPIPE(32)")
+       1156 -            return true
+       1157 -          }
+       1158 -        }
+       1159 -      }
+       1160 -    }
+       1161 -
+       1162 -    // 作为fallback，使用应用层字符串匹配
+       1163 -    if strings.Contains(err.Error(), "connection reset by peer") {
+       1164 -      c.logger.Printf("GFW reset detected by string matching")
+       1165 -      return true
+       1166 -    }
+       1167 -
+       1168 -    return false
+       1169 -  }

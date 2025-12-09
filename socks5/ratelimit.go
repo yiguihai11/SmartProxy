@@ -441,19 +441,6 @@ func (rl *RateLimiter) ClearStats() {
 	rl.stats = make(map[string]*RateLimitStats)
 }
 
-// ConvertToBps 将不同单位转换为bps
-func ConvertToBps(value int64, unit RateLimitUnit) int64 {
-	switch unit {
-	case RateLimitUnitBps:
-		return value
-	case RateLimitUnitKbps:
-		return value * 1000
-	case RateLimitUnitMbps:
-		return value * 1000 * 1000
-	default:
-		return value
-	}
-}
 
 // GetUsageRate 获取使用率 (0-100)
 func (rl *RateLimiter) GetUsageRate(key string) (uploadRate, downloadRate float64) {

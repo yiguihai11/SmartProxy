@@ -720,39 +720,6 @@ func (a *AuthManager) HandleAuthentication(clientConn net.Conn) (string, error) 
 	}
 }
 
-// LegacyHashMigrator 旧哈希格式迁移器
-type LegacyHashMigrator struct {
-	hasher *PasswordHasher
-	logger *log.Logger
-}
-
-// NewLegacyHashMigrator 创建旧哈希迁移器
-func NewLegacyHashMigrator(hasher *PasswordHasher, logger *log.Logger) *LegacyHashMigrator {
-	return &LegacyHashMigrator{
-		hasher: hasher,
-		logger: logger,
-	}
-}
-
-// NeedsMigration 检查配置是否需要哈希迁移
-func (l *LegacyHashMigrator) NeedsMigration(users map[string]interface{}) bool {
-	for username, userData := range users {
-		if userMap, ok := userData.(map[string]interface{}); ok {
-			if oldHash, exists := userMap["password_hash"]; exists {
-				if oldHashStr, ok := oldHash.(string); ok {
-					// 检查是否为旧格式（简单的64位十六进制字符串）
-					if len(oldHashStr) == 64 {
-						if matched, _ := regexp.MatchString("^[0-9a-fA-F]{64}$", oldHashStr); matched {
-							l.logger.Printf("User '%s' has insecure hash format", username)
-							return true
-						}
-					}
-				}
-			}
-		}
-	}
-	return false
-}
 
 // isTimeAllowed 检查时间是否允许
 func (a *AuthManager) isTimeAllowed(user *User) bool {
