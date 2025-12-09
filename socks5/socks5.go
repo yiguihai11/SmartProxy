@@ -418,8 +418,107 @@ func (c *Connection) handleRequest() error {
 	clientInfo := c.getClientInfo()
 	c.logger.Printf("Connection request: %s -> %s (%s)", clientInfo, target, c.targetHost)
 
-	// 统一使用高级路由逻辑，实现全面的连接失败回退功能
-	return c.executeAdvancedRouting(targetAddr, targetPort)
+	// --- NEW LOGIC: Pre-detection of SNI/Host ---
+	// 1. Wrap the connection to allow "putting back" the data we read for detection.
+	prependingClientConn := &PrependingConn{Conn: c.clientConn}
+	c.clientConn = prependingClientConn
+
+	// 2. Send a "fake" success reply to unlock the client so it sends application data.
+	if err := c.sendReply(REP_SUCCESS, "0.0.0.0", 0); err != nil {
+		return fmt.Errorf("failed to send temporary success reply: %v", err)
+	}
+
+	// 3. Read the initial data (e.g., ClientHello) from the client.
+	buf := bufferPool.Get()
+	defer bufferPool.Put(buf)
+
+	c.clientConn.SetReadDeadline(time.Now().Add(1 * time.Second)) // 1-second timeout for initial data
+	n, err := prependingClientConn.Conn.Read(buf)                 // Read from underlying conn
+	c.clientConn.SetReadDeadline(time.Time{})                    // Clear the deadline
+
+	// 3a. If we read data, "prepend" it back to the connection's read buffer.
+	if n > 0 {
+		prependingClientConn.mu.Lock()
+		prependingClientConn.prependedData = buf[:n]
+		prependingClientConn.mu.Unlock()
+	}
+
+	// 3b. Handle read errors. EOF is fine, it means the client closed the connection.
+	if err != nil && err != io.EOF {
+		c.logger.Printf("Could not read initial data for detection: %v", err)
+		// We already sent a success reply, so we can't send a SOCKS error.
+		// We just close the connection by returning nil.
+		return nil
+	}
+
+	// 4. Detect hostname from the data we just read.
+	var detectedHost string
+	if n > 0 {
+		if result := c.server.detector.DetectTraffic(buf[:n]); result != nil {
+			if result.Type == TrafficTypeHTTPS && result.SNI != "" {
+				detectedHost = result.SNI
+			} else if result.Type == TrafficTypeHTTP && result.Hostname != "" {
+				detectedHost = result.Hostname
+			}
+			if detectedHost != "" {
+				c.logger.Printf("SNI/Host detected before routing: %s", detectedHost)
+				c.detectedHost = detectedHost
+			}
+		}
+	}
+
+	// 5. Perform routing logic, similar to executeAdvancedRouting.
+	var finalTargetConn net.Conn
+	var connErr error
+	accessInfo := c.getAccessInfo()
+
+	// 5a. Determine action based on detected host, falling back to IP.
+	result := c.server.router.matchRulePostDetection(detectedHost) // Try post-detection first
+	if !result.Match {
+		result = c.server.router.matchRulePreDetection(targetAddr, int(targetPort)) // Fallback to pre-detection
+	}
+
+	// 5b. Execute the determined action.
+	switch result.Action {
+	case ActionBlock:
+		c.logger.Printf("BLOCKED by rule: %s -> %s (detected: %s)", accessInfo, c.targetAddr, detectedHost)
+		return nil // Connection will be closed as we've already sent a success reply.
+	case ActionProxy:
+		proxy := c.server.router.GetProxyNode(result.ProxyNode)
+		if proxy == nil {
+			connErr = fmt.Errorf("proxy node '%s' not found", result.ProxyNode)
+		} else {
+			c.logger.Printf("PROXY by rule: %s -> %s (detected: %s) via %s", accessInfo, c.targetAddr, detectedHost, proxy.Name)
+			finalTargetConn, connErr = c.connectThroughProxy(proxy, targetAddr, targetPort)
+		}
+	case ActionDeny:
+		defaultProxy := c.server.router.GetDefaultProxy()
+		if defaultProxy == nil {
+			connErr = fmt.Errorf("no default proxy available")
+		} else {
+			c.logger.Printf("DENY by rule, using proxy: %s -> %s (detected: %s) via %s", accessInfo, c.targetAddr, detectedHost, defaultProxy.Name)
+			finalTargetConn, connErr = c.connectThroughProxy(defaultProxy, targetAddr, targetPort)
+		}
+	case ActionAllow:
+		fallthrough
+	default: // Default to direct connection attempt.
+		c.logger.Printf("ALLOW by rule (or default): %s -> %s (detected: %s)", accessInfo, c.targetAddr, detectedHost)
+		finalTargetConn, connErr = c.attemptDirectAndSniff(targetAddr, targetPort)
+	}
+
+	// 6. Handle connection result.
+	if connErr != nil {
+		c.logger.Printf("ALL attempts FAILED for %s -> %s:%d: %v", accessInfo, targetAddr, targetPort, connErr)
+		// We can't send a SOCKS error reply. Just close.
+		return nil
+	}
+	defer finalTargetConn.Close()
+
+	c.targetConn = finalTargetConn
+
+	// 7. We already sent a success reply. Now, just start relaying.
+	c.logger.Printf("CONNECTED: %s -> %s:%d", c.getAccessInfo(), targetAddr, targetPort)
+	return c.relay()
 }
 
 func (c *Connection) sendReply(rep byte, bindAddr string, bindPort int) error {
