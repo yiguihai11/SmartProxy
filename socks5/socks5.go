@@ -477,39 +477,102 @@ func (c *Connection) detectAndConnect(targetAddr string, targetPort uint16) (net
 		}
 	}
 
-	// 5. 使用统一的路由函数进行决策
-	result := c.server.router.matchRule(detectedHost, targetAddr, int(targetPort))
+	// 5. 预检测阶段的路由决策（仅IP、CIDR、端口规则）
+	preResult := c.server.router.MatchRulePreDetection(targetAddr, int(targetPort))
 
-	// 6. 根据路由结果执行连接
+	// 6. 根据预检测结果执行连接
 	var finalTargetConn net.Conn
 	var connErr error
 	accessInfo := c.getAccessInfo()
 
-	switch result.Action {
-	case ActionBlock:
-		connErr = fmt.Errorf("blocked by rule for %s (detected: %s)", c.targetAddr, detectedHost)
-		c.logger.Printf("BLOCKED: %s -> %s", accessInfo, c.targetAddr)
-	case ActionProxy:
-		proxy := c.server.router.GetProxyNode(result.ProxyNode)
-		if proxy == nil {
-			connErr = fmt.Errorf("proxy node '%s' not found", result.ProxyNode)
-		} else {
-			c.logger.Printf("PROXY: %s -> %s via %s", accessInfo, c.targetAddr, proxy.Name)
-			finalTargetConn, connErr = c.connectThroughProxy(proxy, targetAddr, targetPort)
+	if preResult.Match {
+		// 预检测阶段已匹配规则，直接执行对应的动作
+		switch preResult.Action {
+		case ActionBlock:
+			connErr = fmt.Errorf("blocked by pre-detection rule for %s", c.targetAddr)
+			c.logger.Printf("BLOCKED by pre-detection rule: %s -> %s", accessInfo, c.targetAddr)
+
+		case ActionProxy:
+			proxy := c.server.router.GetProxyNode(preResult.ProxyNode)
+			if proxy == nil {
+				connErr = fmt.Errorf("proxy node '%s' not found", preResult.ProxyNode)
+			} else {
+				c.logger.Printf("PROXY by pre-detection rule: %s -> %s via %s", accessInfo, c.targetAddr, proxy.Name)
+				finalTargetConn, connErr = c.connectThroughProxy(proxy, targetAddr, targetPort)
+			}
+
+		case ActionDeny:
+			// 规则要求走代理 (deny在配置中表示走代理)
+			// 如果启用智能代理且端口在探测范围内，使用选择最优连接路径
+			if c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
+				c.logger.Printf("DENY by pre-detection rule, using optimal path selection: %s -> %s", accessInfo, c.targetAddr)
+				finalTargetConn, connErr = c.attemptDirectAndSniff(targetAddr, targetPort)
+			} else {
+				// 否则直接走默认代理
+				defaultProxy := c.server.router.GetDefaultProxy()
+				if defaultProxy == nil {
+					connErr = fmt.Errorf("no default proxy available")
+				} else {
+					c.logger.Printf("DENY by pre-detection rule, using proxy: %s -> %s via %s", accessInfo, c.targetAddr, defaultProxy.Name)
+					finalTargetConn, connErr = c.connectThroughProxy(defaultProxy, targetAddr, targetPort)
+				}
+			}
+
+		case ActionAllow:
+			// 规则要求直连
+			c.logger.Printf("ALLOW by pre-detection rule: %s -> %s", accessInfo, c.targetAddr)
+			finalTargetConn, connErr = net.DialTimeout("tcp", formatNetworkAddress(targetAddr, targetPort), 5*time.Second)
 		}
-	case ActionDeny:
-		defaultProxy := c.server.router.GetDefaultProxy()
-		if defaultProxy == nil {
-			connErr = fmt.Errorf("no default proxy available")
+	} else {
+		// 7. 预检测未匹配，进行后检测（域名规则）
+		postResult := c.server.router.MatchRulePostDetection(detectedHost)
+		if postResult.Match {
+			// 后检测阶段匹配了域名规则
+			switch postResult.Action {
+			case ActionBlock:
+				connErr = fmt.Errorf("blocked by post-detection rule for %s (detected: %s)", c.targetAddr, detectedHost)
+				c.logger.Printf("BLOCKED by post-detection rule: %s -> %s (detected: %s)", accessInfo, c.targetAddr, detectedHost)
+
+			case ActionProxy:
+				proxy := c.server.router.GetProxyNode(postResult.ProxyNode)
+				if proxy == nil {
+					connErr = fmt.Errorf("proxy node '%s' not found", postResult.ProxyNode)
+				} else {
+					c.logger.Printf("PROXY by post-detection rule: %s -> %s via %s (detected: %s)", accessInfo, c.targetAddr, proxy.Name, detectedHost)
+					finalTargetConn, connErr = c.connectThroughProxy(proxy, targetAddr, targetPort)
+				}
+
+			case ActionDeny:
+				// 规则要求走代理
+				defaultProxy := c.server.router.GetDefaultProxy()
+				if defaultProxy == nil {
+					connErr = fmt.Errorf("no default proxy available")
+				} else {
+					c.logger.Printf("DENY by post-detection rule, using proxy: %s -> %s via %s (detected: %s)", accessInfo, c.targetAddr, defaultProxy.Name, detectedHost)
+					finalTargetConn, connErr = c.connectThroughProxy(defaultProxy, targetAddr, targetPort)
+				}
+
+			case ActionAllow:
+				c.logger.Printf("ALLOW by post-detection rule: %s -> %s (detected: %s)", accessInfo, c.targetAddr, detectedHost)
+				finalTargetConn, connErr = net.DialTimeout("tcp", formatNetworkAddress(targetAddr, targetPort), 5*time.Second)
+			}
 		} else {
-			c.logger.Printf("DENY: %s -> %s via %s", accessInfo, c.targetAddr, defaultProxy.Name)
-			finalTargetConn, connErr = c.connectThroughProxy(defaultProxy, targetAddr, targetPort)
+			// 8. 都没有匹配，使用智能代理或默认行为
+			if c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
+				// 启用智能代理且端口在探测范围内，使用智能路径选择
+				c.logger.Printf("Using optimal path selection: %s -> %s", accessInfo, c.targetAddr)
+				finalTargetConn, connErr = c.attemptDirectAndSniff(targetAddr, targetPort)
+			} else {
+				// 默认走代理
+				defaultProxy := c.server.router.GetDefaultProxy()
+				if defaultProxy == nil {
+					connErr = fmt.Errorf("no default proxy available")
+				} else {
+					c.logger.Printf("Using default proxy: %s -> %s via %s", accessInfo, c.targetAddr, defaultProxy.Name)
+					finalTargetConn, connErr = c.connectThroughProxy(defaultProxy, targetAddr, targetPort)
+				}
+			}
 		}
-	case ActionAllow:
-		fallthrough
-	default: // 默认直连
-		c.logger.Printf("ALLOW: %s -> %s", accessInfo, c.targetAddr)
-		finalTargetConn, connErr = c.attemptDirectAndSniff(targetAddr, targetPort)
 	}
 
 	return finalTargetConn, connErr

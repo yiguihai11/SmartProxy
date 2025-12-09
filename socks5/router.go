@@ -338,6 +338,92 @@ func (r *Router) IsChinaIP(ip string) bool {
 	return false
 }
 
+// MatchRulePreDetection 预检测阶段的路由匹配（仅IP、CIDR、端口规则）
+func (r *Router) MatchRulePreDetection(host string, port int) MatchResult {
+	// 1. IP地址匹配 - 使用基数树（最高优先级）
+	if ip := net.ParseIP(host); ip != nil {
+		// 检查IPv6支持
+		if ip.To4() == nil && !r.supportsIPv6 {
+			// IPv6地址但不支持IPv6，跳过IP匹配
+		} else {
+			// 自定义IP规则
+			if action, found, rule := r.ipTrie.Lookup(host); found {
+				fmt.Printf("[Router DEBUG] IP rule matched: %s -> action=%s\n", host, action)
+				return MatchResult{
+					Action:             action,
+					Match:              true,
+					Rule:               rule,
+					ProxyNode:          rule.ProxyNode,
+					ProxyNodeSpecified: rule.ProxyNode != "",
+				}
+			}
+
+			// 中国IP检查
+			if action, found, rule := r.chinaTrie.Lookup(host); found {
+				fmt.Printf("[Router DEBUG] China IP matched: %s -> action=%s\n", host, action)
+				return MatchResult{
+					Action:             action,
+					Match:              true,
+					Rule:               rule,
+					ProxyNode:          rule.ProxyNode,
+					ProxyNodeSpecified: rule.ProxyNode != "",
+				}
+			}
+		}
+	}
+
+	// 2. 端口规则匹配
+	portStr := strconv.Itoa(port)
+	for i := range r.rules {
+		rule := &r.rules[i]
+		if r.matchPortRule(rule, portStr) {
+			fmt.Printf("[Router DEBUG] Port rule matched: port=%s, action=%s, description=%s\n", portStr, rule.Action, rule.Description)
+			return MatchResult{
+				Action:             rule.Action,
+				Match:              true,
+				Rule:               rule,
+				ProxyNode:          rule.ProxyNode,
+				ProxyNodeSpecified: rule.ProxyNode != "",
+			}
+		}
+	}
+	fmt.Printf("[Router DEBUG] No rule matched for host=%s, port=%s\n", host, portStr)
+
+	// 3. 预检测阶段：如果没有匹配到IP/CIDR/端口规则，返回未匹配状态
+	return MatchResult{
+		Action: ActionDeny,
+		Match:  false,
+	}
+}
+
+// MatchRulePostDetection 后检测阶段的域名规则匹配
+func (r *Router) MatchRulePostDetection(hostname string) MatchResult {
+	if hostname == "" {
+		// 如果没有检测到hostname，返回未匹配状态
+		return MatchResult{
+			Action: ActionDeny,
+			Match:  false,
+		}
+	}
+
+	// 域名匹配 - 使用哈希表 O(1) 查找
+	if rule := r.matchDomainRule(hostname); rule != nil {
+		return MatchResult{
+			Action:             rule.Action,
+			Match:              true,
+			Rule:               rule,
+			ProxyNode:          rule.ProxyNode,
+			ProxyNodeSpecified: rule.ProxyNode != "",
+		}
+	}
+
+	// 默认行为（无域名规则匹配）
+	return MatchResult{
+		Action: ActionDeny,
+		Match:  false,
+	}
+}
+
 func (r *Router) isChinaIP(host string) bool {
 	// 检查是否在中国 IP 基数树中
 	if _, found, _ := r.chinaTrie.Lookup(host); found {
