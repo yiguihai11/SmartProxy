@@ -290,7 +290,7 @@ func (r *Router) matchRulePreDetection(host string, port int) MatchResult {
 			}
 		}
 	}
-	fmt.Printf("[Router DEBUG] No port rule matched for port=%s\n", portStr)
+	// fmt.Printf("[Router DEBUG] No port rule matched for port=%s\n", portStr)
 
 	// 检测前阶段：如果没有匹配到IP/CIDR/端口规则，返回未匹配状态
 	// 不进行域名匹配，等待SNI/Host检测

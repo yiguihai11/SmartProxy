@@ -11,7 +11,7 @@ import (
 	"log"
 	"net"
 	"os"
-		"strconv"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -423,45 +423,23 @@ func (c *Connection) handleRequest() error {
 }
 
 func (c *Connection) sendReply(rep byte, bindAddr string, bindPort int) error {
-	// 1. 获取服务器的实际监听地址
-	listenAddr, ok := c.server.listener.Addr().(*net.TCPAddr)
-	if !ok {
-		// 如果不是TCPAddr，或有其他问题，使用一个安全的回退值
-		// 理论上在我们的场景中这不应该发生
-		c.logger.Printf("Could not assert listener address to TCPAddr")
-		fallbackIP := net.IPv4(0, 0, 0, 0)
-		response := []byte{SOCKS5_VERSION, rep, 0x00, ATYPE_IPV4}
-		response = append(response, fallbackIP.To4()...)
-		portBytes := make([]byte, 2)
-		binary.BigEndian.PutUint16(portBytes, uint16(0))
-		response = append(response, portBytes...)
-		_, err := c.clientConn.Write(response)
-		return err
+	// 修复：为了兼容简单客户端（它们可能只处理IPv4响应），
+	// 我们总是返回一个IPv4地址作为绑定地址。
+	// 这确保了响应总是10字节长。
+	addrType := byte(ATYPE_IPV4)
+	addrBody := net.IPv4(0, 0, 0, 0).To4()
+	portBytes := make([]byte, 2)
+	binary.BigEndian.PutUint16(portBytes, uint16(bindPort))
+
+	// 获取服务器的实际监听端口（如果需要）
+	if listenAddr, ok := c.server.listener.Addr().(*net.TCPAddr); ok && bindPort == 0 {
+		binary.BigEndian.PutUint16(portBytes, uint16(listenAddr.Port))
 	}
 
-	// 2. 准备地址和端口
-	var addrType byte
-	var addrBody []byte
-	addrIP := listenAddr.IP
-
-	if ipv4 := addrIP.To4(); ipv4 != nil {
-		addrType = ATYPE_IPV4
-		addrBody = ipv4
-	} else if ipv6 := addrIP.To16(); ipv6 != nil {
-		addrType = ATYPE_IPV6
-		addrBody = ipv6
-	} else {
-		// 如果地址既不是IPv4也不是IPv6（例如，未指定），则回退
-		addrType = ATYPE_IPV4
-		addrBody = net.IPv4(0, 0, 0, 0).To4()
-	}
-
-	// 3. 构建回复
+	// 构建回复
 	// [VER, REP, RSV, ATYP, BND.ADDR, BND.PORT]
 	response := []byte{SOCKS5_VERSION, rep, 0x00, addrType}
 	response = append(response, addrBody...)
-	portBytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(portBytes, uint16(listenAddr.Port))
 	response = append(response, portBytes...)
 
 	_, err := c.clientConn.Write(response)
@@ -685,7 +663,7 @@ func (c *Connection) relayTargetToClient(ctx context.Context, done chan error) {
 			done <- err
 			return
 		}
-
+/*
 		// DEBUG: 记录收到的数据
 		if n > 0 {
 			c.logger.Printf("DEBUG: Received %d bytes from target: %x", n, buf[:min(n, 32)])
@@ -694,7 +672,7 @@ func (c *Connection) relayTargetToClient(ctx context.Context, done chan error) {
 				c.logger.Printf("DEBUG: Data as string: %q", string(buf[:n]))
 			}
 		}
-
+*/
 		// 应用下载限速
 		if !c.applyDownloadRateLimit(int64(n)) {
 			continue // 超过限速，丢弃数据
@@ -751,24 +729,20 @@ func (c *Connection) checkProxySwitch(hostname string) (*ProxyNode, error) {
 		return nil, fmt.Errorf("connection blocked by rule for host %s", hostname)
 
 	case ActionProxy:
-		// 规则要求走指定代理节点
+		// 规则要求走指定代理节点（必须指定，不回退到默认代理）
 		if postResult.ProxyNodeSpecified {
 			proxy := c.server.router.GetProxyNode(postResult.ProxyNode)
 			if proxy != nil {
 				c.logger.Printf("PROXY by post-detection rule: %s (detected: %s) via %s", accessInfo, hostname, proxy.Name)
 				return proxy, nil
 			} else {
-				c.logger.Printf("Proxy node '%s' not found for host %s, falling back to default proxy", postResult.ProxyNode, hostname)
+				c.logger.Printf("Proxy node '%s' not found for host %s", postResult.ProxyNode, hostname)
+				return nil, fmt.Errorf("proxy node '%s' not found for host %s", postResult.ProxyNode, hostname)
 			}
 		}
-		// 如果没有指定代理节点或指定的节点不存在，使用默认代理
-		defaultProxy := c.server.router.GetDefaultProxy()
-		if defaultProxy != nil {
-			c.logger.Printf("PROXY by post-detection rule: %s (detected: %s) via default proxy %s", accessInfo, hostname, defaultProxy.Name)
-			return defaultProxy, nil
-		}
-		c.logger.Printf("PROXY rule matched but no proxy available for host %s", hostname)
-		return nil, fmt.Errorf("no proxy available for host %s", hostname)
+		// ActionProxy 必须指定代理节点，不允许回退
+		c.logger.Printf("ActionProxy rule matched but no proxy node specified for host %s", hostname)
+		return nil, fmt.Errorf("ActionProxy requires a specific proxy node to be specified for host %s", hostname)
 
 	case ActionDeny:
 		// 规则要求走代理 (deny在配置中表示走代理)
@@ -1026,12 +1000,12 @@ func (c *Connection) executeAdvancedRouting(targetAddr string, targetPort uint16
 		return c.sendReply(REP_CONNECTION_FORBIDDEN, "127.0.0.1", 1080)
 
 	case ActionProxy:
-		// 规则要求走指定代理节点
+		// 规则要求走指定代理节点（必须指定，不回退到默认代理）
 		accessInfo := c.getAccessInfo()
 		proxy := c.server.router.GetProxyNode(result.ProxyNode)
 		if proxy == nil {
-			c.logger.Printf("Proxy node '%s' not found, falling back to default proxy", result.ProxyNode)
-			proxy = c.server.router.GetDefaultProxy()
+			c.logger.Printf("Proxy node '%s' not found for %s -> %s:%d", result.ProxyNode, accessInfo, targetAddr, targetPort)
+			return c.sendReply(REP_GENERAL_FAILURE, "127.0.0.1", 1080)
 		}
 		c.logger.Printf("PROXY by specific rule: %s -> %s:%d via %s", accessInfo, targetAddr, targetPort, proxy.Name)
 		finalTargetConn, err = c.connectThroughProxy(proxy, targetAddr, targetPort)
@@ -1039,13 +1013,21 @@ func (c *Connection) executeAdvancedRouting(targetAddr string, targetPort uint16
 	case ActionDeny:
 		// 规则要求走代理 (deny在配置中表示走代理)
 		accessInfo := c.getAccessInfo()
-		defaultProxy := c.server.router.GetDefaultProxy()
-		if defaultProxy == nil {
-			c.logger.Printf("DENY rule matched but no default proxy available for %s -> %s:%d", accessInfo, targetAddr, targetPort)
-			return c.sendReply(REP_GENERAL_FAILURE, "127.0.0.1", 1080)
+
+		// 如果启用智能代理且端口在探测范围内，使用选择最优连接路径
+		if c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
+			c.logger.Printf("DENY by pre-detection rule, using optimal path selection: %s -> %s:%d", accessInfo, targetAddr, targetPort)
+			finalTargetConn, err = c.attemptDirectAndSniff(targetAddr, targetPort)
+		} else {
+			// 否则直接走默认代理
+			defaultProxy := c.server.router.GetDefaultProxy()
+			if defaultProxy == nil {
+				c.logger.Printf("DENY rule matched but no default proxy available for %s -> %s:%d", accessInfo, targetAddr, targetPort)
+				return c.sendReply(REP_GENERAL_FAILURE, "127.0.0.1", 1080)
+			}
+			c.logger.Printf("DENY by pre-detection rule, using proxy: %s -> %s:%d via %s", accessInfo, targetAddr, targetPort, defaultProxy.Name)
+			finalTargetConn, err = c.connectThroughProxy(defaultProxy, targetAddr, targetPort)
 		}
-		c.logger.Printf("DENY by pre-detection rule, using proxy: %s -> %s:%d via %s", accessInfo, targetAddr, targetPort, defaultProxy.Name)
-		finalTargetConn, err = c.connectThroughProxy(defaultProxy, targetAddr, targetPort)
 
 	case ActionAllow:
 		// 规则要求直连
@@ -1238,16 +1220,6 @@ func (c *Connection) attemptDirectAndSniff(targetAddr string, targetPort uint16)
 // selectOptimalConnection 选择最优连接路径
 func (c *Connection) selectOptimalConnection(targetAddr string, targetPort uint16) (net.Conn, string, *ProxyNode, error) {
 	target := formatNetworkAddress(targetAddr, targetPort)
-
-	// 首先检查预检测路由规则，如果明确要求直连，则直接直连
-	if c.server.router != nil {
-		result := c.server.router.matchRulePreDetection(targetAddr, int(targetPort))
-		if result.Match && result.Action == ActionAllow {
-			// 规则明确要求直连，不进行智能探测
-			conn, err := net.DialTimeout("tcp", target, 5*time.Second)
-			return conn, "direct", nil, err
-		}
-	}
 
 	// 如果未启用智能代理，使用简单直连
 	if !c.server.smartProxyEnabled || !c.server.isProbingPort(int(targetPort)) {

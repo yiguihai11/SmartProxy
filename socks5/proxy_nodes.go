@@ -355,6 +355,11 @@ func (pn *ProxyNodes) performSOCKS5Connect(conn net.Conn, targetAddr string) err
 		return fmt.Errorf("connection failed with code: %d", connectResp[1])
 	}
 
+	// 修复：完全读取并丢弃响应中剩余的 BND.ADDR 和 BND.PORT，防止其污染后续的数据流
+	if err := drainReply(conn, connectResp[3]); err != nil {
+		return fmt.Errorf("failed to drain connect reply: %v", err)
+	}
+
 	return nil
 }
 

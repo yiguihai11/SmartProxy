@@ -188,7 +188,7 @@ func (p *PasswordHasher) pbkdf2(password string, salt []byte, iterations, keyLen
 	for i := 1; i < iterations; i++ {
 		h.Reset()
 		h.Write(result)
-		result = h.Sum(result)
+		result = h.Sum(nil)
 	}
 
 	return result[:keyLen]
