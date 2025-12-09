@@ -343,8 +343,9 @@ func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 	}()
 }
 
+// handleRequest 处理SOCKS5连接请求，并使用预检测和路由来建立连接
 func (c *Connection) handleRequest() error {
-	// 读取请求头
+	// 1. 解析SOCKS5请求头以获取目标地址和端口
 	header := make([]byte, 4)
 	if _, err := io.ReadFull(c.clientConn, header); err != nil {
 		return fmt.Errorf("failed to read request header: %v", err)
@@ -354,141 +355,146 @@ func (c *Connection) handleRequest() error {
 	if version != SOCKS5_VERSION {
 		return fmt.Errorf("unsupported SOCKS version: %d", version)
 	}
-
 	if cmd != CMD_CONNECT {
 		return c.sendReply(REP_COMMAND_NOT_SUPPORTED, "127.0.0.1", 1080)
 	}
 
-	// 解析目标地址
-	var targetAddr string
-	var targetPort uint16
-
-	switch atype {
-	case ATYPE_IPV4:
-		addr := make([]byte, 4)
-		if _, err := io.ReadFull(c.clientConn, addr); err != nil {
-			return fmt.Errorf("failed to read IPv4 address: %v", err)
-		}
-		targetAddr = net.IP(addr).String()
-
-	case ATYPE_IPV6:
-		addr := make([]byte, 16)
-		if _, err := io.ReadFull(c.clientConn, addr); err != nil {
-			return fmt.Errorf("failed to read IPv6 address: %v", err)
-		}
-		targetAddr = net.IP(addr).String()
-
-	case ATYPE_DOMAIN:
-		lenByte := make([]byte, 1)
-		if _, err := io.ReadFull(c.clientConn, lenByte); err != nil {
-			return fmt.Errorf("failed to read domain length: %v", err)
-		}
-
-		domainLen := int(lenByte[0])
-		domain := make([]byte, domainLen)
-		if _, err := io.ReadFull(c.clientConn, domain); err != nil {
-			return fmt.Errorf("failed to read domain: %v", err)
-		}
-		targetAddr = string(domain)
-
-	default:
-		return c.sendReply(REP_ADDRESS_TYPE_NOT_SUPPORTED, "127.0.0.1", 1080)
+	targetAddr, targetPort, err := c.parseAddress(atype)
+	if err != nil {
+		return err // an error reply has already been sent by parseAddress
 	}
 
-	// 读取端口
-	portBytes := make([]byte, 2)
-	if _, err := io.ReadFull(c.clientConn, portBytes); err != nil {
-		return fmt.Errorf("failed to read port: %v", err)
-	}
-	targetPort = binary.BigEndian.Uint16(portBytes)
-
-	target := formatNetworkAddress(targetAddr, targetPort)
-
-	// 设置连接的目标信息
-	c.targetAddr = target
-
-	// 从目标地址中提取主机名
+	// 2. 设置连接的基本信息
+	c.targetAddr = formatNetworkAddress(targetAddr, targetPort)
 	if host, _, err := net.SplitHostPort(targetAddr); err == nil {
 		c.targetHost = host
 	} else {
 		c.targetHost = targetAddr
 	}
+	c.logger.Printf("Connection request: %s -> %s (%s)", c.getClientInfo(), c.targetAddr, c.targetHost)
 
-	// 记录连接请求（包含用户信息）
-	clientInfo := c.getClientInfo()
-	c.logger.Printf("Connection request: %s -> %s (%s)", clientInfo, target, c.targetHost)
+	// 3. 核心逻辑：检测SNI并根据路由规则建立连接
+	finalTargetConn, err := c.detectAndConnect(targetAddr, targetPort)
+	if err != nil {
+		c.logger.Printf("Failed to establish connection for %s: %v", c.getClientInfo(), err)
+		// Since a fake success reply was already sent, we can't send a SOCKS error.
+		// We just close the connection by returning.
+		return nil
+	}
+	defer finalTargetConn.Close()
+	c.targetConn = finalTargetConn
 
-	// --- NEW LOGIC: Pre-detection of SNI/Host ---
-	// 1. Wrap the connection to allow "putting back" the data we read for detection.
+	// 4. 开始双向转发数据
+	c.logger.Printf("CONNECTED: %s -> %s", c.getAccessInfo(), c.targetAddr)
+	return c.relay()
+}
+
+// parseAddress 解析SOCKS5请求中的地址部分
+func (c *Connection) parseAddress(atype byte) (addr string, port uint16, err error) {
+	switch atype {
+	case ATYPE_IPV4:
+		addrBytes := make([]byte, 4)
+		if _, err = io.ReadFull(c.clientConn, addrBytes); err != nil {
+			return "", 0, fmt.Errorf("failed to read IPv4 address: %v", err)
+		}
+		addr = net.IP(addrBytes).String()
+	case ATYPE_IPV6:
+		addrBytes := make([]byte, 16)
+		if _, err = io.ReadFull(c.clientConn, addrBytes); err != nil {
+			return "", 0, fmt.Errorf("failed to read IPv6 address: %v", err)
+		}
+		addr = net.IP(addrBytes).String()
+	case ATYPE_DOMAIN:
+		lenByte := make([]byte, 1)
+		if _, err = io.ReadFull(c.clientConn, lenByte); err != nil {
+			return "", 0, fmt.Errorf("failed to read domain length: %v", err)
+		}
+		domainLen := int(lenByte[0])
+		domain := make([]byte, domainLen)
+		if _, err = io.ReadFull(c.clientConn, domain); err != nil {
+			return "", 0, fmt.Errorf("failed to read domain: %v", err)
+		}
+		addr = string(domain)
+	default:
+		err = c.sendReply(REP_ADDRESS_TYPE_NOT_SUPPORTED, "127.0.0.1", 1080)
+		return "", 0, err
+	}
+
+	portBytes := make([]byte, 2)
+	if _, err = io.ReadFull(c.clientConn, portBytes); err != nil {
+		return "", 0, fmt.Errorf("failed to read port: %v", err)
+	}
+	port = binary.BigEndian.Uint16(portBytes)
+	return addr, port, nil
+}
+
+// detectAndConnect 执行 "提前响应-检测-路由-连接" 的核心逻辑
+func (c *Connection) detectAndConnect(targetAddr string, targetPort uint16) (net.Conn, error) {
+	// 1. 包装客户端连接以支持数据“回放”
 	prependingClientConn := &PrependingConn{Conn: c.clientConn}
 	c.clientConn = prependingClientConn
 
-	// 2. Send a "fake" success reply to unlock the client so it sends application data.
+	// 2. 发送“虚假”成功响应以解锁客户端
 	if err := c.sendReply(REP_SUCCESS, "0.0.0.0", 0); err != nil {
-		return fmt.Errorf("failed to send temporary success reply: %v", err)
+		return nil, fmt.Errorf("failed to send temporary success reply: %v", err)
 	}
 
-	// 3. Read the initial data (e.g., ClientHello) from the client.
+	// 3. 读取初始数据包以进行SNI检测
 	buf := bufferPool.Get()
 	defer bufferPool.Put(buf)
 
-	c.clientConn.SetReadDeadline(time.Now().Add(1 * time.Second)) // 1-second timeout for initial data
-	n, err := prependingClientConn.Conn.Read(buf)                 // Read from underlying conn
-	c.clientConn.SetReadDeadline(time.Time{})                    // Clear the deadline
+	c.clientConn.SetReadDeadline(time.Now().Add(1 * time.Second)) // 1秒超时
+	n, err := prependingClientConn.Conn.Read(buf)                 // 从底层连接读取
+	c.clientConn.SetReadDeadline(time.Time{})                    // 清除超时
 
-	// 3a. If we read data, "prepend" it back to the connection's read buffer.
+	// 3a. 将读到的数据“预置”回连接，以便后续relay
 	if n > 0 {
 		prependingClientConn.mu.Lock()
 		prependingClientConn.prependedData = buf[:n]
 		prependingClientConn.mu.Unlock()
 	}
 
-	// 3b. Handle read errors. EOF is fine, it means the client closed the connection.
+	// 3b. 处理读取错误
 	if err != nil && err != io.EOF {
-		c.logger.Printf("Could not read initial data for detection: %v", err)
-		// We already sent a success reply, so we can't send a SOCKS error.
-		// We just close the connection by returning nil.
-		return nil
+		return nil, fmt.Errorf("could not read initial data for detection: %v", err)
 	}
 
-	// 4. Detect hostname from the data we just read.
+	// 4. 从数据中检测主机名
 	var detectedHost string
 	if n > 0 {
 		if result := c.server.detector.DetectTraffic(buf[:n]); result != nil {
+			hostname := ""
 			if result.Type == TrafficTypeHTTPS && result.SNI != "" {
-				detectedHost = result.SNI
+				hostname = result.SNI
 			} else if result.Type == TrafficTypeHTTP && result.Hostname != "" {
-				detectedHost = result.Hostname
+				hostname = result.Hostname
 			}
-			if detectedHost != "" {
-				c.logger.Printf("SNI/Host detected before routing: %s", detectedHost)
-				c.detectedHost = detectedHost
+			if hostname != "" {
+				c.logger.Printf("SNI/Host detected before routing: %s", hostname)
+				detectedHost = hostname
+				c.detectedHost = hostname
 			}
 		}
 	}
 
-	// 5. Perform routing logic, similar to executeAdvancedRouting.
+	// 5. 使用统一的路由函数进行决策
+	result := c.server.router.matchRule(detectedHost, targetAddr, int(targetPort))
+
+	// 6. 根据路由结果执行连接
 	var finalTargetConn net.Conn
 	var connErr error
 	accessInfo := c.getAccessInfo()
 
-	// 5a. Determine action based on detected host, falling back to IP.
-	result := c.server.router.matchRulePostDetection(detectedHost) // Try post-detection first
-	if !result.Match {
-		result = c.server.router.matchRulePreDetection(targetAddr, int(targetPort)) // Fallback to pre-detection
-	}
-
-	// 5b. Execute the determined action.
 	switch result.Action {
 	case ActionBlock:
-		c.logger.Printf("BLOCKED by rule: %s -> %s (detected: %s)", accessInfo, c.targetAddr, detectedHost)
-		return nil // Connection will be closed as we've already sent a success reply.
+		connErr = fmt.Errorf("blocked by rule for %s (detected: %s)", c.targetAddr, detectedHost)
+		c.logger.Printf("BLOCKED: %s -> %s", accessInfo, c.targetAddr)
 	case ActionProxy:
 		proxy := c.server.router.GetProxyNode(result.ProxyNode)
 		if proxy == nil {
 			connErr = fmt.Errorf("proxy node '%s' not found", result.ProxyNode)
 		} else {
-			c.logger.Printf("PROXY by rule: %s -> %s (detected: %s) via %s", accessInfo, c.targetAddr, detectedHost, proxy.Name)
+			c.logger.Printf("PROXY: %s -> %s via %s", accessInfo, c.targetAddr, proxy.Name)
 			finalTargetConn, connErr = c.connectThroughProxy(proxy, targetAddr, targetPort)
 		}
 	case ActionDeny:
@@ -496,29 +502,17 @@ func (c *Connection) handleRequest() error {
 		if defaultProxy == nil {
 			connErr = fmt.Errorf("no default proxy available")
 		} else {
-			c.logger.Printf("DENY by rule, using proxy: %s -> %s (detected: %s) via %s", accessInfo, c.targetAddr, detectedHost, defaultProxy.Name)
+			c.logger.Printf("DENY: %s -> %s via %s", accessInfo, c.targetAddr, defaultProxy.Name)
 			finalTargetConn, connErr = c.connectThroughProxy(defaultProxy, targetAddr, targetPort)
 		}
 	case ActionAllow:
 		fallthrough
-	default: // Default to direct connection attempt.
-		c.logger.Printf("ALLOW by rule (or default): %s -> %s (detected: %s)", accessInfo, c.targetAddr, detectedHost)
+	default: // 默认直连
+		c.logger.Printf("ALLOW: %s -> %s", accessInfo, c.targetAddr)
 		finalTargetConn, connErr = c.attemptDirectAndSniff(targetAddr, targetPort)
 	}
 
-	// 6. Handle connection result.
-	if connErr != nil {
-		c.logger.Printf("ALL attempts FAILED for %s -> %s:%d: %v", accessInfo, targetAddr, targetPort, connErr)
-		// We can't send a SOCKS error reply. Just close.
-		return nil
-	}
-	defer finalTargetConn.Close()
-
-	c.targetConn = finalTargetConn
-
-	// 7. We already sent a success reply. Now, just start relaying.
-	c.logger.Printf("CONNECTED: %s -> %s:%d", c.getAccessInfo(), targetAddr, targetPort)
-	return c.relay()
+	return finalTargetConn, connErr
 }
 
 func (c *Connection) sendReply(rep byte, bindAddr string, bindPort int) error {
@@ -814,51 +808,51 @@ func (c *Connection) checkProxySwitch(hostname string) (*ProxyNode, error) {
 		return nil, nil
 	}
 
-	postResult := c.server.router.matchRulePostDetection(hostname)
-	if !postResult.Match {
-		return nil, nil
-	}
-
 	accessInfo := c.getAccessInfo()
 
-	switch postResult.Action {
-	case ActionBlock:
-		// 规则要求阻止连接
-		c.logger.Printf("BLOCKED by post-detection rule: %s (detected: %s)", accessInfo, hostname)
-		return nil, fmt.Errorf("connection blocked by rule for host %s", hostname)
+	// 检查域名规则
+	rule := c.server.router.matchDomainRule(hostname)
+	if rule != nil {
+		switch rule.Action {
+		case ActionBlock:
+			// 规则要求阻止连接
+			c.logger.Printf("BLOCKED by post-detection rule: %s (detected: %s)", accessInfo, hostname)
+			return nil, fmt.Errorf("connection blocked by rule for host %s", hostname)
 
-	case ActionProxy:
-		// 规则要求走指定代理节点（必须指定，不回退到默认代理）
-		if postResult.ProxyNodeSpecified {
-			proxy := c.server.router.GetProxyNode(postResult.ProxyNode)
-			if proxy != nil {
-				c.logger.Printf("PROXY by post-detection rule: %s (detected: %s) via %s", accessInfo, hostname, proxy.Name)
-				return proxy, nil
-			} else {
-				c.logger.Printf("Proxy node '%s' not found for host %s", postResult.ProxyNode, hostname)
-				return nil, fmt.Errorf("proxy node '%s' not found for host %s", postResult.ProxyNode, hostname)
+		case ActionProxy:
+			// 规则要求走指定代理节点（必须指定，不回退到默认代理）
+			if rule.ProxyNode != "" {
+				proxy := c.server.router.GetProxyNode(rule.ProxyNode)
+				if proxy != nil {
+					c.logger.Printf("PROXY by post-detection rule: %s (detected: %s) via %s", accessInfo, hostname, proxy.Name)
+					return proxy, nil
+				} else {
+					c.logger.Printf("Proxy node '%s' not found for host %s", rule.ProxyNode, hostname)
+					return nil, fmt.Errorf("proxy node '%s' not found for host %s", rule.ProxyNode, hostname)
+				}
 			}
-		}
-		// ActionProxy 必须指定代理节点，不允许回退
-		c.logger.Printf("ActionProxy rule matched but no proxy node specified for host %s", hostname)
-		return nil, fmt.Errorf("ActionProxy requires a specific proxy node to be specified for host %s", hostname)
+			// ActionProxy 必须指定代理节点，不允许回退
+			c.logger.Printf("ActionProxy rule matched but no proxy node specified for host %s", hostname)
+			return nil, fmt.Errorf("ActionProxy requires a specific proxy node to be specified for host %s", hostname)
 
-	case ActionDeny:
-		// 规则要求走代理 (deny在配置中表示走代理)
-		defaultProxy := c.server.router.GetDefaultProxy()
-		if defaultProxy != nil {
-			c.logger.Printf("DENY by post-detection rule, using proxy: %s (detected: %s) via %s", accessInfo, hostname, defaultProxy.Name)
-			return defaultProxy, nil
-		}
-		c.logger.Printf("DENY rule matched but no default proxy available for host %s", hostname)
-		return nil, fmt.Errorf("no default proxy available for host %s", hostname)
+		case ActionDeny:
+			// 规则要求走代理 (deny在配置中表示走代理)
+			defaultProxy := c.server.router.GetDefaultProxy()
+			if defaultProxy != nil {
+				c.logger.Printf("DENY by post-detection rule, using proxy: %s (detected: %s) via %s", accessInfo, hostname, defaultProxy.Name)
+				return defaultProxy, nil
+			}
+			c.logger.Printf("DENY rule matched but no default proxy available for host %s", hostname)
+			return nil, fmt.Errorf("no default proxy available for host %s", hostname)
 
-	case ActionAllow:
-		// 规则要求直连，不需要切换代理
-		c.logger.Printf("ALLOW by post-detection rule: %s (detected: %s) - direct connection", accessInfo, hostname)
-		return nil, nil
+		case ActionAllow:
+			// 规则要求直连，不需要切换代理
+			c.logger.Printf("ALLOW by post-detection rule: %s (detected: %s) - direct connection", accessInfo, hostname)
+			return nil, nil
+		}
 	}
 
+	// 没有匹配规则，返回nil（不切换代理）
 	return nil, nil
 }
 
@@ -1083,82 +1077,7 @@ func (s *SOCKS5Server) isProbingPort(port int) bool {
 	return false
 }
 
-// executeAdvancedRouting 执行包含嗅探和回退的复杂路由逻辑
-func (c *Connection) executeAdvancedRouting(targetAddr string, targetPort uint16) error {
-	var finalTargetConn net.Conn
-	var err error
 
-	// 1. 执行“检测前”路由匹配
-	result := c.server.router.matchRulePreDetection(targetAddr, int(targetPort))
-
-	switch result.Action {
-	case ActionBlock:
-		// 规则要求阻止
-		accessInfo := c.getAccessInfo()
-		c.logger.Printf("BLOCKED by pre-detection rule: %s -> %s:%d", accessInfo, targetAddr, targetPort)
-		return c.sendReply(REP_CONNECTION_FORBIDDEN, "127.0.0.1", 1080)
-
-	case ActionProxy:
-		// 规则要求走指定代理节点（必须指定，不回退到默认代理）
-		accessInfo := c.getAccessInfo()
-		proxy := c.server.router.GetProxyNode(result.ProxyNode)
-		if proxy == nil {
-			c.logger.Printf("Proxy node '%s' not found for %s -> %s:%d", result.ProxyNode, accessInfo, targetAddr, targetPort)
-			return c.sendReply(REP_GENERAL_FAILURE, "127.0.0.1", 1080)
-		}
-		c.logger.Printf("PROXY by specific rule: %s -> %s:%d via %s", accessInfo, targetAddr, targetPort, proxy.Name)
-		finalTargetConn, err = c.connectThroughProxy(proxy, targetAddr, targetPort)
-
-	case ActionDeny:
-		// 规则要求走代理 (deny在配置中表示走代理)
-		accessInfo := c.getAccessInfo()
-
-		// 如果启用智能代理且端口在探测范围内，使用选择最优连接路径
-		if c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
-			c.logger.Printf("DENY by pre-detection rule, using optimal path selection: %s -> %s:%d", accessInfo, targetAddr, targetPort)
-			finalTargetConn, err = c.attemptDirectAndSniff(targetAddr, targetPort)
-		} else {
-			// 否则直接走默认代理
-			defaultProxy := c.server.router.GetDefaultProxy()
-			if defaultProxy == nil {
-				c.logger.Printf("DENY rule matched but no default proxy available for %s -> %s:%d", accessInfo, targetAddr, targetPort)
-				return c.sendReply(REP_GENERAL_FAILURE, "127.0.0.1", 1080)
-			}
-			c.logger.Printf("DENY by pre-detection rule, using proxy: %s -> %s:%d via %s", accessInfo, targetAddr, targetPort, defaultProxy.Name)
-			finalTargetConn, err = c.connectThroughProxy(defaultProxy, targetAddr, targetPort)
-		}
-
-	case ActionAllow:
-		// 规则要求直连
-		fallthrough // 执行与默认行为相同的逻辑
-	default:
-		// 默认行为：尝试直连，并根据嗅探结果决定是否回退
-		accessInfo := c.getAccessInfo()
-		c.logger.Printf("ALLOW by pre-detection rule (or default): %s -> %s:%d", accessInfo, targetAddr, targetPort)
-		finalTargetConn, err = c.attemptDirectAndSniff(targetAddr, targetPort)
-	}
-
-	// 3. 处理连接结果
-	if err != nil {
-		// 所有连接尝试都失败了
-		accessInfo := c.getAccessInfo()
-		c.logger.Printf("ALL attempts FAILED for %s -> %s:%d: %v", accessInfo, targetAddr, targetPort, err)
-		// 根据错误类型发送更具体的回应
-		// (为了简化，这里统一发送 Host Unreachable)
-		return c.sendReply(REP_HOST_UNREACHABLE, "127.0.0.1", 1080)
-	}
-	defer finalTargetConn.Close()
-
-	c.targetConn = finalTargetConn
-
-	// 4. 发送成功回复并开始转发
-	if err := c.sendReply(REP_SUCCESS, "0.0.0.0", 0); err != nil {
-		return fmt.Errorf("failed to send success reply: %v", err)
-	}
-
-	c.logger.Printf("CONNECTED: %s -> %s:%d", c.getAccessInfo(), targetAddr, targetPort)
-	return c.relay()
-}
 
 // connectThroughProxy 通过指定的代理节点建立连接
 func (c *Connection) connectThroughProxy(proxy *ProxyNode, targetAddr string, targetPort uint16) (net.Conn, error) {

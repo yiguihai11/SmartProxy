@@ -260,12 +260,12 @@ func (r *Resolver) isChinaIP(ipStr string) bool {
 		return false
 	}
 
-	r.logger.Printf("DNS DEBUG: About to call Router.ShouldDirectPreDetection(%s)", ipStr)
-	// 使用Router的ShouldDirectPreDetection方法来检查是否为中国IP
-	// ShouldDirectPreDetection对于中国IP会返回true，表示应该直连
-	result := r.router.ShouldDirectPreDetection(ipStr, 0)
-	r.logger.Printf("DNS DEBUG: Router.ShouldDirectPreDetection(%s) returned: %v", ipStr, result)
-	return result
+	r.logger.Printf("DNS DEBUG: Checking if IP %s is in China routes", ipStr)
+	// 使用 Router 的 IsChinaIP 方法来检查中国IP基数树
+	isChina := r.router.IsChinaIP(ipStr)
+
+	r.logger.Printf("DNS DEBUG: IP %s isChinaIP check returned: %v", ipStr, isChina)
+	return isChina
 }
 
 // querySingleServer 查询单个DNS服务器
