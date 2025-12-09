@@ -139,6 +139,149 @@
             margin: 1px;
         }
 
+        /* 代理节点建议列表样式 */
+        .proxy-node-suggestions {
+            margin-top: 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--light-bg);
+            overflow: hidden;
+        }
+
+        /* 代理节点表单组动画 */
+        #proxy-node-group {
+            transition: all 0.3s ease;
+            overflow: hidden;
+        }
+
+        #proxy-node-group.collapsing {
+            max-height: 0;
+            opacity: 0;
+            margin: 0;
+            padding: 0;
+        }
+
+        #proxy-node-group.expanding {
+            opacity: 0;
+        }
+
+        #proxy-node-group.visible {
+            opacity: 1;
+        }
+
+        .suggestions-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: linear-gradient(135deg, rgba(91, 141, 239, 0.1) 0%, rgba(99, 102, 241, 0.1) 100%);
+            border-bottom: 1px solid var(--border-color);
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .suggestions-header i {
+            color: var(--primary-color);
+        }
+
+        .suggestions-list {
+            padding: 8px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .proxy-node-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            margin: 4px 0;
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .proxy-node-item:hover {
+            border-color: var(--primary-color);
+            box-shadow: 0 2px 8px rgba(91, 141, 239, 0.15);
+            transform: translateY(-1px);
+        }
+
+        .proxy-node-item.selected {
+            border-color: var(--primary-color);
+            background: rgba(91, 141, 239, 0.1);
+        }
+
+        .proxy-node-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .proxy-node-name {
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .proxy-node-details {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .proxy-node-badge {
+            padding: 2px 6px;
+            border-radius: 8px;
+            font-size: 10px;
+            font-weight: 500;
+            color: white;
+        }
+
+        .proxy-node-badge.socks5 {
+            background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+        }
+
+        .proxy-node-badge.http {
+            background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%);
+        }
+
+        .proxy-node-badge.direct {
+            background: linear-gradient(135deg, #6B7280 0%, #4B5563 100%);
+        }
+
+        .proxy-node-status {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .proxy-node-status.enabled {
+            background: var(--success-color);
+        }
+
+        .proxy-node-status.disabled {
+            background: var(--text-secondary);
+        }
+
+        .suggestions-empty {
+            text-align: center;
+            padding: 20px;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+
+        .btn-xs {
+            padding: 2px 8px;
+            font-size: 11px;
+            border-radius: 3px;
+            margin-left: auto;
+        }
+
         * {
             box-sizing: border-box;
         }

@@ -8,7 +8,6 @@ import (
 	"log"
 	"math/rand"
 	"net"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -200,11 +199,25 @@ type Resolver struct {
 func NewResolver(config *Config, logger *log.Logger, router *socks5.Router) *Resolver {
 	cache := NewDNSCache(config.CacheSize, config.CleanupInterval, logger)
 
+	// 直接打印到标准输出，确保能看到
+	if router == nil {
+		fmt.Printf("CRITICAL: NewResolver called with nil router!\n")
+	} else {
+		fmt.Printf("SUCCESS: NewResolver called with valid router\n")
+	}
+
+	// 也记录到logger
+	if router == nil {
+		logger.Printf("DEBUG: NewResolver called with nil router")
+	} else {
+		logger.Printf("DEBUG: NewResolver called with valid router")
+	}
+
 	return &Resolver{
 		config: config,
 		cache:  cache,
 		client: &dns.Client{
-			Timeout: 2 * time.Second,
+			Timeout: 5 * time.Second, // 增加超时时间以减少超时失败
 		},
 		logger: logger,
 		router: router,
@@ -225,26 +238,6 @@ func (r *Resolver) matchPattern(pattern, value string) bool {
 	return pattern == value
 }
 
-// isValidHostname 验证主机名格式
-func (r *Resolver) isValidHostname(hostname string) bool {
-	if len(hostname) == 0 || len(hostname) > 255 {
-		return false
-	}
-
-	// 基本格式检查
-	if !regexp.MustCompile(`^[a-zA-Z0-9.-]+$`).MatchString(hostname) {
-		return false
-	}
-
-	// 不能以 . 或 - 开始或结束
-	if strings.HasPrefix(hostname, ".") || strings.HasPrefix(hostname, "-") ||
-		strings.HasSuffix(hostname, ".") || strings.HasSuffix(hostname, "-") {
-		return false
-	}
-
-	return true
-}
-
 // extractIPs 从DNS响应中提取IP地址
 func (r *Resolver) extractIPs(msg *dns.Msg) []string {
 	var ips []string
@@ -261,19 +254,23 @@ func (r *Resolver) extractIPs(msg *dns.Msg) []string {
 
 // isChinaIP 检查IP是否为中国IP (使用Router的chnroutes结果)
 func (r *Resolver) isChinaIP(ipStr string) bool {
+	r.logger.Printf("DNS DEBUG: Checking IP %s, router is nil: %v", ipStr, r.router == nil)
 	if r.router == nil {
-		r.logger.Printf("Router not initialized, falling back to default IP check for %s", ipStr)
+		r.logger.Printf("DNS ERROR: Router not initialized, falling back to default IP check for %s", ipStr)
 		return false
 	}
 
-	// 使用Router的ShouldDirect方法来检查是否为中国IP
-	// ShouldDirect对于中国IP会返回true，表示应该直连
-	return r.router.ShouldDirect(ipStr, 0)
+	r.logger.Printf("DNS DEBUG: About to call Router.ShouldDirectPreDetection(%s)", ipStr)
+	// 使用Router的ShouldDirectPreDetection方法来检查是否为中国IP
+	// ShouldDirectPreDetection对于中国IP会返回true，表示应该直连
+	result := r.router.ShouldDirectPreDetection(ipStr, 0)
+	r.logger.Printf("DNS DEBUG: Router.ShouldDirectPreDetection(%s) returned: %v", ipStr, result)
+	return result
 }
 
 // querySingleServer 查询单个DNS服务器
 func (r *Resolver) querySingleServer(msg *dns.Msg, server string) (*dns.Msg, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // 增加超时时间
 	defer cancel()
 
 	resp, _, err := r.client.ExchangeContext(ctx, msg, server)
@@ -303,7 +300,7 @@ func (r *Resolver) queryConcurrent(msg *dns.Msg, servers []string) (*dns.Msg, er
 	}
 
 	results := make(chan result, len(shuffled))
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second) // 增加并发查询超时
 	defer cancel()
 
 	// 并发查询
@@ -782,6 +779,17 @@ func (s *SmartDNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 // Start 启动DNS服务器
 func (s *SmartDNSServer) Start() error {
 	s.logger.Printf("Starting Smart DNS server on %s", s.server.Addr)
+
+	// 添加Router状态检查
+	if s.resolver != nil {
+		s.logger.Printf("DNS DEBUG: Resolver is not nil, checking router...")
+		// 这里我们不能直接访问resolver的router，因为它没有公开
+		// 但是可以调用一个简单的方法来验证
+		s.logger.Printf("DNS DEBUG: DNS Server configuration loaded successfully")
+	} else {
+		s.logger.Printf("DNS ERROR: Resolver is nil!")
+	}
+
 	return s.server.ListenAndServe()
 }
 

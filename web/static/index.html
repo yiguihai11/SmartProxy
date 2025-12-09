@@ -647,7 +647,7 @@
                     <div class="form-group">
                         <label class="form-label">动作 *</label>
                         <div class="layui-form" lay-filter="router-rule-action-form">
-                            <select name="action" id="router-rule-action" lay-verify="required">
+                            <select name="action" id="router-rule-action" lay-verify="required" lay-filter="router-rule-action-filter">
                                 <option value="">请选择Action类型</option>
                                 <option value="allow">Allow (直连)</option>
                                 <option value="deny">Deny (走代理)</option>
@@ -660,9 +660,21 @@
                         <label class="form-label">模式 (Patterns) *</label>
                         <textarea class="form-input" id="router-rule-patterns" rows="4" placeholder="每行一个模式, 例如:&#10;*.google.com&#10;1.2.3.4&#10;192.168.0.0/16" required></textarea>
                     </div>
-                    <div class="form-group">
-                        <label class="form-label">代理节点</label>
-                        <input type="text" class="form-input" id="router-rule-proxy-node" placeholder="例如: proxy1 (仅当动作为 'proxy' 时需要)">
+                    <div class="form-group" id="proxy-node-group" style="display: none;">
+                        <label class="form-label">代理节点 *</label>
+                        <input type="text" class="form-input" id="router-rule-proxy-node" placeholder="从下方选择或输入代理节点名称">
+                        <div class="proxy-node-suggestions" id="proxy-node-suggestions">
+                            <div class="suggestions-header">
+                                <i class="layui-icon layui-icon-component"></i>
+                                <span>可用代理节点：</span>
+                                <button type="button" class="btn btn-xs btn-secondary" onclick="refreshProxyNodeSuggestions()">
+                                    <i class="layui-icon layui-icon-refresh"></i> 刷新
+                                </button>
+                            </div>
+                            <div class="suggestions-list" id="suggestions-list">
+                                <!-- 动态生成代理节点列表 -->
+                            </div>
+                        </div>
                     </div>
                     <div class="form-group">
                         <label class="form-label">描述</label>

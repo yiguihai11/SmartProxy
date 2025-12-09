@@ -82,6 +82,30 @@ func (pn *ProxyNodes) LoadFromJSON(jsonData []byte) error {
 	return nil
 }
 
+// LoadNodes 直接加载代理节点切片
+func (pn *ProxyNodes) LoadNodes(nodes []ProxyNode) error {
+	pn.mu.Lock()
+	defer pn.mu.Unlock()
+
+	// 验证配置
+	for i, node := range nodes {
+		if node.Name == "" {
+			return fmt.Errorf("proxy node %d: name cannot be empty", i)
+		}
+		if node.Address == "" {
+			return fmt.Errorf("proxy node %s: address cannot be empty", node.Name)
+		}
+		if !isValidProxyType(string(node.Type)) {
+			return fmt.Errorf("proxy node %s: invalid type '%s'", node.Name, node.Type)
+		}
+	}
+
+	pn.nodes = nodes
+	pn.logger.Printf("Loaded %d proxy nodes", len(nodes))
+
+	return nil
+}
+
 // GetDefaultProxy 获取默认代理节点
 // 返回第一个启用的代理节点，如果没有启用的则返回nil
 func (pn *ProxyNodes) GetDefaultProxy() *ProxyNode {

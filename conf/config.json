@@ -1,15 +1,50 @@
 {
   "listener": {
-    "socks5_port": 1090,
+    "socks5_port": 1080,
     "web_port": 8080,
     "dns_port": 1053,
     "ipv6_enabled": false
   },
   "socks5": {
-    "max_connections": 1000,
-    "cleanup_interval": 300,
     "enable_auth": false,
-    "auth_users": []
+    "auth_users": [
+      {
+        "username": "admin",
+        "password": "password9527",
+        "enabled": true,
+        "user_groups": ["admin"],
+        "rate_limit": {
+          "upload_bps": 10485760,
+          "download_bps": 10485760
+        },
+        "connection_limit": {
+          "max_connections": 10,
+          "expires_after_minutes": 60,
+          "allow_from_ips": ["192.168.0.0/16"],
+          "block_from_ips": [],
+          "time_restriction": {
+            "allowed_hours": ["09:00-18:00"],
+            "allowed_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+            "timezone": "Asia/Shanghai",
+            "effective_dates": ["2024-01-01"],
+            "expired_dates": []
+          }
+        }
+      },
+      {
+        "username": "user",
+        "password": "user123",
+        "enabled": true,
+        "user_groups": ["user"],
+        "rate_limit": {
+          "upload_bps": 524288,
+          "download_bps": 524288
+        },
+        "connection_limit": {
+          "max_connections": 5
+        }
+      }
+    ]
   },
   "router": {
     "chnroutes": {
@@ -68,9 +103,9 @@
       {
         "action": "deny",
         "patterns": [
-          "80",
-          "8080",
-          "3128"
+          "8888",
+          "8889",
+          "8890"
         ],
         "description": "HTTP代理端口走代理"
       },
@@ -79,16 +114,24 @@
         "patterns": [
           "*.example.com"
         ],
-        "proxy_node": "us-node1",
-        "description": "特定域名通过指定代理节点"
+        "proxy_node": "upstream-socks5",
+        "description": "特定域名通过上游SOCKS5代理"
       }
     ],
     "proxy_nodes": [
       {
+        "name": "upstream-socks5",
+        "type": "socks5",
+        "address": "127.0.0.1:1081",
+        "enabled": true,
+        "auth_method": "",
+        "description": "上游SOCKS5代理服务器"
+      },
+      {
         "name": "us-node1",
         "type": "socks5",
         "address": "us-proxy.example.com:1080",
-        "enabled": true,
+        "enabled": false,
         "username": "user1",
         "password": "pass1",
         "auth_method": "userpass",
@@ -98,34 +141,45 @@
         "name": "jp-node1",
         "type": "socks5",
         "address": "jp-proxy.example.com:1080",
-        "enabled": true,
+        "enabled": false,
+        "auth_method": "",
         "description": "日本代理节点1"
       }
     ]
   },
-  "traffic_detection": {
-    "enabled": false,
-    "enhanced_probing": {
-      "enable": false,
-      "sni_extraction": false,
-      "http_validation": false,
-      "max_initial_data_size": 4096,
-      "validation_timeout_ms": 1500,
-      "probing_ports": []
-    }
+  "smart_proxy": {
+    "enabled": true,
+    "timeout_ms": 1500,
+    "blacklist_expiry_minutes": 360,
+    "probing_ports": [80, 8080, 443, 8443]
   },
   "dns": {
-    "enabled": false,
+    "enabled": true,
     "cache": {
       "max_size": 2000,
       "default_ttl": 300,
       "cleanup_interval": 60
     },
     "groups": {
-      "cn": [],
-      "foreign": []
+      "cn": [
+        "119.29.29.29:53",
+        "223.5.5.5:53",
+        "114.114.114.114:53"
+      ],
+      "foreign": [
+        "8.8.8.8:53",
+        "8.8.4.4:53",
+        "1.1.1.1:53",
+        "1.0.0.1:53"
+      ]
     },
-    "hijack_rules": []
+    "hijack_rules": [
+      {
+        "domain": "ad.google.com",
+        "answer": "0.0.0.0",
+        "type": "A"
+      }
+    ]
   },
   "connection_settings": {
     "tcp_timeout_seconds": 60,
@@ -133,8 +187,8 @@
   },
   "logging": {
     "level": "info",
-    "enable_user_logs": false,
-    "enable_access_logs": false,
+    "enable_user_logs": true,
+    "enable_access_logs": true,
     "log_file": "proxy.log"
   }
 }

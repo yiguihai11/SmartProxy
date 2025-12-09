@@ -92,7 +92,9 @@ function setupAutoSave() {
 
     const inputs = document.querySelectorAll('input[type="text"], input[type="number"], input[type="checkbox"], select, textarea');
     inputs.forEach(input => {
+        // 排除模态框中的所有元素，模态框有自己的保存逻辑
         if (input.closest('.modal')) return;
+
         input.addEventListener('change', autoSave);
         input.addEventListener('input', autoSave);
         if (input.id && input.id.includes('_port')) {
@@ -101,10 +103,15 @@ function setupAutoSave() {
     });
 
     if (AppState.layuiForm) {
-        AppState.layuiForm.on('select', autoSave); // 通用select监听
+        // 只监听模态框外的select变化
+        AppState.layuiForm.on('select', function(data) {
+            if (!data.elem || !data.elem.closest('.modal')) {
+                autoSave();
+            }
+        });
         AppState.layuiForm.on('checkbox', function(data){
-            // 排除enable_auth，它有专门的handleAuthToggle处理
-            if(data.elem.id !== 'enable_auth') {
+            // 排除enable_auth和模态框中的元素
+            if (data.elem.id !== 'enable_auth' && !data.elem.closest('.modal')) {
                 autoSave();
             }
         });
@@ -312,7 +319,7 @@ function populateConfigForms(config) {
     if (AppState.layuiForm) { AppState.layuiForm.render(); }
     initializePortWarnings();
     loadChnroutesFile(); // 加载中国路由文件
-    populateProxyNodesTable((config.router?.proxy_nodes || config.proxy_nodes || []));
+    populateProxyNodesTable(config.router?.proxy_nodes || []);
     // 初始化时不填充所有表格以提高性能，在切换到相应标签页时再填充
 }
 
@@ -589,10 +596,9 @@ function populateProxyNodesTable(nodes) {
 
     nodes.forEach((node, index) => {
         const row = document.createElement('tr');
-        // Handle different node structures (legacy vs current)
-        const name = node.name || node.identifier || 'Unknown';
-        const type = node.type || node.protocol || 'unknown';
-        const address = node.address || node.ip || 'Unknown';
+        const name = node.name || 'Unknown';
+        const type = node.type || 'unknown';
+        const address = node.address || 'Unknown';
         const port = node.port || 0;
         const weight = node.weight || 5;
         const enabled = node.enabled !== false;
@@ -647,8 +653,7 @@ function addProxyNode() {
 
 // 编辑代理节点
 function editProxyNode(index) {
-    // Support both router.proxy_nodes and legacy proxy_nodes structure
-    const nodes = AppState.currentConfig.router?.proxy_nodes || AppState.currentConfig.proxy_nodes || [];
+    const nodes = AppState.currentConfig.router?.proxy_nodes || [];
     const node = nodes[index];
     if (node) {
         const nodeIndex = document.getElementById('node-index');
@@ -663,10 +668,9 @@ function editProxyNode(index) {
 
         if (nodeIndex) nodeIndex.value = index;
         if (modalTitle) modalTitle.textContent = '编辑代理节点';
-        // Handle different field names between structures
-        if (nodeIdentifier) nodeIdentifier.value = node.name || node.identifier || '';
-        if (nodeProtocol) nodeProtocol.value = node.type || node.protocol || 'socks5';
-        if (nodeIp) nodeIp.value = node.address || node.ip || '';
+        if (nodeIdentifier) nodeIdentifier.value = node.name || '';
+        if (nodeProtocol) nodeProtocol.value = node.type || 'socks5';
+        if (nodeIp) nodeIp.value = node.address || '';
         if (nodePort) nodePort.value = node.port || '';
         if (nodeWeight) nodeWeight.value = node.weight || '5';
         if (nodeEnabled) nodeEnabled.checked = node.enabled !== false;
@@ -677,26 +681,21 @@ function editProxyNode(index) {
 
 // 删除代理节点
 function deleteProxyNode(index) {
-    // Support both router.proxy_nodes and legacy proxy_nodes structure
-    const nodes = AppState.currentConfig.router?.proxy_nodes || AppState.currentConfig.proxy_nodes || [];
+    const nodes = AppState.currentConfig.router?.proxy_nodes || [];
     const node = nodes[index];
-    const nodeName = node.name || node.identifier || 'Unknown';
-    const nodeAddress = node.address || node.ip || 'Unknown';
+    const nodeName = node.name || 'Unknown';
+    const nodeAddress = node.address || 'Unknown';
     const nodePort = node.port || 'Unknown';
 
     showConfirm('删除确认', `确定要删除代理节点 "${nodeName}" 吗？<br>IP: ${nodeAddress}:${nodePort}`, async function () {
-        // Update both structures for compatibility
         if (AppState.currentConfig.router?.proxy_nodes) {
             AppState.currentConfig.router.proxy_nodes.splice(index, 1);
-        }
-        if (AppState.currentConfig.proxy_nodes) {
-            AppState.currentConfig.proxy_nodes.splice(index, 1);
         }
 
         const saved = await saveConfig();
         if (saved) {
             showAlert('success', '代理节点删除成功！');
-            populateProxyNodesTable(AppState.currentConfig.router?.proxy_nodes || AppState.currentConfig.proxy_nodes || []);
+            populateProxyNodesTable(AppState.currentConfig.router?.proxy_nodes || []);
         }
     });
 }
@@ -732,32 +731,26 @@ async function saveProxyNode() {
     };
     if (protocol === 'direct') node.port = 0;
 
-    // Fix: Support both config structures
+    // Ensure config structures exist
     if (!AppState.currentConfig.router) {
         AppState.currentConfig.router = {};
     }
     if (!AppState.currentConfig.router.proxy_nodes) {
         AppState.currentConfig.router.proxy_nodes = [];
     }
-    // Also support legacy proxy_nodes
-    if (!AppState.currentConfig.proxy_nodes) {
-        AppState.currentConfig.proxy_nodes = [];
-    }
 
     if (index === '') {
         AppState.currentConfig.router.proxy_nodes.push(node);
-        AppState.currentConfig.proxy_nodes.push(node); // Update both for compatibility
     } else {
         const idx = parseInt(index);
         AppState.currentConfig.router.proxy_nodes[idx] = node;
-        AppState.currentConfig.proxy_nodes[idx] = node; // Update both for compatibility
     }
 
     const saved = await saveConfig();
     if (saved) {
         showAlert('success', '代理节点保存成功！');
         closeProxyNodeModal();
-        populateProxyNodesTable(AppState.currentConfig.router?.proxy_nodes || AppState.currentConfig.proxy_nodes || []);
+        populateProxyNodesTable(AppState.currentConfig.router?.proxy_nodes || []);
     }
 }
 
@@ -1222,10 +1215,17 @@ function populateRouterRulesTable() {
 function addRouterRule() {
     document.getElementById('router-rule-index').value = '';
     document.getElementById('router-rule-modal-title-text').textContent = '添加路由规则';
-    document.getElementById('router-rule-action').value = 'proxy';
+    document.getElementById('router-rule-action').value = 'allow'; // 默认为allow，不显示代理节点
     document.getElementById('router-rule-patterns').value = '';
     document.getElementById('router-rule-proxy-node').value = '';
     document.getElementById('router-rule-description').value = '';
+
+    // 添加输入框实时监听
+    setupProxyNodeInputListener();
+
+    // 添加动作选择监听器
+    setupActionChangeListener();
+
     document.getElementById('router-rule-modal').style.display = 'flex';
     if (AppState.layuiForm) AppState.layuiForm.render('select');
 }
@@ -1241,6 +1241,13 @@ function editRouterRule(index) {
     document.getElementById('router-rule-patterns').value = (rule.patterns || []).join('\n');
     document.getElementById('router-rule-proxy-node').value = rule.proxy_node || '';
     document.getElementById('router-rule-description').value = rule.description || '';
+
+    // 添加输入框实时监听
+    setupProxyNodeInputListener();
+
+    // 添加动作选择监听器（这会根据action自动处理代理节点显示）
+    setupActionChangeListener();
+
     document.getElementById('router-rule-modal').style.display = 'flex';
     if (AppState.layuiForm) AppState.layuiForm.render('select');
 }
@@ -1789,6 +1796,285 @@ function togglePatterns(index) {
         icon.className = 'layui-icon layui-icon-up';
         text.textContent = '收缩';
     }
+}
+
+// --- 代理节点建议列表 ---
+
+function refreshProxyNodeSuggestions() {
+    const suggestionsList = document.getElementById('suggestions-list');
+    if (!suggestionsList) return;
+
+    // 显示加载状态
+    suggestionsList.innerHTML = `
+        <div class="suggestions-loading" style="text-align: center; padding: 20px; color: #999;">
+            <i class="layui-icon layui-icon-loading layui-anim layui-anim-rotate layui-anim-loop" style="font-size: 16px; margin-right: 8px;"></i>
+            正在加载代理节点...
+        </div>
+    `;
+
+    // 尝试从API获取最新的代理节点数据
+    fetch('/api/proxy-nodes')
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.success && data.data) {
+                populateProxyNodeSuggestions(data.data);
+            } else {
+                // API调用失败，回退到使用本地配置
+                console.warn('API调用失败，使用本地配置:', data.error || '未知错误');
+                fallbackToLocalConfig();
+            }
+        })
+        .catch(error => {
+            console.warn('获取代理节点失败:', error);
+            fallbackToLocalConfig();
+        });
+}
+
+// 回退到使用本地配置
+function fallbackToLocalConfig() {
+    const suggestionsList = document.getElementById('suggestions-list');
+    if (!suggestionsList) return;
+
+    // 从当前状态获取代理节点
+    const proxyNodes = AppState.currentConfig.router?.proxy_nodes || [];
+    console.log('使用本地配置，代理节点数量:', proxyNodes.length);
+    populateProxyNodeSuggestions(proxyNodes);
+}
+
+// 填充代理节点建议列表
+function populateProxyNodeSuggestions(proxyNodes) {
+    const suggestionsList = document.getElementById('suggestions-list');
+    if (!suggestionsList) return;
+
+    if (proxyNodes.length === 0) {
+        suggestionsList.innerHTML = `
+            <div class="suggestions-empty">
+                <i class="layui-icon layui-icon-component" style="font-size: 24px; margin-bottom: 8px; display: block; opacity: 0.5;"></i>
+                <div>暂无可用的代理节点</div>
+                <div style="font-size: 11px; margin-top: 4px; opacity: 0.7;">请先在"代理节点"标签页中添加代理节点</div>
+            </div>
+        `;
+        return;
+    }
+
+    const currentValue = document.getElementById('router-rule-proxy-node').value;
+    const searchTerm = currentValue.toLowerCase();
+    suggestionsList.innerHTML = '';
+
+    // 过滤代理节点
+    const filteredNodes = proxyNodes.filter((node, index) => {
+        const nodeName = node.name || `proxy-${index}`;
+        const nodeType = node.type || 'unknown';
+        const nodeAddress = node.address || 'unknown';
+
+        return !searchTerm ||
+               nodeName.toLowerCase().includes(searchTerm) ||
+               nodeType.toLowerCase().includes(searchTerm) ||
+               nodeAddress.toLowerCase().includes(searchTerm);
+    });
+
+    if (filteredNodes.length === 0) {
+        suggestionsList.innerHTML = `
+            <div class="suggestions-empty">
+                <i class="layui-icon layui-icon-search" style="font-size: 24px; margin-bottom: 8px; display: block; opacity: 0.5;"></i>
+                <div>未找到匹配的代理节点</div>
+                <div style="font-size: 11px; margin-top: 4px; opacity: 0.7;">尝试使用其他搜索关键词</div>
+            </div>
+        `;
+        return;
+    }
+
+    filteredNodes.forEach((node, index) => {
+        const nodeName = node.name || `proxy-${index}`;
+        const nodeType = node.type || 'unknown';
+        const nodeAddress = node.address || 'unknown';
+        const nodeEnabled = node.enabled !== false;
+
+        // 创建类型徽章样式
+        let typeBadge = '';
+        switch (nodeType.toLowerCase()) {
+            case 'socks5':
+                typeBadge = '<span class="proxy-node-badge socks5">SOCKS5</span>';
+                break;
+            case 'http':
+                typeBadge = '<span class="proxy-node-badge http">HTTP</span>';
+                break;
+            case 'direct':
+                typeBadge = '<span class="proxy-node-badge direct">DIRECT</span>';
+                break;
+            default:
+                typeBadge = `<span class="proxy-node-badge" style="background: linear-gradient(135deg, #6B7280 0%, #4B5563 100%);">${nodeType.toUpperCase()}</span>`;
+        }
+
+        // 高亮匹配的文本
+        const highlightText = (text, term) => {
+            if (!term) return text;
+            const regex = new RegExp(`(${term})`, 'gi');
+            return text.replace(regex, '<mark style="background: rgba(91, 141, 239, 0.3); padding: 1px 2px; border-radius: 2px;">$1</mark>');
+        };
+
+        const highlightedName = highlightText(nodeName, searchTerm);
+        const highlightedAddress = highlightText(nodeAddress, searchTerm);
+
+        const nodeItem = document.createElement('div');
+        nodeItem.className = 'proxy-node-item';
+        nodeItem.setAttribute('data-node-name', nodeName);
+
+        if (nodeName === currentValue && !searchTerm) {
+            nodeItem.classList.add('selected');
+        }
+
+        nodeItem.innerHTML = `
+            <div class="proxy-node-info">
+                <div class="proxy-node-name">${highlightedName}</div>
+                <div class="proxy-node-details">
+                    ${typeBadge}
+                    <span>${highlightedAddress}</span>
+                </div>
+            </div>
+            <div class="proxy-node-status ${nodeEnabled ? 'enabled' : 'disabled'}" title="${nodeEnabled ? '已启用' : '已禁用'}"></div>
+        `;
+
+        // 添加点击事件
+        nodeItem.addEventListener('click', function() {
+            selectProxyNode(nodeName);
+        });
+
+        suggestionsList.appendChild(nodeItem);
+    });
+}
+
+function selectProxyNode(nodeName) {
+    const proxyNodeInput = document.getElementById('router-rule-proxy-node');
+    if (proxyNodeInput) {
+        proxyNodeInput.value = nodeName;
+    }
+
+    // 更新选中状态
+    document.querySelectorAll('.proxy-node-item').forEach(item => {
+        item.classList.remove('selected');
+        if (item.getAttribute('data-node-name') === nodeName) {
+            item.classList.add('selected');
+        }
+    });
+}
+
+function setupProxyNodeInputListener() {
+    const proxyNodeInput = document.getElementById('router-rule-proxy-node');
+    if (!proxyNodeInput) return;
+
+    // 移除之前的事件监听器（避免重复绑定）
+    proxyNodeInput.removeEventListener('input', proxyNodeInputHandler);
+    proxyNodeInput.removeEventListener('focus', proxyNodeFocusHandler);
+    proxyNodeInput.removeEventListener('blur', proxyNodeBlurHandler);
+
+    // 添加新的事件监听器
+    proxyNodeInput.addEventListener('input', proxyNodeInputHandler);
+    proxyNodeInput.addEventListener('focus', proxyNodeFocusHandler);
+    proxyNodeInput.addEventListener('blur', proxyNodeBlurHandler);
+}
+
+function setupActionChangeListener() {
+    const actionSelect = document.getElementById('router-rule-action');
+    if (!actionSelect) return;
+
+    // 方案1: 使用layui的特定过滤器监听
+    if (AppState.layuiForm) {
+        // 移除之前的监听器
+        AppState.layuiForm.off('select(router-rule-action-filter)');
+
+        // 添加新的监听器
+        AppState.layuiForm.on('select(router-rule-action-filter)', function(data) {
+            alert('[LayuiSelect] 动作选择变化: ' + data.value);
+            actionChangeHandler();
+        });
+    }
+
+    // 方案2: 同时使用原生监听作为备用
+    actionSelect.removeEventListener('change', actionChangeHandler);
+    actionSelect.addEventListener('change', function(e) {
+        alert('[NativeSelect] 原生选择变化: ' + e.target.value);
+        actionChangeHandler();
+    });
+
+    // 方案3: 定时检查（作为最后的保障）
+    let lastValue = actionSelect.value;
+    const checkInterval = setInterval(() => {
+        const currentValue = actionSelect.value;
+        if (currentValue !== lastValue) {
+            alert('[Polling] 检测到值变化: ' + currentValue);
+            lastValue = currentValue;
+            actionChangeHandler();
+        }
+    }, 500);
+
+    // 清理定时器
+    const originalClose = closeRouterRuleModal;
+    window.closeRouterRuleModal = function() {
+        clearInterval(checkInterval);
+        return originalClose.apply(this, arguments);
+    };
+
+    // 初始化时也触发一次
+    actionChangeHandler();
+}
+
+function actionChangeHandler() {
+    const actionSelect = document.getElementById('router-rule-action');
+    const proxyNodeGroup = document.getElementById('proxy-node-group');
+
+    if (!actionSelect || !proxyNodeGroup) {
+        alert('[ActionChangeHandler] 元素未找到: actionSelect=' + !!actionSelect + ', proxyNodeGroup=' + !!proxyNodeGroup);
+        return;
+    }
+
+    const selectedAction = actionSelect.value;
+    alert('[ActionChangeHandler] 处理动作变化: selectedAction=' + selectedAction + ', currentDisplay=' + proxyNodeGroup.style.display);
+
+    if (selectedAction === 'proxy') {
+        // 显示代理节点选择
+        proxyNodeGroup.style.display = 'block';
+        alert('[ActionChangeHandler] 显示代理节点选择框');
+        // 刷新代理节点列表
+        refreshProxyNodeSuggestions();
+    } else {
+        // 隐藏代理节点选择，并清空值
+        proxyNodeGroup.style.display = 'none';
+        const proxyNodeInput = document.getElementById('router-rule-proxy-node');
+        if (proxyNodeInput) {
+            proxyNodeInput.value = '';
+        }
+        alert('[ActionChangeHandler] 隐藏代理节点选择框');
+    }
+}
+
+function proxyNodeInputHandler() {
+    // 实时过滤代理节点
+    refreshProxyNodeSuggestions();
+}
+
+function proxyNodeFocusHandler() {
+    // 输入框获得焦点时显示建议列表
+    const suggestionsDiv = document.getElementById('proxy-node-suggestions');
+    if (suggestionsDiv) {
+        suggestionsDiv.style.display = 'block';
+    }
+    refreshProxyNodeSuggestions();
+}
+
+function proxyNodeBlurHandler() {
+    // 输入框失去焦点时延迟隐藏建议列表（让用户有时间点击列表项）
+    setTimeout(() => {
+        const suggestionsDiv = document.getElementById('proxy-node-suggestions');
+        if (suggestionsDiv) {
+            suggestionsDiv.style.display = 'block'; // 保持显示状态，让用户随时可以看到可用节点
+        }
+    }, 200);
 }
 
 console.log('SmartProxy 现代化控制台脚本加载完成');

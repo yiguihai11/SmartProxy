@@ -2,8 +2,10 @@ package socks5
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
+	"smartproxy/config"
 	"sync"
 	"time"
 )
@@ -34,7 +36,6 @@ type RateLimitRule struct {
 	Key           string        `json:"key"`            // 限速键 (用户名/IP等)
 	UploadLimit   int64         `json:"upload_limit"`   // 上传限速 (bps)
 	DownloadLimit int64         `json:"download_limit"` // 下载限速 (bps)
-	BurstSize     int64         `json:"burst_size"`     // 突发大小 (bytes)
 	Enabled       bool          `json:"enabled"`
 	Priority      int           `json:"priority"` // 优先级
 }
@@ -183,24 +184,17 @@ func (rl *RateLimiter) AddRule(rule *RateLimitRule) error {
 		return &SecurityError{"At least one limit must be specified"}
 	}
 
-	// 设置默认突发大小
-	if rule.BurstSize <= 0 {
-		maxLimit := rule.UploadLimit
-		if rule.DownloadLimit > maxLimit {
-			maxLimit = rule.DownloadLimit
-		}
-		rule.BurstSize = maxLimit * 2 // 2秒突发
-	}
-
 	rl.rules[rule.ID] = rule
 
-	// 创建对应的令牌桶
+	// 自动计算突发大小：2秒突发容量
 	key := rule.Key
 	if rule.UploadLimit > 0 {
-		rl.uploadBuckets[key] = NewTokenBucket(rule.BurstSize, rule.UploadLimit)
+		uploadBurst := rule.UploadLimit * 2 // 2秒突发
+		rl.uploadBuckets[key] = NewTokenBucket(uploadBurst, rule.UploadLimit)
 	}
 	if rule.DownloadLimit > 0 {
-		rl.downloadBuckets[key] = NewTokenBucket(rule.BurstSize, rule.DownloadLimit)
+		downloadBurst := rule.DownloadLimit * 2 // 2秒突发
+		rl.downloadBuckets[key] = NewTokenBucket(downloadBurst, rule.DownloadLimit)
 	}
 
 	// 初始化统计
@@ -475,4 +469,51 @@ func (rl *RateLimiter) GetUsageRate(key string) (uploadRate, downloadRate float6
 	}
 
 	return
+}
+
+// LoadUserRateLimitsFromConfig 从配置文件加载用户级限速
+func (rl *RateLimiter) LoadUserRateLimitsFromConfig(configUsers []config.AuthUser) error {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	// 清除现有的用户级限速规则
+	for key, rule := range rl.rules {
+		if rule.Type == RateLimitTypeUser {
+			delete(rl.rules, key)
+			delete(rl.uploadBuckets, key)
+			delete(rl.downloadBuckets, key)
+		}
+	}
+
+	// 加载新的用户级限速规则
+	for _, configUser := range configUsers {
+		if !configUser.Enabled || configUser.RateLimit == nil {
+			continue
+		}
+
+		rule := &RateLimitRule{
+			ID:            fmt.Sprintf("user_%s", configUser.Username),
+			Type:          RateLimitTypeUser,
+			Key:           configUser.Username,
+			UploadLimit:   configUser.RateLimit.UploadBPS,
+			DownloadLimit: configUser.RateLimit.DownloadBPS,
+			Enabled:       true,
+			Priority:      100, // 用户限速优先级较高
+		}
+
+		rl.rules[rule.ID] = rule
+
+		// 自动计算突发大小：2秒突发容量
+		if rule.UploadLimit > 0 {
+			uploadBurst := rule.UploadLimit * 2 // 2秒突发
+			rl.uploadBuckets[rule.Key] = NewTokenBucket(uploadBurst, rule.UploadLimit)
+		}
+		if rule.DownloadLimit > 0 {
+			downloadBurst := rule.DownloadLimit * 2 // 2秒突发
+			rl.downloadBuckets[rule.Key] = NewTokenBucket(downloadBurst, rule.DownloadLimit)
+		}
+	}
+
+	rl.logger.Printf("Loaded rate limits for %d users from config", len(configUsers))
+	return nil
 }

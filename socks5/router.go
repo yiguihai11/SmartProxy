@@ -6,8 +6,6 @@ import (
 	"io/ioutil"
 	"net"
 	"os"
-	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 )
@@ -28,11 +26,22 @@ type Rule struct {
 	Description string   `json:"description"`
 }
 
-type RouterConfig struct {
-	ACLRules        []Rule      `json:"rules"`
-	ChinaRoutes     bool        `json:"chnroutes.enable"`
-	ChinaRoutesPath string      `json:"chnroutes.path"`
-	ProxyNodes      []ProxyNode `json:"proxy_nodes"`
+// FullConfig 完整配置文件结构体，用于解析嵌套的router配置
+type FullConfig struct {
+	Listener struct {
+		SOCKS5Port  int  `json:"socks5_port"`
+		WebPort     int  `json:"web_port"`
+		DNSPort     int  `json:"dns_port"`
+		IPv6Enabled bool `json:"ipv6_enabled"`
+	} `json:"listener"`
+	Router struct {
+		Chnroutes struct {
+			Enable bool   `json:"enable"`
+			Path   string `json:"path"`
+		} `json:"chnroutes"`
+		Rules      []Rule      `json:"rules"`
+		ProxyNodes []ProxyNode `json:"proxy_nodes,omitempty"`
+	} `json:"router"`
 }
 
 type Router struct {
@@ -51,10 +60,11 @@ type Router struct {
 }
 
 type MatchResult struct {
-	Action    Action
-	Match     bool
-	Rule      *Rule
-	ProxyNode string // 匹配到的代理节点名称
+	Action             Action
+	Match              bool
+	Rule               *Rule
+	ProxyNode          string // 匹配到的代理节点名称
+	ProxyNodeSpecified bool   // 规则是否明确指定了proxy_node
 }
 
 func NewRouter(configPath string) (*Router, error) {
@@ -85,26 +95,31 @@ func (r *Router) loadConfig() error {
 		return fmt.Errorf("failed to read config file: %v", err)
 	}
 
-	var config RouterConfig
-	if err := json.Unmarshal(data, &config); err != nil {
+	// 解析配置结构（嵌套的router配置）
+	var fullConfig FullConfig
+	if err := json.Unmarshal(data, &fullConfig); err != nil {
 		return fmt.Errorf("failed to parse config: %v", err)
 	}
 
+	// 根据配置文件设置IPv6支持
+	r.supportsIPv6 = fullConfig.Listener.IPv6Enabled
+
 	// 加载路由规则
-	r.rules = config.ACLRules
+	r.rules = fullConfig.Router.Rules
 
 	// 加载代理节点
-	if len(config.ProxyNodes) > 0 {
-		if err := r.proxyNodes.LoadFromJSON(data); err != nil {
+	if len(fullConfig.Router.ProxyNodes) > 0 {
+		if err := r.proxyNodes.LoadNodes(fullConfig.Router.ProxyNodes); err != nil {
 			return fmt.Errorf("failed to load proxy nodes: %v", err)
 		}
 	}
 
 	// 加载中国 IP 段
-	if config.ChinaRoutes && config.ChinaRoutesPath != "" {
-		if err := r.loadChinaRoutes(config.ChinaRoutesPath); err != nil {
-			// 如果文件不存在，创建默认的中国 IP 段
-			r.createDefaultChinaRoutes(config.ChinaRoutesPath)
+	if fullConfig.Router.Chnroutes.Enable && fullConfig.Router.Chnroutes.Path != "" {
+		if err := r.loadChinaRoutes(fullConfig.Router.Chnroutes.Path); err != nil {
+			// 如果文件读取失败，退出程序
+			fmt.Fprintf(os.Stderr, "Failed to load china routes from %s: %v\n", fullConfig.Router.Chnroutes.Path, err)
+			os.Exit(1)
 		}
 	}
 
@@ -140,37 +155,6 @@ func (r *Router) loadChinaRoutes(filePath string) error {
 	}
 
 	return nil
-}
-
-func (r *Router) createDefaultChinaRoutes(filePath string) {
-	// 创建一些常见的中国 IP 段（包括IPv4和IPv6）
-	defaultChinaRoutes := `# 中国大陆 IP 段文件
-# IPv4 DNS
-114.114.114.114/32
-223.5.5.5/32
-223.6.6.6/32
-119.29.29.29/32
-180.76.76.76/32
-123.125.81.6/32
-
-# IPv6 DNS
-2400:da00::6666/128
-2001:4860:4860::8888/128
-2001:4860:4860::8844/128
-
-# 常见中国网段（示例）
-58.240.0.0/16
-202.96.0.0/12
-211.136.0.0/16
-218.0.0.0/8
-`
-
-	// 确保目录存在
-	dir := filepath.Dir(filePath)
-	os.MkdirAll(dir, 0755)
-
-	ioutil.WriteFile(filePath, []byte(defaultChinaRoutes), 0644)
-	r.loadChinaRoutes(filePath)
 }
 
 func (r *Router) precompileRules() {
@@ -259,44 +243,34 @@ func (r *Router) ShouldProxyPostDetection(hostname string) bool {
 	return result.Action == ActionDeny
 }
 
-// ShouldBlock 兼容性函数，保持原有接口
-func (r *Router) ShouldBlock(host string, port int) bool {
-	result := r.matchRule(host, port)
-	return result.Action == ActionBlock
-}
-
-// ShouldDirect 兼容性函数，保持原有接口
-func (r *Router) ShouldDirect(host string, port int) bool {
-	result := r.matchRule(host, port)
-	return result.Action == ActionAllow || (result.Action == "" && r.isChinaIP(host))
-}
-
-// ShouldProxy 兼容性函数，保持原有接口
-func (r *Router) ShouldProxy(host string, port int) bool {
-	result := r.matchRule(host, port)
-	return result.Action == ActionDeny
-}
-
 // matchRulePreDetection SNI/Host检测前的路由匹配（仅IP、CIDR、端口规则）
 func (r *Router) matchRulePreDetection(host string, port int) MatchResult {
 	// 1. IP地址匹配 - 使用基数树（最高优先级）
 	if ip := net.ParseIP(host); ip != nil {
-		if action, found, rule := r.ipTrie.Lookup(host); found {
-			return MatchResult{
-				Action:    action,
-				Match:     true,
-				Rule:      rule,
-				ProxyNode: rule.ProxyNode,
+		// 检查IPv6支持
+		if ip.To4() == nil && !r.supportsIPv6 {
+			// IPv6地址但不支持IPv6，跳过IP匹配
+		} else {
+			if action, found, rule := r.ipTrie.Lookup(host); found {
+				return MatchResult{
+					Action:             action,
+					Match:              true,
+					Rule:               rule,
+					ProxyNode:          rule.ProxyNode,
+					ProxyNodeSpecified: rule.ProxyNode != "",
+				}
 			}
-		}
 
-		// 2. 中国IP检查
-		if action, found, rule := r.chinaTrie.Lookup(host); found {
-			return MatchResult{
-				Action:    action,
-				Match:     true,
-				Rule:      rule,
-				ProxyNode: rule.ProxyNode,
+			// 2. 中国IP检查
+			if action, found, rule := r.chinaTrie.Lookup(host); found {
+				fmt.Printf("[Router DEBUG] China IP matched: %s -> action=%s\n", host, action)
+				return MatchResult{
+					Action:             action,
+					Match:              true,
+					Rule:               rule,
+					ProxyNode:          rule.ProxyNode,
+					ProxyNodeSpecified: rule.ProxyNode != "",
+				}
 			}
 		}
 	}
@@ -306,14 +280,17 @@ func (r *Router) matchRulePreDetection(host string, port int) MatchResult {
 	for i := range r.rules {
 		rule := &r.rules[i]
 		if r.matchPortRule(rule, portStr) {
+			fmt.Printf("[Router DEBUG] Port rule matched: port=%s, action=%s, description=%s\n", portStr, rule.Action, rule.Description)
 			return MatchResult{
-				Action:    rule.Action,
-				Match:     true,
-				Rule:      rule,
-				ProxyNode: rule.ProxyNode,
+				Action:             rule.Action,
+				Match:              true,
+				Rule:               rule,
+				ProxyNode:          rule.ProxyNode,
+				ProxyNodeSpecified: rule.ProxyNode != "",
 			}
 		}
 	}
+	fmt.Printf("[Router DEBUG] No port rule matched for port=%s\n", portStr)
 
 	// 检测前阶段：如果没有匹配到IP/CIDR/端口规则，返回未匹配状态
 	// 不进行域名匹配，等待SNI/Host检测
@@ -336,41 +313,15 @@ func (r *Router) matchRulePostDetection(hostname string) MatchResult {
 	// 1. 域名匹配 - 使用哈希表 O(1) 查找
 	if rule := r.matchDomainRule(hostname); rule != nil {
 		return MatchResult{
-			Action:    rule.Action,
-			Match:     true,
-			Rule:      rule,
-			ProxyNode: rule.ProxyNode,
-		}
-	}
-
-	// 2. 中国域名检查
-	if r.isChinaDomain(hostname) {
-		return MatchResult{
-			Action: ActionAllow,
-			Match:  true,
+			Action:             rule.Action,
+			Match:              true,
+			Rule:               rule,
+			ProxyNode:          rule.ProxyNode,
+			ProxyNodeSpecified: rule.ProxyNode != "",
 		}
 	}
 
 	// 3. 默认行为（无域名规则匹配）
-	return MatchResult{
-		Action: ActionDeny,
-		Match:  false,
-	}
-}
-
-// matchRule 兼容性函数，保持原有接口
-func (r *Router) matchRule(host string, port int) MatchResult {
-	// 先尝试检测前匹配
-	if result := r.matchRulePreDetection(host, port); result.Match {
-		return result
-	}
-
-	// 如果检测前没有匹配，尝试域名匹配
-	if result := r.matchRulePostDetection(host); result.Match {
-		return result
-	}
-
-	// 默认行为
 	return MatchResult{
 		Action: ActionDeny,
 		Match:  false,
@@ -429,60 +380,14 @@ func (r *Router) GetDefaultProxy() *ProxyNode {
 	return r.proxyNodes.GetDefaultProxy()
 }
 
-func (r *Router) matchPattern(pattern, host, port string) bool {
-	// 端口匹配
-	if pattern == port {
-		return true
-	}
-
-	// CIDR 网段匹配
-	if strings.Contains(pattern, "/") {
-		if _, ipNet, err := net.ParseCIDR(pattern); err == nil {
-			if ip := net.ParseIP(host); ip != nil {
-				return ipNet.Contains(ip)
-			}
-		}
-	}
-
-	// 精确 IP 匹配
-	if ip := net.ParseIP(pattern); ip != nil {
-		return pattern == host
-	}
-
-	// 域名匹配
-	if strings.Contains(pattern, "*") {
-		// 通配符匹配
-		regex := strings.ReplaceAll(pattern, ".", "\\.")
-		regex = strings.ReplaceAll(regex, "*", ".*")
-		matched, _ := regexp.MatchString("^"+regex+"$", host)
-		return matched
-	} else if strings.Contains(pattern, ".") {
-		// 后缀匹配
-		return strings.HasSuffix(host, pattern) || host == pattern
-	}
-
-	return false
-}
-
 func (r *Router) isChinaIP(host string) bool {
 	// 检查是否在中国 IP 基数树中
 	if _, found, _ := r.chinaTrie.Lookup(host); found {
+		fmt.Printf("[Router DEBUG] %s is China IP (found in chinaTrie)\n", host)
 		return true
 	}
 
-	return false
-}
-
-func (r *Router) isChinaDomain(host string) bool {
-	// 检查域名后缀
-	chinaTLDs := []string{".cn", ".com.cn", ".net.cn", ".org.cn", ".gov.cn", ".ac.cn", ".ah.cn", ".bj.cn", ".cq.cn", ".fj.cn", ".gd.cn", ".gs.cn", ".gz.cn", ".gx.cn", ".ha.cn", ".hb.cn", ".he.cn", ".hi.cn", ".hl.cn", ".hn.cn", ".jl.cn", ".js.cn", ".jx.cn", ".ln.cn", ".nm.cn", ".nx.cn", ".qh.cn", ".sc.cn", ".sd.cn", ".sh.cn", ".sn.cn", ".sx.cn", ".tj.cn", ".tw.cn", ".xj.cn", ".xz.cn", ".yn.cn", ".zj.cn", ".hk.cn", ".mo.cn"}
-
-	for _, tld := range chinaTLDs {
-		if strings.HasSuffix(strings.ToLower(host), tld) {
-			return true
-		}
-	}
-
+	fmt.Printf("[Router DEBUG] %s is NOT China IP (not found in chinaTrie)\n", host)
 	return false
 }
 

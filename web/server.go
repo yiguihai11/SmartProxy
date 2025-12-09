@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"smartproxy/config"
+	"smartproxy/socks5"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -61,6 +62,8 @@ type WebServer struct {
 	clients    map[*websocket.Conn]bool
 	clientsMu  sync.RWMutex
 
+	blacklistManager *socks5.BlacklistManager
+
 	activeConnections map[string]*ConnectionInfo
 	connectionsMu     sync.RWMutex
 }
@@ -105,6 +108,11 @@ func NewWebServer(cfg *config.Manager, webCfg WebConfig, logger *log.Logger) *We
 	return ws
 }
 
+// SetBlacklistManager sets the blacklist manager for stats reporting
+func (ws *WebServer) SetBlacklistManager(blacklistManager *socks5.BlacklistManager) {
+	ws.blacklistManager = blacklistManager
+}
+
 // setupRoutes configures the HTTP routes for the web server.
 func (ws *WebServer) setupRoutes() {
 	mux := http.NewServeMux()
@@ -112,6 +120,7 @@ func (ws *WebServer) setupRoutes() {
 	mux.HandleFunc("/api/health", ws.handleHealth)
 	mux.HandleFunc("/api/status", ws.handleStatus)
 	mux.HandleFunc("/api/stats", ws.handleStats)
+	mux.HandleFunc("/api/blacklist", ws.handleBlacklistStats)
 	mux.HandleFunc("/api/config", ws.handleConfig)
 	mux.HandleFunc("/api/users", ws.handleUsers)
 	mux.HandleFunc("/api/rules", ws.handleRules)
@@ -194,11 +203,25 @@ func (ws *WebServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	ws.sendJSONResponse(w, APIResponse{Success: true, Data: status})
 }
 
+// handleBlacklistStats provides blacklist statistics and performance metrics.
+func (ws *WebServer) handleBlacklistStats(w http.ResponseWriter, r *http.Request) {
+	if ws.blacklistManager == nil {
+		ws.sendJSONResponse(w, APIResponse{
+			Success: false,
+			Error:   "Blacklist manager not available",
+		})
+		return
+	}
+
+	stats := ws.blacklistManager.GetStats()
+	ws.sendJSONResponse(w, APIResponse{Success: true, Data: stats})
+}
+
 // handleStats provides server statistics.
 func (ws *WebServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	ws.statsMu.RLock()
 	defer ws.statsMu.RUnlock()
-	
+
 	cfg := ws.config.GetConfig()
 	enabledUsers := 0
 	for _, user := range cfg.SOCKS5.AuthUsers {
@@ -330,26 +353,19 @@ func (ws *WebServer) mergeConfigs(current, new *config.Config) *config.Config {
 		merged.Router.ProxyNodes = new.Router.ProxyNodes
 	}
 
-	// Traffic Detection配置
-	// Enabled是布尔值，直接覆盖
-	merged.TrafficDetection.Enabled = new.TrafficDetection.Enabled
-	if new.TrafficDetection.EnhancedProbing.Enable != merged.TrafficDetection.EnhancedProbing.Enable {
-		merged.TrafficDetection.EnhancedProbing.Enable = new.TrafficDetection.EnhancedProbing.Enable
+	// SmartProxy配置
+	// enabled is a boolean, so we check if it has changed from the current state
+	if new.SmartProxy.Enabled != merged.SmartProxy.Enabled {
+		merged.SmartProxy.Enabled = new.SmartProxy.Enabled
 	}
-	if new.TrafficDetection.EnhancedProbing.SNIExtraction != merged.TrafficDetection.EnhancedProbing.SNIExtraction {
-		merged.TrafficDetection.EnhancedProbing.SNIExtraction = new.TrafficDetection.EnhancedProbing.SNIExtraction
+	if new.SmartProxy.TimeoutMs > 0 {
+		merged.SmartProxy.TimeoutMs = new.SmartProxy.TimeoutMs
 	}
-	if new.TrafficDetection.EnhancedProbing.HTTPValidation != merged.TrafficDetection.EnhancedProbing.HTTPValidation {
-		merged.TrafficDetection.EnhancedProbing.HTTPValidation = new.TrafficDetection.EnhancedProbing.HTTPValidation
+	if new.SmartProxy.BlacklistExpiryMinutes > 0 {
+		merged.SmartProxy.BlacklistExpiryMinutes = new.SmartProxy.BlacklistExpiryMinutes
 	}
-	if new.TrafficDetection.EnhancedProbing.MaxInitialDataSize != 0 {
-		merged.TrafficDetection.EnhancedProbing.MaxInitialDataSize = new.TrafficDetection.EnhancedProbing.MaxInitialDataSize
-	}
-	if new.TrafficDetection.EnhancedProbing.ValidationTimeoutMs != 0 {
-		merged.TrafficDetection.EnhancedProbing.ValidationTimeoutMs = new.TrafficDetection.EnhancedProbing.ValidationTimeoutMs
-	}
-	if new.TrafficDetection.EnhancedProbing.ProbingPorts != nil {
-		merged.TrafficDetection.EnhancedProbing.ProbingPorts = new.TrafficDetection.EnhancedProbing.ProbingPorts
+	if new.SmartProxy.ProbingPorts != nil {
+		merged.SmartProxy.ProbingPorts = new.SmartProxy.ProbingPorts
 	}
 
 	// DNS配置
@@ -464,7 +480,7 @@ func (ws *WebServer) handleFileChnroutes(w http.ResponseWriter, r *http.Request)
 	}
 	ws.sendJSONResponse(w, APIResponse{
 		Success: true,
-		Data: map[string]interface{}{"content": string(content), "lines": len(lines), "size": fmt.Sprintf("%.2f KB", float64(len(content))/1024.0)},
+		Data:    map[string]interface{}{"content": string(content), "lines": len(lines), "size": fmt.Sprintf("%.2f KB", float64(len(content))/1024.0)},
 	})
 }
 
@@ -588,4 +604,3 @@ func (ws *WebServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
-

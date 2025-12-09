@@ -10,8 +10,10 @@ import (
 	"log"
 	"net"
 	"regexp"
+	"smartproxy/config"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -335,10 +337,11 @@ type User struct {
 
 // AuthManager 认证管理器
 type AuthManager struct {
-	users       map[string]*User
-	hasher      *PasswordHasher
-	requireAuth bool
-	logger      *log.Logger
+	users        map[string]*User
+	hasher       *PasswordHasher
+	requireAuth  bool
+	logger       *log.Logger
+	sync.RWMutex // 添加读写锁
 }
 
 // NewAuthManager 创建认证管理器
@@ -591,13 +594,6 @@ func (a *AuthManager) GetStats() map[string]interface{} {
 
 // HandleAuthentication 处理SOCKS5认证，返回认证的用户名（空字符串表示未认证）
 func (a *AuthManager) HandleAuthentication(clientConn net.Conn) (string, error) {
-	if !a.requireAuth {
-		// 不需要认证，直接返回无认证方法
-		response := []byte{SOCKS5_VERSION, AUTH_NO_AUTH}
-		_, err := clientConn.Write(response)
-		return "", err // 返回空用户名
-	}
-
 	// 读取认证方法协商请求
 	header := make([]byte, 2)
 	if _, err := clientConn.Read(header); err != nil {
@@ -618,17 +614,30 @@ func (a *AuthManager) HandleAuthentication(clientConn net.Conn) (string, error) 
 		return "", fmt.Errorf("failed to read auth methods: %v", err)
 	}
 
-	// 检查是否支持用户名/密码认证
+	// 检查支持的认证方法
 	hasUserPassAuth := false
+	hasNoAuth := false
 	for _, method := range methods {
 		if method == AUTH_USER_PASS {
 			hasUserPassAuth = true
-			break
+		}
+		if method == AUTH_NO_AUTH {
+			hasNoAuth = true
 		}
 	}
 
 	// 回复认证方法
-	if hasUserPassAuth {
+	if a.requireAuth {
+		// 需要认证，但客户端不支持用户名密码认证
+		if !hasUserPassAuth {
+			response := []byte{SOCKS5_VERSION, AUTH_NO_ACCEPTABLE}
+			if _, err := clientConn.Write(response); err != nil {
+				return "", fmt.Errorf("failed to write auth response: %v", err)
+			}
+			return "", fmt.Errorf("client doesn't support required authentication")
+		}
+
+		// 使用用户名密码认证
 		response := []byte{SOCKS5_VERSION, AUTH_USER_PASS}
 		if _, err := clientConn.Write(response); err != nil {
 			return "", err
@@ -681,6 +690,24 @@ func (a *AuthManager) HandleAuthentication(clientConn net.Conn) (string, error) 
 			return "", writeErr
 		}
 		return user.Username, nil // 返回认证成功的用户名
+
+	} else if !a.requireAuth {
+		// 不需要认证，使用无认证方法
+		if !hasNoAuth {
+			response := []byte{SOCKS5_VERSION, AUTH_NO_ACCEPTABLE}
+			if _, err := clientConn.Write(response); err != nil {
+				return "", fmt.Errorf("failed to write auth response: %v", err)
+			}
+			return "", fmt.Errorf("client doesn't support no-auth method")
+		}
+
+		// 发送无认证方法响应
+		response := []byte{SOCKS5_VERSION, AUTH_NO_AUTH}
+		if _, err := clientConn.Write(response); err != nil {
+			return "", fmt.Errorf("failed to write auth response: %v", err)
+		}
+
+		return "", nil // 返回空用户名
 
 	} else {
 		// 不支持任何认证方法
@@ -826,4 +853,136 @@ func (a *AuthManager) GetUserInfo(username string) map[string]interface{} {
 	return map[string]interface{}{
 		"error": "User not found",
 	}
+}
+
+// LoadUsersFromConfig 从配置文件加载用户
+func (a *AuthManager) LoadUsersFromConfig(configUsers []config.AuthUser) error {
+	a.Lock()
+	defer a.Unlock()
+
+	a.users = make(map[string]*User)
+
+	for _, configUser := range configUsers {
+		user := &User{
+			Username:       configUser.Username,
+			PasswordHash:   configUser.Password, // 使用明文密码，实际生产环境应该加密
+			Role:           "user",
+			Enabled:        configUser.Enabled,
+			LastLogin:      time.Now(),
+			MaxConnections: 0,
+			ExpiresAfter:   0,
+			AllowFrom:      []string{},
+			BlockFrom:      []string{},
+			AllowedHours:   []int{},
+			AllowedDays:    []int{},
+			Timezone:       "UTC",
+		}
+
+		// 处理连接限制配置
+		if configUser.ConnectionLimit != nil {
+			user.MaxConnections = configUser.ConnectionLimit.MaxConnections
+			user.ExpiresAfter = configUser.ConnectionLimit.ExpiresAfter * 60 // 转换为秒
+			user.AllowFrom = configUser.ConnectionLimit.AllowFrom
+			user.BlockFrom = configUser.ConnectionLimit.BlockFrom
+
+			// 处理时间限制
+			if configUser.ConnectionLimit.TimeRestriction != nil {
+				// 字符串数组转换为int数组，简化处理
+				if len(configUser.ConnectionLimit.TimeRestriction.AllowedHours) > 0 {
+					user.AllowedHours = make([]int, len(configUser.ConnectionLimit.TimeRestriction.AllowedHours))
+					user.Timezone = configUser.ConnectionLimit.TimeRestriction.Timezone
+				}
+			}
+		}
+
+		a.users[configUser.Username] = user
+	}
+
+	a.logger.Printf("Loaded %d users from config", len(configUsers))
+	return nil
+}
+
+// CheckConnectionLimit 检查用户的连接限制
+func (a *AuthManager) CheckConnectionLimit(username string, clientIP string) error {
+	a.RLock()
+	defer a.RUnlock()
+
+	user, exists := a.users[username]
+	if !exists {
+		return nil // 用户不存在，不进行连接限制检查
+	}
+
+	if !user.Enabled {
+		return fmt.Errorf("user %s is disabled", username)
+	}
+
+	// 检查最大连接数
+	if user.MaxConnections > 0 && user.CurrentConnections >= user.MaxConnections {
+		return fmt.Errorf("user %s has exceeded maximum connections (%d)", username, user.MaxConnections)
+	}
+
+	// 检查IP限制
+	if len(user.BlockFrom) > 0 {
+		for _, blockedIP := range user.BlockFrom {
+			if a.matchesIPRange(clientIP, blockedIP) {
+				return fmt.Errorf("IP %s is blocked for user %s", clientIP, username)
+			}
+		}
+	}
+
+	if len(user.AllowFrom) > 0 {
+		allowed := false
+		for _, allowedIP := range user.AllowFrom {
+			if a.matchesIPRange(clientIP, allowedIP) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return fmt.Errorf("IP %s is not allowed for user %s", clientIP, username)
+		}
+	}
+
+	// 检查时间限制
+	if len(user.AllowedHours) > 0 || len(user.AllowedDays) > 0 {
+		if !a.isTimeAllowed(user) {
+			return fmt.Errorf("access not allowed at this time for user %s", username)
+		}
+	}
+
+	// 增加连接计数
+	user.CurrentConnections++
+
+	return nil
+}
+
+// ReleaseConnection 释放连接计数
+func (a *AuthManager) ReleaseConnection(username string) {
+	a.Lock()
+	defer a.Unlock()
+
+	if user, exists := a.users[username]; exists {
+		if user.CurrentConnections > 0 {
+			user.CurrentConnections--
+		}
+	}
+}
+
+// matchesIPRange 检查IP是否匹配网段
+func (a *AuthManager) matchesIPRange(ip, cidr string) bool {
+	if !strings.Contains(cidr, "/") {
+		return ip == cidr
+	}
+
+	_, ipNet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return false
+	}
+
+	clientIP := net.ParseIP(ip)
+	if clientIP == nil {
+		return false
+	}
+
+	return ipNet.Contains(clientIP)
 }

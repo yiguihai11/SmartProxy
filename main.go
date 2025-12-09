@@ -34,17 +34,33 @@ func main() {
 		}
 	}
 
-	// 加载主配置以获取 probing_ports
+	// 加载主配置以获取 probing_ports 和 SOCKS5端口
 	mainCfgManager := config.NewManager(configPath)
 	if err := mainCfgManager.Load(); err != nil {
 		log.Fatalf("Failed to load main config file: %v", err)
 	}
-	probingPorts := mainCfgManager.GetConfig().TrafficDetection.EnhancedProbing.ProbingPorts
+
+	// 从配置文件读取SOCKS5端口（如果配置文件中有设置则覆盖命令行参数）
+	configPort := mainCfgManager.GetConfig().Listener.SOCKS5Port
+	if configPort > 0 {
+		port = configPort // 使用配置文件中的端口
+		log.Printf("Using SOCKS5 port from config: %d", configPort)
+	} else {
+		log.Printf("Using SOCKS5 port from command line or default: %d", port)
+	}
+
+	probingPorts := mainCfgManager.GetConfig().SmartProxy.ProbingPorts
 
 	server, err := socks5.NewSOCKS5ServerWithConfig(port, configPath, probingPorts)
 	if err != nil {
 		log.Fatalf("Failed to create SOCKS5 server: %v", err)
 	}
+
+	// 获取Router实例，用于DNS模块
+	router := server.GetRouter()
+
+	// 获取BlacklistManager实例，用于Web API统计
+	blacklistManager := server.GetBlacklistManager()
 
 	// 创建Web服务器配置
 	webConfig := web.WebConfig{
@@ -54,6 +70,9 @@ func main() {
 
 	// 创建Web服务器，传入配置管理器
 	webServer := web.NewWebServer(mainCfgManager, webConfig, log.New(os.Stdout, "[Web] ", log.LstdFlags))
+
+	// 设置黑名单管理器到Web服务器
+	webServer.SetBlacklistManager(blacklistManager)
 
 	// 创建DNS服务器配置（router为nil，将使用默认路由）
 	dnsConfig := &dns.Config{
@@ -65,7 +84,7 @@ func main() {
 		ProxyNodes:      []dns.ProxyNode{},
 	}
 
-	dnsServer := dns.NewSmartDNSServer(dnsConfig, dnsPort, log.New(os.Stdout, "[DNS] ", log.LstdFlags), nil)
+	dnsServer := dns.NewSmartDNSServer(dnsConfig, dnsPort, log.New(os.Stdout, "[DNS] ", log.LstdFlags), router)
 
 	// 如果web服务器启动成功，可以在这里添加额外的初始化逻辑
 	if webServer != nil {

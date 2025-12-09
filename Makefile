@@ -1,7 +1,7 @@
 # Go SOCKS5 代理服务器 Makefile
 
 # 变量定义
-BINARY_NAME=socks5proxy
+BINARY_NAME=smartproxy
 BUILD_DIR=build
 GO_FILES=$(shell find . -name "*.go" -type f)
 STATIC_DIR=web/static

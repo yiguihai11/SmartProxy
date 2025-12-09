@@ -7,7 +7,9 @@
       "Bash(lsof:*)",
       "Bash(netstat:*)",
       "Bash(curl:*)",
-      "Bash(xargs:*)"
+      "Bash(xargs:*)",
+      "Bash(make:*)",
+      "Bash(python:*)"
     ],
     "deny": [],
     "ask": []

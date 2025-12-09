@@ -35,17 +35,12 @@ type Config struct {
 		ProxyNodes []ProxyNode  `json:"proxy_nodes,omitempty"`
 	} `json:"router"`
 
-	TrafficDetection struct {
-		Enabled         bool `json:"enabled"`
-		EnhancedProbing struct {
-			Enable              bool  `json:"enable"`
-			SNIExtraction       bool  `json:"sni_extraction"`
-			HTTPValidation      bool  `json:"http_validation"`
-			MaxInitialDataSize  int   `json:"max_initial_data_size"`
-			ValidationTimeoutMs int   `json:"validation_timeout_ms"`
-			ProbingPorts        []int `json:"probing_ports"`
-		} `json:"enhanced_probing"`
-	} `json:"traffic_detection"`
+	SmartProxy struct {
+		Enabled                bool  `json:"enabled"`
+		TimeoutMs              int   `json:"timeout_ms"`
+		BlacklistExpiryMinutes int   `json:"blacklist_expiry_minutes"`
+		ProbingPorts           []int `json:"probing_ports"`
+	} `json:"smart_proxy"`
 
 	DNS struct {
 		Enabled bool `json:"enabled"`
@@ -85,7 +80,6 @@ type AuthUser struct {
 type RateLimit struct {
 	UploadBPS   int64 `json:"upload_bps"`
 	DownloadBPS int64 `json:"download_bps"`
-	BurstSize   int64 `json:"burst_size"`
 }
 
 // ConnectionLimit 连接限制结构体
@@ -99,11 +93,11 @@ type ConnectionLimit struct {
 
 // TimeRestriction 时间限制配置
 type TimeRestriction struct {
-	AllowedHours     []string `json:"allowed_hours,omitempty"`
-	AllowedDays      []string `json:"allowed_days,omitempty"`
-	Timezone         string   `json:"timezone,omitempty"`
-	EffectiveDates   []string `json:"effective_dates,omitempty"`
-	ExpiredDates     []string `json:"expired_dates,omitempty"`
+	AllowedHours   []string `json:"allowed_hours,omitempty"`
+	AllowedDays    []string `json:"allowed_days,omitempty"`
+	Timezone       string   `json:"timezone,omitempty"`
+	EffectiveDates []string `json:"effective_dates,omitempty"`
+	ExpiredDates   []string `json:"expired_dates,omitempty"`
 }
 
 // RouterRule 路由规则结构体
@@ -177,36 +171,6 @@ func (m *Manager) Load() error {
 	return nil
 }
 
-// Save 保存配置文件
-func (m *Manager) Save() error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	// 确保目录存在
-	if err := os.MkdirAll(filepath.Dir(m.configPath), 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %v", err)
-	}
-
-	data, err := json.MarshalIndent(m.config, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal config: %v", err)
-	}
-
-	// 写入临时文件然后重命名，确保原子性操作
-	tempPath := m.configPath + ".tmp"
-	if err := ioutil.WriteFile(tempPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write temp config file: %v", err)
-	}
-
-	if err := os.Rename(tempPath, m.configPath); err != nil {
-		os.Remove(tempPath)
-		return fmt.Errorf("failed to rename temp config file: %v", err)
-	}
-
-	m.lastLoad = time.Now()
-	return nil
-}
-
 // GetConfig 获取完整配置（只读）
 func (m *Manager) GetConfig() *Config {
 	m.mutex.RLock()
@@ -243,9 +207,9 @@ func (m *Manager) GetConfig() *Config {
 		copy(configCopy.DNS.HijackRules, m.config.DNS.HijackRules)
 	}
 
-	if m.config.TrafficDetection.EnhancedProbing.ProbingPorts != nil {
-		configCopy.TrafficDetection.EnhancedProbing.ProbingPorts = make([]int, len(m.config.TrafficDetection.EnhancedProbing.ProbingPorts))
-		copy(configCopy.TrafficDetection.EnhancedProbing.ProbingPorts, m.config.TrafficDetection.EnhancedProbing.ProbingPorts)
+	if m.config.SmartProxy.ProbingPorts != nil {
+		configCopy.SmartProxy.ProbingPorts = make([]int, len(m.config.SmartProxy.ProbingPorts))
+		copy(configCopy.SmartProxy.ProbingPorts, m.config.SmartProxy.ProbingPorts)
 	}
 
 	return &configCopy
@@ -283,90 +247,6 @@ func (m *Manager) UpdateFullConfig(newConfig *Config) error {
 	return nil
 }
 
-// UpdateListenerConfig 更新监听器配置
-func (m *Manager) UpdateListenerConfig(socks5Port, webPort, dnsPort int, ipv6Enabled bool) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	m.config.Listener.SOCKS5Port = socks5Port
-	m.config.Listener.WebPort = webPort
-	m.config.Listener.DNSPort = dnsPort
-	m.config.Listener.IPv6Enabled = ipv6Enabled
-
-	return nil
-}
-
-// GetListenerConfig 获取监听器配置
-func (m *Manager) GetListenerConfig() (socks5Port, webPort, dnsPort int, ipv6Enabled bool) {
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
-
-	return m.config.Listener.SOCKS5Port,
-		m.config.Listener.WebPort,
-		m.config.Listener.DNSPort,
-		m.config.Listener.IPv6Enabled
-}
-
-// UpdateSOCKS5Config 更新SOCKS5配置
-func (m *Manager) UpdateSOCKS5Config(maxConnections, cleanupInterval int, enableAuth bool) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	m.config.SOCKS5.MaxConnections = maxConnections
-	m.config.SOCKS5.CleanupInterval = cleanupInterval
-	m.config.SOCKS5.EnableAuth = enableAuth
-	return nil
-}
-
-// AddAuthUser 添加认证用户
-func (m *Manager) AddAuthUser(user AuthUser) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	// 检查用户名是否已存在
-	for _, existingUser := range m.config.SOCKS5.AuthUsers {
-		if existingUser.Username == user.Username {
-			return fmt.Errorf("user %s already exists", user.Username)
-		}
-	}
-
-	m.config.SOCKS5.AuthUsers = append(m.config.SOCKS5.AuthUsers, user)
-	return nil
-}
-
-// UpdateAuthUser 更新认证用户
-func (m *Manager) UpdateAuthUser(username string, user AuthUser) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	for i, existingUser := range m.config.SOCKS5.AuthUsers {
-		if existingUser.Username == username {
-			m.config.SOCKS5.AuthUsers[i] = user
-			return nil
-		}
-	}
-
-	return fmt.Errorf("user %s not found", username)
-}
-
-// DeleteAuthUser 删除认证用户
-func (m *Manager) DeleteAuthUser(username string) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	for i, user := range m.config.SOCKS5.AuthUsers {
-		if user.Username == username {
-			m.config.SOCKS5.AuthUsers = append(
-				m.config.SOCKS5.AuthUsers[:i],
-				m.config.SOCKS5.AuthUsers[i+1:]...,
-			)
-			return nil
-		}
-	}
-
-	return fmt.Errorf("user %s not found", username)
-}
-
 // GetAuthUsers 获取所有认证用户
 func (m *Manager) GetAuthUsers() []AuthUser {
 	m.mutex.RLock()
@@ -375,55 +255,6 @@ func (m *Manager) GetAuthUsers() []AuthUser {
 	users := make([]AuthUser, len(m.config.SOCKS5.AuthUsers))
 	copy(users, m.config.SOCKS5.AuthUsers)
 	return users
-}
-
-// AddProxyNode 添加代理节点
-func (m *Manager) AddProxyNode(node ProxyNode) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	// 检查节点名称是否已存在
-	for _, existingNode := range m.config.Router.ProxyNodes {
-		if existingNode.Name == node.Name {
-			return fmt.Errorf("proxy node %s already exists", node.Name)
-		}
-	}
-
-	m.config.Router.ProxyNodes = append(m.config.Router.ProxyNodes, node)
-	return nil
-}
-
-// UpdateProxyNode 更新代理节点
-func (m *Manager) UpdateProxyNode(name string, node ProxyNode) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	for i, existingNode := range m.config.Router.ProxyNodes {
-		if existingNode.Name == name {
-			m.config.Router.ProxyNodes[i] = node
-			return nil
-		}
-	}
-
-	return fmt.Errorf("proxy node %s not found", name)
-}
-
-// DeleteProxyNode 删除代理节点
-func (m *Manager) DeleteProxyNode(name string) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	for i, node := range m.config.Router.ProxyNodes {
-		if node.Name == name {
-			m.config.Router.ProxyNodes = append(
-				m.config.Router.ProxyNodes[:i],
-				m.config.Router.ProxyNodes[i+1:]...,
-			)
-			return nil
-		}
-	}
-
-	return fmt.Errorf("proxy node %s not found", name)
 }
 
 // GetProxyNodes 获取所有代理节点
@@ -577,14 +408,13 @@ func (m *Manager) createDefaultConfig() error {
 	defaultConfig.SOCKS5.EnableAuth = false
 	defaultConfig.SOCKS5.AuthUsers = []AuthUser{
 		{
-			Username: "admin",
-			Password: "admin123",
-			Enabled:  true,
+			Username:   "admin",
+			Password:   "admin123",
+			Enabled:    true,
 			UserGroups: []string{"admin"},
 			RateLimit: &RateLimit{
 				UploadBPS:   10485760, // 10 MB/s
 				DownloadBPS: 10485760, // 10 MB/s
-				BurstSize:   52428800, // 50 MB
 			},
 			ConnectionLimit: &ConnectionLimit{
 				MaxConnections: 10,
@@ -600,13 +430,10 @@ func (m *Manager) createDefaultConfig() error {
 		},
 	}
 
-	defaultConfig.TrafficDetection.Enabled = true
-	defaultConfig.TrafficDetection.EnhancedProbing.Enable = true
-	defaultConfig.TrafficDetection.EnhancedProbing.SNIExtraction = true
-	defaultConfig.TrafficDetection.EnhancedProbing.HTTPValidation = true
-	defaultConfig.TrafficDetection.EnhancedProbing.MaxInitialDataSize = 4096
-	defaultConfig.TrafficDetection.EnhancedProbing.ValidationTimeoutMs = 3000
-	defaultConfig.TrafficDetection.EnhancedProbing.ProbingPorts = []int{80, 443, 8080, 8443}
+	defaultConfig.SmartProxy.Enabled = true
+	defaultConfig.SmartProxy.TimeoutMs = 1500
+	defaultConfig.SmartProxy.BlacklistExpiryMinutes = 360
+	defaultConfig.SmartProxy.ProbingPorts = []int{80, 443, 8080, 8443}
 
 	defaultConfig.Router.ProxyNodes = []ProxyNode{}
 
