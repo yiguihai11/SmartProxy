@@ -1014,7 +1014,7 @@ func (c *Connection) connectThroughProxy(proxy *ProxyNode, targetAddr string, ta
 }
 
 
-// selectOptimalConnection 选择最优连接路径，并行尝试直连和代理连接
+// selectOptimalConnection 选择最优连接路径，优先尝试国内直连
 func (c *Connection) selectOptimalConnection(targetAddr string, targetPort uint16) (net.Conn, string, *ProxyNode, error) {
 	type connectionAttempt struct {
 		conn    net.Conn
@@ -1026,7 +1026,7 @@ func (c *Connection) selectOptimalConnection(targetAddr string, targetPort uint1
 	directResult := make(chan *connectionAttempt, 1)
 	proxyResult := make(chan *connectionAttempt, 1)
 
-	// 并行启动直连尝试
+	// 优先启动直连尝试
 	go func() {
 		target := formatNetworkAddress(targetAddr, targetPort)
 		timeout := time.Duration(c.server.smartProxyTimeoutMs) * time.Millisecond
@@ -1045,8 +1045,11 @@ func (c *Connection) selectOptimalConnection(targetAddr string, targetPort uint1
 		directResult <- &connectionAttempt{success: true, conn: conn}
 	}()
 
-	// 并行启动代理连接尝试
+	// 延迟启动代理连接尝试，给直连优先机会
 	go func() {
+		// 等待 100ms，让直连有优先尝试的机会
+		time.Sleep(100 * time.Millisecond)
+
 		proxy := c.server.router.GetDefaultProxy()
 		if proxy == nil {
 			proxyResult <- &connectionAttempt{success: false, err: fmt.Errorf("no proxy available")}
@@ -1064,22 +1067,28 @@ func (c *Connection) selectOptimalConnection(targetAddr string, targetPort uint1
 		proxyResult <- &connectionAttempt{success: true, conn: conn, proxy: proxy}
 	}()
 
-	// 等待第一个成功的连接
+	// 等待第一个成功的连接，优先检查直连
 	timeout := time.After(2 * time.Second)
 
 	for {
 		select {
 		case result := <-directResult:
 			if result.success {
+				// 直连成功，立即返回
 				return result.conn, "direct", nil, nil
 			}
 		case result := <-proxyResult:
 			if result.success {
+				// 代理连接成功，返回代理连接
 				return result.conn, "proxy", result.proxy, nil
 			}
 		case <-timeout:
-			// 检查是否有部分结果
+			// 超时处理，最后检查直连结果
 			select {
+			case result := <-directResult:
+				if result.success {
+					return result.conn, "direct", nil, nil
+				}
 			case result := <-proxyResult:
 				if result.success {
 					return result.conn, "proxy", result.proxy, nil
