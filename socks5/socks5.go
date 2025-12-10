@@ -1014,28 +1014,55 @@ func (c *Connection) connectThroughProxy(proxy *ProxyNode, targetAddr string, ta
 }
 
 
-// selectOptimalConnection 选择最优连接路径
+// selectOptimalConnection 选择最优连接路径，并行尝试直连和代理连接
 func (c *Connection) selectOptimalConnection(targetAddr string, targetPort uint16) (net.Conn, string, *ProxyNode, error) {
-	target := formatNetworkAddress(targetAddr, targetPort)
-
-	// 如果未启用智能代理，使用简单直连
-	if !c.server.smartProxyEnabled || !c.server.isProbingPort(int(targetPort)) {
-		conn, err := net.DialTimeout("tcp", target, 5*time.Second)
-		return conn, "direct", nil, err
+	type connectionAttempt struct {
+		conn    net.Conn
+		proxy   *ProxyNode
+		success bool
+		err     error
 	}
 
-	// 并行尝试直连和代理
-	return c.tryParallelConnections(targetAddr, targetPort)
-}
-
-// tryParallelConnections 并行尝试直连和代理连接
-func (c *Connection) tryParallelConnections(targetAddr string, targetPort uint16) (net.Conn, string, *ProxyNode, error) {
 	directResult := make(chan *connectionAttempt, 1)
 	proxyResult := make(chan *connectionAttempt, 1)
 
-	// 并行启动连接尝试
-	go c.tryDirectConnection(targetAddr, targetPort, directResult)
-	go c.tryProxyConnection(targetAddr, targetPort, proxyResult)
+	// 并行启动直连尝试
+	go func() {
+		target := formatNetworkAddress(targetAddr, targetPort)
+		timeout := time.Duration(c.server.smartProxyTimeoutMs) * time.Millisecond
+
+		conn, err := net.DialTimeout("tcp", target, timeout)
+		if err != nil {
+			c.logger.Printf("Direct connection to %s failed: %v", target, err)
+			if c.server.blacklist != nil {
+				c.server.blacklist.Add(targetAddr)
+			}
+			directResult <- &connectionAttempt{success: false, err: err}
+			return
+		}
+
+		c.logger.Printf("Direct connection to %s established", target)
+		directResult <- &connectionAttempt{success: true, conn: conn}
+	}()
+
+	// 并行启动代理连接尝试
+	go func() {
+		proxy := c.server.router.GetDefaultProxy()
+		if proxy == nil {
+			proxyResult <- &connectionAttempt{success: false, err: fmt.Errorf("no proxy available")}
+			return
+		}
+
+		conn, err := c.connectThroughProxy(proxy, targetAddr, targetPort)
+		if err != nil {
+			c.logger.Printf("Proxy connection through %s failed: %v", proxy.Name, err)
+			proxyResult <- &connectionAttempt{success: false, err: err}
+			return
+		}
+
+		c.logger.Printf("Proxy connection through %s established", proxy.Name)
+		proxyResult <- &connectionAttempt{success: true, conn: conn, proxy: proxy}
+	}()
 
 	// 等待第一个成功的连接
 	timeout := time.After(2 * time.Second)
@@ -1062,51 +1089,5 @@ func (c *Connection) tryParallelConnections(targetAddr string, targetPort uint16
 			}
 		}
 	}
-}
-
-// connectionAttempt 连接尝试结果
-type connectionAttempt struct {
-	conn    net.Conn
-	proxy   *ProxyNode
-	success bool
-	err     error
-}
-
-// tryDirectConnection 尝试直连
-func (c *Connection) tryDirectConnection(targetAddr string, targetPort uint16, resultChan chan *connectionAttempt) {
-	target := formatNetworkAddress(targetAddr, targetPort)
-	timeout := time.Duration(c.server.smartProxyTimeoutMs) * time.Millisecond
-
-	conn, err := net.DialTimeout("tcp", target, timeout)
-	if err != nil {
-		c.logger.Printf("Direct connection to %s failed: %v", target, err)
-		if c.server.blacklist != nil {
-			c.server.blacklist.Add(targetAddr)
-		}
-		resultChan <- &connectionAttempt{success: false, err: err}
-		return
-	}
-
-	c.logger.Printf("Direct connection to %s established", target)
-	resultChan <- &connectionAttempt{success: true, conn: conn}
-}
-
-// tryProxyConnection 尝试代理连接
-func (c *Connection) tryProxyConnection(targetAddr string, targetPort uint16, resultChan chan *connectionAttempt) {
-	proxy := c.server.router.GetDefaultProxy()
-	if proxy == nil {
-		resultChan <- &connectionAttempt{success: false, err: fmt.Errorf("no proxy available")}
-		return
-	}
-
-	conn, err := c.connectThroughProxy(proxy, targetAddr, targetPort)
-	if err != nil {
-		c.logger.Printf("Proxy connection through %s failed: %v", proxy.Name, err)
-		resultChan <- &connectionAttempt{success: false, err: err}
-		return
-	}
-
-	c.logger.Printf("Proxy connection through %s established", proxy.Name)
-	resultChan <- &connectionAttempt{success: true, conn: conn, proxy: proxy}
 }
 
