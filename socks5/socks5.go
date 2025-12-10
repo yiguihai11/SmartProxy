@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -673,6 +674,18 @@ func (c *Connection) relayTargetToClient(ctx context.Context, done chan error) {
 
 		n, err := c.targetConn.Read(buf)
 		if err != nil {
+			// 检查是否是RST重置信号（系统错误码104）
+			if opErr, ok := err.(*net.OpError); ok {
+				if syscallErr, ok := opErr.Err.(*os.SyscallError); ok {
+					if errno, ok := syscallErr.Err.(syscall.Errno); ok && errno == 104 {
+						// 连接被RST重置，将目标IP加入黑名单
+						if c.server.blacklist != nil && c.targetHost != "" {
+							c.logger.Printf("Direct connection to %s reset by RST, adding to blacklist", c.targetHost)
+							c.server.blacklist.Add(c.targetHost)
+						}
+					}
+				}
+			}
 			done <- err
 			return
 		}
@@ -1031,6 +1044,13 @@ func (c *Connection) selectOptimalConnection(targetAddr string, targetPort uint1
 		target := formatNetworkAddress(targetAddr, targetPort)
 		timeout := time.Duration(c.server.smartProxyTimeoutMs) * time.Millisecond
 
+		// 检查是否在黑名单中
+		if c.server.blacklist != nil && c.server.blacklist.IsBlacklisted(targetAddr) {
+			c.logger.Printf("Direct connection to %s skipped: in blacklist", target)
+			directResult <- &connectionAttempt{success: false, err: fmt.Errorf("target in blacklist")}
+			return
+		}
+
 		conn, err := net.DialTimeout("tcp", target, timeout)
 		if err != nil {
 			c.logger.Printf("Direct connection to %s failed: %v", target, err)
@@ -1040,7 +1060,7 @@ func (c *Connection) selectOptimalConnection(targetAddr string, targetPort uint1
 			directResult <- &connectionAttempt{success: false, err: err}
 			return
 		}
-
+		
 		c.logger.Printf("Direct connection to %s established", target)
 		directResult <- &connectionAttempt{success: true, conn: conn}
 	}()
