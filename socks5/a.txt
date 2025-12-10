@@ -30,3 +30,43 @@
        1167 -
        1168 -    return false
        1169 -  }
+       
+       
+       
+       
+       ​防止 Socket 泄露 (关键):
+
+
+
+
+
+​当第一个连接成功并 return 后，我启动了一个匿名 Goroutine (go func() { ... })。
+
+
+
+​它的任务是等待那个“比较慢”的结果。如果那个慢的结果也连接成功了，它会立即调用 .Close()。
+
+
+
+​如果没有这个机制，慢的那个连接会一直挂在后台，直到 TCP 超时，这在高并发下会耗尽服务器的句柄。
+
+
+
+​缓冲通道 (Buffered Channel):
+
+
+
+
+
+​使用 results := make(chan connResult, 2)。
+
+
+
+​即使主函数因为超时或者第一个结果已经返回而退出了，后台的 Goroutine 依然可以把结果写进去然后正常退出，不会被永久阻塞（Goroutine Leak）。
+
+🔍 潜在改进方向  性能优化  使用 io.Copy 替代手动循环（relay 函数） 零拷贝技术（splice 系统调用）
+
+UDP 转发（SOCKS5 UDP ASSOCIATE）
+
+
+

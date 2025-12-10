@@ -108,6 +108,10 @@ type Connection struct {
 	targetHost   string // 目标主机名
 	detectedHost string // 检测到的主机名 (HTTP Host或HTTPS SNI)
 	protocol     string // 协议类型 (HTTP/HTTPS/Unknown)
+	
+	// 新增：缓存初始请求数据
+	initialData       []byte // 缓存的第一个数据包
+	initialDataCached bool   // 是否已缓存
 }
 
 
@@ -420,23 +424,43 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 
 	case ActionAllow:
 		c.logger.Printf("ALLOW by %s: %s -> %s", logContext, accessInfo, c.targetAddr)
-		return net.DialTimeout("tcp", formatNetworkAddress(targetAddr, targetPort), 5*time.Second)
+
+		// 纯粹直连，不回退代理
+		target := formatNetworkAddress(targetAddr, targetPort)
+		conn, err := net.DialTimeout("tcp", target, 5*time.Second)
+		if err != nil {
+			return nil, fmt.Errorf("direct connection failed: %v", err)
+		}
+
+		return conn, nil
 
 	default:
-		// 默认行为：走默认代理（包括ActionDeny和unknown action）
-		// 对于ActionDeny，如果启用智能代理且端口在探测范围内，使用选择最优连接路径
+		// ActionDeny 或未知动作：使用智能路径选择或默认代理
 		if result.Action == ActionDeny && c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
 			c.logger.Printf("DENY by %s, using optimal path selection: %s -> %s", logContext, accessInfo, c.targetAddr)
-			conn, connType, proxyNode, err := c.selectOptimalConnection(targetAddr, targetPort)
-			if err != nil {
-				return nil, err
+
+			// 检查是否在黑名单中
+			if c.server.blacklist != nil && c.server.blacklist.IsBlacklisted(targetAddr) {
+				c.logger.Printf("Target %s is in blacklist, using proxy directly", targetAddr)
+				defaultProxy := c.server.router.GetDefaultProxy()
+				if defaultProxy == nil {
+					return nil, fmt.Errorf("target in blacklist but no proxy available")
+				}
+				c.logger.Printf("DENY by %s (blacklisted), using proxy: %s -> %s via %s", logContext, accessInfo, c.targetAddr, defaultProxy.Name)
+				return c.connectThroughProxy(defaultProxy, targetAddr, targetPort)
 			}
-			// 记录连接类型
-			c.logConnectionChoice(connType, proxyNode, targetAddr, targetPort)
+
+			// 尝试直连
+			target := formatNetworkAddress(targetAddr, targetPort)
+			conn, err := net.DialTimeout("tcp", target, time.Duration(c.server.smartProxyTimeoutMs)*time.Millisecond)
+			if err != nil {
+				return nil, fmt.Errorf("direct connection failed: %v", err)
+			}
+
 			return conn, nil
 		}
 
-		// 获取默认代理
+		// 默认代理
 		defaultProxy := c.server.router.GetDefaultProxy()
 		if defaultProxy == nil {
 			if result.Action == ActionDeny {
@@ -465,32 +489,38 @@ func (c *Connection) detectAndConnect(targetAddr string, targetPort uint16) (net
 		return nil, fmt.Errorf("failed to send temporary success reply: %v", err)
 	}
 
-	// 3. 只对 probing_ports 中的端口进行流量检测
+	// 3. 检测 SNI/Host（针对探测端口）
 	var detectedHost string
 	shouldProbe := c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort))
 
 	if shouldProbe {
-		// 3a. 读取初始数据包以进行SNI检测
+		// 读取初始数据包
 		buf := bufferPool.Get()
 		defer bufferPool.Put(buf)
 
-		c.clientConn.SetReadDeadline(time.Now().Add(1300 * time.Millisecond)) // 1.3秒超时
-		n, err := prependingClientConn.Conn.Read(buf)                 // 从底层连接读取
-		c.clientConn.SetReadDeadline(time.Time{})                    // 清除超时
+		c.clientConn.SetReadDeadline(time.Now().Add(1300 * time.Millisecond))
+		n, err := prependingClientConn.Conn.Read(buf)
+		c.clientConn.SetReadDeadline(time.Time{})
 
-		// 3b. 将读到的数据"预置"回连接，以便后续relay
+		// ⭐ 缓存初始数据（关键修改）
 		if n > 0 {
+			c.initialData = make([]byte, n)
+			copy(c.initialData, buf[:n])
+			c.initialDataCached = true
+			c.logger.Printf("Cached %d bytes of initial data for potential retry", n)
+
+			// 预置数据回连接（供正常流程使用）
 			prependingClientConn.mu.Lock()
-			prependingClientConn.prependedData = buf[:n]
+			prependingClientConn.prependedData = make([]byte, n)
+			copy(prependingClientConn.prependedData, buf[:n])
 			prependingClientConn.mu.Unlock()
 		}
 
-		// 3c. 处理读取错误
 		if err != nil && err != io.EOF {
 			return nil, fmt.Errorf("could not read initial data for detection: %v", err)
 		}
 
-		// 3d. 从数据中检测主机名
+		// 检测主机名
 		if n > 0 {
 			if result := c.server.detector.DetectTraffic(buf[:n]); result != nil {
 				hostname := ""
@@ -508,20 +538,18 @@ func (c *Connection) detectAndConnect(targetAddr string, targetPort uint16) (net
 		}
 	}
 
-	// 4. 统一的路由匹配决策（支持预检测和后检测）
+	// 4. 路由匹配
 	result := c.server.router.MatchRule(targetAddr, detectedHost, int(targetPort))
 
-	// 6. 根据匹配结果执行连接
+	// 5. 根据匹配结果执行连接
 	logContext := "rule"
 	if result.Match {
-		// 匹配到规则
 		if detectedHost != "" {
 			logContext += " (detected: " + detectedHost + ")"
 		}
 	} else {
-		// 没有匹配到规则，使用默认ActionDeny行为
 		logContext = "default"
-		result.Action = ActionDeny // 触发默认代理或智能路径选择逻辑
+		result.Action = ActionDeny
 	}
 
 	return c.executeConnectionAction(result, targetAddr, targetPort, logContext)
@@ -674,14 +702,24 @@ func (c *Connection) relayTargetToClient(ctx context.Context, done chan error) {
 
 		n, err := c.targetConn.Read(buf)
 		if err != nil {
-			// 检查是否是RST重置信号（系统错误码104）
+			// 检查连接是否被重置（GFW干扰）
 			if opErr, ok := err.(*net.OpError); ok {
 				if syscallErr, ok := opErr.Err.(*os.SyscallError); ok {
 					if errno, ok := syscallErr.Err.(syscall.Errno); ok && errno == 104 {
-						// 连接被RST重置，将目标IP加入黑名单
 						if c.server.blacklist != nil && c.targetHost != "" {
-							c.logger.Printf("Direct connection to %s reset by RST, adding to blacklist", c.targetHost)
+							c.logger.Printf("⚠️  Direct connection to %s reset by peer (errno 104), switching to proxy", c.targetHost)
 							c.server.blacklist.Add(c.targetHost)
+
+							// 尝试切换到代理连接
+							if proxyConn, proxyErr := c.switchToProxyAndReplay(); proxyErr == nil {
+								// 成功切换到代理，更新目标连接并继续读取
+								c.targetConn.Close()
+								c.targetConn = proxyConn
+								c.logger.Printf("✅ Successfully switched to proxy for %s", c.targetHost)
+								continue // 继续循环，从代理连接读取数据
+							} else {
+								c.logger.Printf("❌ Failed to switch to proxy: %v", proxyErr)
+							}
 						}
 					}
 				}
@@ -689,19 +727,10 @@ func (c *Connection) relayTargetToClient(ctx context.Context, done chan error) {
 			done <- err
 			return
 		}
-/*
-		// DEBUG: 记录收到的数据
-		if n > 0 {
-			c.logger.Printf("DEBUG: Received %d bytes from target: %x", n, buf[:min(n, 32)])
-			// 如果数据很短，尝试转换为字符串
-			if n <= 16 {
-				c.logger.Printf("DEBUG: Data as string: %q", string(buf[:n]))
-			}
-		}
-*/
+
 		// 应用下载限速
 		if !c.applyDownloadRateLimit(int64(n)) {
-			continue // 超过限速，丢弃数据
+			continue
 		}
 
 		// 转发数据到客户端
@@ -712,7 +741,54 @@ func (c *Connection) relayTargetToClient(ctx context.Context, done chan error) {
 	}
 }
 
+// switchToProxyAndReplay 切换到代理连接并重放缓存的数据
+func (c *Connection) switchToProxyAndReplay() (net.Conn, error) {
+	// 解析目标地址
+	targetHost, targetPort, err := net.SplitHostPort(c.targetAddr)
+	if err != nil {
+		// 如果解析失败，可能已经是 host:port 格式
+		parts := strings.Split(c.targetAddr, ":")
+		if len(parts) == 2 {
+			targetHost = parts[0]
+			port, parseErr := strconv.ParseUint(parts[1], 10, 16)
+			if parseErr != nil {
+				return nil, fmt.Errorf("failed to parse target port: %v", parseErr)
+			}
+			targetPort = fmt.Sprintf("%d", port)
+		} else {
+			return nil, fmt.Errorf("failed to parse target address: %v", err)
+		}
+	}
 
+	// 解析端口号
+	portUint16, err := strconv.ParseUint(targetPort, 10, 16)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse port: %v", err)
+	}
+
+	// 获取默认代理
+	proxy := c.server.router.GetDefaultProxy()
+	if proxy == nil {
+		return nil, fmt.Errorf("no proxy available")
+	}
+
+	// 建立代理连接
+	proxyConn, err := c.connectThroughProxy(proxy, targetHost, uint16(portUint16))
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect through proxy: %v", err)
+	}
+
+	// 重放缓存的初始数据
+	if c.initialDataCached && len(c.initialData) > 0 {
+		c.logger.Printf("🔄 Replaying %d bytes of cached data to proxy connection", len(c.initialData))
+		if _, writeErr := proxyConn.Write(c.initialData); writeErr != nil {
+			proxyConn.Close()
+			return nil, fmt.Errorf("failed to replay data to proxy: %v", writeErr)
+		}
+	}
+
+	return proxyConn, nil
+}
 
 // applyUploadRateLimit 应用上传限速
 func (c *Connection) applyUploadRateLimit(bytes int64) bool {
@@ -1025,98 +1101,3 @@ func (c *Connection) connectThroughProxy(proxy *ProxyNode, targetAddr string, ta
 
 	return proxyConn, nil
 }
-
-
-// selectOptimalConnection 选择最优连接路径，优先尝试国内直连
-func (c *Connection) selectOptimalConnection(targetAddr string, targetPort uint16) (net.Conn, string, *ProxyNode, error) {
-	type connectionAttempt struct {
-		conn    net.Conn
-		proxy   *ProxyNode
-		success bool
-		err     error
-	}
-
-	directResult := make(chan *connectionAttempt, 1)
-	proxyResult := make(chan *connectionAttempt, 1)
-
-	// 优先启动直连尝试
-	go func() {
-		target := formatNetworkAddress(targetAddr, targetPort)
-		timeout := time.Duration(c.server.smartProxyTimeoutMs) * time.Millisecond
-
-		// 检查是否在黑名单中
-		if c.server.blacklist != nil && c.server.blacklist.IsBlacklisted(targetAddr) {
-			c.logger.Printf("Direct connection to %s skipped: in blacklist", target)
-			directResult <- &connectionAttempt{success: false, err: fmt.Errorf("target in blacklist")}
-			return
-		}
-
-		conn, err := net.DialTimeout("tcp", target, timeout)
-		if err != nil {
-			c.logger.Printf("Direct connection to %s failed: %v", target, err)
-			if c.server.blacklist != nil {
-				c.server.blacklist.Add(targetAddr)
-			}
-			directResult <- &connectionAttempt{success: false, err: err}
-			return
-		}
-		
-		c.logger.Printf("Direct connection to %s established", target)
-		directResult <- &connectionAttempt{success: true, conn: conn}
-	}()
-
-	// 延迟启动代理连接尝试，给直连优先机会
-	go func() {
-		// 等待 100ms，让直连有优先尝试的机会
-		time.Sleep(100 * time.Millisecond)
-
-		proxy := c.server.router.GetDefaultProxy()
-		if proxy == nil {
-			proxyResult <- &connectionAttempt{success: false, err: fmt.Errorf("no proxy available")}
-			return
-		}
-
-		conn, err := c.connectThroughProxy(proxy, targetAddr, targetPort)
-		if err != nil {
-			c.logger.Printf("Proxy connection through %s failed: %v", proxy.Name, err)
-			proxyResult <- &connectionAttempt{success: false, err: err}
-			return
-		}
-
-		c.logger.Printf("Proxy connection through %s established", proxy.Name)
-		proxyResult <- &connectionAttempt{success: true, conn: conn, proxy: proxy}
-	}()
-
-	// 等待第一个成功的连接，优先检查直连
-	timeout := time.After(2 * time.Second)
-
-	for {
-		select {
-		case result := <-directResult:
-			if result.success {
-				// 直连成功，立即返回
-				return result.conn, "direct", nil, nil
-			}
-		case result := <-proxyResult:
-			if result.success {
-				// 代理连接成功，返回代理连接
-				return result.conn, "proxy", result.proxy, nil
-			}
-		case <-timeout:
-			// 超时处理，最后检查直连结果
-			select {
-			case result := <-directResult:
-				if result.success {
-					return result.conn, "direct", nil, nil
-				}
-			case result := <-proxyResult:
-				if result.success {
-					return result.conn, "proxy", result.proxy, nil
-				}
-			default:
-				return nil, "", nil, fmt.Errorf("all connection attempts failed")
-			}
-		}
-	}
-}
-
