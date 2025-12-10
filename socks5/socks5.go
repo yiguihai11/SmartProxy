@@ -60,7 +60,6 @@ type Logger interface {
 	Print(v ...interface{})
 }
 
-
 // PrependingConn is a net.Conn that allows prepending data to the read stream.
 // This is useful for "pushing back" data that was read during a probe.
 type PrependingConn struct {
@@ -108,12 +107,11 @@ type Connection struct {
 	targetHost   string // 目标主机名
 	detectedHost string // 检测到的主机名 (HTTP Host或HTTPS SNI)
 	protocol     string // 协议类型 (HTTP/HTTPS/Unknown)
-	
+
 	// 新增：缓存初始请求数据
 	initialData       []byte // 缓存的第一个数据包
 	initialDataCached bool   // 是否已缓存
 }
-
 
 func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) (*SOCKS5Server, error) {
 	listener, err := net.Listen("tcp", ":"+strconv.Itoa(port))
@@ -435,46 +433,27 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 		return conn, nil
 
 	default:
-		// ActionDeny 或未知动作：使用智能路径选择或默认代理
-		if result.Action == ActionDeny && c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
-			c.logger.Printf("DENY by %s, using optimal path selection: %s -> %s", logContext, accessInfo, c.targetAddr)
-
+		if c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
 			// 检查是否在黑名单中
-			if c.server.blacklist != nil && c.server.blacklist.IsBlacklisted(targetAddr) {
-				c.logger.Printf("Target %s is in blacklist, using proxy directly", targetAddr)
-				defaultProxy := c.server.router.GetDefaultProxy()
-				if defaultProxy == nil {
-					return nil, fmt.Errorf("target in blacklist but no proxy available")
+			if c.server.blacklist != nil && !c.server.blacklist.IsBlacklisted(targetAddr) {
+
+				// 尝试直连
+				target := formatNetworkAddress(targetAddr, targetPort)
+				conn, err := net.DialTimeout("tcp", target, time.Duration(c.server.smartProxyTimeoutMs)*time.Millisecond)
+				if err != nil {
+					return nil, fmt.Errorf("direct connection failed: %v", err)
 				}
-				c.logger.Printf("DENY by %s (blacklisted), using proxy: %s -> %s via %s", logContext, accessInfo, c.targetAddr, defaultProxy.Name)
-				return c.connectThroughProxy(defaultProxy, targetAddr, targetPort)
-			}
 
-			// 尝试直连
-			target := formatNetworkAddress(targetAddr, targetPort)
-			conn, err := net.DialTimeout("tcp", target, time.Duration(c.server.smartProxyTimeoutMs)*time.Millisecond)
-			if err != nil {
-				return nil, fmt.Errorf("direct connection failed: %v", err)
+				return conn, nil
 			}
-
-			return conn, nil
 		}
-
-		// 默认代理
 		defaultProxy := c.server.router.GetDefaultProxy()
 		if defaultProxy == nil {
-			if result.Action == ActionDeny {
-				return nil, fmt.Errorf("no default proxy available")
-			}
-			return nil, fmt.Errorf("unknown action: %s", result.Action)
+			return nil, fmt.Errorf("no default proxy available")
 		}
-
-		if result.Action == ActionDeny {
-			c.logger.Printf("DENY by %s, using proxy: %s -> %s via %s", logContext, accessInfo, c.targetAddr, defaultProxy.Name)
-		} else {
-			c.logger.Printf("Using default proxy: %s -> %s via %s", accessInfo, c.targetAddr, defaultProxy.Name)
-		}
+		c.logger.Printf("Using default proxy: %s -> %s via %s", accessInfo, c.targetAddr, defaultProxy.Name)
 		return c.connectThroughProxy(defaultProxy, targetAddr, targetPort)
+
 	}
 }
 
@@ -871,7 +850,6 @@ func (c *Connection) handleAuthentication() error {
 
 	return nil
 }
-
 
 // GetRateLimiter 获取限速器实例
 func (s *SOCKS5Server) GetRateLimiter() *RateLimiter {

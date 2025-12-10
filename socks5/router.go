@@ -207,7 +207,6 @@ func (r *Router) classifyDomainRule(pattern string, rule *Rule) {
 	}
 }
 
-
 // matchPortRule 检查端口规则
 func (r *Router) matchPortRule(rule *Rule, portStr string) bool {
 	for _, pattern := range rule.Patterns {
@@ -347,7 +346,7 @@ func (r *Router) MatchRule(host, detectedHost string, port int) MatchResult {
 		}
 	}
 
-	fmt.Printf("[Router DEBUG] No rule matched for host=%s, detectedHost=%s, port=%s\n", host, detectedHost, portStr)
+	//fmt.Printf("[Router DEBUG] No rule matched for host=%s, detectedHost=%s, port=%s\n", host, detectedHost, portStr)
 
 	// 4. 默认行为
 	return MatchResult{
@@ -355,8 +354,6 @@ func (r *Router) MatchRule(host, detectedHost string, port int) MatchResult {
 		Match:  false,
 	}
 }
-
-
 
 func (r *Router) GetStats() map[string]int {
 	stats := make(map[string]int)

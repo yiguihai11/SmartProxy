@@ -441,7 +441,6 @@ func (rl *RateLimiter) ClearStats() {
 	rl.stats = make(map[string]*RateLimitStats)
 }
 
-
 // GetUsageRate 获取使用率 (0-100)
 func (rl *RateLimiter) GetUsageRate(key string) (uploadRate, downloadRate float64) {
 	rl.mu.RLock()

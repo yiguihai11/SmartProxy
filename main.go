@@ -131,8 +131,8 @@ func main() {
 	log.Printf("  Web管理: http://127.0.0.1:%d", webPort)
 	log.Printf("")
 	log.Printf("示例用法:")
-	log.Printf("  ./socks5proxy 1080                    # 使用默认配置")
-	log.Printf("  ./socks5proxy --config socks5-config.json 1080  # 使用自定义配置")
+	log.Printf("  ./smartproxy 1080                    # 使用默认配置")
+	log.Printf("  ./smartproxy --config socks5-config.json 1080  # 使用自定义配置")
 	log.Printf("")
 
 	// 等待中断信号

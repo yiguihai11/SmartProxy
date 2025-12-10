@@ -720,7 +720,6 @@ func (a *AuthManager) HandleAuthentication(clientConn net.Conn) (string, error) 
 	}
 }
 
-
 // isTimeAllowed 检查时间是否允许
 func (a *AuthManager) isTimeAllowed(user *User) bool {
 	if len(user.AllowedHours) == 0 && len(user.AllowedDays) == 0 {

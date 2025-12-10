@@ -21,7 +21,7 @@
 go/
 ├── main.go                    # 程序入口点
 ├── go.mod                     # Go 模块配置
-├── socks5proxy               # 编译生成的可执行文件
+├── smartproxy               # 编译生成的可执行文件
 ├── README.md                 # 本文件
 ├── enhanced-config.json      # 增强配置文件示例
 ├── socks5-config.json        # 基础配置文件示例
@@ -43,20 +43,20 @@ go/
 
 ```bash
 cd go/
-go build -o socks5proxy .
+go build -o smartproxy .
 ```
 
 ### 运行
 
 ```bash
 # 使用默认配置和端口 1080
-./socks5proxy
+./smartproxy
 
 # 指定端口
-./socks5proxy 8080
+./smartproxy 8080
 
 # 使用自定义配置文件
-./socks5proxy --config enhanced-config.json 1080
+./smartproxy --config enhanced-config.json 1080
 ```
 
 ### 设置代理

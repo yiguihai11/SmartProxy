@@ -31,10 +31,10 @@ TCP_TEST_CONFIGS = [                             # TCP测试配置（可增删�
         "timeout": 3
     },
     {
-        "target_domain": "www.marxists.org",
-        "target_ip": "65.109.101.238",
+        "target_domain": "t66y.com",
+        "target_ip": "205.185.121.64",
         "ports": [80, 443],
-        "timeout": 3
+        "timeout": 4
     }
 ]
 
@@ -137,14 +137,14 @@ def test_tcp_through_socks5(target_domain, target_ip, port, proxy_host, proxy_po
             sock = context.wrap_socket(sock, server_hostname=target_domain)
 
         # 发送HTTP请求
-        if target_domain == "www.marxists.org":
-            path = "/index-mobiles.htm"
+        if target_domain == "t66y.com":
+            path = "/"
         else:
             path = "/generate_204"
         http_request = (
             f"GET {path} HTTP/1.1\r\n"
             f"Host: {target_domain}\r\n"
-            f"User-Agent: python-test-script/1.0\r\n"
+            f"User-Agent: MAUI WAP Browser/1.0\r\n"
             f"Connection: close\r\n\r\n"
         ).encode("utf-8")
         sock.sendall(http_request)
