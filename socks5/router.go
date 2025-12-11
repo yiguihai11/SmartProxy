@@ -346,7 +346,7 @@ func (r *Router) MatchRule(host, detectedHost string, port int) MatchResult {
 		}
 	}
 
-	//fmt.Printf("[Router DEBUG] No rule matched for host=%s, detectedHost=%s, port=%s\n", host, detectedHost, portStr)
+	fmt.Printf("[Router DEBUG] No rule matched for host=%s, detectedHost=%s, port=%s\n", host, detectedHost, portStr)
 
 	// 4. 默认行为
 	return MatchResult{
