@@ -54,8 +54,8 @@ type Router struct {
 	ipTrie       *RadixTrie // IP基数树
 	chinaTrie    *RadixTrie // 中国IP基数树
 	configPath   string
-	supportsIPv4 bool
-	supportsIPv6 bool
+	SupportsIPv4 bool
+	SupportsIPv6 bool
 	proxyNodes   *ProxyNodes // 代理节点管理器
 }
 
@@ -76,8 +76,8 @@ func NewRouter(configPath string) (*Router, error) {
 		ipTrie:          NewRadixTrie(),
 		chinaTrie:       NewRadixTrie(),
 		configPath:      configPath,
-		supportsIPv4:    true,
-		supportsIPv6:    true,
+		SupportsIPv4:    true,
+		SupportsIPv6:    true,
 		proxyNodes:      NewProxyNodes(nil),
 	}
 
@@ -102,7 +102,7 @@ func (r *Router) loadConfig() error {
 	}
 
 	// 根据配置文件设置IPv6支持
-	r.supportsIPv6 = fullConfig.Listener.IPv6Enabled
+	r.SupportsIPv6 = fullConfig.Listener.IPv6Enabled
 
 	// 加载路由规则
 	r.rules = fullConfig.Router.Rules
@@ -301,7 +301,7 @@ func (r *Router) MatchRule(host, detectedHost string, port int) MatchResult {
 	// 2. IP地址匹配 - 使用基数树（host必须是IP地址）
 	if ip := net.ParseIP(host); ip != nil {
 		// 检查IPv6支持
-		if ip.To4() == nil && !r.supportsIPv6 {
+		if ip.To4() == nil && !r.SupportsIPv6 {
 			// IPv6地址但不支持IPv6，跳过IP匹配
 		} else {
 			// 2a. 自定义IP规则

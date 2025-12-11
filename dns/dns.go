@@ -252,22 +252,6 @@ func (r *Resolver) extractIPs(msg *dns.Msg) []string {
 	return ips
 }
 
-// isChinaIP 检查IP是否为中国IP (使用Router的chnroutes结果)
-func (r *Resolver) isChinaIP(ipStr string) bool {
-	r.logger.Printf("DNS DEBUG: Checking IP %s, router is nil: %v", ipStr, r.router == nil)
-	if r.router == nil {
-		r.logger.Printf("DNS ERROR: Router not initialized, falling back to default IP check for %s", ipStr)
-		return false
-	}
-
-	r.logger.Printf("DNS DEBUG: Checking if IP %s is in China routes", ipStr)
-	// 使用 Router 的 IsChinaIP 方法来检查中国IP基数树
-	isChina := r.router.IsChinaIP(ipStr)
-
-	r.logger.Printf("DNS DEBUG: IP %s isChinaIP check returned: %v", ipStr, isChina)
-	return isChina
-}
-
 // querySingleServer 查询单个DNS服务器
 func (r *Resolver) querySingleServer(msg *dns.Msg, server string) (*dns.Msg, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // 增加超时时间
@@ -635,7 +619,7 @@ func (r *Resolver) hijackQuery(msg *dns.Msg, domain string) (*dns.Msg, bool) {
 	return nil, false
 }
 
-// Resolve 解析DNS查询
+// Resolve 解析DNS查询 - 优化版
 func (r *Resolver) Resolve(msg *dns.Msg) (*dns.Msg, error) {
 	if len(msg.Question) == 0 {
 		return nil, fmt.Errorf("no question in DNS query")
@@ -644,6 +628,16 @@ func (r *Resolver) Resolve(msg *dns.Msg) (*dns.Msg, error) {
 	question := msg.Question[0]
 	domain := question.Name
 	qtype := question.Qtype
+
+	// 特殊处理：如果配置禁用IPv6，对AAAA查询返回空结果
+	if !r.isIPv6Enabled() && qtype == dns.TypeAAAA {
+		r.logger.Printf("IPv6 disabled, returning empty response for AAAA query: %s", domain)
+		reply := msg.Copy()
+		reply.Response = true
+		reply.Rcode = dns.RcodeSuccess
+		// 返回空Answer（表示没有IPv6地址）
+		return reply, nil
+	}
 
 	// 生成缓存键
 	cacheKey := fmt.Sprintf("%s:%d", strings.TrimSuffix(domain, "."), qtype)
@@ -662,49 +656,49 @@ func (r *Resolver) Resolve(msg *dns.Msg) (*dns.Msg, error) {
 		return hijacked, nil
 	}
 
-	// 首先查询中国DNS服务器
+	// 使用Router的MatchRule来决定查询策略
+	// 提取纯域名（去除末尾的.）
+	cleanDomain := strings.TrimSuffix(domain, ".")
+
+	// 使用路由规则匹配域名（端口53）
+	routeResult := r.router.MatchRule(cleanDomain, cleanDomain, 53)
+
 	var resp *dns.Msg
 	var err error
 
-	if len(r.config.CNServers) > 0 {
-		r.logger.Printf("Querying CN DNS servers for %s", domain)
+	switch routeResult.Action {
+	case socks5.ActionAllow:
+		// 直连规则：仅使用国内DNS，不进行污染检测
+		r.logger.Printf("Domain %s matched ALLOW rule, using CN DNS only", cleanDomain)
 		resp, err = r.queryConcurrent(msg, r.config.CNServers)
 		if err != nil {
 			r.logger.Printf("CN DNS query failed for %s: %v", domain, err)
-		}
-	}
-
-	// 检查污染
-	if resp != nil {
-		ips := r.extractIPs(resp)
-		isPolluted := false
-
-		for _, ip := range ips {
-			if !r.isChinaIP(ip) && qtype == dns.TypeA {
-				isPolluted = true
-				break
-			}
+			return nil, err
 		}
 
-		if isPolluted {
-			r.logger.Printf("CN response for %s appears polluted, trying foreign servers", domain)
-			resp = nil
-		}
-	}
+	case socks5.ActionBlock:
+		// 屏蔽规则：返回NXDOMAIN
+		r.logger.Printf("Domain %s matched BLOCK rule", cleanDomain)
+		reply := msg.Copy()
+		reply.Response = true
+		reply.Rcode = dns.RcodeNameError
+		return reply, nil
 
-	// 如果中国服务器失败或被污染，通过SOCKS5代理查询外国服务器
-	if resp == nil && len(r.config.ForeignServers) > 0 {
-		r.logger.Printf("Querying Foreign DNS servers for %s through SOCKS5 proxy", domain)
+	case socks5.ActionProxy:
+		// 强制走代理规则：仅使用国外DNS+代理
+		r.logger.Printf("Domain %s matched PROXY rule, using foreign DNS via proxy", cleanDomain)
 		resp, err = r.queryThroughProxyNodes(msg, r.config.ForeignServers)
 		if err != nil {
-			r.logger.Printf("Foreign DNS query through proxy failed for %s: %v", domain, err)
-			// 如果代理查询也失败，尝试直连外国服务器
-			r.logger.Printf("Attempting direct foreign DNS query for %s", domain)
-			resp, err = r.queryConcurrent(msg, r.config.ForeignServers)
-			if err != nil {
-				r.logger.Printf("Direct foreign DNS query failed for %s: %v", domain, err)
-				return nil, err
-			}
+			r.logger.Printf("Foreign DNS query via proxy failed for %s: %v", domain, err)
+			return nil, err
+		}
+
+	default:
+		// ActionDeny 或无匹配：智能查询模式
+		r.logger.Printf("Domain %s: no specific rule, using smart query mode", cleanDomain)
+		resp, err = r.smartQuery(msg, domain, qtype)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -718,6 +712,93 @@ func (r *Resolver) Resolve(msg *dns.Msg) (*dns.Msg, error) {
 
 	r.logger.Printf("Successfully resolved %s", domain)
 	return resp, nil
+}
+
+// isIPv6Enabled 检查是否启用IPv6
+func (r *Resolver) isIPv6Enabled() bool {
+	if r.router == nil {
+		return true // 默认启用
+	}
+	return r.router.SupportsIPv6
+}
+
+// smartQuery 智能查询模式：先国内，检测污染，如有污染则走国外+代理
+func (r *Resolver) smartQuery(msg *dns.Msg, domain string, qtype uint16) (*dns.Msg, error) {
+	// 1. 首先查询国内DNS
+	if len(r.config.CNServers) > 0 {
+		r.logger.Printf("Smart query step 1: trying CN DNS for %s", domain)
+		resp, err := r.queryConcurrent(msg, r.config.CNServers)
+		if err != nil {
+			r.logger.Printf("CN DNS query failed for %s: %v", domain, err)
+		} else if resp != nil {
+			// 检查污染（仅对A记录进行检测）
+			if qtype == dns.TypeA {
+				ips := r.extractIPs(resp)
+				isPolluted := r.checkPollution(ips)
+
+				if !isPolluted {
+					r.logger.Printf("Smart query: CN response for %s is clean", domain)
+					return resp, nil
+				}
+
+				r.logger.Printf("Smart query: CN response for %s appears polluted, trying foreign DNS", domain)
+			} else {
+				// 非A记录不检测污染
+				r.logger.Printf("Smart query: CN response for %s (type=%d) accepted without pollution check", domain, qtype)
+				return resp, nil
+			}
+		}
+	}
+
+	// 2. 国内DNS失败或被污染，使用国外DNS+代理
+	r.logger.Printf("Smart query step 2: querying foreign DNS via proxy for %s", domain)
+	resp, err := r.queryThroughProxyNodes(msg, r.config.ForeignServers)
+	if err != nil {
+		r.logger.Printf("Foreign DNS query via proxy failed for %s: %v", domain, err)
+
+		// 3. 代理查询也失败，尝试直连国外DNS（最后的备选）
+		r.logger.Printf("Smart query step 3: fallback to direct foreign DNS for %s", domain)
+		resp, err = r.queryConcurrent(msg, r.config.ForeignServers)
+		if err != nil {
+			r.logger.Printf("Direct foreign DNS query failed for %s: %v", domain, err)
+			return nil, err
+		}
+	}
+
+	return resp, nil
+}
+
+// checkPollution 检查DNS响应是否被污染
+func (r *Resolver) checkPollution(ips []string) bool {
+	if len(ips) == 0 {
+		return false
+	}
+
+	r.logger.Printf("DNS pollution check: checking %d IPs", len(ips))
+
+	for _, ip := range ips {
+		// 使用Router的MatchRule进行更精确的判断
+		// 如果IP匹配到ALLOW规则（包括中国IP），则认为是干净的
+		result := r.router.MatchRule(ip, "", 53)
+
+		if result.Action == socks5.ActionAllow {
+			r.logger.Printf("DNS pollution check: IP %s matched ALLOW rule (clean)", ip)
+			continue
+		}
+
+		// 检查是否在中国IP段
+		if r.router.IsChinaIP(ip) {
+			r.logger.Printf("DNS pollution check: IP %s is China IP (clean)", ip)
+			continue
+		}
+
+		// 如果有任何一个IP不是中国IP且没有匹配ALLOW规则，可能被污染
+		r.logger.Printf("DNS pollution check: IP %s is not China IP and not in ALLOW rules (potentially polluted)", ip)
+		return true
+	}
+
+	// 所有IP都是中国IP或匹配ALLOW规则
+	return false
 }
 
 // Stop 停止解析器

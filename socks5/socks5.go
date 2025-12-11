@@ -10,14 +10,11 @@ import (
 	"log"
 	"net"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -46,7 +43,7 @@ const (
 
 	// UDP 相关常量
 	UDP_ASSOC_TIMEOUT = 5 * time.Minute
-	UDP_BUFFER_SIZE    = 64 * 1024
+	UDP_BUFFER_SIZE   = 64 * 1024
 	UDP_SESSION_TTL   = 10 * time.Minute
 )
 
@@ -91,23 +88,23 @@ func (c *PrependingConn) Read(p []byte) (int, error) {
 
 // UDPSession UDP会话信息
 type UDPSession struct {
-	ClientAddr     *net.UDPAddr
-	TargetAddr     *net.UDPAddr
-	CreatedAt       time.Time
-	LastActivity   time.Time
-	TargetHost     string
+	ClientAddr   *net.UDPAddr
+	TargetAddr   *net.UDPAddr
+	CreatedAt    time.Time
+	LastActivity time.Time
+	TargetHost   string
 }
 
 // UDPPacket SOCKS5 UDP数据包结构
 type UDPPacket struct {
-	RESERVED  uint16 // 保留字段
-	FRAG     uint8   // 分片标志
-	ATYPE     uint8   // 地址类型
-	SRCADDR   []byte  // 源地址
-	DSTADDR   []byte  // 目标地址
-	SRCPORT   uint16  // 源端口
-	DSTPORT   uint16  // 目标端口
-	DATA      []byte  // 数据
+	RESERVED uint16 // 保留字段
+	FRAG     uint8  // 分片标志
+	ATYPE    uint8  // 地址类型
+	SRCADDR  []byte // 源地址
+	DSTADDR  []byte // 目标地址
+	SRCPORT  uint16 // 源端口
+	DSTPORT  uint16 // 目标端口
+	DATA     []byte // 数据
 }
 
 // UDPSessionManager UDP会话管理器
@@ -115,14 +112,28 @@ type UDPSessionManager struct {
 	sessions    map[string]*UDPSession // key: clientAddr
 	mutex       sync.RWMutex
 	logger      *log.Logger
-	cleanupTick  *time.Ticker
+	cleanupTick *time.Ticker
+	// Full Cone NAT 支持
+	fullConeMap   map[string]*FullConeMapping // key: internalAddr -> mapping
+	fullConeMutex sync.RWMutex
+}
+
+// FullConeMapping Full Cone NAT映射
+type FullConeMapping struct {
+	InternalAddr    *net.UDPAddr
+	ExternalConn    *net.UDPConn // 用于接收响应的外部连接
+	ExternalPort    int          // 外部端口
+	CreatedAt       time.Time
+	LastActivity    time.Time
+	TargetEndpoints map[string]bool // 记录已通信的目标端点
 }
 
 // NewUDPSessionManager 创建UDP会话管理器
 func NewUDPSessionManager(logger *log.Logger) *UDPSessionManager {
 	manager := &UDPSessionManager{
-		sessions: make(map[string]*UDPSession),
-		logger:   logger,
+		sessions:    make(map[string]*UDPSession),
+		fullConeMap: make(map[string]*FullConeMapping),
+		logger:      logger,
 	}
 
 	// 启动清理协程
@@ -140,7 +151,7 @@ func (m *UDPSessionManager) AddSession(clientAddr, targetAddr *net.UDPAddr, targ
 	session := &UDPSession{
 		ClientAddr:   clientAddr,
 		TargetAddr:   targetAddr,
-		CreatedAt:     time.Now(),
+		CreatedAt:    time.Now(),
 		LastActivity: time.Now(),
 		TargetHost:   targetHost,
 	}
@@ -175,30 +186,222 @@ func (m *UDPSessionManager) RemoveSession(clientAddr *net.UDPAddr) {
 // cleanupExpiredSessions 清理过期会话
 func (m *UDPSessionManager) cleanupExpiredSessions() {
 	for range m.cleanupTick.C {
-		m.mutex.Lock()
 		now := time.Now()
-		var expired []string
+		var expiredSessions []string
+		var expiredMappings []string
 
+		// 清理普通UDP会话
+		m.mutex.Lock()
 		for key, session := range m.sessions {
 			if now.Sub(session.LastActivity) > UDP_SESSION_TTL {
-				expired = append(expired, key)
+				expiredSessions = append(expiredSessions, key)
 			}
 		}
 
-		for _, key := range expired {
+		for _, key := range expiredSessions {
 			if session := m.sessions[key]; session != nil {
 				delete(m.sessions, key)
 				m.logger.Printf("UDP session expired: %s -> %s", session.ClientAddr, session.TargetAddr)
 			}
 		}
-
 		m.mutex.Unlock()
+
+		// 清理Full Cone NAT映射
+		m.fullConeMutex.Lock()
+		for key, mapping := range m.fullConeMap {
+			if now.Sub(mapping.LastActivity) > UDP_SESSION_TTL {
+				expiredMappings = append(expiredMappings, key)
+				if mapping.ExternalConn != nil {
+					mapping.ExternalConn.Close()
+				}
+			}
+		}
+
+		for _, key := range expiredMappings {
+			if mapping := m.fullConeMap[key]; mapping != nil {
+				delete(m.fullConeMap, key)
+				m.logger.Printf("Full Cone mapping expired: %s -> external port %d", mapping.InternalAddr, mapping.ExternalPort)
+			}
+		}
+		m.fullConeMutex.Unlock()
 	}
+}
+
+// CreateFullConeMapping 创建Full Cone NAT映射
+func (m *UDPSessionManager) CreateFullConeMapping(internalAddr *net.UDPAddr) (*FullConeMapping, error) {
+	m.fullConeMutex.Lock()
+	defer m.fullConeMutex.Unlock()
+
+	// 检查是否已存在映射
+	if mapping, exists := m.fullConeMap[internalAddr.String()]; exists {
+		mapping.LastActivity = time.Now()
+		return mapping, nil
+	}
+
+	// 根据内部地址类型选择监听地址
+	var listenAddr string
+	if internalAddr.IP.To4() != nil {
+		// IPv4: 监听所有IPv4接口
+		listenAddr = "0.0.0.0:0"
+	} else {
+		// IPv6: 监听所有IPv6接口
+		listenAddr = "[::]:0"
+	}
+
+	// 创建外部监听端口
+	externalAddr, err := net.ResolveUDPAddr("udp", listenAddr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve external address: %v", err)
+	}
+
+	externalConn, err := net.ListenUDP("udp", externalAddr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to listen on external port: %v", err)
+	}
+
+	// 获取实际分配的外部端口
+	extPort := externalConn.LocalAddr().(*net.UDPAddr).Port
+
+	mapping := &FullConeMapping{
+		InternalAddr:    internalAddr,
+		ExternalConn:    externalConn,
+		ExternalPort:    extPort,
+		CreatedAt:       time.Now(),
+		LastActivity:    time.Now(),
+		TargetEndpoints: make(map[string]bool),
+	}
+
+	m.fullConeMap[internalAddr.String()] = mapping
+	m.logger.Printf("Full Cone mapping created: %s -> external port %d", internalAddr, extPort)
+
+	// 启动监听协程
+	go m.handleFullConeTraffic(mapping)
+
+	return mapping, nil
+}
+
+// GetFullConeMapping 获取Full Cone NAT映射
+func (m *UDPSessionManager) GetFullConeMapping(internalAddr *net.UDPAddr) (*FullConeMapping, bool) {
+	m.fullConeMutex.RLock()
+	defer m.fullConeMutex.RUnlock()
+
+	mapping, exists := m.fullConeMap[internalAddr.String()]
+	if exists {
+		mapping.LastActivity = time.Now()
+	}
+	return mapping, exists
+}
+
+// handleFullConeTraffic 处理Full Cone NAT流量
+func (m *UDPSessionManager) handleFullConeTraffic(mapping *FullConeMapping) {
+	defer mapping.ExternalConn.Close()
+
+	buffer := make([]byte, UDP_BUFFER_SIZE)
+
+	// 创建连接到内部客户端的UDP连接
+	internalConn, err := net.DialUDP("udp", nil, mapping.InternalAddr)
+	if err != nil {
+		m.logger.Printf("Failed to dial internal client: %v", err)
+		return
+	}
+	defer internalConn.Close()
+
+	for {
+		// 设置超时
+		mapping.ExternalConn.SetReadDeadline(time.Now().Add(UDP_ASSOC_TIMEOUT))
+
+		n, senderAddr, err := mapping.ExternalConn.ReadFromUDP(buffer)
+		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				m.logger.Printf("Full Cone mapping timeout for %s", mapping.InternalAddr)
+				return
+			}
+			m.logger.Printf("Full Cone read error: %v", err)
+			continue
+		}
+
+		// 更新活动时间
+		mapping.LastActivity = time.Now()
+
+		// 记录目标端点
+		senderKey := senderAddr.String()
+		mapping.TargetEndpoints[senderKey] = true
+
+		// 构建SOCKS5响应包发送回内部客户端
+		responsePacket, err := m.buildFullConeResponsePacket(senderAddr, buffer[:n])
+		if err != nil {
+			m.logger.Printf("Failed to build response packet: %v", err)
+			continue
+		}
+
+		// 发送回内部客户端
+		_, err = internalConn.Write(responsePacket)
+		if err != nil {
+			m.logger.Printf("Failed to send response to internal client: %v", err)
+			continue
+		}
+	}
+}
+
+// buildFullConeResponsePacket 构建Full Cone NAT响应包
+func (m *UDPSessionManager) buildFullConeResponsePacket(senderAddr *net.UDPAddr, data []byte) ([]byte, error) {
+	var packet []byte
+
+	// SOCKS5 UDP 头部
+	packet = append(packet, 0x00, 0x00, 0x00) // RSV + FRAG
+
+	// 添加源地址（外部发送方地址）
+	if ip4 := senderAddr.IP.To4(); ip4 != nil {
+		packet = append(packet, ATYPE_IPV4)
+		packet = append(packet, ip4...)
+	} else if ip6 := senderAddr.IP.To16(); ip6 != nil {
+		packet = append(packet, ATYPE_IPV6)
+		packet = append(packet, ip6...)
+	} else {
+		return nil, fmt.Errorf("invalid IP address")
+	}
+
+	// 添加源端口
+	portBytes := make([]byte, 2)
+	binary.BigEndian.PutUint16(portBytes, uint16(senderAddr.Port))
+	packet = append(packet, portBytes...)
+
+	// 添加数据
+	packet = append(packet, data...)
+
+	return packet, nil
+}
+
+// SendViaFullCone 通过Full Cone NAT发送数据
+func (m *UDPSessionManager) SendViaFullCone(internalAddr *net.UDPAddr, targetAddr *net.UDPAddr, data []byte) error {
+	// 获取或创建映射
+	mapping, exists := m.GetFullConeMapping(internalAddr)
+	if !exists {
+		var err error
+		mapping, err = m.CreateFullConeMapping(internalAddr)
+		if err != nil {
+			return err
+		}
+	}
+
+	// 更新活动时间和目标端点
+	mapping.LastActivity = time.Now()
+	mapping.TargetEndpoints[targetAddr.String()] = true
+
+	// 通过外部连接发送数据
+	_, err := mapping.ExternalConn.WriteToUDP(data, targetAddr)
+	if err != nil {
+		return fmt.Errorf("failed to send via Full Cone: %v", err)
+	}
+
+	m.logger.Printf("Full Cone send: %s -> %s (%d bytes)", internalAddr, targetAddr, len(data))
+	return nil
 }
 
 // SOCKS5Server SOCKS5 服务器
 type SOCKS5Server struct {
 	listener            net.Listener
+	tcpListener         *net.TCPListener // TCP监听器，用于SetDeadline
 	udpListener         *net.UDPConn
 	wg                  sync.WaitGroup
 	logger              *log.Logger
@@ -212,6 +415,7 @@ type SOCKS5Server struct {
 	smartProxyEnabled   bool
 	smartProxyTimeoutMs int
 	udpSessions         *UDPSessionManager
+	natTraversal        *NATTraversal // NAT穿透支持
 }
 
 type Connection struct {
@@ -231,13 +435,62 @@ type Connection struct {
 }
 
 func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) (*SOCKS5Server, error) {
-	listener, err := net.Listen("tcp", ":"+strconv.Itoa(port))
-	if err != nil {
-		return nil, fmt.Errorf("failed to listen on port %d: %v", port, err)
-	}
-
 	// 创建 logger
 	logger := log.New(os.Stdout, "[SOCKS5] ", log.LstdFlags)
+
+	// 读取配置以获取IPv6设置
+	ipv6Enabled := true
+	ipv6Only := false
+	if configData, err := ioutil.ReadFile(configPath); err == nil {
+		var config struct {
+			Listener struct {
+				IPv6Enabled bool `json:"ipv6_enabled"`
+				IPv6Only    bool `json:"ipv6_only"`
+			} `json:"listener"`
+		}
+		if json.Unmarshal(configData, &config) == nil {
+			ipv6Enabled = config.Listener.IPv6Enabled
+			ipv6Only = config.Listener.IPv6Only
+		}
+	}
+
+	var listener net.Listener
+	var tcpListener *net.TCPListener
+	var err error
+
+	// 根据配置选择监听方式
+	if ipv6Only {
+		// 仅IPv6
+		tcpListener, err = net.ListenTCP("tcp6", &net.TCPAddr{Port: port})
+		if err != nil {
+			return nil, fmt.Errorf("failed to listen on IPv6 port %d: %v", port, err)
+		}
+		listener = tcpListener
+		logger.Printf("SOCKS5 server listening on IPv6 only")
+	} else if ipv6Enabled {
+		// 首先尝试IPv6（dual stack）
+		tcpListener, err = net.ListenTCP("tcp6", &net.TCPAddr{Port: port})
+		if err != nil {
+			// IPv6失败，回退到IPv4
+			logger.Printf("IPv6 listen failed, trying IPv4 only: %v", err)
+			tcpListener, err = net.ListenTCP("tcp", &net.TCPAddr{Port: port})
+			if err != nil {
+				return nil, fmt.Errorf("failed to listen on port %d: %v", port, err)
+			}
+			logger.Printf("SOCKS5 server listening on IPv4 only")
+		} else {
+			logger.Printf("SOCKS5 server listening on IPv6 (dual-stack)")
+		}
+		listener = tcpListener
+	} else {
+		// 仅IPv4
+		tcpListener, err = net.ListenTCP("tcp4", &net.TCPAddr{Port: port})
+		if err != nil {
+			return nil, fmt.Errorf("failed to listen on IPv4 port %d: %v", port, err)
+		}
+		listener = tcpListener
+		logger.Printf("SOCKS5 server listening on IPv4 only")
+	}
 
 	// -- Begin: Load smart_proxy config and initialize blacklist --
 	var blacklist *BlacklistManager
@@ -302,9 +555,13 @@ func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) 
 	// 初始化 UDP 会话管理器
 	udpSessions := NewUDPSessionManager(logger)
 
+	// 初始化 NAT 穿透管理器
+	natTraversal := NewNATTraversal(configPath, logger)
+
 	// User and rate limit configuration is now loaded and applied from main.go
 	server := &SOCKS5Server{
 		listener:            listener,
+		tcpListener:         tcpListener,
 		logger:              logger,
 		router:              router,
 		detector:            detector,
@@ -316,6 +573,7 @@ func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) 
 		smartProxyEnabled:   smartProxyEnabled,
 		smartProxyTimeoutMs: smartProxyTimeoutMs,
 		udpSessions:         udpSessions,
+		natTraversal:        natTraversal,
 	}
 
 	// 打印系统统计信息
@@ -345,28 +603,37 @@ func isClosedConnectionError(err error) bool {
 func (s *SOCKS5Server) Start() error {
 	s.logger.Printf("SOCKS5 server started on %s", s.listener.Addr())
 
-	// 运行 splice 兼容性测试
-	go func() {
-		time.Sleep(1 * time.Second) // 延迟测试，避免影响启动时间
-		TestSpliceCompatibility(s.logger)
-	}()
-
+	// 使用select循环来处理连接，避免永久阻塞
 	for {
-		clientConn, err := s.listener.Accept()
+		var clientConn net.Conn
+		var err error
+
+		// 如果有TCPListener，使用SetDeadline
+		if s.tcpListener != nil {
+			// 设置accept超时
+			s.tcpListener.SetDeadline(time.Now().Add(1 * time.Second))
+			clientConn, err = s.tcpListener.Accept()
+
+			// 检查是否是超时
+			if netErr, ok := err.(net.Error); ok && ok && netErr.Timeout() {
+				continue // 继续下一次accept
+			}
+		} else {
+			// 普通的Listener，没有deadline支持
+			clientConn, err = s.listener.Accept()
+		}
+
 		if err != nil {
 			// 检查是否是关闭信号导致的错误
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				s.logger.Printf("Accept timeout: %v", err)
-				continue
-			}
-			// 如果是连接被关闭的错误，不再继续循环
 			if opErr, ok := err.(*net.OpError); ok && opErr.Op == "accept" {
-				if isClosedConnectionError(opErr.Err) {
+				if isClosedConnectionError(opErr.Err) || strings.Contains(err.Error(), "use of closed network connection") {
 					s.logger.Printf("Server shutting down...")
 					return nil
 				}
 			}
 			s.logger.Printf("Failed to accept connection: %v", err)
+			// 避免CPU占用过高
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 
@@ -498,24 +765,23 @@ func (c *Connection) handleConnectRequest(atype byte) error {
 	defer finalTargetConn.Close()
 	c.targetConn = finalTargetConn
 
-	// 4. 开始双向转发数据 - 尝试使用 splice 零拷贝
+	// 4. 开始双向转发数据
 	c.logger.Printf("CONNECTED: %s -> %s", c.getAccessInfo(), c.targetAddr)
 
-	// 优先尝试 splice 零拷贝，如果不支持则降级到 io.Copy
-	return c.EnhancedRelay()
+	// 使用传统的 io.Copy 进行数据转发
+	return c.relay()
 }
 
 // handleUDPAssociateRequest 处理UDP ASSOCIATE请求
 func (c *Connection) handleUDPAssociateRequest(atype byte) error {
-	targetAddr, targetPort, err := c.parseAddress(atype)
+	targetAddr, _, err := c.parseAddress(atype)
 	if err != nil {
 		return err // an error reply has already been sent by parseAddress
 	}
 
-	// 解析目标地址
-	targetIP := net.ParseIP(targetAddr)
-	if targetIP == nil {
-		return c.sendReply(REP_ADDRESS_TYPE_NOT_SUPPORTED, "127.0.0.1", 1080)
+	// 记录客户端请求的目标地址（仅用于日志）
+	if targetAddr != "" {
+		c.logger.Printf("UDP ASSOCIATE request for target: %s (address ignored per RFC 1928)", targetAddr)
 	}
 
 	// 创建 UDP 监听地址
@@ -529,12 +795,126 @@ func (c *Connection) handleUDPAssociateRequest(atype byte) error {
 		return fmt.Errorf("failed to listen on UDP: %v", err)
 	}
 
-	// 启动 UDP 转发协程
-	go c.handleUDPRelay(udpConn, targetAddr, targetPort)
+	// 启动 UDP 转发协程（使用Full Cone NAT）
+	go c.handleUDPRelayWithFullCone(udpConn)
 
 	// 发送成功响应
 	localAddr := udpConn.LocalAddr().(*net.UDPAddr)
 	return c.sendUDPReply(localAddr.IP, uint16(localAddr.Port))
+}
+
+// handleUDPRelayWithFullCone 处理Full Cone NAT UDP数据转发
+func (c *Connection) handleUDPRelayWithFullCone(udpConn *net.UDPConn) {
+	c.logger.Printf("Full Cone UDP relay started")
+
+	defer udpConn.Close()
+
+	buffer := make([]byte, UDP_BUFFER_SIZE)
+
+	for {
+		// 设置超时以防止资源泄漏
+		udpConn.SetReadDeadline(time.Now().Add(UDP_ASSOC_TIMEOUT))
+
+		n, clientAddr, err := udpConn.ReadFromUDP(buffer)
+		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				c.logger.Printf("UDP association timeout")
+				return
+			}
+			c.logger.Printf("UDP read error: %v", err)
+			continue
+		}
+
+		// 解析 SOCKS5 UDP 数据包
+		packet, err := c.parseUDPPacket(buffer[:n])
+		if err != nil {
+			c.logger.Printf("Failed to parse UDP packet: %v", err)
+			continue
+		}
+
+		// 使用Full Cone NAT转发数据
+		go c.forwardUDPPacketWithFullCone(udpConn, packet, clientAddr)
+	}
+}
+
+// forwardUDPPacketWithFullCone 使用Full Cone NAT转发UDP数据包
+func (c *Connection) forwardUDPPacketWithFullCone(udpConn *net.UDPConn, packet *UDPPacket, clientAddr *net.UDPAddr) {
+	var targetHost string
+	var targetPort int
+
+	// 从UDP包中解析目标地址
+	switch packet.ATYPE {
+	case ATYPE_IPV4:
+		if len(packet.DSTADDR) != 4 {
+			c.logger.Printf("UDP: Invalid IPv4 address length")
+			return
+		}
+		targetHost = net.IP(packet.DSTADDR).String()
+	case ATYPE_IPV6:
+		if len(packet.DSTADDR) != 16 {
+			c.logger.Printf("UDP: Invalid IPv6 address length")
+			return
+		}
+		targetHost = net.IP(packet.DSTADDR).String()
+	case ATYPE_DOMAIN:
+		targetHost = string(packet.DSTADDR)
+	default:
+		c.logger.Printf("UDP: Unsupported address type in packet: %d", packet.ATYPE)
+		return
+	}
+	targetPort = int(packet.DSTPORT)
+
+	// 构建目标地址
+	targetAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", targetHost, targetPort))
+	if err != nil {
+		c.logger.Printf("Failed to resolve target UDP address: %v", err)
+		return
+	}
+
+	// 路由决策
+	var result MatchResult
+	if c.server.router != nil {
+		result = c.server.router.MatchRule(targetHost, "", targetPort)
+	} else {
+		result = MatchResult{Action: ActionDeny, Match: false}
+	}
+
+	// 根据路由结果执行操作
+	switch result.Action {
+	case ActionBlock:
+		c.logger.Printf("UDP: Blocked packet to %s:%d by rule", targetHost, packet.DSTPORT)
+		return
+
+	case ActionAllow:
+		c.logger.Printf("UDP: Allowed packet to %s:%d by rule (direct connection)", targetHost, packet.DSTPORT)
+		// 使用Full Cone NAT发送
+		err := c.server.udpSessions.SendViaFullCone(clientAddr, targetAddr, packet.DATA)
+		if err != nil {
+			c.logger.Printf("UDP: Full Cone forward failed: %v", err)
+		}
+
+	case ActionProxy:
+		proxyNode := c.server.router.GetProxyNode(result.ProxyNode)
+		if proxyNode == nil {
+			c.logger.Printf("UDP: Proxy node '%s' not found for %s:%d. Dropping packet.", result.ProxyNode, targetHost, packet.DSTPORT)
+			return
+		}
+		c.logger.Printf("UDP: Proxying packet to %s:%d via %s", targetHost, packet.DSTPORT, proxyNode.Name)
+		if err := c.forwardUDPPacketViaProxy(udpConn, packet, clientAddr, proxyNode); err != nil {
+			c.logger.Printf("UDP: Failed to forward packet via proxy %s: %v", proxyNode.Name, err)
+		}
+
+	default: // ActionDeny 或无匹配规则
+		defaultProxy := c.server.router.GetDefaultProxy()
+		if defaultProxy == nil {
+			c.logger.Printf("UDP: No rule matched for %s:%d and no default proxy configured. Dropping packet.", targetHost, packet.DSTPORT)
+			return
+		}
+		c.logger.Printf("UDP: No rule matched for %s:%d, using default proxy %s", targetHost, packet.DSTPORT, defaultProxy.Name)
+		if err := c.forwardUDPPacketViaProxy(udpConn, packet, clientAddr, defaultProxy); err != nil {
+			c.logger.Printf("UDP: Failed to forward packet via default proxy %s: %v", defaultProxy.Name, err)
+		}
+	}
 }
 
 // parseAddress 解析SOCKS5请求中的地址部分
@@ -608,16 +988,19 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 	default:
 		if c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
 			// 检查是否在黑名单中
-			if c.server.blacklist != nil && !c.server.blacklist.IsBlacklisted(targetAddr) {
-
-				// 尝试直连
-				target := formatNetworkAddress(targetAddr, targetPort)
-				conn, err := net.DialTimeout("tcp", target, time.Duration(c.server.smartProxyTimeoutMs)*time.Millisecond)
-				if err != nil {
-					return nil, fmt.Errorf("direct connection failed: %v", err)
+			if c.server.blacklist != nil {
+				if c.server.blacklist.IsBlacklisted(targetAddr) {
+					c.logger.Printf("🚫 %s is in blacklist, using proxy directly", targetAddr)
+				} else {
+					c.logger.Printf("✅ %s not in blacklist, trying direct connection", targetAddr)
+					// 尝试直连
+					target := formatNetworkAddress(targetAddr, targetPort)
+					conn, err := net.DialTimeout("tcp", target, time.Duration(c.server.smartProxyTimeoutMs)*time.Millisecond)
+					if err != nil {
+						return nil, fmt.Errorf("direct connection failed: %v", err)
+					}
+					return conn, nil
 				}
-
-				return conn, nil
 			}
 		}
 		defaultProxy := c.server.router.GetDefaultProxy()
@@ -738,52 +1121,6 @@ func (c *Connection) sendUDPReply(ip net.IP, port uint16) error {
 	return err
 }
 
-// handleUDPRelay 处理UDP数据转发
-func (c *Connection) handleUDPRelay(udpConn *net.UDPConn, targetAddr string, targetPort uint16) {
-	c.logger.Printf("UDP relay started for %s:%d", targetAddr, targetPort)
-
-	// 检查 UDP splice 支持情况
-	if c.CanUseUDPSplice() {
-		c.logger.Printf("UDP splice optimization enabled")
-	} else {
-		c.logger.Printf("Using classic UDP forwarding (splice not available)")
-	}
-
-	defer udpConn.Close()
-
-	buffer := make([]byte, UDP_BUFFER_SIZE)
-
-	for {
-		// 设置超时以防止资源泄漏
-		udpConn.SetReadDeadline(time.Now().Add(UDP_ASSOC_TIMEOUT))
-
-		n, clientAddr, err := udpConn.ReadFromUDP(buffer)
-		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				c.logger.Printf("UDP association timeout")
-				return
-			}
-			c.logger.Printf("UDP read error: %v", err)
-			continue
-		}
-
-		// 解析 SOCKS5 UDP 数据包
-		packet, err := c.parseUDPPacket(buffer[:n])
-		if err != nil {
-			c.logger.Printf("Failed to parse UDP packet: %v", err)
-			continue
-		}
-
-		// 记录数据包大小以显示 splice 活跃度
-		if c.CanUseUDPSplice() && len(packet.DATA) > 8192 {
-			c.logger.Printf("Processing large UDP packet (%d bytes) with splice", len(packet.DATA))
-		}
-
-		// 转发数据到目标
-		go c.forwardUDPPacket(udpConn, packet, clientAddr)
-	}
-}
-
 // parseUDPPacket 解析SOCKS5 UDP数据包
 func (c *Connection) parseUDPPacket(data []byte) (*UDPPacket, error) {
 	if len(data) < 10 {
@@ -792,8 +1129,8 @@ func (c *Connection) parseUDPPacket(data []byte) (*UDPPacket, error) {
 
 	packet := &UDPPacket{
 		RESERVED: binary.BigEndian.Uint16(data[0:2]),
-		FRAG:    data[2],
-		ATYPE:   data[3],
+		FRAG:     data[2],
+		ATYPE:    data[3],
 	}
 
 	offset := 4
@@ -878,326 +1215,6 @@ func (c *Connection) buildUDPPacket(srcAddr, dstAddr string, srcPort, dstPort ui
 	return packet, nil
 }
 
-// forwardUDPPacket 转发UDP数据包（集成路由和 splice 优化）
-func (c *Connection) forwardUDPPacket(udpConn *net.UDPConn, packet *UDPPacket, clientAddr *net.UDPAddr) {
-	var targetHost string
-	isDomain := false
-
-	// 1. 从UDP包中解析目标地址
-	switch packet.ATYPE {
-	case ATYPE_IPV4, ATYPE_IPV6:
-		targetHost = net.IP(packet.DSTADDR).String()
-	case ATYPE_DOMAIN:
-		targetHost = string(packet.DSTADDR)
-		isDomain = true
-	default:
-		c.logger.Printf("UDP: Unsupported address type in packet: %d", packet.ATYPE)
-		return
-	}
-
-	// 2. 路由决策（根据用户要求，仅对IP地址进行规则匹配）
-	var result MatchResult
-	if c.server.router != nil && !isDomain {
-		result = c.server.router.MatchRule(targetHost, "", int(packet.DSTPORT))
-	} else {
-		// 如果是域名，或路由器未启用，则走默认行为（通常是走代理）
-		result = MatchResult{Action: ActionDeny, Match: false}
-	}
-
-	// 3. 根据路由结果执行操作
-	switch result.Action {
-	case ActionBlock:
-		c.logger.Printf("UDP: Blocked packet to %s:%d by rule", targetHost, packet.DSTPORT)
-		return // 直接丢弃数据包
-
-	case ActionAllow:
-		c.logger.Printf("UDP: Allowed packet to %s:%d by rule (direct connection)", targetHost, packet.DSTPORT)
-		// 为了简单起见，我们暂时禁用splice，直接使用传统方式转发
-		err := c.forwardUDPPacketClassic(udpConn, packet, clientAddr)
-		if err != nil {
-			c.logger.Printf("UDP: Direct forward failed: %v", err)
-		}
-
-	case ActionProxy:
-		proxyNode := c.server.router.GetProxyNode(result.ProxyNode)
-		if proxyNode == nil {
-			c.logger.Printf("UDP: Proxy node '%s' not found for %s:%d. Dropping packet.", result.ProxyNode, targetHost, packet.DSTPORT)
-			return
-		}
-		c.logger.Printf("UDP: Proxying packet to %s:%d via %s", targetHost, packet.DSTPORT, proxyNode.Name)
-		if err := c.forwardUDPPacketViaProxy(udpConn, packet, clientAddr, proxyNode); err != nil {
-			c.logger.Printf("UDP: Failed to forward packet via proxy %s: %v", proxyNode.Name, err)
-		}
-
-	default: // ActionDeny 或无匹配规则
-		defaultProxy := c.server.router.GetDefaultProxy()
-		if defaultProxy == nil {
-			c.logger.Printf("UDP: No rule matched for %s:%d and no default proxy configured. Dropping packet.", targetHost, packet.DSTPORT)
-			return
-		}
-		c.logger.Printf("UDP: No rule matched for %s:%d, using default proxy %s", targetHost, packet.DSTPORT, defaultProxy.Name)
-		if err := c.forwardUDPPacketViaProxy(udpConn, packet, clientAddr, defaultProxy); err != nil {
-			c.logger.Printf("UDP: Failed to forward packet via default proxy %s: %v", defaultProxy.Name, err)
-		}
-	}
-}
-
-// ============== UDP splice 零拷贝优化 ==============
-
-// CanUseUDPSplice 检查是否可以使用 UDP splice
-func (c *Connection) CanUseUDPSplice() bool {
-	if runtime.GOOS != "linux" {
-		return false
-	}
-
-	// 检查系统是否支持 splice
-	if !IsSpliceSupported() {
-		return false
-	}
-
-	// Linux 2.6.17+ 支持 UDP splice
-	return true
-}
-
-// UDPSpliceRelay UDP splice 转发（适用于高流量 UDP）
-func (c *Connection) UDPSpliceRelay(udpConn *net.UDPConn, packet *UDPPacket, clientAddr *net.UDPAddr) error {
-	if !c.CanUseUDPSplice() {
-		return c.forwardUDPPacketClassic(udpConn, packet, clientAddr)
-	}
-
-	// 对于高性能 UDP，我们可以使用 splice 优化
-	return c.forwardUDPPacketWithSplice(udpConn, packet, clientAddr)
-}
-
-// forwardUDPPacketWithSplice 使用 splice 优化的 UDP 转发
-func (c *Connection) forwardUDPPacketWithSplice(udpConn *net.UDPConn, packet *UDPPacket, clientAddr *net.UDPAddr) error {
-	// 构建目标地址
-	targetHost := string(packet.DSTADDR)
-	if packet.ATYPE == ATYPE_IPV4 {
-		ip := net.IP(packet.DSTADDR).String()
-		targetHost = ip
-	}
-
-	targetAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", targetHost, packet.DSTPORT))
-	if err != nil {
-		c.logger.Printf("Failed to resolve target UDP address: %v", err)
-		return err
-	}
-
-	// 检查是否已有会话
-	session := c.server.udpSessions.GetSession(clientAddr)
-	if session == nil {
-		session = c.server.udpSessions.AddSession(clientAddr, targetAddr, targetHost)
-	}
-
-	// 创建 UDP 连接
-	targetConn, err := net.DialUDP("udp", nil, targetAddr)
-	if err != nil {
-		c.logger.Printf("Failed to dial target UDP: %v", err)
-		return err
-	}
-	defer targetConn.Close()
-
-	// 对于大型数据包，尝试使用 splice 优化
-	if len(packet.DATA) > 8192 { // 8KB 以上使用 splice
-		err = c.udpSpliceLargePacket(targetConn, packet.DATA, len(packet.DATA))
-		if err != nil {
-			c.logger.Printf("UDP splice failed, falling back: %v", err)
-			// 降级到普通方式
-			_, err = targetConn.Write(packet.DATA)
-			if err != nil {
-				return err
-			}
-		}
-	} else {
-		// 小数据包使用传统方式
-		_, err = targetConn.Write(packet.DATA)
-		if err != nil {
-			return err
-		}
-	}
-
-	// 设置超时
-	targetConn.SetReadDeadline(time.Now().Add(5 * time.Second))
-
-	// 接收响应
-	response := make([]byte, UDP_BUFFER_SIZE)
-	n, err := targetConn.Read(response)
-	if err != nil {
-		c.logger.Printf("Failed to read response from target: %v", err)
-		return err
-	}
-
-	// 对于大型响应，也尝试使用 splice
-	if n > 8192 {
-		err = c.udpSpliceResponseBack(udpConn, response[:n], n, clientAddr, packet)
-		if err != nil {
-			c.logger.Printf("UDP response splice failed, falling back: %v", err)
-			// 降级到传统方式
-			return c.udpSendClassicResponse(udpConn, response[:n], n, clientAddr, packet)
-		}
-		return nil
-	} else {
-		// 小响应使用传统方式
-		return c.udpSendClassicResponse(udpConn, response[:n], n, clientAddr, packet)
-	}
-}
-
-// udpSpliceLargePacket 使用 splice 转发大型 UDP 数据包
-func (c *Connection) udpSpliceLargePacket(targetConn *net.UDPConn, data []byte, size int) error {
-	// 将 UDP 数据写入内存缓冲区
-	targetFile, err := targetConn.File()
-	if err != nil {
-		return fmt.Errorf("failed to get UDP file descriptor: %v", err)
-	}
-	defer targetFile.Close()
-
-	targetFd := int(targetFile.Fd())
-
-	// 创建内存管道
-	var pipe [2]int
-	if err := unix.Pipe2(pipe[:], unix.O_NONBLOCK|unix.O_CLOEXEC); err != nil {
-		return fmt.Errorf("failed to create splice pipe: %v", err)
-	}
-	defer unix.Close(pipe[0])
-	defer unix.Close(pipe[1])
-
-	// 将数据写入管道
-	bytesWritten, err := unix.Write(pipe[1], data[:size])
-	if err != nil {
-		return fmt.Errorf("failed to write to splice pipe: %v", err)
-	}
-
-	// 使用 splice 从管道传输到套接字
-	remaining := int(bytesWritten)
-	for remaining > 0 {
-		written, err := unix.Splice(pipe[0], nil, targetFd, nil, remaining, unix.SPLICE_F_MOVE|unix.SPLICE_F_NONBLOCK)
-		if err != nil {
-			if err == unix.EINTR {
-				continue
-			}
-			if err == unix.EAGAIN {
-				time.Sleep(time.Microsecond * 100)
-				continue
-			}
-			return fmt.Errorf("UDP splice write failed: %v", err)
-		}
-		remaining -= int(written)
-	}
-
-	return nil
-}
-
-// udpSpliceResponseBack 使用 splice 回传大型 UDP 响应
-func (c *Connection) udpSpliceResponseBack(udpConn *net.UDPConn, data []byte, size int, clientAddr *net.UDPAddr, packet *UDPPacket) error {
-	// 构建 SOCKS5 UDP 回复包头
-	replyPacket, err := c.buildUDPPacket(
-		"target", // 源地址（简化）
-		clientAddr.String(),
-		packet.DSTPORT,
-		uint16(clientAddr.Port),
-		data,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to build reply packet: %v", err)
-	}
-
-	// 直接发送（对于 UDP，splice 的收益相对较小）
-	_, err = udpConn.WriteToUDP(replyPacket, clientAddr)
-	return err
-}
-
-// udpSendClassicResponse 传统方式发送 UDP 响应
-func (c *Connection) udpSendClassicResponse(udpConn *net.UDPConn, data []byte, size int, clientAddr *net.UDPAddr, packet *UDPPacket) error {
-	// 构建回复包
-	replyPacket, err := c.buildUDPPacket(
-		"target", // 源地址（简化）
-		clientAddr.String(),
-		packet.DSTPORT,
-		uint16(clientAddr.Port),
-		data,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to build reply packet: %v", err)
-	}
-
-	// 发送回复给客户端
-	_, err = udpConn.WriteToUDP(replyPacket, clientAddr)
-	return err
-}
-
-// forwardUDPPacketClassic 传统 UDP 转发（降级方案）
-func (c *Connection) forwardUDPPacketClassic(udpConn *net.UDPConn, packet *UDPPacket, clientAddr *net.UDPAddr) error {
-	// 使用原来的转发逻辑
-	targetHost := string(packet.DSTADDR)
-	if packet.ATYPE == ATYPE_IPV4 {
-		ip := net.IP(packet.DSTADDR).String()
-		targetHost = ip
-	}
-
-	targetAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", targetHost, packet.DSTPORT))
-	if err != nil {
-		c.logger.Printf("Failed to resolve target UDP address: %v", err)
-		return err
-	}
-
-	// 检查是否已有会话
-	session := c.server.udpSessions.GetSession(clientAddr)
-	if session == nil {
-		session = c.server.udpSessions.AddSession(clientAddr, targetAddr, targetHost)
-	}
-
-	// 发送数据到目标
-	targetConn, err := net.DialUDP("udp", nil, targetAddr)
-	if err != nil {
-		c.logger.Printf("Failed to dial target UDP: %v", err)
-		return err
-	}
-	defer targetConn.Close()
-
-	_, err = targetConn.Write(packet.DATA)
-	if err != nil {
-		c.logger.Printf("Failed to send data to target: %v", err)
-		return err
-	}
-
-	// 设置超时
-	targetConn.SetReadDeadline(time.Now().Add(5 * time.Second))
-
-	// 接收响应
-	response := make([]byte, UDP_BUFFER_SIZE)
-	n, err := targetConn.Read(response)
-	if err != nil {
-		c.logger.Printf("Failed to read response from target: %v", err)
-		return err
-	}
-
-	// 构建回复包
-	replyPacket, err := c.buildUDPPacket(
-		targetAddr.String(),
-		clientAddr.String(),
-		packet.DSTPORT,
-		uint16(clientAddr.Port),
-		response[:n],
-	)
-	if err != nil {
-		c.logger.Printf("Failed to build reply packet: %v", err)
-		return err
-	}
-
-	// 发送回复给客户端
-	_, err = udpConn.WriteToUDP(replyPacket, clientAddr)
-	if err != nil {
-		c.logger.Printf("Failed to send reply to client: %v", err)
-		return err
-	}
-
-	// 更新会话活动时间
-	session.LastActivity = time.Now()
-
-	return nil
-}
-
 // sendReply 发送SOCKS5回复
 func (c *Connection) sendReply(rep byte, bindAddr string, bindPort int) error {
 	// 修复：为了兼容简单客户端（它们可能只处理IPv4响应），
@@ -1276,32 +1293,15 @@ type rateLimitedWriter struct {
 func (w *rateLimitedWriter) Write(p []byte) (int, error) {
 	n := len(p)
 	if w.rateLimiter != nil {
-		if !w.rateLimiter.CheckDownloadLimit(w.key, int64(n)) {
-			// 超过限速，丢弃数据（但实际上应该阻塞而不是丢弃）
-			// 这里使用简化的处理：超过限速时返回错误
-			return 0, fmt.Errorf("rate limit exceeded")
+		// 使用带超时的等待来处理限速
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := w.rateLimiter.WaitForDownload(ctx, w.key, int64(n))
+		cancel()
+		if err != nil {
+			return 0, err
 		}
 	}
 	return w.conn.Write(p)
-}
-
-// rateLimitedReader 带限速的读取器
-type rateLimitedReader struct {
-	conn        net.Conn
-	rateLimiter *RateLimiter
-	key         string
-}
-
-func (r *rateLimitedReader) Read(p []byte) (int, error) {
-	n, err := r.conn.Read(p)
-	if err == nil && r.rateLimiter != nil {
-		if !r.rateLimiter.CheckUploadLimit(r.key, int64(n)) {
-			// 超过限速，丢弃数据（但实际上应该阻塞）
-			// 这里使用简化的处理：超过限速时返回错误
-			return 0, fmt.Errorf("rate limit exceeded")
-		}
-	}
-	return n, err
 }
 
 func (c *Connection) relay() error {
@@ -1372,482 +1372,6 @@ func (c *Connection) relay() error {
 	return copyErr
 }
 
-// ============== 第二阶段优化：Linux splice 零拷贝 ==============
-
-// IsSpliceSupported 检查系统是否支持 splice
-func IsSpliceSupported() bool {
-	if runtime.GOOS != "linux" {
-		return false
-	}
-
-	// 尝试创建管道测试 splice 支持
-	var pipe [2]int
-	if err := unix.Pipe(pipe[:]); err != nil {
-		return false
-	}
-	defer unix.Close(pipe[0])
-	defer unix.Close(pipe[1])
-
-	// 尝试 splice 调用（空数据）
-	_, err := unix.Splice(pipe[0], nil, pipe[1], nil, 0, unix.SPLICE_F_NONBLOCK|unix.SPLICE_F_MOVE)
-	return err == nil || err == unix.EAGAIN || err == unix.EPIPE
-}
-
-// SpliceRelay 使用 splice 进行零拷贝数据转发
-func SpliceRelay(src, dst net.Conn) error {
-	// 类型断言获取 TCPConn
-	srcTCP, ok := src.(*net.TCPConn)
-	if !ok {
-		return fmt.Errorf("source connection is not TCP")
-	}
-
-	dstTCP, ok := dst.(*net.TCPConn)
-	if !ok {
-		return fmt.Errorf("destination connection is not TCP")
-	}
-
-	// 获取文件描述符
-	srcFile, err := srcTCP.File()
-	if err != nil {
-		return fmt.Errorf("failed to get source file descriptor: %v", err)
-	}
-	defer srcFile.Close()
-
-	dstFile, err := dstTCP.File()
-	if err != nil {
-		return fmt.Errorf("failed to get destination file descriptor: %v", err)
-	}
-	defer dstFile.Close()
-
-	srcFd := int(srcFile.Fd())
-	dstFd := int(dstFile.Fd())
-
-	// 创建管道作为内核缓冲区
-	var pipe [2]int
-	if err := unix.Pipe2(pipe[:], unix.O_NONBLOCK|unix.O_CLOEXEC); err != nil {
-		return fmt.Errorf("failed to create pipe: %v", err)
-	}
-	defer unix.Close(pipe[0])
-	defer unix.Close(pipe[1])
-
-	// 注释：无法设置管道大小，因为某些系统不支持
-	// if err := unix.Fcntl(uintptr(pipe[0]), unix.F_SETPIPE_SZ, 1024*1024); err != nil {
-	// 	// 如果失败，继续使用默认大小
-	// }
-
-	// 使用 splice 进行双向数据转发
-	var wg sync.WaitGroup
-	var forwardErr error
-	var reverseErr error
-
-	// src -> dst 转发
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		forwardErr = spliceCopy(srcFd, dstFd, pipe[1], pipe[0], "forward")
-	}()
-
-	// dst -> src 转发
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		reverseErr = spliceCopy(dstFd, srcFd, pipe[1], pipe[0], "reverse")
-	}()
-
-	// 等待双向转发完成
-	wg.Wait()
-
-	if forwardErr != nil && reverseErr != nil {
-		return fmt.Errorf("both directions failed: forward=%v, reverse=%v", forwardErr, reverseErr)
-	}
-	if forwardErr != nil {
-		return forwardErr
-	}
-	if reverseErr != nil {
-		return reverseErr
-	}
-
-	return nil
-}
-
-// spliceCopy 单向 splice 数据拷贝
-func spliceCopy(srcFd, dstFd, writePipe, readPipe int, direction string) error {
-	const bufferSize = 64 * 1024 // 64KB 缓冲区
-
-	for {
-		// 从源读取到管道
-		n, err := unix.Splice(srcFd, nil, writePipe, nil, bufferSize, unix.SPLICE_F_MOVE|unix.SPLICE_F_NONBLOCK)
-		if err != nil {
-			if err == unix.EINTR {
-				continue
-			}
-			if err == unix.EAGAIN || err == unix.EPIPE {
-				return nil // 正常结束
-			}
-			return fmt.Errorf("splice read failed (%s): %v", direction, err)
-		}
-		if n == 0 {
-			return nil // EOF
-		}
-
-		// 从管道写入到目标
-		remaining := int(n)
-		for remaining > 0 {
-			written, err := unix.Splice(readPipe, nil, dstFd, nil, remaining, unix.SPLICE_F_MOVE|unix.SPLICE_F_NONBLOCK)
-			if err != nil {
-				if err == unix.EINTR {
-					continue
-				}
-				if err == unix.EAGAIN {
-					// 简单的忙等待，生产环境应该使用 poll/epoll
-					time.Sleep(time.Microsecond * 100)
-					continue
-				}
-				return fmt.Errorf("splice write failed (%s): %v", direction, err)
-			}
-			if written == 0 {
-				break
-			}
-			remaining -= int(written)
-		}
-	}
-}
-
-// EnhancedRelay 增强版 relay，支持 splice 零拷贝
-func (c *Connection) EnhancedRelay() error {
-	// 检查是否支持 splice
-	if !IsSpliceSupported() {
-		c.logger.Printf("Splice not supported on this system, using io.Copy")
-		return c.relay()
-	}
-
-	// 确保连接在函数结束时被关闭
-	defer func() {
-		if c.clientConn != nil {
-			c.clientConn.Close()
-		}
-		if c.targetConn != nil {
-			c.targetConn.Close()
-		}
-	}()
-
-	// 检查连接类型是否支持 splice并提供详细信息
-	if !c.canUseSplice() {
-		// 提供详细的拒绝原因
-		clientAddr := c.clientConn.RemoteAddr().(*net.TCPAddr)
-		targetAddr := c.targetConn.RemoteAddr().(*net.TCPAddr)
-
-		clientIPv4 := clientAddr.IP.To4()
-		targetIPv4 := targetAddr.IP.To4()
-
-		if clientIPv4 != nil && targetIPv4 != nil {
-			c.logger.Printf("Connections should support IPv4 splice but failed test, using io.Copy")
-		} else if clientIPv4 == nil && targetIPv4 == nil {
-			c.logger.Printf("IPv6 splice not available on this system, using io.Copy")
-		} else {
-			c.logger.Printf("Mixed IPv4/IPv6 connections cannot use splice, using io.Copy")
-		}
-
-		return c.relay()
-	}
-
-	// 提供 splice 启用的详细信息
-	clientAddr := c.clientConn.RemoteAddr().(*net.TCPAddr)
-	targetAddr := c.targetConn.RemoteAddr().(*net.TCPAddr)
-
-	clientIPv4 := clientAddr.IP.To4()
-	if clientIPv4 != nil {
-		c.logger.Printf("IPv4 splice enabled: %s -> %s", clientAddr, targetAddr)
-	} else {
-		c.logger.Printf("IPv6 splice enabled: %s -> %s", clientAddr, targetAddr)
-	}
-
-	// 创建上下文管理连接生命周期
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// 使用 splice 进行零拷贝数据传输
-	var wg sync.WaitGroup
-	var copyErr error
-
-	// 启动双向 splice 转发
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err := SpliceRelay(c.clientConn, c.targetConn)
-		if err != nil {
-			copyErr = err
-			cancel()
-		}
-	}()
-
-	// 处理可能的代理切换（仅在需要时）
-	if c.server.smartProxyEnabled && c.server.isProbingPort(getPortFromAddr(c.targetAddr)) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			c.monitorAndHandleRST(ctx, &copyErr)
-		}()
-	}
-
-	// 等待完成
-	wg.Wait()
-
-	if copyErr != nil {
-		c.logger.Printf("Enhanced relay finished with error: %v", copyErr)
-	} else {
-		c.logger.Printf("Enhanced relay completed successfully")
-	}
-
-	return copyErr
-}
-
-// canUseSplice 检查连接是否适合使用 splice
-func (c *Connection) canUseSplice() bool {
-	// 检查连接是否为 TCP
-	_, ok := c.clientConn.(*net.TCPConn)
-	if !ok {
-		return false
-	}
-
-	_, ok = c.targetConn.(*net.TCPConn)
-	if !ok {
-		return false
-	}
-
-	clientAddr := c.clientConn.RemoteAddr().(*net.TCPAddr)
-	targetAddr := c.targetConn.RemoteAddr().(*net.TCPAddr)
-
-	// IPv4 splice 支持最稳定
-	clientIPv4 := clientAddr.IP.To4()
-	targetIPv4 := targetAddr.IP.To4()
-	if clientIPv4 != nil && targetIPv4 != nil {
-		return true
-	}
-
-	// IPv6 splice 支持（Linux 2.6.17+ 基本支持）
-	// 但需要更谨慎的检查，因为某些系统可能不支持
-	clientIPv6 := clientAddr.IP.To16()
-	targetIPv6 := targetAddr.IP.To16()
-	if clientIPv6 != nil && targetIPv6 != nil && clientIPv4 == nil && targetIPv4 == nil {
-		// 尝试测试 IPv6 splice 的实际可用性
-		return c.testIPv6SpliceSupport()
-	}
-
-	return false
-}
-
-// testIPv6SpliceSupport 测试 IPv6 splice 的实际支持情况
-func (c *Connection) testIPv6SpliceSupport() bool {
-	// 对于非 Linux 系统，直接返回 false
-	if runtime.GOOS != "linux" {
-		return false
-	}
-
-	// 简单测试：创建 IPv6 套接字对
-	var testPipe [2]int
-	if err := unix.Pipe2(testPipe[:], unix.O_NONBLOCK|unix.O_CLOEXEC); err != nil {
-		return false
-	}
-	defer unix.Close(testPipe[0])
-	defer unix.Close(testPipe[1])
-
-	// 测试 splice 调用是否支持
-	_, err := unix.Splice(testPipe[0], nil, testPipe[1], nil, 1, unix.SPLICE_F_MOVE|unix.SPLICE_F_NONBLOCK)
-
-	// 如果成功或者是预期的错误（EAGAIN/EPIPE），认为支持
-	return err == nil || err == unix.EAGAIN || err == unix.EPIPE || err == unix.EINTR
-}
-
-// monitorAndHandleRST 监控并处理 RST 重置（简化版，用于 splice 模式）
-func (c *Connection) monitorAndHandleRST(ctx context.Context, copyErr *error) {
-	// 在 splice 模式下，我们无法轻易检测 RST
-	// 这里提供基本的监控，主要依靠其他机制
-	select {
-	case <-ctx.Done():
-		return
-	case <-time.After(10 * time.Second):
-		// 超时检查
-		return
-	}
-}
-
-// getPortFromAddr 从地址中提取端口
-func getPortFromAddr(addr string) int {
-	if _, portStr, err := net.SplitHostPort(addr); err == nil {
-		if port, err := strconv.Atoi(portStr); err == nil {
-			return port
-		}
-	}
-	return 0
-}
-
-// ============== IPv6 splice 兼容性测试 ==============
-
-// TestSpliceCompatibility 测试 splice 兼容性（包括 IPv6）
-func TestSpliceCompatibility(logger *log.Logger) {
-	logger.Printf("=== Splice Compatibility Test ===")
-
-	// 基础系统支持测试
-	systemSupported := IsSpliceSupported()
-	if systemSupported {
-		logger.Printf("✅ System supports splice")
-	} else {
-		logger.Printf("❌ System does not support splice")
-		return
-	}
-
-	// IPv4 splice 测试
-	ipv4Supported := testIPv4SpliceSupport(logger)
-	if ipv4Supported {
-		logger.Printf("✅ IPv4 splice supported")
-	} else {
-		logger.Printf("❌ IPv4 splice not supported")
-	}
-
-	// IPv6 splice 测试
-	ipv6Supported := testIPv6SpliceSupport(logger)
-	if ipv6Supported {
-		logger.Printf("✅ IPv6 splice supported")
-	} else {
-		logger.Printf("❌ IPv6 splice not supported")
-	}
-
-	// 总结
-	logger.Printf("=== Test Summary ===")
-	logger.Printf("System Splice: %v", systemSupported)
-	logger.Printf("IPv4 Splice: %v", ipv4Supported)
-	logger.Printf("IPv6 Splice: %v", ipv6Supported)
-
-	if systemSupported && ipv4Supported {
-		logger.Printf("🎯 Ready for high-performance IPv4 connections")
-	}
-	if systemSupported && ipv6Supported {
-		logger.Printf("🎯 Ready for high-performance IPv6 connections")
-	}
-}
-
-// testIPv4SpliceSupport 测试 IPv4 splice 支持
-func testIPv4SpliceSupport(logger *log.Logger) bool {
-	if runtime.GOOS != "linux" {
-		return false
-	}
-
-	// 创建 IPv4 套接字
-	socket, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM, unix.IPPROTO_TCP)
-	if err != nil {
-		return false
-	}
-	defer unix.Close(socket)
-
-	// 创建测试管道
-	var pipe [2]int
-	if err := unix.Pipe2(pipe[:], unix.O_NONBLOCK|unix.O_CLOEXEC); err != nil {
-		return false
-	}
-	defer unix.Close(pipe[0])
-	defer unix.Close(pipe[1])
-
-	// 测试 splice
-	_, err = unix.Splice(socket, nil, pipe[1], nil, 1, unix.SPLICE_F_MOVE|unix.SPLICE_F_NONBLOCK)
-	return err == nil || err == unix.EAGAIN || err == unix.EPIPE || err == unix.EINTR
-}
-
-// testIPv6SpliceSupport 测试 IPv6 splice 支持
-func testIPv6SpliceSupport(logger *log.Logger) bool {
-	if runtime.GOOS != "linux" {
-		return false
-	}
-
-	// 创建 IPv6 套接字
-	socket, err := unix.Socket(unix.AF_INET6, unix.SOCK_STREAM, unix.IPPROTO_TCP)
-	if err != nil {
-		logger.Printf("IPv6 socket creation failed: %v", err)
-		return false
-	}
-	defer unix.Close(socket)
-
-	// 创建测试管道
-	var pipe [2]int
-	if err := unix.Pipe2(pipe[:], unix.O_NONBLOCK|unix.O_CLOEXEC); err != nil {
-		logger.Printf("IPv6 pipe creation failed: %v", err)
-		return false
-	}
-	defer unix.Close(pipe[0])
-	defer unix.Close(pipe[1])
-
-	// 测试 splice
-	_, err = unix.Splice(socket, nil, pipe[1], nil, 1, unix.SPLICE_F_MOVE|unix.SPLICE_F_NONBLOCK)
-
-	if err == nil {
-		logger.Printf("IPv6 splice test: SUCCESS")
-		return true
-	}
-
-	if err == unix.EAGAIN || err == unix.EPIPE || err == unix.EINTR {
-		logger.Printf("IPv6 splice test: EXPECTED ERROR %v", err)
-		return true
-	}
-
-	logger.Printf("IPv6 splice test: FAILED %v", err)
-	return false
-}
-
-
-// relayTargetToClient 处理目标到客户端的数据流
-func (c *Connection) relayTargetToClient(ctx context.Context, done chan error) {
-	buf := bufferPool.Get()
-	defer bufferPool.Put(buf)
-
-	for {
-		select {
-		case <-ctx.Done():
-			done <- nil
-			return
-		default:
-		}
-
-		n, err := c.targetConn.Read(buf)
-		if err != nil {
-			// 检查连接是否被重置（GFW干扰）
-			if opErr, ok := err.(*net.OpError); ok {
-				if syscallErr, ok := opErr.Err.(*os.SyscallError); ok {
-					if errno, ok := syscallErr.Err.(syscall.Errno); ok && errno == 104 {
-						if c.server.blacklist != nil && c.targetHost != "" {
-							c.logger.Printf("⚠️  Direct connection to %s reset by peer (errno 104), switching to proxy", c.targetHost)
-							c.server.blacklist.Add(c.targetHost)
-
-							// 尝试切换到代理连接
-							if proxyConn, proxyErr := c.switchToProxyAndReplay(); proxyErr == nil {
-								// 成功切换到代理，更新目标连接并继续读取
-								c.targetConn.Close()
-								c.targetConn = proxyConn
-								c.logger.Printf("✅ Successfully switched to proxy for %s", c.targetHost)
-								continue // 继续循环，从代理连接读取数据
-							} else {
-								c.logger.Printf("❌ Failed to switch to proxy: %v", proxyErr)
-							}
-						}
-					}
-				}
-			}
-			done <- err
-			return
-		}
-
-		// 应用下载限速
-		if !c.applyDownloadRateLimit(int64(n)) {
-			continue
-		}
-
-		// 转发数据到客户端
-		if _, err := c.clientConn.Write(buf[:n]); err != nil {
-			done <- err
-			return
-		}
-	}
-}
-
 // relayTargetToClientOptimized 优化版的目标到客户端数据流处理
 func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io.Writer, rateLimitKey string, copyErr *error) {
 	buf := bufferPool.Get()
@@ -1869,6 +1393,7 @@ func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io
 						if c.server.blacklist != nil && c.targetHost != "" {
 							c.logger.Printf("⚠️  Direct connection to %s reset by peer (errno 104), switching to proxy", c.targetHost)
 							c.server.blacklist.Add(c.targetHost)
+							c.logger.Printf("🚫 Added %s to blacklist", c.targetHost)
 
 							// 尝试切换到代理连接
 							if proxyConn, proxyErr := c.switchToProxyAndReplay(); proxyErr == nil {
@@ -1898,9 +1423,17 @@ func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io
 
 		// 使用高效的写入方式
 		if c.server.rateLimiter != nil {
-			// 应用下载限速
-			if !c.server.rateLimiter.CheckDownloadLimit(rateLimitKey, int64(n)) {
-				continue // 超过限速，丢弃数据
+			// 应用下载限速，使用带超时的等待
+			waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			err := c.server.rateLimiter.WaitForDownload(waitCtx, rateLimitKey, int64(n))
+			cancel()
+			if err != nil {
+				// 限速等待失败或超时
+				if err == context.DeadlineExceeded {
+					c.logger.Printf("Rate limit wait timeout for %s", rateLimitKey)
+				}
+				*copyErr = err
+				return
 			}
 		}
 
@@ -1961,26 +1494,6 @@ func (c *Connection) switchToProxyAndReplay() (net.Conn, error) {
 	return proxyConn, nil
 }
 
-// applyUploadRateLimit 应用上传限速
-func (c *Connection) applyUploadRateLimit(bytes int64) bool {
-	if c.server.rateLimiter == nil {
-		return true
-	}
-
-	rateLimitKey := c.getRateLimitKey()
-	return c.server.rateLimiter.CheckUploadLimit(rateLimitKey, bytes)
-}
-
-// applyDownloadRateLimit 应用下载限速
-func (c *Connection) applyDownloadRateLimit(bytes int64) bool {
-	if c.server.rateLimiter == nil {
-		return true
-	}
-
-	rateLimitKey := c.getRateLimitKey()
-	return c.server.rateLimiter.CheckDownloadLimit(rateLimitKey, bytes)
-}
-
 // getRateLimitKey 获取限速键，优先使用用户名
 func (c *Connection) getRateLimitKey() string {
 	if c.username != "" {
@@ -2012,16 +1525,6 @@ func (c *Connection) getAccessInfo() string {
 		return fmt.Sprintf("%s (detected: %s)", info, c.detectedHost)
 	}
 	return info
-}
-
-func (c *Connection) logConnectionChoice(connType string, proxyNode *ProxyNode, targetAddr string, targetPort uint16) {
-	accessInfo := c.getAccessInfo()
-	target := formatNetworkAddress(targetAddr, targetPort)
-	if connType == "proxy" && proxyNode != nil {
-		c.logger.Printf("OPTIMAL_PATH: %s -> %s via proxy %s (%s)", accessInfo, target, proxyNode.Name, proxyNode.Address)
-	} else {
-		c.logger.Printf("OPTIMAL_PATH: %s -> %s via %s", accessInfo, target, connType)
-	}
 }
 
 // handleAuthentication 处理SOCKS5认证

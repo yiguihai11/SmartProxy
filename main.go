@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log"
 	"os"
 	"os/signal"
@@ -10,6 +9,7 @@ import (
 	"smartproxy/socks5"
 	"smartproxy/web"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -92,34 +92,9 @@ func main() {
 	}
 
 	// 设置信号处理
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
-	// 启动SOCKS5服务器
-	go func() {
-		log.Printf("Starting SOCKS5 proxy server on port %d", port)
-		if err := server.Start(); err != nil {
-			log.Printf("SOCKS5 server error: %v", err)
-			cancel()
-		}
-	}()
-
-	// 启动Web服务器
-	go func() {
-		log.Printf("Starting Web interface on port %d", webPort)
-		log.Printf("Web interface: http://127.0.0.1:%d", webPort)
-		if err := webServer.Start(); err != nil {
-			log.Printf("Web server error: %v", err)
-		}
-	}()
-
-	// 启动DNS服务器
-	go func() {
-		log.Printf("Starting DNS server on port %d", dnsPort)
-		if err := dnsServer.Start(); err != nil {
-			log.Printf("DNS server error: %v", err)
-		}
-	}()
+	// 用于等待所有服务停止的WaitGroup
+	var wg sync.WaitGroup
 
 	log.Printf("Config file: %s", configPath)
 	log.Printf("使用方法: 设置代理为 127.0.0.1:%d", port)
@@ -135,28 +110,76 @@ func main() {
 	log.Printf("  ./smartproxy --config socks5-config.json 1080  # 使用自定义配置")
 	log.Printf("")
 
+	// 启动SOCKS5服务器
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		log.Printf("Starting SOCKS5 proxy server on port %d", port)
+		if err := server.Start(); err != nil {
+			log.Printf("SOCKS5 server error: %v", err)
+		}
+		log.Printf("SOCKS5 server stopped")
+	}()
+
+	// 启动Web服务器
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		log.Printf("Starting Web interface on port %d", webPort)
+		log.Printf("Web interface: http://127.0.0.1:%d", webPort)
+		if err := webServer.Start(); err != nil {
+			log.Printf("Web server error: %v", err)
+		}
+		log.Printf("Web server stopped")
+	}()
+
+	// 启动DNS服务器
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		log.Printf("Starting DNS server on port %d", dnsPort)
+		if err := dnsServer.Start(); err != nil {
+			log.Printf("DNS server error: %v", err)
+		}
+		log.Printf("DNS server stopped")
+	}()
+
 	// 等待中断信号
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	select {
-	case sig := <-sigChan:
-		log.Printf("Received signal %v, shutting down...", sig)
-	case <-ctx.Done():
-		log.Printf("Context cancelled, shutting down...")
+	sig := <-sigChan
+	log.Printf("\nReceived signal %v, shutting down gracefully...", sig)
+
+	// 优雅关闭各个服务
+	log.Printf("Stopping SOCKS5 server...")
+	if err := server.Stop(); err != nil {
+		log.Printf("Error stopping SOCKS5 server: %v", err)
 	}
 
-	// 优雅关闭
-	log.Printf("Stopping SOCKS5 server...")
-	server.Stop()
-
 	log.Printf("Stopping Web server...")
-	webServer.Stop()
+	if err := webServer.Stop(); err != nil {
+		log.Printf("Error stopping Web server: %v", err)
+	}
 
 	log.Printf("Stopping DNS server...")
 	if err := dnsServer.Stop(); err != nil {
 		log.Printf("Error stopping DNS server: %v", err)
 	}
 
-	log.Printf("SmartProxy stopped gracefully")
+	// 等待所有goroutine完成，最多等待10秒
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Printf("All services stopped gracefully")
+	case <-time.After(10 * time.Second):
+		log.Printf("Warning: Some services did not stop within timeout")
+	}
+
+	log.Printf("SmartProxy stopped")
 }

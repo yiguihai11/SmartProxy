@@ -17,6 +17,7 @@ type Config struct {
 		WebPort     int  `json:"web_port"`
 		DNSPort     int  `json:"dns_port"`
 		IPv6Enabled bool `json:"ipv6_enabled"`
+		IPv6Only    bool `json:"ipv6_only"`
 	} `json:"listener"`
 
 	SOCKS5 struct {
@@ -64,6 +65,21 @@ type Config struct {
 		EnableAccessLogs bool   `json:"enable_access_logs"`
 		LogFile          string `json:"log_file"`
 	} `json:"logging"`
+
+	NATTraversal struct {
+		Enabled          bool     `json:"enabled"`
+		Mode             string   `json:"mode"`          // "auto", "direct", "fullcone", "holepunch", "turn"
+		STUNServers      []string `json:"stun_servers"`  // STUN服务器列表
+		TURNServer       string   `json:"turn_server"`   // TURN服务器地址
+		TURNUsername     string   `json:"turn_username"` // TURN用户名
+		TURNPassword     string   `json:"turn_password"` // TURN密码
+		UPnPEnabled      bool     `json:"upnp_enabled"`  // 是否启用UPnP
+		PortMappingRange struct {
+			Start int `json:"start"` // 端口映射起始端口
+			End   int `json:"end"`   // 端口映射结束端口
+		} `json:"port_mapping_range"`
+		KeepAliveInterval int `json:"keepalive_interval"` // 保活间隔（秒）
+	} `json:"nat_traversal"`
 }
 
 // AuthUser 认证用户结构体
@@ -267,44 +283,6 @@ func (m *Manager) GetProxyNodes() []ProxyNode {
 	return nodes
 }
 
-// AddRouterRule 添加路由规则
-func (m *Manager) AddRouterRule(rule RouterRule) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	m.config.Router.Rules = append(m.config.Router.Rules, rule)
-	return nil
-}
-
-// UpdateRouterRule 更新路由规则
-func (m *Manager) UpdateRouterRule(index int, rule RouterRule) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	if index < 0 || index >= len(m.config.Router.Rules) {
-		return fmt.Errorf("router rule index out of bounds")
-	}
-
-	m.config.Router.Rules[index] = rule
-	return nil
-}
-
-// DeleteRouterRule 删除路由规则
-func (m *Manager) DeleteRouterRule(index int) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	if index < 0 || index >= len(m.config.Router.Rules) {
-		return fmt.Errorf("router rule index out of bounds")
-	}
-
-	m.config.Router.Rules = append(
-		m.config.Router.Rules[:index],
-		m.config.Router.Rules[index+1:]...,
-	)
-	return nil
-}
-
 // GetRouterRules 获取所有路由规则
 func (m *Manager) GetRouterRules() []RouterRule {
 	m.mutex.RLock()
@@ -313,84 +291,6 @@ func (m *Manager) GetRouterRules() []RouterRule {
 	rules := make([]RouterRule, len(m.config.Router.Rules))
 	copy(rules, m.config.Router.Rules)
 	return rules
-}
-
-// AddDNSHijackRule 添加DNS劫持规则
-func (m *Manager) AddDNSHijackRule(rule DNSHijackRule) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	m.config.DNS.HijackRules = append(m.config.DNS.HijackRules, rule)
-	return nil
-}
-
-// UpdateDNSHijackRule 更新DNS劫持规则
-func (m *Manager) UpdateDNSHijackRule(index int, rule DNSHijackRule) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	if index < 0 || index >= len(m.config.DNS.HijackRules) {
-		return fmt.Errorf("DNS hijack rule index out of bounds")
-	}
-
-	m.config.DNS.HijackRules[index] = rule
-	return nil
-}
-
-// DeleteDNSHijackRule 删除DNS劫持规则
-func (m *Manager) DeleteDNSHijackRule(index int) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	if index < 0 || index >= len(m.config.DNS.HijackRules) {
-		return fmt.Errorf("DNS hijack rule index out of bounds")
-	}
-
-	m.config.DNS.HijackRules = append(
-		m.config.DNS.HijackRules[:index],
-		m.config.DNS.HijackRules[index+1:]...,
-	)
-	return nil
-}
-
-// GetDNSHijackRules 获取所有DNS劫持规则
-func (m *Manager) GetDNSHijackRules() []DNSHijackRule {
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
-
-	rules := make([]DNSHijackRule, len(m.config.DNS.HijackRules))
-	copy(rules, m.config.DNS.HijackRules)
-	return rules
-}
-
-// UpdateLoggingConfig 更新日志配置
-func (m *Manager) UpdateLoggingConfig(level string, enableUserLogs, enableAccessLogs bool, logFile string) error {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-
-	m.config.Logging.Level = level
-	m.config.Logging.EnableUserLogs = enableUserLogs
-	m.config.Logging.EnableAccessLogs = enableAccessLogs
-	m.config.Logging.LogFile = logFile
-	return nil
-}
-
-// GetLoggingConfig 获取日志配置
-func (m *Manager) GetLoggingConfig() (level string, enableUserLogs, enableAccessLogs bool, logFile string) {
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
-
-	return m.config.Logging.Level,
-		m.config.Logging.EnableUserLogs,
-		m.config.Logging.EnableAccessLogs,
-		m.config.Logging.LogFile
-}
-
-// GetLastLoadTime 获取最后加载时间
-func (m *Manager) GetLastLoadTime() time.Time {
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
-	return m.lastLoad
 }
 
 // createDefaultConfig 创建默认配置文件
