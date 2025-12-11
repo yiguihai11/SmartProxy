@@ -410,7 +410,7 @@ type SOCKS5Server struct {
 	configPath          string
 	rateLimiter         *RateLimiter
 	authManager         *AuthManager
-	blacklist           *BlacklistManager
+	blockedItems        *BlockedItemsManager // Enhanced blocked items tracking
 	probingPorts        []int
 	smartProxyEnabled   bool
 	smartProxyTimeoutMs int
@@ -440,17 +440,14 @@ func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) 
 
 	// 读取配置以获取IPv6设置
 	ipv6Enabled := true
-	ipv6Only := false
 	if configData, err := ioutil.ReadFile(configPath); err == nil {
 		var config struct {
 			Listener struct {
 				IPv6Enabled bool `json:"ipv6_enabled"`
-				IPv6Only    bool `json:"ipv6_only"`
 			} `json:"listener"`
 		}
 		if json.Unmarshal(configData, &config) == nil {
 			ipv6Enabled = config.Listener.IPv6Enabled
-			ipv6Only = config.Listener.IPv6Only
 		}
 	}
 
@@ -459,15 +456,7 @@ func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) 
 	var err error
 
 	// 根据配置选择监听方式
-	if ipv6Only {
-		// 仅IPv6
-		tcpListener, err = net.ListenTCP("tcp6", &net.TCPAddr{Port: port})
-		if err != nil {
-			return nil, fmt.Errorf("failed to listen on IPv6 port %d: %v", port, err)
-		}
-		listener = tcpListener
-		logger.Printf("SOCKS5 server listening on IPv6 only")
-	} else if ipv6Enabled {
+	if ipv6Enabled {
 		// 首先尝试IPv6（dual stack）
 		tcpListener, err = net.ListenTCP("tcp6", &net.TCPAddr{Port: port})
 		if err != nil {
@@ -492,11 +481,12 @@ func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) 
 		logger.Printf("SOCKS5 server listening on IPv4 only")
 	}
 
-	// -- Begin: Load smart_proxy config and initialize blacklist --
-	var blacklist *BlacklistManager
+	// -- Begin: Load smart_proxy config and initialize blocked items --
+	var blockedItems *BlockedItemsManager
 	var smartProxyProbingPorts []int
 	var smartProxyEnabled bool
 	var smartProxyTimeoutMs int
+	var blockedItemsExpiryMinutes int = 360 // Default value
 
 	type smartProxyConfig struct {
 		SmartProxy struct {
@@ -519,7 +509,8 @@ func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) 
 				logger.Printf("SmartProxy is enabled.")
 				smartProxyEnabled = true
 				smartProxyTimeoutMs = spc.SmartProxy.TimeoutMs
-				blacklist = NewBlacklistManager(spc.SmartProxy.BlacklistExpiryMinutes, logger)
+				blockedItemsExpiryMinutes = spc.SmartProxy.BlacklistExpiryMinutes
+				blockedItems = NewBlockedItemsManager(blockedItemsExpiryMinutes, logger)
 
 				// 解析探测端口配置
 				smartProxyProbingPorts = spc.SmartProxy.ProbingPorts
@@ -533,7 +524,7 @@ func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) 
 			}
 		}
 	}
-	// -- End: Load smart_proxy config and initialize blacklist --
+	// -- End: Load smart_proxy config and initialize blocked items --
 
 	// 初始化路由器
 	router, err := NewRouter(configPath)
@@ -568,7 +559,7 @@ func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) 
 		configPath:          configPath,
 		rateLimiter:         rateLimiter,
 		authManager:         authManager,
-		blacklist:           blacklist,
+		blockedItems:        blockedItems,
 		probingPorts:        probingPorts,
 		smartProxyEnabled:   smartProxyEnabled,
 		smartProxyTimeoutMs: smartProxyTimeoutMs,
@@ -646,6 +637,11 @@ func (s *SOCKS5Server) Start() error {
 }
 
 func (s *SOCKS5Server) Stop() error {
+	// Stop the BlockedItemsManager cleanup routine
+	if s.blockedItems != nil {
+		s.blockedItems.Stop()
+	}
+
 	if s.listener != nil {
 		err := s.listener.Close()
 		s.wg.Wait()
@@ -980,6 +976,24 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 		target := formatNetworkAddress(targetAddr, targetPort)
 		conn, err := net.DialTimeout("tcp", target, 5*time.Second)
 		if err != nil {
+			// Check for connection reset (errno 104) which indicates GFW blocking
+			if errno, ok := err.(*net.OpError).Err.(*os.SyscallError); ok {
+				if syscallErr, ok := errno.Err.(syscall.Errno); ok && syscallErr == 104 {
+					c.logger.Printf("⚠️ Direct connection to %s reset by peer (errno 104), adding to blocked items", c.targetHost)
+					c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonRST)
+				} else {
+					// For other errors, check if it's a timeout
+					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+						c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonTimeout)
+					} else {
+						c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonConnectionRefused)
+					}
+				}
+			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonTimeout)
+			} else {
+				c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonConnectionRefused)
+			}
 			return nil, fmt.Errorf("direct connection failed: %v", err)
 		}
 
@@ -987,16 +1001,42 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 
 	default:
 		if c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
-			// 检查是否在黑名单中
-			if c.server.blacklist != nil {
-				if c.server.blacklist.IsBlacklisted(targetAddr) {
-					c.logger.Printf("🚫 %s is in blacklist, using proxy directly", targetAddr)
+			// 检查是否在屏蔽列表中
+			if c.server.blockedItems != nil {
+				// 优先使用detectedHost（域名），如果没有则使用targetHost，最后才使用targetAddr（IP）
+				key := c.detectedHost
+				if key == "" {
+					key = c.targetHost
+				}
+				if key == "" {
+					key = targetAddr
+				}
+				if c.server.blockedItems.IsBlocked(key) {
+					c.logger.Printf("🚫 %s is in blocked items, using proxy directly", key)
 				} else {
-					c.logger.Printf("✅ %s not in blacklist, trying direct connection", targetAddr)
+					c.logger.Printf("✅ %s not in blocked items, trying direct connection", key)
 					// 尝试直连
 					target := formatNetworkAddress(targetAddr, targetPort)
 					conn, err := net.DialTimeout("tcp", target, time.Duration(c.server.smartProxyTimeoutMs)*time.Millisecond)
 					if err != nil {
+						// Check for connection reset (errno 104) which indicates GFW blocking
+						if errno, ok := err.(*net.OpError).Err.(*os.SyscallError); ok {
+							if syscallErr, ok := errno.Err.(syscall.Errno); ok && syscallErr == 104 {
+								c.logger.Printf("⚠️ Direct connection to %s reset by peer (errno 104), adding to blocked items", c.targetHost)
+								c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonRST)
+							} else {
+								// For other errors, check if it's a timeout
+								if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+									c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonTimeout)
+								} else {
+									c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonConnectionRefused)
+								}
+							}
+						} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+							c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonTimeout)
+						} else {
+							c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonConnectionRefused)
+						}
 						return nil, fmt.Errorf("direct connection failed: %v", err)
 					}
 					return conn, nil
@@ -1390,10 +1430,31 @@ func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io
 			if opErr, ok := err.(*net.OpError); ok {
 				if syscallErr, ok := opErr.Err.(*os.SyscallError); ok {
 					if errno, ok := syscallErr.Err.(syscall.Errno); ok && errno == 104 {
-						if c.server.blacklist != nil && c.targetHost != "" {
+						if c.targetHost != "" {
 							c.logger.Printf("⚠️  Direct connection to %s reset by peer (errno 104), switching to proxy", c.targetHost)
-							c.server.blacklist.Add(c.targetHost)
-							c.logger.Printf("🚫 Added %s to blacklist", c.targetHost)
+
+							// 获取目标端口
+							_, portStr, err := net.SplitHostPort(c.targetAddr)
+							if err != nil {
+								// 如果没有端口，尝试从连接中获取
+								if c.targetConn != nil {
+									if remoteAddr := c.targetConn.RemoteAddr(); remoteAddr != nil {
+										_, portStr, _ = net.SplitHostPort(remoteAddr.String())
+									}
+								}
+							}
+
+							// 添加到BlockedItemsManager
+							var port uint16 = 80
+							if p, err := strconv.Atoi(portStr); err == nil {
+								port = uint16(p)
+							}
+							// 优先使用detectedHost（域名），如果为空则使用targetAddr（IP）
+							hostToAdd := c.detectedHost
+							if hostToAdd == "" {
+								hostToAdd = c.targetAddr
+							}
+							c.AddToBlockedItems(hostToAdd, c.targetAddr, port, FailureReasonRST)
 
 							// 尝试切换到代理连接
 							if proxyConn, proxyErr := c.switchToProxyAndReplay(); proxyErr == nil {
@@ -1413,6 +1474,39 @@ func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io
 							} else {
 								c.logger.Printf("❌ Failed to switch to proxy: %v", proxyErr)
 							}
+						}
+					}
+				} else {
+					// 处理其他类型的连接错误
+					if c.targetHost != "" {
+						// 获取目标端口
+						_, portStr, err := net.SplitHostPort(c.targetAddr)
+						if err != nil {
+							if c.targetConn != nil {
+								if remoteAddr := c.targetConn.RemoteAddr(); remoteAddr != nil {
+									_, portStr, _ = net.SplitHostPort(remoteAddr.String())
+								}
+							}
+						}
+
+						// 端口转换为uint16
+						var port uint16 = 80
+						if p, err := strconv.Atoi(portStr); err == nil {
+							port = uint16(p)
+						}
+
+						// 根据错误类型分类并添加到BlockedItemsManager
+						// 优先使用detectedHost（域名），如果为空则使用targetAddr（IP）
+						hostToAdd := c.detectedHost
+						if hostToAdd == "" {
+							hostToAdd = c.targetAddr
+						}
+						if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+							c.AddToBlockedItems(hostToAdd, c.targetAddr, port, FailureReasonTimeout)
+						} else if opErr, ok := err.(*net.OpError); ok && opErr.Timeout() {
+							c.AddToBlockedItems(hostToAdd, c.targetAddr, port, FailureReasonTimeout)
+						} else {
+							c.AddToBlockedItems(hostToAdd, c.targetAddr, port, FailureReasonConnectionRefused)
 						}
 					}
 				}
@@ -1629,9 +1723,34 @@ func (s *SOCKS5Server) GetRouter() *Router {
 	return s.router
 }
 
-// GetBlacklistManager 获取黑名单管理器实例
+// GetBlockedItemsManager 获取增强版黑名单管理器实例
+func (s *SOCKS5Server) GetBlockedItemsManager() *BlockedItemsManager {
+	return s.blockedItems
+}
+
+// GetBlacklistManager 返回nil，因为现在使用BlockedItemsManager
+// TODO: Web服务器需要更新以使用BlockedItemsManager
 func (s *SOCKS5Server) GetBlacklistManager() *BlacklistManager {
-	return s.blacklist
+	return nil
+}
+
+// AddToBlockedItems 添加域名或IP到BlockedItemsManager
+func (c *Connection) AddToBlockedItems(targetHost, targetAddr string, port uint16, failureReason FailureReason) {
+	if c.server.blockedItems == nil || targetHost == "" {
+		return
+	}
+
+	// 确定目标IP地址
+	targetIP := targetHost
+	// 如果targetHost是域名且targetAddr包含IP，使用targetAddr中的IP
+	if net.ParseIP(targetHost) == nil { // targetHost不是IP
+		if ip := net.ParseIP(targetAddr); ip != nil {
+			targetIP = targetAddr
+		}
+	}
+
+	// 添加到BlockedItemsManager
+	c.server.blockedItems.AddBlockedDomain(targetHost, fmt.Sprintf("%d", port), targetIP, failureReason)
 }
 
 // isProbingPort 检查端口是否在需要嗅探的列表中

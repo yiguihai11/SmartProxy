@@ -61,7 +61,7 @@ func main() {
 	// 获取Router实例，用于DNS模块
 	router := server.GetRouter()
 
-	// 获取BlacklistManager实例，用于Web API统计
+	// 获取BlacklistManager实例，用于Web API统计（现在返回nil，因为使用BlockedItemsManager）
 	blacklistManager := server.GetBlacklistManager()
 
 	// 创建Web服务器配置
@@ -73,8 +73,10 @@ func main() {
 	// 创建Web服务器，传入配置管理器
 	webServer := web.NewWebServer(mainCfgManager, webConfig, log.New(os.Stdout, "[Web] ", log.LstdFlags))
 
-	// 设置黑名单管理器到Web服务器
-	webServer.SetBlacklistManager(blacklistManager)
+	// 设置黑名单管理器到Web服务器（现在为空，因为使用BlockedItemsManager）
+	if blacklistManager != nil {
+		webServer.SetBlacklistManager(blacklistManager)
+	}
 
 	// 从配置文件读取DNS配置
 	cfg := mainCfgManager.GetConfig()
