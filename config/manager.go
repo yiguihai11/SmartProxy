@@ -17,7 +17,6 @@ type Config struct {
 		WebPort     int  `json:"web_port"`
 		DNSPort     int  `json:"dns_port"`
 		IPv6Enabled bool `json:"ipv6_enabled"`
-		IPv6Only    bool `json:"ipv6_only"`
 	} `json:"listener"`
 
 	SOCKS5 struct {
@@ -78,7 +77,10 @@ type Config struct {
 			Start int `json:"start"` // 端口映射起始端口
 			End   int `json:"end"`   // 端口映射结束端口
 		} `json:"port_mapping_range"`
-		KeepAliveInterval int `json:"keepalive_interval"` // 保活间隔（秒）
+		KeepAliveInterval int  `json:"keepalive_interval"` // 保活间隔（秒）
+		STUNTimeout      int  `json:"stun_timeout"`       // STUN请求超时时间（秒）
+		HolePunchCount   int  `json:"hole_punch_count"`   // 打洞包发送次数
+		HolePunchDelay   int  `json:"hole_punch_delay"`   // 打洞包间隔（毫秒）
 	} `json:"nat_traversal"`
 }
 
@@ -354,6 +356,22 @@ func (m *Manager) createDefaultConfig() error {
 	defaultConfig.Logging.EnableUserLogs = true
 	defaultConfig.Logging.EnableAccessLogs = true
 	defaultConfig.Logging.LogFile = "proxy.log"
+
+	// NAT穿透默认配置
+	defaultConfig.NATTraversal.Enabled = false
+	defaultConfig.NATTraversal.Mode = "auto"
+	defaultConfig.NATTraversal.STUNServers = []string{
+		"stun.l.google.com:19302",
+		"stun1.l.google.com:19302",
+		"stun2.l.google.com:19302",
+	}
+	defaultConfig.NATTraversal.UPnPEnabled = false
+	defaultConfig.NATTraversal.PortMappingRange.Start = 50000
+	defaultConfig.NATTraversal.PortMappingRange.End = 60000
+	defaultConfig.NATTraversal.KeepAliveInterval = 30
+	defaultConfig.NATTraversal.STUNTimeout = 5
+	defaultConfig.NATTraversal.HolePunchCount = 3
+	defaultConfig.NATTraversal.HolePunchDelay = 100
 
 	// 临时保存默认配置到临时文件
 	// 确保目录存在

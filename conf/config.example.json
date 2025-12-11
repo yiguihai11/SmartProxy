@@ -3,14 +3,17 @@
     "socks5_port": 1080,
     "web_port": 8080,
     "dns_port": 1053,
-    "ipv6_enabled": false
+    "ipv6_enabled": false,
+    "ipv6_only": false
   },
   "socks5": {
-    "enable_auth": false,
+    "max_connections": 1000,
+    "cleanup_interval": 300,
+    "enable_auth": true,
     "auth_users": [
       {
         "username": "admin",
-        "password": "password9527",
+        "password": "admin123",
         "enabled": true,
         "user_groups": ["admin"],
         "rate_limit": {
@@ -211,10 +214,6 @@
       }
     ]
   },
-  "connection_settings": {
-    "tcp_timeout_seconds": 60,
-    "udp_timeout_seconds": 300
-  },
   "nat_traversal": {
     "enabled": false,
     "mode": "auto",
@@ -234,6 +233,10 @@
     "stun_timeout": 5,
     "hole_punch_count": 3,
     "hole_punch_delay": 100
+  },
+  "connection_settings": {
+    "tcp_timeout_seconds": 60,
+    "udp_timeout_seconds": 300
   },
   "logging": {
     "level": "info",

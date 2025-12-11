@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"smartproxy/config"
@@ -9,6 +10,7 @@ import (
 	"smartproxy/socks5"
 	"smartproxy/web"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -74,41 +76,57 @@ func main() {
 	// 设置黑名单管理器到Web服务器
 	webServer.SetBlacklistManager(blacklistManager)
 
-	// 创建DNS服务器配置（router为nil，将使用默认路由）
+	// 从配置文件读取DNS配置
+	cfg := mainCfgManager.GetConfig()
+	var cnServers []string
+	var foreignServers []string
+
+	if cfg.DNS.Enabled {
+		// 从配置文件读取DNS服务器
+		if group, exists := cfg.DNS.Groups["cn"]; exists {
+			cnServers = group
+		}
+		if group, exists := cfg.DNS.Groups["foreign"]; exists {
+			foreignServers = group
+		}
+	}
+
+	// 如果配置文件中没有设置，使用默认值
+	if len(cnServers) == 0 {
+		cnServers = []string{"223.5.5.5:53", "119.29.29.29:53"}
+	}
+	if len(foreignServers) == 0 {
+		foreignServers = []string{"8.8.8.8:53", "1.1.1.1:53"}
+	}
+
+	// 创建DNS服务器配置
 	dnsConfig := &dns.Config{
-		CNServers:       []string{"223.5.5.5:53", "119.29.29.29:53"},
-		ForeignServers:  []string{"8.8.8.8:53", "1.1.1.1:53"},
-		CacheSize:       2000,
-		CleanupInterval: 60 * time.Second,
-		HijackRules:     []dns.HijackRule{},
+		CNServers:       cnServers,
+		ForeignServers:  foreignServers,
+		CacheSize:       cfg.DNS.Cache.MaxSize,
+		CleanupInterval: time.Duration(cfg.DNS.Cache.CleanupInterval) * time.Second,
+		HijackRules:     convertHijackRules(cfg.DNS.HijackRules),
 		ProxyNodes:      []dns.ProxyNode{},
 	}
 
 	dnsServer := dns.NewSmartDNSServer(dnsConfig, dnsPort, log.New(os.Stdout, "[DNS] ", log.LstdFlags), router)
 
-	// 如果web服务器启动成功，可以在这里添加额外的初始化逻辑
-	if webServer != nil {
-		log.Printf("Web server initialized successfully")
-	}
+	// Web server initialized successfully
 
 	// 设置信号处理
 
 	// 用于等待所有服务停止的WaitGroup
 	var wg sync.WaitGroup
 
+	// 获取本地IP地址用于显示
+	localIP := getLocalIP()
+
+	// 使用配置文件中的端口，其他服务端口也由配置文件决定
 	log.Printf("Config file: %s", configPath)
-	log.Printf("使用方法: 设置代理为 127.0.0.1:%d", port)
-	log.Printf("DNS服务器: 127.0.0.1:%d", dnsPort)
-	log.Printf("")
-	log.Printf("服务已启动:")
-	log.Printf("  SOCKS5代理: 127.0.0.1:%d", port)
-	log.Printf("  DNS服务: 127.0.0.1:%d", dnsPort)
-	log.Printf("  Web管理: http://127.0.0.1:%d", webPort)
-	log.Printf("")
-	log.Printf("示例用法:")
-	log.Printf("  ./smartproxy 1080                    # 使用默认配置")
-	log.Printf("  ./smartproxy --config socks5-config.json 1080  # 使用自定义配置")
-	log.Printf("")
+	log.Printf("Services started:")
+	log.Printf("  SOCKS5 proxy: %s:%d", localIP, port)
+	log.Printf("  DNS server:   %s:%d", localIP, dnsPort)
+	log.Printf("  Web UI:       http://%s:%d", localIP, webPort)
 
 	// 启动SOCKS5服务器
 	wg.Add(1)
@@ -182,4 +200,54 @@ func main() {
 	}
 
 	log.Printf("SmartProxy stopped")
+}
+
+// getLocalIP 获取本地IP地址
+func getLocalIP() string {
+	// 尝试创建UDP连接获取本地IP
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		// 如果失败，尝试其他方法
+		if addrs, err := net.InterfaceAddrs(); err == nil {
+			for _, addr := range addrs {
+				if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
+					if ipNet.IP.To4() != nil {
+						return ipNet.IP.String()
+					}
+				}
+			}
+		}
+		return "127.0.0.1"
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	return localAddr.IP.String()
+}
+
+// convertHijackRules 转换配置文件中的劫持规则到DNS模块格式
+func convertHijackRules(rules []config.DNSHijackRule) []dns.HijackRule {
+	var hijackRules []dns.HijackRule
+	for _, rule := range rules {
+		// 检查target是否为IP地址（屏蔽）或服务器地址（转发）
+		if strings.HasSuffix(rule.Target, ":53") || net.ParseIP(rule.Target) != nil {
+			hijackRules = append(hijackRules, dns.HijackRule{
+				Pattern: rule.Pattern,
+				Target:  rule.Target,
+			})
+		} else if rule.Target == "0.0.0.0" {
+			// 屏蔽到本地
+			hijackRules = append(hijackRules, dns.HijackRule{
+				Pattern: rule.Pattern,
+				Target:  rule.Target,
+			})
+		} else {
+			// 假设是域名，添加默认端口53
+			hijackRules = append(hijackRules, dns.HijackRule{
+				Pattern: rule.Pattern,
+				Target:  rule.Target + ":53",
+			})
+		}
+	}
+	return hijackRules
 }

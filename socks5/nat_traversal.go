@@ -36,7 +36,10 @@ type NATConfig struct {
 		Start int `json:"start"` // 端口映射起始端口
 		End   int `json:"end"`   // 端口映射结束端口
 	} `json:"port_mapping_range"`
-	KeepAliveInterval int `json:"keepalive_interval"` // 保活间隔（秒）
+	KeepAliveInterval int  `json:"keepalive_interval"` // 保活间隔（秒）
+	STUNTimeout      int  `json:"stun_timeout"`       // STUN请求超时时间（秒）
+	HolePunchCount   int  `json:"hole_punch_count"`   // 打洞包发送次数
+	HolePunchDelay   int  `json:"hole_punch_delay"`   // 打洞包间隔（毫秒）
 }
 
 // NATTraversal NAT穿透管理器
@@ -96,14 +99,18 @@ func NewNATTraversal(configPath string, logger *log.Logger) *NATTraversal {
 // loadNATConfig 加载NAT配置
 func loadNATConfig(configPath string, logger *log.Logger) *NATConfig {
 	config := &NATConfig{
-		Enabled: true,
+		Enabled: false, // 默认禁用
 		Mode:    "auto",
 		STUNServers: []string{
 			"stun.l.google.com:19302",
 			"stun1.l.google.com:19302",
 			"stun2.l.google.com:19302",
 		},
-		UPnPEnabled: false,
+		UPnPEnabled:        false,
+		KeepAliveInterval: 30, // 30秒保活
+		STUNTimeout:       5,  // 5秒超时
+		HolePunchCount:    3,  // 发送3个打洞包
+		HolePunchDelay:    100, // 100毫秒间隔
 	}
 
 	// 尝试从主配置文件读取
@@ -220,7 +227,11 @@ func (nt *NATTraversal) querySTUNServer(server string) (string, int, error) {
 	}
 
 	// 设置超时
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	timeout := time.Duration(nt.config.STUNTimeout) * time.Second
+	if timeout == 0 {
+		timeout = 5 * time.Second // 默认5秒
+	}
+	conn.SetReadDeadline(time.Now().Add(timeout))
 
 	// 接收响应
 	response := make([]byte, 1024)
@@ -279,12 +290,21 @@ func (nt *NATTraversal) PerformUDPHolePunching(targetIP string, targetPort int, 
 	}
 
 	// 发送多个打洞包提高成功率
-	for i := 0; i < 3; i++ {
+	punchCount := nt.config.HolePunchCount
+	if punchCount <= 0 {
+		punchCount = 3 // 默认3次
+	}
+	punchDelay := time.Duration(nt.config.HolePunchDelay) * time.Millisecond
+	if punchDelay == 0 {
+		punchDelay = 100 * time.Millisecond // 默认100毫秒
+	}
+
+	for i := 0; i < punchCount; i++ {
 		_, err = conn.WriteToUDP([]byte("HOLE_PUNCH"), targetAddr)
 		if err != nil {
 			return err
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(punchDelay)
 	}
 
 	nt.logger.Printf("UDP打洞完成")

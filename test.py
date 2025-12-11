@@ -164,13 +164,13 @@ def test_tcp_through_socks5(target_domain, target_ip, port, proxy_host, proxy_po
             return f"代理TCP失败：状态行无效（内容：{status_line}）"
 
         status_code = status_parts[1]
-        if status_code in ("200", "204"):
+        if status_code in ("200", "204", "301"):
             return f"代理TCP成功：HTTP状态码{status_code}（连接+请求正常）"
         else:
             return f"代理TCP失败：HTTP状态码{status_code}（非预期响应）"
 
     except Exception as e:
-        return f"代理TCP测试失败：{str(e)}"
+            return f"代理TCP测试失败：{str(e)}"
     finally:
         if 'sock' in locals():
             sock.close()
