@@ -2,14 +2,16 @@ package socks5
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net"
 	"os"
+	"smartproxy/logger"
 	"strconv"
 	"strings"
 	"sync"
@@ -59,10 +61,36 @@ func formatNetworkAddress(addr string, port uint16) string {
 	return fmt.Sprintf("%s:%d", addr, port)
 }
 
-// Logger 日志接口
-type Logger interface {
-	Printf(format string, v ...interface{})
-	Print(v ...interface{})
+// generateSessionID generates a unique session ID for SOCKS5 connections
+func generateSessionID() string {
+	// Generate 8 random bytes
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to timestamp-based ID if random generation fails
+		return fmt.Sprintf("sess-%d", time.Now().UnixNano())
+	}
+	// Format as hex with "sess-" prefix
+	return "sess-" + hex.EncodeToString(b)
+}
+
+// logInfo logs with session ID
+func (c *Connection) logInfo(format string, args ...interface{}) {
+	c.logger.WithField("session_id", c.sessionID).Info(format, args...)
+}
+
+// logWarn logs with session ID
+func (c *Connection) logWarn(format string, args ...interface{}) {
+	c.logger.WithField("session_id", c.sessionID).Warn(format, args...)
+}
+
+// logError logs with session ID
+func (c *Connection) logError(format string, args ...interface{}) {
+	c.logger.WithField("session_id", c.sessionID).Error(format, args...)
+}
+
+// logDebug logs with session ID
+func (c *Connection) logDebug(format string, args ...interface{}) {
+	c.logger.WithField("session_id", c.sessionID).Debug(format, args...)
 }
 
 // PrependingConn is a net.Conn that allows prepending data to the read stream.
@@ -111,7 +139,7 @@ type UDPPacket struct {
 type UDPSessionManager struct {
 	sessions    map[string]*UDPSession // key: clientAddr
 	mutex       sync.RWMutex
-	logger      *log.Logger
+	logger      *logger.SlogLogger
 	cleanupTick *time.Ticker
 	// Full Cone NAT 支持
 	fullConeMap   map[string]*FullConeMapping // key: internalAddr -> mapping
@@ -129,7 +157,7 @@ type FullConeMapping struct {
 }
 
 // NewUDPSessionManager 创建UDP会话管理器
-func NewUDPSessionManager(logger *log.Logger) *UDPSessionManager {
+func NewUDPSessionManager(logger *logger.SlogLogger) *UDPSessionManager {
 	manager := &UDPSessionManager{
 		sessions:    make(map[string]*UDPSession),
 		fullConeMap: make(map[string]*FullConeMapping),
@@ -158,7 +186,7 @@ func (m *UDPSessionManager) AddSession(clientAddr, targetAddr *net.UDPAddr, targ
 
 	key := clientAddr.String()
 	m.sessions[key] = session
-	m.logger.Printf("UDP session added: %s -> %s (%s)", clientAddr, targetAddr, targetHost)
+	m.logger.Info("UDP session added: %s -> %s (%s)", clientAddr, targetAddr, targetHost)
 
 	return session
 }
@@ -179,7 +207,7 @@ func (m *UDPSessionManager) RemoveSession(clientAddr *net.UDPAddr) {
 	key := clientAddr.String()
 	if _, exists := m.sessions[key]; exists {
 		delete(m.sessions, key)
-		m.logger.Printf("UDP session removed: %s", clientAddr)
+		m.logger.Info("UDP session removed: %s", clientAddr)
 	}
 }
 
@@ -201,7 +229,7 @@ func (m *UDPSessionManager) cleanupExpiredSessions() {
 		for _, key := range expiredSessions {
 			if session := m.sessions[key]; session != nil {
 				delete(m.sessions, key)
-				m.logger.Printf("UDP session expired: %s -> %s", session.ClientAddr, session.TargetAddr)
+				m.logger.Info("UDP session expired: %s -> %s", session.ClientAddr, session.TargetAddr)
 			}
 		}
 		m.mutex.Unlock()
@@ -220,7 +248,7 @@ func (m *UDPSessionManager) cleanupExpiredSessions() {
 		for _, key := range expiredMappings {
 			if mapping := m.fullConeMap[key]; mapping != nil {
 				delete(m.fullConeMap, key)
-				m.logger.Printf("Full Cone mapping expired: %s -> external port %d", mapping.InternalAddr, mapping.ExternalPort)
+				m.logger.Info("Full Cone mapping expired: %s -> external port %d", mapping.InternalAddr, mapping.ExternalPort)
 			}
 		}
 		m.fullConeMutex.Unlock()
@@ -272,7 +300,7 @@ func (m *UDPSessionManager) CreateFullConeMapping(internalAddr *net.UDPAddr) (*F
 	}
 
 	m.fullConeMap[internalAddr.String()] = mapping
-	m.logger.Printf("Full Cone mapping created: %s -> external port %d", internalAddr, extPort)
+	m.logger.Info("Full Cone mapping created: %s -> external port %d", internalAddr, extPort)
 
 	// 启动监听协程
 	go m.handleFullConeTraffic(mapping)
@@ -301,7 +329,7 @@ func (m *UDPSessionManager) handleFullConeTraffic(mapping *FullConeMapping) {
 	// 创建连接到内部客户端的UDP连接
 	internalConn, err := net.DialUDP("udp", nil, mapping.InternalAddr)
 	if err != nil {
-		m.logger.Printf("Failed to dial internal client: %v", err)
+		m.logger.Info("Failed to dial internal client: %v", err)
 		return
 	}
 	defer internalConn.Close()
@@ -313,10 +341,10 @@ func (m *UDPSessionManager) handleFullConeTraffic(mapping *FullConeMapping) {
 		n, senderAddr, err := mapping.ExternalConn.ReadFromUDP(buffer)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				m.logger.Printf("Full Cone mapping timeout for %s", mapping.InternalAddr)
+				m.logger.Info("Full Cone mapping timeout for %s", mapping.InternalAddr)
 				return
 			}
-			m.logger.Printf("Full Cone read error: %v", err)
+			m.logger.Info("Full Cone read error: %v", err)
 			continue
 		}
 
@@ -330,14 +358,14 @@ func (m *UDPSessionManager) handleFullConeTraffic(mapping *FullConeMapping) {
 		// 构建SOCKS5响应包发送回内部客户端
 		responsePacket, err := m.buildFullConeResponsePacket(senderAddr, buffer[:n])
 		if err != nil {
-			m.logger.Printf("Failed to build response packet: %v", err)
+			m.logger.Info("Failed to build response packet: %v", err)
 			continue
 		}
 
 		// 发送回内部客户端
 		_, err = internalConn.Write(responsePacket)
 		if err != nil {
-			m.logger.Printf("Failed to send response to internal client: %v", err)
+			m.logger.Info("Failed to send response to internal client: %v", err)
 			continue
 		}
 	}
@@ -394,7 +422,7 @@ func (m *UDPSessionManager) SendViaFullCone(internalAddr *net.UDPAddr, targetAdd
 		return fmt.Errorf("failed to send via Full Cone: %v", err)
 	}
 
-	m.logger.Printf("Full Cone send: %s -> %s (%d bytes)", internalAddr, targetAddr, len(data))
+	m.logger.Info("Full Cone send: %s -> %s (%d bytes)", internalAddr, targetAddr, len(data))
 	return nil
 }
 
@@ -404,7 +432,7 @@ type SOCKS5Server struct {
 	tcpListener         *net.TCPListener // TCP监听器，用于SetDeadline
 	udpListener         *net.UDPConn
 	wg                  sync.WaitGroup
-	logger              *log.Logger
+	logger              *logger.SlogLogger
 	router              *Router
 	detector            *TrafficDetector
 	configPath          string
@@ -421,8 +449,9 @@ type SOCKS5Server struct {
 type Connection struct {
 	clientConn   net.Conn
 	targetConn   net.Conn
-	logger       *log.Logger
+	logger       *logger.SlogLogger
 	server       *SOCKS5Server
+	sessionID    string // 会话ID，用于追踪连接
 	username     string // 认证用户名，空表示未认证
 	targetAddr   string // 目标地址 (host:port)
 	targetHost   string // 目标主机名
@@ -436,7 +465,7 @@ type Connection struct {
 
 func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) (*SOCKS5Server, error) {
 	// 创建 logger
-	logger := log.New(os.Stdout, "[SOCKS5] ", log.LstdFlags)
+	logger := logger.WithPrefix("[SOCKS5]")
 
 	// 读取配置以获取IPv6设置
 	ipv6Enabled := true
@@ -461,14 +490,14 @@ func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) 
 		tcpListener, err = net.ListenTCP("tcp6", &net.TCPAddr{Port: port})
 		if err != nil {
 			// IPv6失败，回退到IPv4
-			logger.Printf("IPv6 listen failed, trying IPv4 only: %v", err)
+			logger.Warn("IPv6 listen failed, trying IPv4 only: %v", err)
 			tcpListener, err = net.ListenTCP("tcp", &net.TCPAddr{Port: port})
 			if err != nil {
 				return nil, fmt.Errorf("failed to listen on port %d: %v", port, err)
 			}
-			logger.Printf("SOCKS5 server listening on IPv4 only")
+			logger.Info("SOCKS5 server listening on IPv4 only")
 		} else {
-			logger.Printf("SOCKS5 server listening on IPv6 (dual-stack)")
+			logger.Info("SOCKS5 server listening on IPv6 (dual-stack)")
 		}
 		listener = tcpListener
 	} else {
@@ -478,7 +507,7 @@ func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) 
 			return nil, fmt.Errorf("failed to listen on IPv4 port %d: %v", port, err)
 		}
 		listener = tcpListener
-		logger.Printf("SOCKS5 server listening on IPv4 only")
+		logger.Info("SOCKS5 server listening on IPv4 only")
 	}
 
 	// -- Begin: Load smart_proxy config and initialize blocked items --
@@ -499,14 +528,14 @@ func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) 
 
 	configData, err := ioutil.ReadFile(configPath)
 	if err != nil {
-		logger.Printf("Warning: Could not read config file at %s for smart_proxy settings: %v", configPath, err)
+		logger.Warn("Could not read config file at %s for smart_proxy settings: %v", configPath, err)
 	} else {
 		var spc smartProxyConfig
 		if err := json.Unmarshal(configData, &spc); err != nil {
-			logger.Printf("Warning: Could not parse smart_proxy settings from config: %v", err)
+			logger.Warn("Could not parse smart_proxy settings from config: %v", err)
 		} else {
 			if spc.SmartProxy.Enabled {
-				logger.Printf("SmartProxy is enabled.")
+				logger.Info("SmartProxy is enabled.")
 				smartProxyEnabled = true
 				smartProxyTimeoutMs = spc.SmartProxy.TimeoutMs
 				blockedItemsExpiryMinutes = spc.SmartProxy.BlacklistExpiryMinutes
@@ -520,7 +549,7 @@ func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) 
 					probingPorts = smartProxyProbingPorts
 				}
 			} else {
-				logger.Printf("SmartProxy is disabled.")
+				logger.Info("SmartProxy is disabled.")
 			}
 		}
 	}
@@ -529,7 +558,7 @@ func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) 
 	// 初始化路由器
 	router, err := NewRouter(configPath)
 	if err != nil {
-		logger.Printf("Failed to initialize router: %v", err)
+		logger.Error("Failed to initialize router: %v", err)
 		// 继续运行，但没有路由功能
 		router = nil
 	}
@@ -570,12 +599,12 @@ func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) 
 	// 打印系统统计信息
 	if router != nil {
 		stats := router.GetStats()
-		logger.Printf("Router loaded: %d rules, %d IP rules, %d China rules (IPv4: %d nodes, IPv6: %d nodes)",
+		logger.Info("Router loaded: %d rules, %d IP rules, %d China rules (IPv4: %d nodes, IPv6: %d nodes)",
 			stats["total_rules"], stats["ip_rules"], stats["china_rules"], stats["ipv4_nodes"], stats["ipv6_nodes"])
-		logger.Printf("IPv4/IPv6 support: ✓, Actions - Direct: %d, Proxy: %d, Block: %d",
+		logger.Info("IPv4/IPv6 support: ✓, Actions - Direct: %d, Proxy: %d, Block: %d",
 			stats["allow"], stats["deny"], stats["block"])
 	}
-	logger.Printf("Traffic detector: ✓ (HTTP/HTTPS/SNI detection)")
+	logger.Info("Traffic detector: ✓ (HTTP/HTTPS/SNI detection)")
 
 	return server, nil
 }
@@ -592,7 +621,7 @@ func isClosedConnectionError(err error) bool {
 }
 
 func (s *SOCKS5Server) Start() error {
-	s.logger.Printf("SOCKS5 server started on %s", s.listener.Addr())
+	s.logger.Info("SOCKS5 server started on %s", s.listener.Addr())
 
 	// 使用select循环来处理连接，避免永久阻塞
 	for {
@@ -618,11 +647,11 @@ func (s *SOCKS5Server) Start() error {
 			// 检查是否是关闭信号导致的错误
 			if opErr, ok := err.(*net.OpError); ok && opErr.Op == "accept" {
 				if isClosedConnectionError(opErr.Err) || strings.Contains(err.Error(), "use of closed network connection") {
-					s.logger.Printf("Server shutting down...")
+					s.logger.Info("Server shutting down...")
 					return nil
 				}
 			}
-			s.logger.Printf("Failed to accept connection: %v", err)
+			s.logger.Error("Failed to accept connection: %v", err)
 			// 避免CPU占用过高
 			time.Sleep(100 * time.Millisecond)
 			continue
@@ -660,11 +689,13 @@ func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 	conn.clientConn = clientConn
 	conn.logger = s.logger
 	conn.server = s
+	conn.sessionID = generateSessionID() // 生成会话ID
 
 	// 确保连接对象在函数结束时被重置并放回池中
 	defer func() {
 		conn.clientConn = nil
 		conn.targetConn = nil
+		conn.sessionID = ""
 		conn.username = ""
 		conn.targetAddr = ""
 		conn.targetHost = ""
@@ -673,11 +704,11 @@ func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 		connectionPool.Put(conn)
 	}()
 
-	s.logger.Printf("New connection from %s", clientConn.RemoteAddr())
+	s.logger.Info("New connection from %s", clientConn.RemoteAddr())
 
 	// 认证协商
 	if err := conn.handleAuthentication(); err != nil {
-		s.logger.Printf("Authentication failed: %v", err)
+		s.logger.WithField("session_id", conn.sessionID).Warn("Authentication failed: %v", err)
 		return
 	}
 
@@ -689,14 +720,14 @@ func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 		}
 
 		if err := s.authManager.CheckConnectionLimit(conn.username, clientIP); err != nil {
-			s.logger.Printf("Connection limit check failed for %s: %v", conn.username, err)
+			s.logger.Warn("Connection limit check failed for %s: %v", conn.username, err)
 			return
 		}
 	}
 
 	// 处理连接请求
 	if err := conn.handleRequest(); err != nil {
-		s.logger.Printf("Request failed: %v", err)
+		s.logger.Error("Request failed: %v", err)
 		return
 	}
 
@@ -726,11 +757,23 @@ func (c *Connection) handleRequest() error {
 	case CMD_CONNECT:
 		return c.handleConnectRequest(atype)
 	case CMD_BIND:
-		return c.sendReply(REP_COMMAND_NOT_SUPPORTED, "127.0.0.1", 1080)
+		// 根据客户端连接类型返回适当的错误地址
+		clientAddr := c.clientConn.RemoteAddr().(*net.TCPAddr)
+		if clientAddr.IP.To4() != nil {
+			return c.sendReply(REP_COMMAND_NOT_SUPPORTED, "127.0.0.1", 1080)
+		} else {
+			return c.sendReply(REP_COMMAND_NOT_SUPPORTED, "::1", 1080)
+		}
 	case CMD_UDP_ASSOC:
 		return c.handleUDPAssociateRequest(atype)
 	default:
-		return c.sendReply(REP_COMMAND_NOT_SUPPORTED, "127.0.1", 1080)
+		// 根据客户端连接类型返回适当的错误地址
+		clientAddr := c.clientConn.RemoteAddr().(*net.TCPAddr)
+		if clientAddr.IP.To4() != nil {
+			return c.sendReply(REP_COMMAND_NOT_SUPPORTED, "127.0.0.1", 1080)
+		} else {
+			return c.sendReply(REP_COMMAND_NOT_SUPPORTED, "::1", 1080)
+		}
 	}
 }
 
@@ -748,12 +791,12 @@ func (c *Connection) handleConnectRequest(atype byte) error {
 	} else {
 		c.targetHost = targetAddr
 	}
-	c.logger.Printf("Connection request: %s -> %s (%s)", c.getClientInfo(), c.targetAddr, c.targetHost)
+	c.logInfo("Connection request: %s -> %s (%s)", c.getClientInfo(), c.targetAddr, c.targetHost)
 
 	// 3. 核心逻辑：检测SNI并根据路由规则建立连接
 	finalTargetConn, err := c.detectAndConnect(targetAddr, targetPort)
 	if err != nil {
-		c.logger.Printf("Failed to establish connection for %s: %v", c.getClientInfo(), err)
+		c.logError("Failed to establish connection for %s: %v", c.getClientInfo(), err)
 		// Since a fake success reply was already sent, we can't send a SOCKS error.
 		// We just close the connection by returning.
 		return nil
@@ -762,7 +805,7 @@ func (c *Connection) handleConnectRequest(atype byte) error {
 	c.targetConn = finalTargetConn
 
 	// 4. 开始双向转发数据
-	c.logger.Printf("CONNECTED: %s -> %s", c.getAccessInfo(), c.targetAddr)
+	c.logInfo("CONNECTED: %s -> %s", c.getAccessInfo(), c.targetAddr)
 
 	// 使用传统的 io.Copy 进行数据转发
 	return c.relay()
@@ -777,11 +820,21 @@ func (c *Connection) handleUDPAssociateRequest(atype byte) error {
 
 	// 记录客户端请求的目标地址（仅用于日志）
 	if targetAddr != "" {
-		c.logger.Printf("UDP ASSOCIATE request for target: %s (address ignored per RFC 1928)", targetAddr)
+		c.logInfo("UDP ASSOCIATE request for target: %s (address ignored per RFC 1928)", targetAddr)
 	}
 
-	// 创建 UDP 监听地址
-	udpAddr, err := net.ResolveUDPAddr("udp", "0.0.0.0:0")
+	// 创建 UDP 监听地址 - 根据客户端连接类型选择
+	clientAddr := c.clientConn.RemoteAddr().(*net.TCPAddr)
+	var udpAddr *net.UDPAddr
+
+	if clientAddr.IP.To4() != nil {
+		// IPv4客户端
+		udpAddr, err = net.ResolveUDPAddr("udp", "0.0.0.0:0")
+	} else {
+		// IPv6客户端
+		udpAddr, err = net.ResolveUDPAddr("udp", "[::]:0")
+	}
+
 	if err != nil {
 		return fmt.Errorf("failed to resolve UDP address: %v", err)
 	}
@@ -801,7 +854,7 @@ func (c *Connection) handleUDPAssociateRequest(atype byte) error {
 
 // handleUDPRelayWithFullCone 处理Full Cone NAT UDP数据转发
 func (c *Connection) handleUDPRelayWithFullCone(udpConn *net.UDPConn) {
-	c.logger.Printf("Full Cone UDP relay started")
+	c.logInfo("Full Cone UDP relay started")
 
 	defer udpConn.Close()
 
@@ -814,17 +867,17 @@ func (c *Connection) handleUDPRelayWithFullCone(udpConn *net.UDPConn) {
 		n, clientAddr, err := udpConn.ReadFromUDP(buffer)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				c.logger.Printf("UDP association timeout")
+				c.logWarn("UDP association timeout")
 				return
 			}
-			c.logger.Printf("UDP read error: %v", err)
+			c.logError("UDP read error: %v", err)
 			continue
 		}
 
 		// 解析 SOCKS5 UDP 数据包
 		packet, err := c.parseUDPPacket(buffer[:n])
 		if err != nil {
-			c.logger.Printf("Failed to parse UDP packet: %v", err)
+			c.logError("Failed to parse UDP packet: %v", err)
 			continue
 		}
 
@@ -842,20 +895,20 @@ func (c *Connection) forwardUDPPacketWithFullCone(udpConn *net.UDPConn, packet *
 	switch packet.ATYPE {
 	case ATYPE_IPV4:
 		if len(packet.DSTADDR) != 4 {
-			c.logger.Printf("UDP: Invalid IPv4 address length")
+			c.logError("UDP: Invalid IPv4 address length")
 			return
 		}
 		targetHost = net.IP(packet.DSTADDR).String()
 	case ATYPE_IPV6:
 		if len(packet.DSTADDR) != 16 {
-			c.logger.Printf("UDP: Invalid IPv6 address length")
+			c.logError("UDP: Invalid IPv6 address length")
 			return
 		}
 		targetHost = net.IP(packet.DSTADDR).String()
 	case ATYPE_DOMAIN:
 		targetHost = string(packet.DSTADDR)
 	default:
-		c.logger.Printf("UDP: Unsupported address type in packet: %d", packet.ATYPE)
+		c.logError("UDP: Unsupported address type in packet: %d", packet.ATYPE)
 		return
 	}
 	targetPort = int(packet.DSTPORT)
@@ -863,7 +916,7 @@ func (c *Connection) forwardUDPPacketWithFullCone(udpConn *net.UDPConn, packet *
 	// 构建目标地址
 	targetAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", targetHost, targetPort))
 	if err != nil {
-		c.logger.Printf("Failed to resolve target UDP address: %v", err)
+		c.logError("Failed to resolve target UDP address: %v", err)
 		return
 	}
 
@@ -878,37 +931,37 @@ func (c *Connection) forwardUDPPacketWithFullCone(udpConn *net.UDPConn, packet *
 	// 根据路由结果执行操作
 	switch result.Action {
 	case ActionBlock:
-		c.logger.Printf("UDP: Blocked packet to %s:%d by rule", targetHost, packet.DSTPORT)
+		c.logWarn("UDP: Blocked packet to %s:%d by rule", targetHost, packet.DSTPORT)
 		return
 
 	case ActionAllow:
-		c.logger.Printf("UDP: Allowed packet to %s:%d by rule (direct connection)", targetHost, packet.DSTPORT)
+		c.logInfo("UDP: Allowed packet to %s:%d by rule (direct connection)", targetHost, packet.DSTPORT)
 		// 使用Full Cone NAT发送
 		err := c.server.udpSessions.SendViaFullCone(clientAddr, targetAddr, packet.DATA)
 		if err != nil {
-			c.logger.Printf("UDP: Full Cone forward failed: %v", err)
+			c.logError("UDP: Full Cone forward failed: %v", err)
 		}
 
 	case ActionProxy:
 		proxyNode := c.server.router.GetProxyNode(result.ProxyNode)
 		if proxyNode == nil {
-			c.logger.Printf("UDP: Proxy node '%s' not found for %s:%d. Dropping packet.", result.ProxyNode, targetHost, packet.DSTPORT)
+			c.logWarn("UDP: Proxy node '%s' not found for %s:%d. Dropping packet.", result.ProxyNode, targetHost, packet.DSTPORT)
 			return
 		}
-		c.logger.Printf("UDP: Proxying packet to %s:%d via %s", targetHost, packet.DSTPORT, proxyNode.Name)
+		c.logInfo("UDP: Proxying packet to %s:%d via %s", targetHost, packet.DSTPORT, proxyNode.Name)
 		if err := c.forwardUDPPacketViaProxy(udpConn, packet, clientAddr, proxyNode); err != nil {
-			c.logger.Printf("UDP: Failed to forward packet via proxy %s: %v", proxyNode.Name, err)
+			c.logError("UDP: Failed to forward packet via proxy %s: %v", proxyNode.Name, err)
 		}
 
 	default: // ActionDeny 或无匹配规则
 		defaultProxy := c.server.router.GetDefaultProxy()
 		if defaultProxy == nil {
-			c.logger.Printf("UDP: No rule matched for %s:%d and no default proxy configured. Dropping packet.", targetHost, packet.DSTPORT)
+			c.logWarn("UDP: No rule matched for %s:%d and no default proxy configured. Dropping packet.", targetHost, packet.DSTPORT)
 			return
 		}
-		c.logger.Printf("UDP: No rule matched for %s:%d, using default proxy %s", targetHost, packet.DSTPORT, defaultProxy.Name)
+		c.logInfo("UDP: No rule matched for %s:%d, using default proxy %s", targetHost, packet.DSTPORT, defaultProxy.Name)
 		if err := c.forwardUDPPacketViaProxy(udpConn, packet, clientAddr, defaultProxy); err != nil {
-			c.logger.Printf("UDP: Failed to forward packet via default proxy %s: %v", defaultProxy.Name, err)
+			c.logError("UDP: Failed to forward packet via default proxy %s: %v", defaultProxy.Name, err)
 		}
 	}
 }
@@ -940,7 +993,13 @@ func (c *Connection) parseAddress(atype byte) (addr string, port uint16, err err
 		}
 		addr = string(domain)
 	default:
-		err = c.sendReply(REP_ADDRESS_TYPE_NOT_SUPPORTED, "127.0.0.1", 1080)
+		// 根据客户端连接类型返回适当的错误地址
+		clientAddr := c.clientConn.RemoteAddr().(*net.TCPAddr)
+		if clientAddr.IP.To4() != nil {
+			err = c.sendReply(REP_ADDRESS_TYPE_NOT_SUPPORTED, "127.0.0.1", 1080)
+		} else {
+			err = c.sendReply(REP_ADDRESS_TYPE_NOT_SUPPORTED, "::1", 1080)
+		}
 		return "", 0, err
 	}
 
@@ -966,11 +1025,11 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 		if proxy == nil {
 			return nil, fmt.Errorf("proxy node '%s' not found", result.ProxyNode)
 		}
-		c.logger.Printf("PROXY by %s: %s -> %s via %s", logContext, accessInfo, c.targetAddr, proxy.Name)
+		c.logInfo("PROXY by %s: %s -> %s via %s", logContext, accessInfo, c.targetAddr, proxy.Name)
 		return c.connectThroughProxy(proxy, targetAddr, targetPort)
 
 	case ActionAllow:
-		c.logger.Printf("ALLOW by %s: %s -> %s", logContext, accessInfo, c.targetAddr)
+		c.logInfo("ALLOW by %s: %s -> %s", logContext, accessInfo, c.targetAddr)
 
 		// 纯粹直连，不回退代理
 		target := formatNetworkAddress(targetAddr, targetPort)
@@ -979,7 +1038,7 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 			// Check for connection reset (errno 104) which indicates GFW blocking
 			if errno, ok := err.(*net.OpError).Err.(*os.SyscallError); ok {
 				if syscallErr, ok := errno.Err.(syscall.Errno); ok && syscallErr == 104 {
-					c.logger.Printf("⚠️ Direct connection to %s reset by peer (errno 104), adding to blocked items", c.targetHost)
+					c.logInfo("⚠️ Direct connection to %s reset by peer (errno 104), adding to blocked items", c.targetHost)
 					c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonRST)
 				} else {
 					// For other errors, check if it's a timeout
@@ -1012,9 +1071,9 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 					key = targetAddr
 				}
 				if c.server.blockedItems.IsBlocked(key) {
-					c.logger.Printf("🚫 %s is in blocked items, using proxy directly", key)
+					c.logInfo("🚫 %s is in blocked items, using proxy directly", key)
 				} else {
-					c.logger.Printf("✅ %s not in blocked items, trying direct connection", key)
+					c.logInfo("✅ %s not in blocked items, trying direct connection", key)
 					// 尝试直连
 					target := formatNetworkAddress(targetAddr, targetPort)
 					conn, err := net.DialTimeout("tcp", target, time.Duration(c.server.smartProxyTimeoutMs)*time.Millisecond)
@@ -1022,7 +1081,7 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 						// Check for connection reset (errno 104) which indicates GFW blocking
 						if errno, ok := err.(*net.OpError).Err.(*os.SyscallError); ok {
 							if syscallErr, ok := errno.Err.(syscall.Errno); ok && syscallErr == 104 {
-								c.logger.Printf("⚠️ Direct connection to %s reset by peer (errno 104), adding to blocked items", c.targetHost)
+								c.logInfo("⚠️ Direct connection to %s reset by peer (errno 104), adding to blocked items", c.targetHost)
 								c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonRST)
 							} else {
 								// For other errors, check if it's a timeout
@@ -1047,7 +1106,7 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 		if defaultProxy == nil {
 			return nil, fmt.Errorf("no default proxy available")
 		}
-		c.logger.Printf("Using default proxy: %s -> %s via %s", accessInfo, c.targetAddr, defaultProxy.Name)
+		c.logInfo("Using default proxy: %s -> %s via %s", accessInfo, c.targetAddr, defaultProxy.Name)
 		return c.connectThroughProxy(defaultProxy, targetAddr, targetPort)
 
 	}
@@ -1060,7 +1119,18 @@ func (c *Connection) detectAndConnect(targetAddr string, targetPort uint16) (net
 	c.clientConn = prependingClientConn
 
 	// 2. 发送"虚假"成功响应以解锁客户端
-	if err := c.sendReply(REP_SUCCESS, "0.0.0.0", 0); err != nil {
+	var fakeAddr string
+	// 检查客户端地址类型
+	if clientAddr, ok := c.clientConn.RemoteAddr().(*net.TCPAddr); ok {
+		if clientAddr.IP.To4() == nil {
+			fakeAddr = "::1" // IPv6客户端使用IPv6地址
+		} else {
+			fakeAddr = "0.0.0.0" // IPv4客户端使用IPv4地址
+		}
+	} else {
+		fakeAddr = "0.0.0.0" // 默认使用IPv4地址
+	}
+	if err := c.sendReply(REP_SUCCESS, fakeAddr, 0); err != nil {
 		return nil, fmt.Errorf("failed to send temporary success reply: %v", err)
 	}
 
@@ -1069,8 +1139,9 @@ func (c *Connection) detectAndConnect(targetAddr string, targetPort uint16) (net
 	shouldProbe := c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort))
 
 	if shouldProbe {
-		// 读取初始数据包
-		buf := bufferPool.Get()
+		// 读取初始数据包进行SNI/Host检测
+		// 使用2KB缓冲区足够检测HTTP Host头或HTTPS SNI
+		buf := bufferPool.Get(2048)
 		defer bufferPool.Put(buf)
 
 		c.clientConn.SetReadDeadline(time.Now().Add(1300 * time.Millisecond))
@@ -1082,7 +1153,7 @@ func (c *Connection) detectAndConnect(targetAddr string, targetPort uint16) (net
 			c.initialData = make([]byte, n)
 			copy(c.initialData, buf[:n])
 			c.initialDataCached = true
-			c.logger.Printf("Cached %d bytes of initial data for potential retry", n)
+			c.logInfo("Cached %d bytes of initial data for potential retry", n)
 
 			// 预置数据回连接（供正常流程使用）
 			prependingClientConn.mu.Lock()
@@ -1105,7 +1176,7 @@ func (c *Connection) detectAndConnect(targetAddr string, targetPort uint16) (net
 					hostname = result.Hostname
 				}
 				if hostname != "" {
-					c.logger.Printf("SNI/Host detected for port %d: %s", targetPort, hostname)
+					c.logInfo("SNI/Host detected for port %d: %s", targetPort, hostname)
 					detectedHost = hostname
 					c.detectedHost = hostname
 				}
@@ -1257,11 +1328,9 @@ func (c *Connection) buildUDPPacket(srcAddr, dstAddr string, srcPort, dstPort ui
 
 // sendReply 发送SOCKS5回复
 func (c *Connection) sendReply(rep byte, bindAddr string, bindPort int) error {
-	// 修复：为了兼容简单客户端（它们可能只处理IPv4响应），
-	// 我们总是返回一个IPv4地址作为绑定地址。
-	// 这确保了响应总是10字节长。
-	addrType := byte(ATYPE_IPV4)
-	addrBody := net.IPv4(0, 0, 0, 0).To4()
+	// 检查客户端连接类型以决定返回的地址格式
+	clientAddr := c.clientConn.RemoteAddr().(*net.TCPAddr)
+	var response []byte
 	portBytes := make([]byte, 2)
 	binary.BigEndian.PutUint16(portBytes, uint16(bindPort))
 
@@ -1270,11 +1339,43 @@ func (c *Connection) sendReply(rep byte, bindAddr string, bindPort int) error {
 		binary.BigEndian.PutUint16(portBytes, uint16(listenAddr.Port))
 	}
 
-	// 构建回复
-	// [VER, REP, RSV, ATYP, BND.ADDR, BND.PORT]
-	response := []byte{SOCKS5_VERSION, rep, 0x00, addrType}
-	response = append(response, addrBody...)
-	response = append(response, portBytes...)
+	if clientAddr.IP.To4() != nil {
+		// IPv4客户端 - 返回IPv4格式响应（10字节）
+		ip := net.ParseIP(bindAddr)
+		if ip == nil {
+			ip = net.IPv4(0, 0, 0, 0)
+		}
+		ip4 := ip.To4()
+		if ip4 == nil {
+			ip4 = net.IPv4(0, 0, 0, 0)
+		}
+
+		response = make([]byte, 10)
+		response[0] = SOCKS5_VERSION
+		response[1] = rep
+		response[2] = 0x00 // RSV
+		response[3] = ATYPE_IPV4
+		response[4], response[5], response[6], response[7] = ip4[0], ip4[1], ip4[2], ip4[3]
+		response[8], response[9] = portBytes[0], portBytes[1]
+	} else {
+		// IPv6客户端 - 返回IPv6格式响应（22字节）
+		ip := net.ParseIP(bindAddr)
+		if ip == nil {
+			ip = net.IPv6unspecified
+		}
+		ip6 := ip.To16()
+		if ip6 == nil {
+			ip6 = net.IPv6unspecified
+		}
+
+		response = make([]byte, 22)
+		response[0] = SOCKS5_VERSION
+		response[1] = rep
+		response[2] = 0x00 // RSV
+		response[3] = ATYPE_IPV6
+		copy(response[4:20], ip6)
+		response[20], response[21] = portBytes[0], portBytes[1]
+	}
 
 	_, err := c.clientConn.Write(response)
 	return err
@@ -1404,9 +1505,9 @@ func (c *Connection) relay() error {
 	wg.Wait()
 
 	if copyErr != nil {
-		c.logger.Printf("Relay finished with error: %v", copyErr)
+		c.logInfo("Relay finished with error: %v", copyErr)
 	} else {
-		c.logger.Printf("Connection closed successfully")
+		c.logInfo("Connection closed successfully")
 	}
 
 	return copyErr
@@ -1414,7 +1515,7 @@ func (c *Connection) relay() error {
 
 // relayTargetToClientOptimized 优化版的目标到客户端数据流处理
 func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io.Writer, rateLimitKey string, copyErr *error) {
-	buf := bufferPool.Get()
+	buf := bufferPool.Get(32768) // 使用32KB缓冲区用于大数据传输
 	defer bufferPool.Put(buf)
 
 	for {
@@ -1431,7 +1532,7 @@ func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io
 				if syscallErr, ok := opErr.Err.(*os.SyscallError); ok {
 					if errno, ok := syscallErr.Err.(syscall.Errno); ok && errno == 104 {
 						if c.targetHost != "" {
-							c.logger.Printf("⚠️  Direct connection to %s reset by peer (errno 104), switching to proxy", c.targetHost)
+							c.logInfo("⚠️  Direct connection to %s reset by peer (errno 104), switching to proxy", c.targetHost)
 
 							// 获取目标端口
 							_, portStr, err := net.SplitHostPort(c.targetAddr)
@@ -1461,7 +1562,7 @@ func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io
 								// 成功切换到代理，更新目标连接并继续读取
 								oldConn := c.targetConn
 								c.targetConn = proxyConn
-								c.logger.Printf("✅ Successfully switched to proxy for %s", c.targetHost)
+								c.logInfo("✅ Successfully switched to proxy for %s", c.targetHost)
 								oldConn.Close()
 
 								// 使用 io.Copy 继续从新代理连接读取数据
@@ -1472,7 +1573,7 @@ func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io
 								}
 								return
 							} else {
-								c.logger.Printf("❌ Failed to switch to proxy: %v", proxyErr)
+								c.logInfo("❌ Failed to switch to proxy: %v", proxyErr)
 							}
 						}
 					}
@@ -1524,7 +1625,7 @@ func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io
 			if err != nil {
 				// 限速等待失败或超时
 				if err == context.DeadlineExceeded {
-					c.logger.Printf("Rate limit wait timeout for %s", rateLimitKey)
+					c.logInfo("Rate limit wait timeout for %s", rateLimitKey)
 				}
 				*copyErr = err
 				return
@@ -1578,7 +1679,7 @@ func (c *Connection) switchToProxyAndReplay() (net.Conn, error) {
 
 	// 重放缓存的初始数据
 	if c.initialDataCached && len(c.initialData) > 0 {
-		c.logger.Printf("🔄 Replaying %d bytes of cached data to proxy connection", len(c.initialData))
+		c.logInfo("🔄 Replaying %d bytes of cached data to proxy connection", len(c.initialData))
 		if _, writeErr := proxyConn.Write(c.initialData); writeErr != nil {
 			proxyConn.Close()
 			return nil, fmt.Errorf("failed to replay data to proxy: %v", writeErr)
@@ -1632,9 +1733,9 @@ func (c *Connection) handleAuthentication() error {
 	c.setUsername(username)
 
 	if username != "" {
-		c.logger.Printf("User authenticated: %s (%s)", username, c.getClientInfo())
+		c.logInfo("User authenticated: %s (%s)", username, c.getClientInfo())
 	} else {
-		c.logger.Printf("Anonymous connection (%s)", c.getClientInfo())
+		c.logInfo("Anonymous connection (%s)", c.getClientInfo())
 	}
 
 	return nil
@@ -1649,7 +1750,7 @@ func (s *SOCKS5Server) GetRateLimiter() *RateLimiter {
 func (s *SOCKS5Server) ConfigureRateLimits(uploadBps, downloadBps int64) {
 	if s.rateLimiter != nil {
 		s.rateLimiter.SetGlobalLimits(uploadBps, downloadBps)
-		s.logger.Printf("Rate limits configured: upload=%d bps, download=%d bps", uploadBps, downloadBps)
+		s.logger.Info("Rate limits configured: upload=%d bps, download=%d bps", uploadBps, downloadBps)
 	}
 }
 
@@ -1661,11 +1762,11 @@ func (s *SOCKS5Server) AddRateLimitRule(rule *RateLimitRule) error {
 
 	err := s.rateLimiter.AddRule(rule)
 	if err != nil {
-		s.logger.Printf("Failed to add rate limit rule: %v", err)
+		s.logger.Info("Failed to add rate limit rule: %v", err)
 		return err
 	}
 
-	s.logger.Printf("Added rate limit rule: %s", rule.ID)
+	s.logger.Info("Added rate limit rule: %s", rule.ID)
 	return nil
 }
 
@@ -1682,9 +1783,9 @@ func (s *SOCKS5Server) EnableAuthentication(requireAuth bool) {
 	if s.authManager != nil {
 		s.authManager.requireAuth = requireAuth
 		if requireAuth {
-			s.logger.Printf("User authentication enabled")
+			s.logger.Info("User authentication enabled")
 		} else {
-			s.logger.Printf("User authentication disabled")
+			s.logger.Info("User authentication disabled")
 		}
 	}
 }
@@ -1728,11 +1829,6 @@ func (s *SOCKS5Server) GetBlockedItemsManager() *BlockedItemsManager {
 	return s.blockedItems
 }
 
-// GetBlacklistManager 返回nil，因为现在使用BlockedItemsManager
-// TODO: Web服务器需要更新以使用BlockedItemsManager
-func (s *SOCKS5Server) GetBlacklistManager() *BlacklistManager {
-	return nil
-}
 
 // AddToBlockedItems 添加域名或IP到BlockedItemsManager
 func (c *Connection) AddToBlockedItems(targetHost, targetAddr string, port uint16, failureReason FailureReason) {
@@ -1772,12 +1868,12 @@ func (c *Connection) connectThroughProxy(proxy *ProxyNode, targetAddr string, ta
 		return nil, fmt.Errorf("proxy node is nil")
 	}
 
-	c.logger.Printf("DEBUG: Connecting via proxy: %s (%s)", proxy.Name, proxy.Address)
+	c.logInfo("DEBUG: Connecting via proxy: %s (%s)", proxy.Name, proxy.Address)
 
 	// 1. 连接到代理服务器
 	proxyConn, err := net.DialTimeout("tcp", proxy.Address, 5*time.Second)
 	if err != nil {
-		c.logger.Printf("DEBUG: Failed to connect to proxy '%s' at %s: %v", proxy.Name, proxy.Address, err)
+		c.logInfo("DEBUG: Failed to connect to proxy '%s' at %s: %v", proxy.Name, proxy.Address, err)
 
 		// 检测连接超时
 		if strings.Contains(err.Error(), "dial tcp") && strings.Contains(err.Error(), "i/o timeout") {
@@ -1786,7 +1882,7 @@ func (c *Connection) connectThroughProxy(proxy *ProxyNode, targetAddr string, ta
 
 		return nil, fmt.Errorf("failed to connect to proxy '%s' at %s: %v", proxy.Name, proxy.Address, err)
 	}
-	c.logger.Printf("DEBUG: Successfully connected to proxy: %s (%s)", proxy.Name, proxy.Address)
+	c.logInfo("DEBUG: Successfully connected to proxy: %s (%s)", proxy.Name, proxy.Address)
 
 	// 2. SOCKS5 握手
 	// 客户端问候: Version 5, 1 auth method, 0x02 for user/pass or 0x00 for no auth
@@ -1804,17 +1900,17 @@ func (c *Connection) connectThroughProxy(proxy *ProxyNode, targetAddr string, ta
 	// 读取代理服务器的回复
 	resp := make([]byte, 2)
 	if _, err := io.ReadFull(proxyConn, resp); err != nil {
-		c.logger.Printf("DEBUG: Proxy handshake reply read failed: %v", err)
+		c.logInfo("DEBUG: Proxy handshake reply read failed: %v", err)
 		proxyConn.Close()
 		return nil, fmt.Errorf("failed to read handshake reply from proxy: %v", err)
 	}
-	c.logger.Printf("DEBUG: Proxy handshake reply: version=%d, method=%d", resp[0], resp[1])
+	c.logInfo("DEBUG: Proxy handshake reply: version=%d, method=%d", resp[0], resp[1])
 	if resp[0] != SOCKS5_VERSION || resp[1] != authMethod {
-		c.logger.Printf("DEBUG: Proxy handshake failed: expected version=%d method=%d, got version=%d method=%d", SOCKS5_VERSION, authMethod, resp[0], resp[1])
+		c.logInfo("DEBUG: Proxy handshake failed: expected version=%d method=%d, got version=%d method=%d", SOCKS5_VERSION, authMethod, resp[0], resp[1])
 		proxyConn.Close()
 		return nil, fmt.Errorf("proxy handshake failed, unsupported auth method")
 	}
-	c.logger.Printf("DEBUG: Proxy handshake successful")
+	c.logInfo("DEBUG: Proxy handshake successful")
 
 	// 3. 如果需要，执行用户名/密码认证
 	if authMethod == 0x02 {
@@ -1862,41 +1958,41 @@ func (c *Connection) connectThroughProxy(proxy *ProxyNode, targetAddr string, ta
 	req = append(req, portBytes...)
 
 	if _, err := proxyConn.Write(req); err != nil {
-		c.logger.Printf("DEBUG: Failed to send connect request to proxy: %v", err)
+		c.logInfo("DEBUG: Failed to send connect request to proxy: %v", err)
 		proxyConn.Close()
 		return nil, fmt.Errorf("failed to send connect request to proxy: %v", err)
 	}
-	c.logger.Printf("DEBUG: Sent connect request to proxy, reading reply...")
+	c.logInfo("DEBUG: Sent connect request to proxy, reading reply...")
 
 	// 5. 读取代理的最终回复
 	finalResp := make([]byte, 4) // VER, REP, RSV, ATYP
 	if _, err := io.ReadFull(proxyConn, finalResp); err != nil {
-		c.logger.Printf("DEBUG: Failed to read final reply from proxy: %v", err)
+		c.logInfo("DEBUG: Failed to read final reply from proxy: %v", err)
 		proxyConn.Close()
 		return nil, fmt.Errorf("failed to read final reply from proxy: %v", err)
 	}
-	c.logger.Printf("DEBUG: Proxy final reply: version=%d, response=%d, rsv=%d, atyp=%d", finalResp[0], finalResp[1], finalResp[2], finalResp[3])
+	c.logInfo("DEBUG: Proxy final reply: version=%d, response=%d, rsv=%d, atyp=%d", finalResp[0], finalResp[1], finalResp[2], finalResp[3])
 	if finalResp[0] != SOCKS5_VERSION || finalResp[1] != REP_SUCCESS {
-		c.logger.Printf("DEBUG: Proxy connect command failed: expected version=%d response=%d, got version=%d response=%d", SOCKS5_VERSION, REP_SUCCESS, finalResp[0], finalResp[1])
+		c.logInfo("DEBUG: Proxy connect command failed: expected version=%d response=%d, got version=%d response=%d", SOCKS5_VERSION, REP_SUCCESS, finalResp[0], finalResp[1])
 		proxyConn.Close()
 		return nil, fmt.Errorf("proxy connect command failed with code %d", finalResp[1])
 	}
-	c.logger.Printf("DEBUG: Proxy connect command successful")
+	c.logInfo("DEBUG: Proxy connect command successful")
 	// 忽略剩余的 BND.ADDR 和 BND.PORT
 	// 这部分需要根据 ATYP 读取并丢弃
 	if err := drainReply(proxyConn, finalResp[3]); err != nil {
-		c.logger.Printf("DEBUG: Failed to drain final reply from proxy: %v", err)
+		c.logInfo("DEBUG: Failed to drain final reply from proxy: %v", err)
 		proxyConn.Close()
 		return nil, fmt.Errorf("failed to drain final reply from proxy: %v", err)
 	}
-	c.logger.Printf("DEBUG: Proxy connection established successfully")
+	c.logInfo("DEBUG: Proxy connection established successfully")
 
 	return proxyConn, nil
 }
 
 // forwardUDPPacketViaProxy 通过另一个SOCKS5代理转发UDP数据包
 func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, originalPacket *UDPPacket, originalClientAddr *net.UDPAddr, proxy *ProxyNode) error {
-	c.logger.Printf("UDP-PROXY: Attempting to forward packet for %s via %s", originalClientAddr, proxy.Address)
+	c.logInfo("UDP-PROXY: Attempting to forward packet for %s via %s", originalClientAddr, proxy.Address)
 
 	// 1. 连接到上游代理
 	proxyConn, err := net.DialTimeout("tcp", proxy.Address, 10*time.Second)
@@ -1923,7 +2019,7 @@ func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, origin
 	if resp[0] != SOCKS5_VERSION || resp[1] != authMethod {
 		return fmt.Errorf("UDP-PROXY: proxy handshake failed, unsupported auth method")
 	}
-	c.logger.Printf("UDP-PROXY: SOCKS5 handshake successful")
+	c.logInfo("UDP-PROXY: SOCKS5 handshake successful")
 
 	// 3. 如果需要，执行用户名/密码认证
 	if authMethod == 0x02 {
@@ -1950,7 +2046,7 @@ func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, origin
 		if authResp[0] != 0x01 || authResp[1] != 0x00 {
 			return fmt.Errorf("UDP-PROXY: proxy authentication failed")
 		}
-		c.logger.Printf("UDP-PROXY: Username/password authentication successful")
+		c.logInfo("UDP-PROXY: Username/password authentication successful")
 	}
 
 	// 4. 发送 UDP ASSOCIATE 请求
@@ -2028,7 +2124,7 @@ func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, origin
 		return fmt.Errorf("UDP-PROXY: unsupported address type in UDP associate reply: %d", assocResp[3])
 	}
 
-	c.logger.Printf("UDP-PROXY: UDP association established with proxy at %s", proxyUDPAddr)
+	c.logInfo("UDP-PROXY: UDP association established with proxy at %s", proxyUDPAddr)
 
 	// 7. 创建UDP连接到代理的UDP端口
 	proxyUDPConn, err := net.DialUDP("udp", nil, proxyUDPAddr)
@@ -2087,7 +2183,7 @@ func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, origin
 	if err != nil {
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 			// 超时，没有响应 - 这可能是正常的（UDP是无连接的）
-			c.logger.Printf("UDP-PROXY: No response from proxy (timeout)")
+			c.logInfo("UDP-PROXY: No response from proxy (timeout)")
 			return nil
 		}
 		return fmt.Errorf("UDP-PROXY: failed to read response from proxy: %v", err)
@@ -2125,7 +2221,7 @@ func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, origin
 	// 12. 将响应数据发送回原始客户端
 	responseData := respData[offset:]
 	if len(responseData) == 0 {
-		c.logger.Printf("UDP-PROXY: No data in response from proxy")
+		c.logInfo("UDP-PROXY: No data in response from proxy")
 		return nil
 	}
 
@@ -2146,6 +2242,6 @@ func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, origin
 		return fmt.Errorf("UDP-PROXY: failed to send reply to client: %v", err)
 	}
 
-	c.logger.Printf("UDP-PROXY: Successfully forwarded UDP packet via proxy %s", proxy.Name)
+	c.logInfo("UDP-PROXY: Successfully forwarded UDP packet via proxy %s", proxy.Name)
 	return nil
 }

@@ -4,7 +4,6 @@
 *.dll
 *.so
 *.dylib
-socks5proxy
 smartproxy
 
 # Go 测试和临时文件

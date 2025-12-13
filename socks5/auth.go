@@ -7,9 +7,8 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
-	"log"
+	"smartproxy/logger"
 	"net"
-	"regexp"
 	"smartproxy/config"
 	"strconv"
 	"strings"
@@ -48,26 +47,12 @@ type PasswordHasher struct {
 	saltLength int
 	hashName   string
 	algorithm  string
-	logger     *log.Logger
+	logger     *logger.SlogLogger
 }
 
 // NewPasswordHasher 创建新的密码哈希器
-func NewPasswordHasher(iterations, saltLength int, hashName string, logger *log.Logger) *PasswordHasher {
-	// 安全参数验证
-	if iterations < MinIterations {
-		logger.Printf("Warning: PBKDF2 iterations %d below recommended minimum %d", iterations, MinIterations)
-		iterations = MinIterations
-	}
-
-	if saltLength < MinSaltLength {
-		logger.Printf("Warning: Salt length %d below recommended minimum %d", saltLength, MinSaltLength)
-		saltLength = MinSaltLength
-	}
-
+func NewPasswordHasher(iterations, saltLength int, hashName string, logger *logger.SlogLogger) *PasswordHasher {
 	algorithm := fmt.Sprintf("pbkdf2-%s", hashName)
-
-	logger.Printf("PasswordHasher initialized: %s, iterations=%d, salt_length=%d",
-		algorithm, iterations, saltLength)
 
 	return &PasswordHasher{
 		iterations: iterations,
@@ -105,7 +90,6 @@ func (p *PasswordHasher) HashPassword(password string) (string, error) {
 	// 构造标准格式哈希字符串
 	hashString := fmt.Sprintf("$%s$%d$%s$%s", p.algorithm, p.iterations, saltB64, hashB64)
 
-	p.logger.Printf("Password hashed successfully using %s", p.algorithm)
 	return hashString, nil
 }
 
@@ -115,17 +99,10 @@ func (p *PasswordHasher) VerifyPassword(password, hashString string) bool {
 		return false
 	}
 
-	algorithm, iterations, salt, storedHash, err := p.parseHashString(hashString)
+	_, iterations, salt, storedHash, err := p.parseHashString(hashString)
 	if err != nil {
-		p.logger.Printf("Failed to parse hash string: %v", err)
+		p.logger.Info("Failed to parse hash string: %v", err)
 		return false
-	}
-
-	// 验证算法兼容性
-	if algorithm != p.algorithm {
-		p.logger.Printf("Warning: Incompatible hash algorithm: %s != %s", algorithm, p.algorithm)
-		// 尝试使用旧算法验证（用于迁移）
-		return p.verifyWithLegacyAlgorithm(password, hashString)
 	}
 
 	// 使用相同的盐值和迭代次数计算哈希
@@ -135,13 +112,7 @@ func (p *PasswordHasher) VerifyPassword(password, hashString string) bool {
 	isValid := subtle.ConstantTimeCompare(testHash, storedHash) == 1
 
 	if isValid {
-		p.logger.Printf("Password verified successfully using %s", algorithm)
-
-		// 检查是否需要升级迭代次数
-		if iterations < p.iterations {
-			p.logger.Printf("Info: Password hash uses outdated iterations (%d < %d)", iterations, p.iterations)
-			// 这里可以触发哈希升级
-		}
+		p.logger.Info("Password verified successfully")
 	}
 
 	return isValid
@@ -194,38 +165,13 @@ func (p *PasswordHasher) pbkdf2(password string, salt []byte, iterations, keyLen
 	return result[:keyLen]
 }
 
-// verifyWithLegacyAlgorithm 使用旧算法验证密码（用于迁移）
-func (p *PasswordHasher) verifyWithLegacyAlgorithm(password, hashString string) bool {
-	p.logger.Printf("Attempting legacy password verification")
-
-	// 检测旧格式SHA256哈希
-	if len(hashString) == 64 {
-		// 检查是否为十六进制字符串
-		if matched, _ := regexp.MatchString("^[0-9a-fA-F]{64}$", hashString); matched {
-			// 旧的不安全格式：sha256(password.encode()).hexdigest()
-			h := sha256.Sum256([]byte(password))
-			legacyHash := fmt.Sprintf("%x", h)
-
-			isValid := subtle.ConstantTimeCompare([]byte(strings.ToLower(legacyHash)), []byte(strings.ToLower(hashString))) == 1
-
-			if isValid {
-				p.logger.Printf("Warning: Legacy insecure SHA256 hash detected - immediate upgrade required")
-			}
-
-			return isValid
-		}
-	}
-
-	return false
-}
-
 // checkPasswordStrength 检查密码强度
 func (p *PasswordHasher) checkPasswordStrength(password string) error {
 	if len(password) < MinPasswordLength {
 		return &SecurityError{fmt.Sprintf("Password must be at least %d characters long", MinPasswordLength)}
 	}
 
-	// 检查密码复杂度
+	// 简单的复杂度检查
 	var hasUpper, hasLower, hasDigit, hasSpecial bool
 	for _, c := range password {
 		switch {
@@ -255,20 +201,10 @@ func (p *PasswordHasher) checkPasswordStrength(password string) error {
 	}
 
 	if complexityScore < 3 {
-		p.logger.Printf("Warning: Weak password complexity score: %d/4", complexityScore)
-		// 对于弱密码，我们记录警告但不直接阻止，因为这是管理员配置
+		return &SecurityError{"Password must contain at least 3 of: uppercase, lowercase, digit, special character"}
 	}
 
 	return nil
-}
-
-// UpgradeHash 升级旧格式哈希到新的安全格式
-func (p *PasswordHasher) UpgradeHash(password, oldHash string) (string, error) {
-	if p.VerifyPassword(password, oldHash) {
-		p.logger.Printf("Upgrading password hash to secure format")
-		return p.HashPassword(password)
-	}
-	return "", &SecurityError{"Cannot upgrade invalid password hash"}
 }
 
 // GetHashInfo 获取哈希字符串信息
@@ -276,39 +212,15 @@ func (p *PasswordHasher) GetHashInfo(hashString string) map[string]interface{} {
 	algorithm, iterations, salt, hashBytes, err := p.parseHashString(hashString)
 	if err != nil {
 		return map[string]interface{}{
-			"error":     err.Error(),
-			"is_secure": false,
+			"error": err.Error(),
 		}
 	}
 
 	return map[string]interface{}{
-		"algorithm":            algorithm,
-		"iterations":           iterations,
-		"salt_length":          len(salt),
-		"hash_length":          len(hashBytes),
-		"is_secure":            iterations >= MinIterations && strings.HasPrefix(algorithm, "pbkdf2-"),
-		"estimated_crack_time": p.estimateCrackTime(iterations),
-	}
-}
-
-// estimateCrackTime 估算暴力破解时间（粗略估计）
-func (p *PasswordHasher) estimateCrackTime(iterations int) string {
-	// 基于现代硬件性能（每秒10亿次SHA256计算）
-	hashesPerSecond := float64(1000000000)
-	secondsToCrack := float64(iterations) / hashesPerSecond
-
-	if secondsToCrack < 1 {
-		return "< 1 second"
-	} else if secondsToCrack < 60 {
-		return fmt.Sprintf("%.1f seconds", secondsToCrack)
-	} else if secondsToCrack < 3600 {
-		return fmt.Sprintf("%.1f minutes", secondsToCrack/60)
-	} else if secondsToCrack < 86400 {
-		return fmt.Sprintf("%.1f hours", secondsToCrack/3600)
-	} else if secondsToCrack < 2592000 {
-		return fmt.Sprintf("%.1f days", secondsToCrack/86400)
-	} else {
-		return fmt.Sprintf("%.1f months", secondsToCrack/2592000)
+		"algorithm":   algorithm,
+		"iterations":  iterations,
+		"salt_length": len(salt),
+		"hash_length": len(hashBytes),
 	}
 }
 
@@ -320,7 +232,7 @@ type User struct {
 	Enabled      bool
 	LastLogin    time.Time
 
-	// 新增：连接和时间限制
+	// 连接和时间限制
 	MaxConnections int
 	ExpiresAfter   int // 分钟数
 	AllowFrom      []string
@@ -328,6 +240,10 @@ type User struct {
 	AllowedHours   []int
 	AllowedDays    []int
 	Timezone       string
+
+	// 新增：日期限制
+	EffectiveDates []string // 生效日期列表（字符串格式）
+	ExpiredDates   []string // 过期日期列表（字符串格式）
 
 	// 运行时统计
 	CurrentConnections int
@@ -340,12 +256,12 @@ type AuthManager struct {
 	users        map[string]*User
 	hasher       *PasswordHasher
 	requireAuth  bool
-	logger       *log.Logger
+	logger       *logger.SlogLogger
 	sync.RWMutex // 添加读写锁
 }
 
 // NewAuthManager 创建认证管理器
-func NewAuthManager(requireAuth bool, hasher *PasswordHasher, logger *log.Logger) *AuthManager {
+func NewAuthManager(requireAuth bool, hasher *PasswordHasher, logger *logger.SlogLogger) *AuthManager {
 	if hasher == nil {
 		hasher = NewPasswordHasher(DefaultIterations, DefaultSaltLength, "sha256", logger)
 	}
@@ -389,7 +305,7 @@ func (a *AuthManager) AddUser(username, password, role string) error {
 	}
 
 	a.users[username] = user
-	a.logger.Printf("User '%s' added successfully", username)
+	a.logger.Info("User '%s' added successfully", username)
 	return nil
 }
 
@@ -432,7 +348,7 @@ func (a *AuthManager) AddUserWithConfig(username, password, role string, config 
 	}
 
 	a.users[username] = user
-	a.logger.Printf("User '%s' added with full config (max_conn=%d, expires=%d min)", username, config.MaxConnections, config.ExpiresAfter)
+	a.logger.Info("User '%s' added with full config (max_conn=%d, expires=%d min)", username, config.MaxConnections, config.ExpiresAfter)
 	return nil
 }
 
@@ -460,18 +376,24 @@ func (a *AuthManager) VerifyUser(username, password string, clientIP string) (*U
 		return nil, &SecurityError{"Invalid password"}
 	}
 
-	// 检查账户过期时间
+	// 检查账户过期时间（基于最后登录时间的会话过期）
 	if user.ExpiresAfter > 0 {
 		expireTime := user.LastLogin.Add(time.Duration(user.ExpiresAfter) * time.Minute)
 		if time.Now().After(expireTime) {
-			return nil, &SecurityError{"Account expired"}
+			return nil, &SecurityError{"Account session expired"}
 		}
+	}
+
+	// 检查日期限制（生效日期和过期日期）
+	now := time.Now()
+	if !a.IsDateEffective(user.EffectiveDates, user.ExpiredDates, now) {
+		return nil, &SecurityError{"Account not effective at this time"}
 	}
 
 	// 检查IP限制
 	if len(user.BlockFrom) > 0 {
 		for _, blockedIP := range user.BlockFrom {
-			if clientIP == blockedIP {
+			if a.matchesIPRange(clientIP, blockedIP) {
 				return nil, &SecurityError{"IP blocked"}
 			}
 		}
@@ -480,7 +402,7 @@ func (a *AuthManager) VerifyUser(username, password string, clientIP string) (*U
 	if len(user.AllowFrom) > 0 {
 		allowed := false
 		for _, allowedIP := range user.AllowFrom {
-			if clientIP == allowedIP {
+			if a.matchesIPRange(clientIP, allowedIP) {
 				allowed = true
 				break
 			}
@@ -490,8 +412,8 @@ func (a *AuthManager) VerifyUser(username, password string, clientIP string) (*U
 		}
 	}
 
-	// 检查时间限制
-	if !a.isTimeAllowed(user) {
+	// 检查时间限制（使用增强版的时间检查）
+	if !a.isTimeAllowedEnhanced(user, now) {
 		return nil, &SecurityError{"Time restriction"}
 	}
 
@@ -501,11 +423,12 @@ func (a *AuthManager) VerifyUser(username, password string, clientIP string) (*U
 	}
 
 	// 更新最后登录时间和活动统计
-	user.LastLogin = time.Now()
-	user.LastActivity = time.Now()
+	user.LastLogin = now
+	user.LastActivity = now
 	user.CurrentConnections++
+	user.TotalConnections++
 
-	a.logger.Printf("User '%s' authenticated successfully (IP: %s, Connections: %d/%d)",
+	a.logger.Info("User '%s' authenticated successfully (IP: %s, Connections: %d/%d)",
 		username, clientIP, user.CurrentConnections, user.MaxConnections)
 	return user, nil
 }
@@ -517,7 +440,7 @@ func (a *AuthManager) RemoveUser(username string) error {
 	}
 
 	delete(a.users, username)
-	a.logger.Printf("User '%s' removed successfully", username)
+	a.logger.Info("User '%s' removed successfully", username)
 	return nil
 }
 
@@ -529,7 +452,7 @@ func (a *AuthManager) DisableUser(username string) error {
 	}
 
 	user.Enabled = false
-	a.logger.Printf("User '%s' disabled", username)
+	a.logger.Info("User '%s' disabled", username)
 	return nil
 }
 
@@ -541,7 +464,7 @@ func (a *AuthManager) EnableUser(username string) error {
 	}
 
 	user.Enabled = true
-	a.logger.Printf("User '%s' enabled", username)
+	a.logger.Info("User '%s' enabled", username)
 	return nil
 }
 
@@ -558,7 +481,7 @@ func (a *AuthManager) ChangePassword(username, newPassword string) error {
 	}
 
 	user.PasswordHash = hash
-	a.logger.Printf("Password changed for user '%s'", username)
+	a.logger.Info("Password changed for user '%s'", username)
 	return nil
 }
 
@@ -829,9 +752,13 @@ func (a *AuthManager) LoadUsersFromConfig(configUsers []config.AuthUser) error {
 	a.users = make(map[string]*User)
 
 	for _, configUser := range configUsers {
+		// 检查密码是否为空
+		if configUser.Password == "" {
+			return &SecurityError{fmt.Sprintf("User %s: password cannot be empty", configUser.Username)}
+		}
+
 		user := &User{
 			Username:       configUser.Username,
-			PasswordHash:   configUser.Password, // 使用明文密码，实际生产环境应该加密
 			Role:           "user",
 			Enabled:        configUser.Enabled,
 			LastLogin:      time.Now(),
@@ -842,6 +769,21 @@ func (a *AuthManager) LoadUsersFromConfig(configUsers []config.AuthUser) error {
 			AllowedHours:   []int{},
 			AllowedDays:    []int{},
 			Timezone:       "UTC",
+			EffectiveDates: []string{},
+			ExpiredDates:   []string{},
+		}
+
+		// 如果密码不是哈希格式，则进行哈希
+		if !strings.HasPrefix(configUser.Password, "$") {
+			hashedPassword, err := a.hasher.HashPassword(configUser.Password)
+			if err != nil {
+				return fmt.Errorf("failed to hash password for user %s: %v", configUser.Username, err)
+			}
+			user.PasswordHash = hashedPassword
+			a.logger.Info("Password hashed for user %s", configUser.Username)
+		} else {
+			// 已经是哈希格式
+			user.PasswordHash = configUser.Password
 		}
 
 		// 处理连接限制配置
@@ -853,18 +795,33 @@ func (a *AuthManager) LoadUsersFromConfig(configUsers []config.AuthUser) error {
 
 			// 处理时间限制
 			if configUser.ConnectionLimit.TimeRestriction != nil {
-				// 字符串数组转换为int数组，简化处理
+				// 解析时间范围（支持 "09:00-18:00" 格式）
 				if len(configUser.ConnectionLimit.TimeRestriction.AllowedHours) > 0 {
-					user.AllowedHours = make([]int, len(configUser.ConnectionLimit.TimeRestriction.AllowedHours))
+					user.AllowedHours = a.ParseTimeRanges(configUser.ConnectionLimit.TimeRestriction.AllowedHours)
+				}
+
+				// 解析星期名称（支持 "monday-friday" 格式）
+				if len(configUser.ConnectionLimit.TimeRestriction.AllowedDays) > 0 {
+					user.AllowedDays = a.ParseDayNames(configUser.ConnectionLimit.TimeRestriction.AllowedDays)
+				}
+
+				// 设置时区
+				if configUser.ConnectionLimit.TimeRestriction.Timezone != "" {
 					user.Timezone = configUser.ConnectionLimit.TimeRestriction.Timezone
 				}
+
+				// 设置生效日期
+				user.EffectiveDates = configUser.ConnectionLimit.TimeRestriction.EffectiveDates
+
+				// 设置过期日期
+				user.ExpiredDates = configUser.ConnectionLimit.TimeRestriction.ExpiredDates
 			}
 		}
 
 		a.users[configUser.Username] = user
 	}
 
-	a.logger.Printf("Loaded %d users from config", len(configUsers))
+	a.logger.Info("Loaded %d users from config", len(configUsers))
 	return nil
 }
 
@@ -951,4 +908,242 @@ func (a *AuthManager) matchesIPRange(ip, cidr string) bool {
 	}
 
 	return ipNet.Contains(clientIP)
+}
+
+// ParseTimeRanges 解析时间范围字符串（如 "09:00-18:00"）
+func (a *AuthManager) ParseTimeRanges(timeRanges []string) []int {
+	var hours []int
+	for _, timeRange := range timeRanges {
+		// 支持格式1: "09:00-18:00"
+		if strings.Contains(timeRange, "-") {
+			parts := strings.Split(timeRange, "-")
+			if len(parts) == 2 {
+				startHour := a.parseHour(parts[0])
+				endHour := a.parseHour(parts[1])
+
+				if startHour != -1 && endHour != -1 {
+					for h := startHour; h <= endHour; h++ {
+						hours = append(hours, h%24) // 处理跨天情况
+					}
+				}
+			}
+		} else {
+			// 支持格式2: 单个小时 "09" 或 "9"
+			if hour := a.parseHour(timeRange); hour != -1 {
+				hours = append(hours, hour)
+			}
+		}
+	}
+
+	// 去重并排序
+	return a.uniqueSortedHours(hours)
+}
+
+// parseHour 解析小时字符串
+func (a *AuthManager) parseHour(hourStr string) int {
+	// 移除可能的分钟部分
+	if strings.Contains(hourStr, ":") {
+		parts := strings.Split(hourStr, ":")
+		if len(parts) >= 1 {
+			hourStr = parts[0]
+		}
+	}
+
+	// 去除前导零
+	hourStr = strings.TrimPrefix(hourStr, "0")
+	if hourStr == "" {
+		hourStr = "0"
+	}
+
+	if hour, err := strconv.Atoi(hourStr); err == nil && hour >= 0 && hour <= 23 {
+		return hour
+	}
+
+	return -1
+}
+
+// uniqueSortedHours 去重并排序小时列表
+func (a *AuthManager) uniqueSortedHours(hours []int) []int {
+	unique := make(map[int]bool)
+	for _, h := range hours {
+		unique[h] = true
+	}
+
+	result := make([]int, 0, len(unique))
+	for h := range unique {
+		result = append(result, h)
+	}
+
+	// 排序
+	for i := 0; i < len(result); i++ {
+		for j := i + 1; j < len(result); j++ {
+			if result[i] > result[j] {
+				result[i], result[j] = result[j], result[i]
+			}
+		}
+	}
+
+	return result
+}
+
+// ParseDayNames 解析星期名称列表
+func (a *AuthManager) ParseDayNames(dayNames []string) []int {
+	dayMap := map[string]int{
+		"sunday":    0,
+		"monday":    1,
+		"tuesday":   2,
+		"wednesday": 3,
+		"thursday":  4,
+		"friday":    5,
+		"saturday":  6,
+		// 支持缩写
+		"sun": 0,
+		"mon": 1,
+		"tue": 2,
+		"wed": 3,
+		"thu": 4,
+		"fri": 5,
+		"sat": 6,
+	}
+
+	var days []int
+	unique := make(map[int]bool)
+
+	for _, dayName := range dayNames {
+		// 支持范围格式 "monday-friday"
+		if strings.Contains(dayName, "-") {
+			parts := strings.Split(strings.ToLower(dayName), "-")
+			if len(parts) == 2 {
+				if startDay, ok := dayMap[parts[0]]; ok {
+					if endDay, ok := dayMap[parts[1]]; ok {
+						// 处理星期范围
+						for d := startDay; d <= endDay; d++ {
+							if !unique[d] {
+								unique[d] = true
+								days = append(days, d)
+							}
+						}
+					}
+				}
+			}
+		} else {
+			// 单个星期名称
+			if day, ok := dayMap[strings.ToLower(dayName)]; ok {
+				if !unique[day] {
+					unique[day] = true
+					days = append(days, day)
+				}
+			}
+		}
+	}
+
+	return days
+}
+
+// parseDate 解析日期字符串（支持 "2024-01-01" 格式）
+func (a *AuthManager) parseDate(dateStr string) (time.Time, error) {
+	// 尝试多种日期格式
+	formats := []string{
+		"2006-01-02",
+		"2006/01/02",
+		"2006-1-2",
+		"2006/1/2",
+		"01-02-2006",
+		"01/02/2006",
+	}
+
+	for _, format := range formats {
+		if t, err := time.Parse(format, dateStr); err == nil {
+			return t, nil
+		}
+	}
+
+	return time.Time{}, fmt.Errorf("unable to parse date: %s", dateStr)
+}
+
+// IsDateEffective 检查日期是否在生效范围内
+func (a *AuthManager) IsDateEffective(effectiveDates []string, expiredDates []string, now time.Time) bool {
+	// 如果没有设置任何日期限制，总是生效
+	if len(effectiveDates) == 0 && len(expiredDates) == 0 {
+		return true
+	}
+
+	// 检查生效日期
+	if len(effectiveDates) > 0 {
+		isEffective := false
+		for _, effDate := range effectiveDates {
+			if effDateParsed, err := a.parseDate(effDate); err == nil {
+				if now.After(effDateParsed) || now.Equal(effDateParsed) {
+					isEffective = true
+					break
+				}
+			}
+		}
+		if !isEffective {
+			return false // 不在任何生效日期之后
+		}
+	}
+
+	// 检查过期日期
+	if len(expiredDates) > 0 {
+		for _, expDate := range expiredDates {
+			if expDateParsed, err := a.parseDate(expDate); err == nil {
+				if now.After(expDateParsed) || now.Equal(expDateParsed) {
+					return false // 已过期
+				}
+			}
+		}
+	}
+
+	return true
+}
+
+// isTimeAllowedEnhanced 增强的时间检查，支持所有格式
+func (a *AuthManager) isTimeAllowedEnhanced(user *User, clientTime time.Time) bool {
+	if len(user.AllowedHours) == 0 && len(user.AllowedDays) == 0 {
+		return true // 无时间限制
+	}
+
+	// 处理时区
+	loc, err := time.LoadLocation(user.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	localTime := clientTime.In(loc)
+
+	// 检查日期是否有效
+	// 注意：User结构需要扩展以支持日期限制
+	// 这里暂时跳过日期检查
+
+	// 检查星期几
+	if len(user.AllowedDays) > 0 {
+		currentDay := int(localTime.Weekday())
+		allowed := false
+		for _, allowedDay := range user.AllowedDays {
+			if currentDay == allowedDay {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return false
+		}
+	}
+
+	// 检查小时
+	if len(user.AllowedHours) > 0 {
+		currentHour := localTime.Hour()
+		allowed := false
+		for _, allowedHour := range user.AllowedHours {
+			if currentHour == allowedHour {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return false
+		}
+	}
+
+	return true
 }

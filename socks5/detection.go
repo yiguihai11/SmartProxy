@@ -6,6 +6,8 @@ import (
 	"net"
 	"regexp"
 	"strings"
+
+	"smartproxy/logger"
 )
 
 // TrafficType 流量类型
@@ -31,11 +33,11 @@ type DetectionResult struct {
 
 // TrafficDetector 流量检测器
 type TrafficDetector struct {
-	logger Logger
+	logger *logger.SlogLogger
 }
 
 // NewTrafficDetector 创建流量检测器
-func NewTrafficDetector(logger Logger) *TrafficDetector {
+func NewTrafficDetector(logger *logger.SlogLogger) *TrafficDetector {
 	return &TrafficDetector{
 		logger: logger,
 	}
@@ -318,7 +320,7 @@ func (td *TrafficDetector) DetectFromConnection(conn net.Conn, initialData []byt
 		}
 	}
 
-	td.logger.Printf("Traffic detected: Type=%v, Host=%s, Method=%s",
+	td.logger.Info("Traffic detected: Type=%v, Host=%s, Method=%s",
 		result.Type, result.Hostname, result.Method)
 
 	return result

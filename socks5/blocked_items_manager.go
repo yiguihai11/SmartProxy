@@ -3,7 +3,7 @@ package socks5
 import (
 	"crypto/sha256"
 	"fmt"
-	"log"
+	"smartproxy/logger"
 	"net"
 	"sort"
 	"strings"
@@ -15,13 +15,13 @@ import (
 type FailureReason int
 
 const (
-	FailureReasonUnknown FailureReason = iota
-	FailureReasonRST                    // Connection reset (typical GFW behavior)
-	FailureReasonTimeout               // Connection timeout
-	FailureReasonHandshakeFailure      // TLS handshake failed
-	FailureReasonDNSFailure            // DNS resolution failed
-	FailureReasonConnectionRefused     // Connection refused
-	FailureReasonHostUnreachable       // Host unreachable
+	FailureReasonUnknown           FailureReason = iota
+	FailureReasonRST                             // Connection reset (typical GFW behavior)
+	FailureReasonTimeout                         // Connection timeout
+	FailureReasonHandshakeFailure                // TLS handshake failed
+	FailureReasonDNSFailure                      // DNS resolution failed
+	FailureReasonConnectionRefused               // Connection refused
+	FailureReasonHostUnreachable                 // Host unreachable
 )
 
 // String returns the string representation of FailureReason
@@ -49,9 +49,9 @@ type BlockedItemType int
 
 const (
 	ItemTypeUnknown BlockedItemType = iota
-	ItemTypeDomain                    // Domain name
-	ItemTypeIPv4                      // IPv4 address
-	ItemTypeIPv6                      // IPv6 address
+	ItemTypeDomain                  // Domain name
+	ItemTypeIPv4                    // IPv4 address
+	ItemTypeIPv6                    // IPv6 address
 )
 
 // String returns the string representation of BlockedItemType
@@ -79,16 +79,16 @@ type PortInfo struct {
 
 // BlockedItem represents a blocked domain or IP with detailed information
 type BlockedItem struct {
-	Key           string                     `json:"key"`            // Domain or IP
-	Type          BlockedItemType            `json:"type"`
-	FirstBlocked  time.Time                  `json:"first_blocked"`
-	LastUpdated   time.Time                  `json:"last_updated"`
-	TotalAttempts int                        `json:"total_attempts"`
-	Ports         map[int]*PortInfo          `json:"ports"`           // Port-specific information
-	IPList        []string                   `json:"ip_list"`        // List of IPs tried (for domains)
-	FailureReasons map[FailureReason]int     `json:"failure_reasons"` // Count of each failure type
-	AdditionalInfo map[string]interface{}    `json:"additional_info"` // Extra information
-	mutex         sync.RWMutex               `json:"-"`
+	Key            string                 `json:"key"` // Domain or IP
+	Type           BlockedItemType        `json:"type"`
+	FirstBlocked   time.Time              `json:"first_blocked"`
+	LastUpdated    time.Time              `json:"last_updated"`
+	TotalAttempts  int                    `json:"total_attempts"`
+	Ports          map[int]*PortInfo      `json:"ports"`           // Port-specific information
+	IPList         []string               `json:"ip_list"`         // List of IPs tried (for domains)
+	FailureReasons map[FailureReason]int  `json:"failure_reasons"` // Count of each failure type
+	AdditionalInfo map[string]interface{} `json:"additional_info"` // Extra information
+	mutex          sync.RWMutex           `json:"-"`
 }
 
 // NewBlockedItem creates a new BlockedItem
@@ -217,7 +217,7 @@ func (s *ShardedBlockedItemsMap) getShard(key string) *blockedItemsShard {
 
 	// Use first 4 bytes for shard selection
 	shardIndex := (uint32(hashBytes[0])<<24 | uint32(hashBytes[1])<<16 |
-	               uint32(hashBytes[2])<<8 | uint32(hashBytes[3])) & s.shardMask
+		uint32(hashBytes[2])<<8 | uint32(hashBytes[3])) & s.shardMask
 
 	return s.shards[shardIndex]
 }
@@ -335,15 +335,15 @@ func (s *ShardedBlockedItemsMap) CleanupExpired(ttl time.Duration) int {
 
 // BlockedItemsManager manages blocked items with TTL and cleanup
 type BlockedItemsManager struct {
-	items        *ShardedBlockedItemsMap
-	ttl          time.Duration
+	items         *ShardedBlockedItemsMap
+	ttl           time.Duration
 	cleanupTicker *time.Ticker
-	stopCleanup  chan bool
-	logger       *log.Logger
+	stopCleanup   chan bool
+	logger        *logger.SlogLogger
 }
 
 // NewBlockedItemsManager creates a new BlockedItemsManager
-func NewBlockedItemsManager(ttlMinutes int, logger *log.Logger) *BlockedItemsManager {
+func NewBlockedItemsManager(ttlMinutes int, logger *logger.SlogLogger) *BlockedItemsManager {
 	ttl := time.Duration(ttlMinutes) * time.Minute
 	manager := &BlockedItemsManager{
 		items:       NewShardedBlockedItemsMap(),
@@ -368,7 +368,7 @@ func (bm *BlockedItemsManager) AddBlockedDomain(domain, portStr, ip string, reas
 	key := strings.ToLower(strings.TrimSpace(domain))
 	bm.items.Add(key, ItemTypeDomain, port, reason, ip)
 
-	bm.logger.Printf("🚫 Added blocked domain: %s (port: %d, reason: %s, ip: %s)",
+	bm.logger.Info("🚫 Added blocked domain: %s (port: %d, reason: %s, ip: %s)",
 		key, port, reason, ip)
 }
 
@@ -389,7 +389,7 @@ func (bm *BlockedItemsManager) AddBlockedIP(ip, portStr string, reason FailureRe
 
 	bm.items.Add(ip, itemType, port, reason, "")
 
-	bm.logger.Printf("🚫 Added blocked IP: %s (port: %d, reason: %s, type: %s)",
+	bm.logger.Info("🚫 Added blocked IP: %s (port: %d, reason: %s, type: %s)",
 		ip, port, reason, itemType)
 }
 
@@ -429,15 +429,15 @@ func (bm *BlockedItemsManager) GetStatistics() map[string]interface{} {
 		"total_blocked_domains": domainCount,
 		"total_blocked_ips":     ipCount,
 		"total_blocked_items":   bm.items.Count(),
-		"oldest_block":         oldestBlock,
-		"newest_block":         newestBlock,
+		"oldest_block":          oldestBlock,
+		"newest_block":          newestBlock,
 	}
 }
 
 // Remove removes a blocked item
 func (bm *BlockedItemsManager) Remove(key string) {
 	if bm.items.Delete(key) {
-		bm.logger.Printf("✅ Removed from blocked items: %s", key)
+		bm.logger.Info("✅ Removed from blocked items: %s", key)
 	}
 }
 
@@ -491,7 +491,7 @@ func (bm *BlockedItemsManager) startCleanup() {
 			case <-bm.cleanupTicker.C:
 				expiredCount := bm.items.CleanupExpired(bm.ttl)
 				if expiredCount > 0 {
-					bm.logger.Printf("🧹 Cleaned up %d expired blocked items", expiredCount)
+					bm.logger.Info("🧹 Cleaned up %d expired blocked items", expiredCount)
 				}
 			case <-bm.stopCleanup:
 				return

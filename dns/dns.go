@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
+	"smartproxy/logger"
 	"math/rand"
 	"net"
 	"strings"
@@ -29,11 +29,11 @@ type DNSCache struct {
 	maxSize     int
 	cleanupMu   sync.RWMutex
 	cleanupDone chan struct{}
-	logger      *log.Logger
+	logger      *logger.SlogLogger
 }
 
 // NewDNSCache 创建新的DNS缓存
-func NewDNSCache(maxSize int, cleanupInterval time.Duration, logger *log.Logger) *DNSCache {
+func NewDNSCache(maxSize int, cleanupInterval time.Duration, logger *logger.SlogLogger) *DNSCache {
 	dc := &DNSCache{
 		cache:       make(map[string]*CacheEntry),
 		maxSize:     maxSize,
@@ -56,20 +56,20 @@ func (dc *DNSCache) Get(key string) *dns.Msg {
 
 	entry, exists := dc.cache[key]
 	if !exists {
-		dc.logger.Printf("Cache miss for %s", key)
+		dc.logger.Info("Cache miss for %s", key)
 		return nil
 	}
 
 	// 检查是否过期
 	if time.Now().After(entry.Expiry) {
 		delete(dc.cache, key)
-		dc.logger.Printf("Cache expired for %s", key)
+		dc.logger.Info("Cache expired for %s", key)
 		return nil
 	}
 
 	// 更新访问时间
 	entry.Access = time.Now()
-	dc.logger.Printf("Cache hit for %s", key)
+	dc.logger.Info("Cache hit for %s", key)
 
 	// 返回消息的副本
 	msg := entry.Msg.Copy()
@@ -108,7 +108,7 @@ func (dc *DNSCache) Put(key string, msg *dns.Msg) {
 	}
 
 	dc.cache[key] = entry
-	dc.logger.Printf("Cached %s with TTL %ds", key, minTTL)
+	dc.logger.Info("Cached %s with TTL %ds", key, minTTL)
 }
 
 // evictOldest 驱逐最旧的缓存条目
@@ -191,26 +191,19 @@ type Resolver struct {
 	config *Config
 	cache  *DNSCache
 	client *dns.Client
-	logger *log.Logger
+	logger *logger.SlogLogger
 	router *socks5.Router
 }
 
 // NewResolver 创建新的DNS解析器
-func NewResolver(config *Config, logger *log.Logger, router *socks5.Router) *Resolver {
+func NewResolver(config *Config, logger *logger.SlogLogger, router *socks5.Router) *Resolver {
 	cache := NewDNSCache(config.CacheSize, config.CleanupInterval, logger)
 
-	// 直接打印到标准输出，确保能看到
+	// 记录到logger
 	if router == nil {
-		fmt.Printf("CRITICAL: NewResolver called with nil router!\n")
+		logger.Error("NewResolver called with nil router")
 	} else {
-		fmt.Printf("SUCCESS: NewResolver called with valid router\n")
-	}
-
-	// 也记录到logger
-	if router == nil {
-		logger.Printf("DEBUG: NewResolver called with nil router")
-	} else {
-		logger.Printf("DEBUG: NewResolver called with valid router")
+		logger.Debug("NewResolver called with valid router")
 	}
 
 	return &Resolver{
@@ -329,11 +322,11 @@ func (r *Resolver) queryThroughProxyNodes(msg *dns.Msg, servers []string) (*dns.
 	}
 
 	if len(enabledNodes) == 0 {
-		r.logger.Printf("No enabled proxy nodes available, falling back to direct query")
+		r.logger.Info("No enabled proxy nodes available, falling back to direct query")
 		return r.queryConcurrent(msg, servers)
 	}
 
-	r.logger.Printf("Using %d proxy nodes for DNS query", len(enabledNodes))
+	r.logger.Info("Using %d proxy nodes for DNS query", len(enabledNodes))
 
 	type result struct {
 		msg  *dns.Msg
@@ -361,7 +354,7 @@ func (r *Resolver) queryThroughProxyNodes(msg *dns.Msg, servers []string) (*dns.
 		select {
 		case res := <-results:
 			if res.err == nil {
-				r.logger.Printf("Successfully queried through proxy node: %s", res.node.Name)
+				r.logger.Info("Successfully queried through proxy node: %s", res.node.Name)
 				return res.msg, nil
 			}
 		case <-ctx.Done():
@@ -374,7 +367,7 @@ func (r *Resolver) queryThroughProxyNodes(msg *dns.Msg, servers []string) (*dns.
 
 // queryThroughSingleProxy 通过单个SOCKS5代理查询DNS
 func (r *Resolver) queryThroughSingleProxy(msg *dns.Msg, proxyNode ProxyNode) (*dns.Msg, error) {
-	r.logger.Printf("Querying through proxy node %s (%s)", proxyNode.Name, proxyNode.Address)
+	r.logger.Info("Querying through proxy node %s (%s)", proxyNode.Name, proxyNode.Address)
 
 	// 创建SOCKS5代理连接
 	proxyConn, err := net.Dial("tcp", proxyNode.Address)
@@ -434,7 +427,7 @@ func (r *Resolver) queryThroughSingleProxy(msg *dns.Msg, proxyNode ProxyNode) (*
 		select {
 		case res := <-proxyResults:
 			if res.err == nil {
-				r.logger.Printf("Successfully queried through proxy: %s -> %s", proxyNode.Name, res.server)
+				r.logger.Info("Successfully queried through proxy: %s -> %s", proxyNode.Name, res.server)
 				return res.msg, nil
 			}
 		case <-ctx.Done():
@@ -497,20 +490,47 @@ func (r *Resolver) querySingleServerWithConn(msg *dns.Msg, server string, conn n
 		return nil, fmt.Errorf("failed to pack DNS message: %v", err)
 	}
 
-	// SOCKS5 UDP关联
-	udpAssociate := []byte{0x05, 0x03, 0x00, 0x03, 0x01, 0x08, 0x00, 0x00, 0x00, 0x01} // ATYP=IPv4
+	// SOCKS5 UDP关联 - 根据连接地址类型动态构建
+	var udpAssociate []byte
+	addr := conn.RemoteAddr().(*net.TCPAddr)
+	if addr.IP.To4() != nil {
+		// IPv4连接
+		udpAssociate = []byte{0x05, 0x03, 0x00, 0x01, 0x08, 0x00, 0x00, 0x00, 0x00, 0x01} // ATYP=IPv4, IP=8.8.8.8
+	} else {
+		// IPv6连接
+		udpAssociate = []byte{0x05, 0x03, 0x00, 0x04, 0x10, 0x20, 0x01, 0x04, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x01} // ATYP=IPv6, IP=2001:4860:4860::8888
+	}
+
 	if _, err := conn.Write(udpAssociate); err != nil {
 		return nil, fmt.Errorf("failed to send UDP associate request: %v", err)
 	}
 
-	// 读取UDP关联响应
-	udpResp := make([]byte, 10)
+	// 读取UDP关联响应头部
+	udpResp := make([]byte, 4)
 	if _, err := conn.Read(udpResp); err != nil {
-		return nil, fmt.Errorf("failed to read UDP associate response: %v", err)
+		return nil, fmt.Errorf("failed to read UDP associate response header: %v", err)
 	}
 
 	if udpResp[0] != 0x05 || udpResp[1] != 0x00 {
 		return nil, fmt.Errorf("SOCKS5 UDP associate failed: %v", udpResp)
+	}
+
+	// 读取剩余字节（根据地址类型）
+	remainingBytes := 0
+	switch udpResp[3] {
+	case 0x01: // IPv4
+		remainingBytes = 6
+	case 0x04: // IPv6
+		remainingBytes = 18
+	default:
+		return nil, fmt.Errorf("unsupported address type in UDP associate response: %d", udpResp[3])
+	}
+
+	if remainingBytes > 0 {
+		remaining := make([]byte, remainingBytes)
+		if _, err := conn.Read(remaining); err != nil {
+			return nil, fmt.Errorf("failed to read UDP associate response remaining: %v", err)
+		}
 	}
 
 	// 发送DNS查询数据
@@ -540,7 +560,7 @@ func (r *Resolver) hijackQuery(msg *dns.Msg, domain string) (*dns.Msg, bool) {
 
 	for _, rule := range r.config.HijackRules {
 		if r.matchPattern(rule.Pattern, domain) {
-			r.logger.Printf("DNS query for '%s' hijacked by rule '%s' -> '%s'",
+			r.logger.Info("DNS query for '%s' hijacked by rule '%s' -> '%s'",
 				domain, rule.Pattern, rule.Target)
 
 			reply := msg.Copy()
@@ -549,7 +569,7 @@ func (r *Resolver) hijackQuery(msg *dns.Msg, domain string) (*dns.Msg, bool) {
 
 			// 检查目标是否为纯IP地址（直接返回该IP）
 			if ip := net.ParseIP(rule.Target); ip != nil {
-				r.logger.Printf("Hijacking '%s' to IP address: %s", domain, rule.Target)
+				r.logger.Info("Hijacking '%s' to IP address: %s", domain, rule.Target)
 
 				// 根据查询类型创建相应的DNS记录
 				question := msg.Question[0]
@@ -586,11 +606,11 @@ func (r *Resolver) hijackQuery(msg *dns.Msg, domain string) (*dns.Msg, bool) {
 			if host, _, err := net.SplitHostPort(rule.Target); err == nil {
 				if net.ParseIP(host) != nil {
 					dnsServer := rule.Target // 直接使用完整的 host:port
-					r.logger.Printf("Forwarding hijacked query for '%s' to DNS server: %s", domain, dnsServer)
+					r.logger.Info("Forwarding hijacked query for '%s' to DNS server: %s", domain, dnsServer)
 
 					resp, err := r.querySingleServer(msg, dnsServer)
 					if err != nil {
-						r.logger.Printf("Failed to forward hijacked query to %s: %v", dnsServer, err)
+						r.logger.Info("Failed to forward hijacked query to %s: %v", dnsServer, err)
 						return nil, false
 					}
 					return resp, true
@@ -600,18 +620,18 @@ func (r *Resolver) hijackQuery(msg *dns.Msg, domain string) (*dns.Msg, bool) {
 			// 如果是域名格式，尝试添加默认DNS端口53
 			if net.ParseIP(rule.Target) == nil {
 				dnsServer := rule.Target + ":53"
-				r.logger.Printf("Forwarding hijacked query for '%s' to DNS server: %s", domain, dnsServer)
+				r.logger.Info("Forwarding hijacked query for '%s' to DNS server: %s", domain, dnsServer)
 
 				resp, err := r.querySingleServer(msg, dnsServer)
 				if err != nil {
-					r.logger.Printf("Failed to forward hijacked query to %s: %v", dnsServer, err)
+					r.logger.Info("Failed to forward hijacked query to %s: %v", dnsServer, err)
 					return nil, false
 				}
 				return resp, true
 			}
 
 			// 如果目标格式无法识别，记录错误
-			r.logger.Printf("Invalid hijack target format for rule '%s': %s", rule.Pattern, rule.Target)
+			r.logger.Info("Invalid hijack target format for rule '%s': %s", rule.Pattern, rule.Target)
 			return nil, false
 		}
 	}
@@ -631,7 +651,7 @@ func (r *Resolver) Resolve(msg *dns.Msg) (*dns.Msg, error) {
 
 	// 特殊处理：如果配置禁用IPv6，对AAAA查询返回空结果
 	if !r.isIPv6Enabled() && qtype == dns.TypeAAAA {
-		r.logger.Printf("IPv6 disabled, returning empty response for AAAA query: %s", domain)
+		r.logger.Info("IPv6 disabled, returning empty response for AAAA query: %s", domain)
 		reply := msg.Copy()
 		reply.Response = true
 		reply.Rcode = dns.RcodeSuccess
@@ -645,7 +665,7 @@ func (r *Resolver) Resolve(msg *dns.Msg) (*dns.Msg, error) {
 	// 检查缓存
 	if cached := r.cache.Get(cacheKey); cached != nil {
 		cached.Id = msg.Id
-		r.logger.Printf("Serving cached response for %s", domain)
+		r.logger.Info("Serving cached response for %s", domain)
 		return cached, nil
 	}
 
@@ -669,16 +689,16 @@ func (r *Resolver) Resolve(msg *dns.Msg) (*dns.Msg, error) {
 	switch routeResult.Action {
 	case socks5.ActionAllow:
 		// 直连规则：仅使用国内DNS，不进行污染检测
-		r.logger.Printf("Domain %s matched ALLOW rule, using CN DNS only", cleanDomain)
+		r.logger.Info("Domain %s matched ALLOW rule, using CN DNS only", cleanDomain)
 		resp, err = r.queryConcurrent(msg, r.config.CNServers)
 		if err != nil {
-			r.logger.Printf("CN DNS query failed for %s: %v", domain, err)
+			r.logger.Info("CN DNS query failed for %s: %v", domain, err)
 			return nil, err
 		}
 
 	case socks5.ActionBlock:
 		// 屏蔽规则：返回NXDOMAIN
-		r.logger.Printf("Domain %s matched BLOCK rule", cleanDomain)
+		r.logger.Info("Domain %s matched BLOCK rule", cleanDomain)
 		reply := msg.Copy()
 		reply.Response = true
 		reply.Rcode = dns.RcodeNameError
@@ -686,16 +706,16 @@ func (r *Resolver) Resolve(msg *dns.Msg) (*dns.Msg, error) {
 
 	case socks5.ActionProxy:
 		// 强制走代理规则：仅使用国外DNS+代理
-		r.logger.Printf("Domain %s matched PROXY rule, using foreign DNS via proxy", cleanDomain)
+		r.logger.Info("Domain %s matched PROXY rule, using foreign DNS via proxy", cleanDomain)
 		resp, err = r.queryThroughProxyNodes(msg, r.config.ForeignServers)
 		if err != nil {
-			r.logger.Printf("Foreign DNS query via proxy failed for %s: %v", domain, err)
+			r.logger.Info("Foreign DNS query via proxy failed for %s: %v", domain, err)
 			return nil, err
 		}
 
 	default:
 		// ActionDeny 或无匹配：智能查询模式
-		r.logger.Printf("Domain %s: no specific rule, using smart query mode", cleanDomain)
+		r.logger.Info("Domain %s: no specific rule, using smart query mode", cleanDomain)
 		resp, err = r.smartQuery(msg, domain, qtype)
 		if err != nil {
 			return nil, err
@@ -710,7 +730,7 @@ func (r *Resolver) Resolve(msg *dns.Msg) (*dns.Msg, error) {
 	r.cache.Put(cacheKey, resp)
 	resp.Id = msg.Id
 
-	r.logger.Printf("Successfully resolved %s", domain)
+	r.logger.Info("Successfully resolved %s", domain)
 	return resp, nil
 }
 
@@ -726,10 +746,10 @@ func (r *Resolver) isIPv6Enabled() bool {
 func (r *Resolver) smartQuery(msg *dns.Msg, domain string, qtype uint16) (*dns.Msg, error) {
 	// 1. 首先查询国内DNS
 	if len(r.config.CNServers) > 0 {
-		r.logger.Printf("Smart query step 1: trying CN DNS for %s", domain)
+		r.logger.Info("Smart query step 1: trying CN DNS for %s", domain)
 		resp, err := r.queryConcurrent(msg, r.config.CNServers)
 		if err != nil {
-			r.logger.Printf("CN DNS query failed for %s: %v", domain, err)
+			r.logger.Info("CN DNS query failed for %s: %v", domain, err)
 		} else if resp != nil {
 			// 检查污染（仅对A记录进行检测）
 			if qtype == dns.TypeA {
@@ -737,30 +757,30 @@ func (r *Resolver) smartQuery(msg *dns.Msg, domain string, qtype uint16) (*dns.M
 				isPolluted := r.checkPollution(ips)
 
 				if !isPolluted {
-					r.logger.Printf("Smart query: CN response for %s is clean", domain)
+					r.logger.Info("Smart query: CN response for %s is clean", domain)
 					return resp, nil
 				}
 
-				r.logger.Printf("Smart query: CN response for %s appears polluted, trying foreign DNS", domain)
+				r.logger.Info("Smart query: CN response for %s appears polluted, trying foreign DNS", domain)
 			} else {
 				// 非A记录不检测污染
-				r.logger.Printf("Smart query: CN response for %s (type=%d) accepted without pollution check", domain, qtype)
+				r.logger.Info("Smart query: CN response for %s (type=%d) accepted without pollution check", domain, qtype)
 				return resp, nil
 			}
 		}
 	}
 
 	// 2. 国内DNS失败或被污染，使用国外DNS+代理
-	r.logger.Printf("Smart query step 2: querying foreign DNS via proxy for %s", domain)
+	r.logger.Info("Smart query step 2: querying foreign DNS via proxy for %s", domain)
 	resp, err := r.queryThroughProxyNodes(msg, r.config.ForeignServers)
 	if err != nil {
-		r.logger.Printf("Foreign DNS query via proxy failed for %s: %v", domain, err)
+		r.logger.Info("Foreign DNS query via proxy failed for %s: %v", domain, err)
 
 		// 3. 代理查询也失败，尝试直连国外DNS（最后的备选）
-		r.logger.Printf("Smart query step 3: fallback to direct foreign DNS for %s", domain)
+		r.logger.Info("Smart query step 3: fallback to direct foreign DNS for %s", domain)
 		resp, err = r.queryConcurrent(msg, r.config.ForeignServers)
 		if err != nil {
-			r.logger.Printf("Direct foreign DNS query failed for %s: %v", domain, err)
+			r.logger.Info("Direct foreign DNS query failed for %s: %v", domain, err)
 			return nil, err
 		}
 	}
@@ -774,7 +794,7 @@ func (r *Resolver) checkPollution(ips []string) bool {
 		return false
 	}
 
-	r.logger.Printf("DNS pollution check: checking %d IPs", len(ips))
+	r.logger.Info("DNS pollution check: checking %d IPs", len(ips))
 
 	for _, ip := range ips {
 		// 使用Router的MatchRule进行更精确的判断
@@ -782,18 +802,18 @@ func (r *Resolver) checkPollution(ips []string) bool {
 		result := r.router.MatchRule(ip, "", 53)
 
 		if result.Action == socks5.ActionAllow {
-			r.logger.Printf("DNS pollution check: IP %s matched ALLOW rule (clean)", ip)
+			r.logger.Info("DNS pollution check: IP %s matched ALLOW rule (clean)", ip)
 			continue
 		}
 
 		// 检查是否在中国IP段
 		if r.router.IsChinaIP(ip) {
-			r.logger.Printf("DNS pollution check: IP %s is China IP (clean)", ip)
+			r.logger.Info("DNS pollution check: IP %s is China IP (clean)", ip)
 			continue
 		}
 
 		// 如果有任何一个IP不是中国IP且没有匹配ALLOW规则，可能被污染
-		r.logger.Printf("DNS pollution check: IP %s is not China IP and not in ALLOW rules (potentially polluted)", ip)
+		r.logger.Info("DNS pollution check: IP %s is not China IP and not in ALLOW rules (potentially polluted)", ip)
 		return true
 	}
 
@@ -811,11 +831,11 @@ type SmartDNSServer struct {
 	config   *Config
 	resolver *Resolver
 	server   *dns.Server
-	logger   *log.Logger
+	logger   *logger.SlogLogger
 }
 
 // NewSmartDNSServer 创建新的智能DNS服务器
-func NewSmartDNSServer(config *Config, port int, logger *log.Logger, router *socks5.Router) *SmartDNSServer {
+func NewSmartDNSServer(config *Config, port int, logger *logger.SlogLogger, router *socks5.Router) *SmartDNSServer {
 	resolver := NewResolver(config, logger, router)
 
 	// 检查是否启用IPv6
@@ -839,12 +859,12 @@ func NewSmartDNSServer(config *Config, port int, logger *log.Logger, router *soc
 
 // handleDNSRequest 处理DNS请求
 func (s *SmartDNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
-	s.logger.Printf("Received DNS query for %s from %s",
+	s.logger.Info("Received DNS query for %s from %s",
 		r.Question[0].Name, w.RemoteAddr())
 
 	resp, err := s.resolver.Resolve(r)
 	if err != nil {
-		s.logger.Printf("Failed to resolve query for %s: %v",
+		s.logger.Info("Failed to resolve query for %s: %v",
 			r.Question[0].Name, err)
 
 		// 返回SERVFAIL
@@ -859,16 +879,16 @@ func (s *SmartDNSServer) handleDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
 
 // Start 启动DNS服务器
 func (s *SmartDNSServer) Start() error {
-	s.logger.Printf("Starting Smart DNS server on %s", s.server.Addr)
+	s.logger.Info("Starting Smart DNS server on %s", s.server.Addr)
 
 	// 添加Router状态检查
 	if s.resolver != nil {
-		s.logger.Printf("DNS DEBUG: Resolver is not nil, checking router...")
+		s.logger.Info("DNS DEBUG: Resolver is not nil, checking router...")
 		// 这里我们不能直接访问resolver的router，因为它没有公开
 		// 但是可以调用一个简单的方法来验证
-		s.logger.Printf("DNS DEBUG: DNS Server configuration loaded successfully")
+		s.logger.Info("DNS DEBUG: DNS Server configuration loaded successfully")
 	} else {
-		s.logger.Printf("DNS ERROR: Resolver is nil!")
+		s.logger.Info("DNS ERROR: Resolver is nil!")
 	}
 
 	return s.server.ListenAndServe()
@@ -876,7 +896,7 @@ func (s *SmartDNSServer) Start() error {
 
 // Stop 停止DNS服务器
 func (s *SmartDNSServer) Stop() error {
-	s.logger.Printf("Stopping Smart DNS server")
+	s.logger.Info("Stopping Smart DNS server")
 	s.resolver.Stop()
 	if s.server != nil {
 		return s.server.Shutdown()

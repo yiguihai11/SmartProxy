@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartProxy 内存监控</title>
+    <script src="chart.umd.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            padding: 20px;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        .header {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+        .header h1 {
+            color: #2d3748;
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+        .header p {
+            color: #718096;
+            font-size: 1.1rem;
+        }
+        .controls {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+        .btn:active {
+            transform: translateY(0);
+        }
+        .btn-secondary {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+        .btn-success {
+            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+        }
+        .auto-refresh {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 24px;
+        }
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 24px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider {
+            background-color: #667eea;
+        }
+        input:checked + .slider:before {
+            transform: translateX(26px);
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease;
+        }
+        .stat-card:hover {
+            transform: translateY(-5px);
+        }
+        .stat-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            margin-bottom: 15px;
+        }
+        .stat-icon.blue { background: linear-gradient(135deg, #667eea, #764ba2); }
+        .stat-icon.green { background: linear-gradient(135deg, #43e97b, #38f9d7); }
+        .stat-icon.orange { background: linear-gradient(135deg, #fa709a, #fee140); }
+        .stat-icon.red { background: linear-gradient(135deg, #f093fb, #f5576c); }
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #2d3748;
+            margin-bottom: 5px;
+        }
+        .stat-label {
+            color: #718096;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .stat-change {
+            font-size: 0.85rem;
+            margin-top: 10px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .stat-change.positive { color: #43e97b; }
+        .stat-change.negative { color: #f56565; }
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .chart-card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .chart-card h3 {
+            color: #2d3748;
+            margin-bottom: 20px;
+            font-size: 1.2rem;
+        }
+        .chart-container {
+            position: relative;
+            height: 300px;
+        }
+        .pools-section {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+        .pools-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .pool-card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            border-left: 4px solid #667eea;
+        }
+        .pool-card h4 {
+            color: #2d3748;
+            margin-bottom: 15px;
+        }
+        .pool-stats {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+        }
+        .pool-stat {
+            text-align: center;
+        }
+        .pool-stat-value {
+            font-size: 1.8rem;
+            font-weight: bold;
+            color: #667eea;
+        }
+        .pool-stat-label {
+            font-size: 0.85rem;
+            color: #718096;
+            margin-top: 5px;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e2e8f0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #718096;
+        }
+        .error {
+            background: #fed7d7;
+            color: #c53030;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+        }
+        .timestamp {
+            text-align: center;
+            color: #718096;
+            font-size: 0.9rem;
+            margin-top: 20px;
+        }
+        @media (max-width: 768px) {
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .control-group {
+                flex-direction: column;
+            }
+            .charts-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧠 SmartProxy 内存监控</h1>
+            <p>实时监控系统内存使用情况和对象池性能</p>
+        </div>
+
+        <div class="controls">
+            <div class="control-group">
+                <button class="btn" onclick="loadData()">
+                    🔄 刷新数据
+                </button>
+                <button class="btn btn-secondary" onclick="clearHistory()">
+                    🗑️ 清除历史
+                </button>
+                <button class="btn btn-success" onclick="exportData()">
+                    📊 导出数据
+                </button>
+            </div>
+            <div class="auto-refresh">
+                <label class="switch">
+                    <input type="checkbox" id="autoRefresh" checked>
+                    <span class="slider"></span>
+                </label>
+                <span>自动刷新 (5秒)</span>
+            </div>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon blue">💾</div>
+                <div class="stat-value" id="allocated-memory">-</div>
+                <div class="stat-label">已分配内存</div>
+                <div class="stat-change" id="memory-change">
+                    <span>📈</span>
+                    <span>-</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="memory-progress" style="width: 0%"></div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon green">🔗</div>
+                <div class="stat-value" id="active-connections">-</div>
+                <div class="stat-label">活跃连接数</div>
+                <div class="stat-change positive">
+                    <span>✓</span>
+                    <span>正常运行</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon orange">🗑️</div>
+                <div class="stat-value" id="gc-count">-</div>
+                <div class="stat-label">GC 运行次数</div>
+                <div class="stat-change" id="gc-change">
+                    <span>⏱️</span>
+                    <span>-</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon red">📊</div>
+                <div class="stat-value" id="memory-pressure">-</div>
+                <div class="stat-label">内存压力</div>
+                <div class="stat-change" id="pressure-status">
+                    <span>●</span>
+                    <span>-</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="charts-grid">
+            <div class="chart-card">
+                <h3>📈 内存使用趋势</h3>
+                <div class="chart-container">
+                    <canvas id="memoryChart"></canvas>
+                </div>
+            </div>
+            <div class="chart-card">
+                <h3>📊 连接数变化</h3>
+                <div class="chart-container">
+                    <canvas id="connectionsChart"></canvas>
+                </div>
+            </div>
+            <div class="chart-card">
+                <h3>♻️ 对象池效率</h3>
+                <div class="chart-container">
+                    <canvas id="poolEfficiencyChart"></canvas>
+                </div>
+            </div>
+            <div class="chart-card">
+                <h3>🔄 缓冲区分配</h3>
+                <div class="chart-container">
+                    <canvas id="bufferAllocationChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="pools-section">
+            <h3>🎯 对象池详细统计</h3>
+            <div class="pools-grid">
+                <div class="pool-card">
+                    <h4>📦 缓冲区池</h4>
+                    <div class="pool-stats">
+                        <div class="pool-stat">
+                            <div class="pool-stat-value" id="buffer-active">-</div>
+                            <div class="pool-stat-label">活跃对象</div>
+                        </div>
+                        <div class="pool-stat">
+                            <div class="pool-stat-value" id="buffer-hit-rate">-</div>
+                            <div class="pool-stat-label">命中率</div>
+                        </div>
+                        <div class="pool-stat">
+                            <div class="pool-stat-value" id="buffer-total-requests">-</div>
+                            <div class="pool-stat-label">总请求数</div>
+                        </div>
+                        <div class="pool-stat">
+                            <div class="pool-stat-value" id="buffer-memory">-</div>
+                            <div class="pool-stat-label">内存使用(MB)</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="pool-card">
+                    <h4>🔌 连接池</h4>
+                    <div class="pool-stats">
+                        <div class="pool-stat">
+                            <div class="pool-stat-value" id="conn-active">-</div>
+                            <div class="pool-stat-label">活跃连接</div>
+                        </div>
+                        <div class="pool-stat">
+                            <div class="pool-stat-value" id="conn-hit-rate">-</div>
+                            <div class="pool-stat-label">命中率</div>
+                        </div>
+                        <div class="pool-stat">
+                            <div class="pool-stat-value" id="conn-reuse-rate">-</div>
+                            <div class="pool-stat-label">重用率</div>
+                        </div>
+                        <div class="pool-stat">
+                            <div class="pool-stat-value" id="conn-total">-</div>
+                            <div class="pool-stat-label">总请求数</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="timestamp" id="last-update">
+            最后更新: -
+        </div>
+    </div>
+
+    <script>
+        // 全局变量
+        let autoRefreshInterval;
+        let memoryChart, connectionsChart, poolEfficiencyChart, bufferAllocationChart;
+        let memoryHistory = [];
+        let connectionsHistory = [];
+        let previousStats = {};
+
+        // 初始化图表
+        function initCharts() {
+            // 内存使用趋势图
+            const memoryCtx = document.getElementById('memoryChart').getContext('2d');
+            memoryChart = new Chart(memoryCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '内存使用 (MB)',
+                        data: [],
+                        borderColor: '#667eea',
+                        backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+
+            // 连接数变化图
+            const connectionsCtx = document.getElementById('connectionsChart').getContext('2d');
+            connectionsChart = new Chart(connectionsCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '活跃连接数',
+                        data: [],
+                        borderColor: '#43e97b',
+                        backgroundColor: 'rgba(67, 233, 123, 0.1)',
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+
+            // 对象池效率图
+            const poolEfficiencyCtx = document.getElementById('poolEfficiencyChart').getContext('2d');
+            poolEfficiencyChart = new Chart(poolEfficiencyCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['缓冲区池命中率', '连接池命中率'],
+                    datasets: [{
+                        data: [0, 0],
+                        backgroundColor: ['#667eea', '#43e97b'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        }
+                    }
+                }
+            });
+
+            // 缓冲区分配图
+            const bufferAllocationCtx = document.getElementById('bufferAllocationChart').getContext('2d');
+            bufferAllocationChart = new Chart(bufferAllocationCtx, {
+                type: 'bar',
+                data: {
+                    labels: ['64B', '256B', '1KB', '4KB', '8KB', '16KB', '32KB', '64KB'],
+                    datasets: [{
+                        label: '活跃对象数',
+                        data: [0, 0, 0, 0, 0, 0, 0, 0],
+                        backgroundColor: '#764ba2'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+
+        // 加载数据
+        async function loadData() {
+            try {
+                // 并行加载所有数据
+                const [memoryStats, memoryUsage, memoryEfficiency, poolsData] = await Promise.all([
+                    fetch('/api/memory/stats').then(r => r.json()),
+                    fetch('/api/memory/usage').then(r => r.json()),
+                    fetch('/api/memory/efficiency').then(r => r.json()),
+                    fetch('/api/memory/pools').then(r => r.json())
+                ]);
+
+                if (memoryStats.success) {
+                    updateMemoryStats(memoryStats.data);
+                }
+
+                if (memoryUsage.success) {
+                    updateMemoryUsage(memoryUsage.data);
+                }
+
+                if (memoryEfficiency.success) {
+                    updateMemoryEfficiency(memoryEfficiency.data);
+                }
+
+                if (poolsData.success) {
+                    updatePoolsData(poolsData.data);
+                }
+
+                // 更新时间戳
+                document.getElementById('last-update').textContent =
+                    `最后更新: ${new Date().toLocaleString()}`;
+
+                // 更新图表
+                updateCharts();
+
+            } catch (error) {
+                console.error('加载数据失败:', error);
+                showError('无法加载监控数据');
+            }
+        }
+
+        // 更新内存统计
+        function updateMemoryStats(stats) {
+            const allocatedMB = (stats.alloc / 1024 / 1024).toFixed(2);
+            document.getElementById('allocated-memory').textContent = allocatedMB;
+
+            const activeConnections = stats.active_connections || 0;
+            document.getElementById('active-connections').textContent = activeConnections;
+
+            const gcCount = stats.num_gc || 0;
+            document.getElementById('gc-count').textContent = gcCount;
+
+            // 计算变化
+            if (previousStats.alloc) {
+                const change = stats.alloc - previousStats.alloc;
+                const changeElement = document.getElementById('memory-change');
+                if (change > 0) {
+                    changeElement.className = 'stat-change positive';
+                    changeElement.innerHTML = `<span>📈</span><span>+${(change/1024/1024).toFixed(2)} MB</span>`;
+                } else {
+                    changeElement.className = 'stat-change negative';
+                    changeElement.innerHTML = `<span>📉</span><span>${(change/1024/1024).toFixed(2)} MB</span>`;
+                }
+            }
+
+            if (previousStats.num_gc) {
+                const gcChange = stats.num_gc - previousStats.num_gc;
+                document.getElementById('gc-change').innerHTML =
+                    `<span>🔄</span><span>+${gcChange} 次</span>`;
+            }
+
+            previousStats = stats;
+
+            // 添加到历史记录
+            memoryHistory.push({
+                time: new Date().toLocaleTimeString(),
+                value: parseFloat(allocatedMB)
+            });
+
+            connectionsHistory.push({
+                time: new Date().toLocaleTimeString(),
+                value: activeConnections
+            });
+
+            // 限制历史记录长度
+            if (memoryHistory.length > 20) memoryHistory.shift();
+            if (connectionsHistory.length > 20) connectionsHistory.shift();
+        }
+
+        // 更新内存使用
+        function updateMemoryUsage(usage) {
+            const systemMemory = usage.system_memory;
+            if (systemMemory) {
+                const totalMB = (systemMemory.system_bytes / 1024 / 1024).toFixed(0);
+                const allocatedMB = (systemMemory.allocated_bytes / 1024 / 1024).toFixed(0);
+                const percentage = (allocatedMB / totalMB * 100).toFixed(1);
+
+                document.getElementById('memory-progress').style.width = percentage + '%';
+            }
+        }
+
+        // 更新内存效率
+        function updateMemoryEfficiency(efficiency) {
+            const pressure = efficiency.memory_pressure || 'unknown';
+            const pressureElement = document.getElementById('memory-pressure');
+            const statusElement = document.getElementById('pressure-status');
+
+            switch(pressure) {
+                case 'low':
+                    pressureElement.textContent = '低';
+                    statusElement.innerHTML = `<span style="color: #43e97b">●</span><span>正常</span>`;
+                    break;
+                case 'medium':
+                    pressureElement.textContent = '中';
+                    statusElement.innerHTML = `<span style="color: #f6ad55">●</span><span>注意</span>`;
+                    break;
+                case 'high':
+                    pressureElement.textContent = '高';
+                    statusElement.innerHTML = `<span style="color: #f56565">●</span><span>警告</span>`;
+                    break;
+                default:
+                    pressureElement.textContent = '未知';
+                    statusElement.innerHTML = `<span style="color: #718096">●</span><span>未知</span>`;
+            }
+        }
+
+        // 更新对象池数据
+        function updatePoolsData(pools) {
+            // 调试输出
+            console.log('Pool Data:', pools);
+
+            if (pools.buffer_pool) {
+                const bufferPool = pools.buffer_pool;
+                document.getElementById('buffer-active').textContent = bufferPool.active_objects || 0;
+                document.getElementById('buffer-hit-rate').textContent =
+                    (bufferPool.hit_rate_percent || 0).toFixed(1) + '%';
+                document.getElementById('buffer-total-requests').textContent =
+                    (bufferPool.total_requests || 0).toLocaleString();
+                document.getElementById('buffer-memory').textContent =
+                    (bufferPool.total_memory_mb || 0).toFixed(1);
+
+                console.log('Buffer Pool:', bufferPool);
+            }
+
+            if (pools.connection_pool) {
+                const connectionPool = pools.connection_pool;
+                console.log('Connection Pool:', connectionPool);
+
+                // 根据实际的API响应调整字段名
+                document.getElementById('conn-active').textContent =
+                    connectionPool.active_connections || connectionPool.active_objects || 0;
+                document.getElementById('conn-hit-rate').textContent =
+                    (connectionPool.hit_rate_percent || 0).toFixed(1) + '%';
+                document.getElementById('conn-reuse-rate').textContent =
+                    (connectionPool.reuse_rate_percent || 0).toFixed(1) + '%';
+                document.getElementById('conn-total').textContent =
+                    (connectionPool.total_requests || 0).toLocaleString();
+            }
+        }
+
+        // 更新图表
+        function updateCharts() {
+            // 更新内存趋势图
+            if (memoryHistory.length > 0) {
+                memoryChart.data.labels = memoryHistory.map(h => h.time);
+                memoryChart.data.datasets[0].data = memoryHistory.map(h => h.value);
+                memoryChart.update();
+            }
+
+            // 更新连接数图表
+            if (connectionsHistory.length > 0) {
+                connectionsChart.data.labels = connectionsHistory.map(h => h.time);
+                connectionsChart.data.datasets[0].data = connectionsHistory.map(h => h.value);
+                connectionsChart.update();
+            }
+
+            // 更新对象池效率图（示例数据）
+            const bufferHitRate = parseFloat(document.getElementById('buffer-hit-rate').textContent) || 0;
+            const connHitRate = parseFloat(document.getElementById('conn-hit-rate').textContent) || 0;
+            poolEfficiencyChart.data.datasets[0].data = [bufferHitRate, connHitRate];
+            poolEfficiencyChart.update();
+        }
+
+        // 自动刷新控制
+        function toggleAutoRefresh() {
+            const checkbox = document.getElementById('autoRefresh');
+            if (checkbox.checked) {
+                autoRefreshInterval = setInterval(loadData, 5000);
+            } else {
+                clearInterval(autoRefreshInterval);
+            }
+        }
+
+        // 清除历史
+        function clearHistory() {
+            memoryHistory = [];
+            connectionsHistory = [];
+            updateCharts();
+        }
+
+        // 导出数据
+        function exportData() {
+            const data = {
+                timestamp: new Date().toISOString(),
+                memory_history: memoryHistory,
+                connections_history: connectionsHistory,
+                current_stats: previousStats
+            };
+
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `smartproxy-memory-${new Date().toISOString().split('T')[0]}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // 显示错误
+        function showError(message) {
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'error';
+            errorDiv.textContent = message;
+            document.querySelector('.container').insertBefore(errorDiv, document.querySelector('.controls'));
+            setTimeout(() => errorDiv.remove(), 5000);
+        }
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            initCharts();
+            loadData();
+
+            // 设置自动刷新
+            document.getElementById('autoRefresh').addEventListener('change', toggleAutoRefresh);
+            toggleAutoRefresh();
+        });
+    </script>
+</body>
+</html>

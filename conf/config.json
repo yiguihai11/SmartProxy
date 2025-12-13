@@ -6,13 +6,15 @@
     "ipv6_enabled": false
   },
   "socks5": {
-    "enable_auth": false,
+    "enable_auth": true,
     "auth_users": [
       {
         "username": "admin",
-        "password": "password9527",
+        "password": "AdminPass123!",
         "enabled": true,
-        "user_groups": ["admin"],
+        "user_groups": [
+          "admin"
+        ],
         "rate_limit": {
           "upload_bps": 10485760,
           "download_bps": 10485760
@@ -20,28 +22,68 @@
         "connection_limit": {
           "max_connections": 10,
           "expires_after_minutes": 60,
-          "allow_from_ips": ["192.168.0.0/16"],
-          "block_from_ips": [],
+          "allow_from_ips": [
+            "192.168.0.0/16"
+          ],
+          "block_from_ips": [
+            "10.0.0.1"
+          ],
           "time_restriction": {
-            "allowed_hours": ["09:00-18:00"],
-            "allowed_days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+            "allowed_hours": [
+              "09:00-18:00"
+            ],
+            "allowed_days": [
+              "monday-friday"
+            ],
             "timezone": "Asia/Shanghai",
-            "effective_dates": ["2024-01-01"],
-            "expired_dates": []
+            "effective_dates": [
+              "2024-01-01"
+            ]
           }
         }
       },
       {
-        "username": "user",
-        "password": "user123",
+        "username": "user1",
+        "password": "User1Pass@123",
         "enabled": true,
-        "user_groups": ["user"],
+        "user_groups": [
+          "user"
+        ],
+        "rate_limit": {
+          "upload_bps": 1048576,
+          "download_bps": 1048576
+        },
+        "connection_limit": {
+          "max_connections": 5,
+          "expires_after_minutes": 1440
+        }
+      },
+      {
+        "username": "guest",
+        "password": "Guest#12345",
+        "enabled": true,
+        "user_groups": [
+          "guest"
+        ],
         "rate_limit": {
           "upload_bps": 524288,
           "download_bps": 524288
         },
         "connection_limit": {
-          "max_connections": 5
+          "max_connections": 2,
+          "allow_from_ips": [
+            "127.0.0.1"
+          ],
+          "time_restriction": {
+            "allowed_hours": [
+              "19:00-23:00"
+            ],
+            "allowed_days": [
+              "saturday",
+              "sunday"
+            ],
+            "timezone": "Asia/Shanghai"
+          }
         }
       }
     ]
@@ -151,10 +193,15 @@
     "enabled": true,
     "timeout_ms": 1500,
     "blacklist_expiry_minutes": 360,
-    "probing_ports": [80, 8080, 443, 8443]
+    "probing_ports": [
+      80,
+      8080,
+      443,
+      8443
+    ]
   },
   "dns": {
-    "enabled": true,
+    "enabled": false,
     "cache": {
       "max_size": 2000,
       "default_ttl": 300,
@@ -211,9 +258,12 @@
       }
     ]
   },
-  "connection_settings": {
-    "tcp_timeout_seconds": 60,
-    "udp_timeout_seconds": 300
+  "logging": {
+    "level": "info",
+    "output_file": "",
+    "enable_time": true,
+    "enable_colors": true,
+    "prefix": "[SmartProxy]"
   },
   "nat_traversal": {
     "enabled": false,
@@ -225,6 +275,9 @@
       "stun.stunprotocol.org:3478",
       "stunserver.org:3478"
     ],
+    "turn_server": "",
+    "turn_username": "",
+    "turn_password": "",
     "upnp_enabled": false,
     "port_mapping_range": {
       "start": 50000,
@@ -234,11 +287,5 @@
     "stun_timeout": 5,
     "hole_punch_count": 3,
     "hole_punch_delay": 100
-  },
-  "logging": {
-    "level": "info",
-    "enable_user_logs": true,
-    "enable_access_logs": true,
-    "log_file": "proxy.log"
   }
 }

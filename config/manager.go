@@ -10,6 +10,35 @@ import (
 	"time"
 )
 
+// Router 路由器配置结构体
+type Router struct {
+	Chnroutes struct {
+		Enable bool   `json:"enable"`
+		Path   string `json:"path"`
+	} `json:"chnroutes"`
+	Rules      []RouterRule `json:"rules"`
+	ProxyNodes []ProxyNode  `json:"proxy_nodes,omitempty"`
+}
+
+// NATTraversal NAT穿透配置结构体
+type NATTraversal struct {
+	Enabled          bool     `json:"enabled"`
+	Mode             string   `json:"mode"`          // "auto", "direct", "fullcone", "holepunch", "turn"
+	STUNServers      []string `json:"stun_servers"`  // STUN服务器列表
+	TURNServer       string   `json:"turn_server"`   // TURN服务器地址
+	TURNUsername     string   `json:"turn_username"` // TURN用户名
+	TURNPassword     string   `json:"turn_password"` // TURN密码
+	UPnPEnabled      bool     `json:"upnp_enabled"`  // 是否启用UPnP
+	PortMappingRange struct {
+		Start int `json:"start"` // 端口映射起始端口
+		End   int `json:"end"`   // 端口映射结束端口
+	} `json:"port_mapping_range"`
+	KeepAliveInterval int `json:"keepalive_interval"` // 保活间隔（秒）
+	STUNTimeout       int `json:"stun_timeout"`       // STUN请求超时时间（秒）
+	HolePunchCount    int `json:"hole_punch_count"`   // 打洞包发送次数
+	HolePunchDelay    int `json:"hole_punch_delay"`   // 打洞包间隔（毫秒）
+}
+
 // Config 配置文件结构体
 type Config struct {
 	Listener struct {
@@ -20,20 +49,11 @@ type Config struct {
 	} `json:"listener"`
 
 	SOCKS5 struct {
-		MaxConnections  int        `json:"max_connections"`
-		CleanupInterval int        `json:"cleanup_interval"`
-		EnableAuth      bool       `json:"enable_auth"`
-		AuthUsers       []AuthUser `json:"auth_users"`
+		EnableAuth bool       `json:"enable_auth"`
+		AuthUsers  []AuthUser `json:"auth_users"`
 	} `json:"socks5"`
 
-	Router struct {
-		Chnroutes struct {
-			Enable bool   `json:"enable"`
-			Path   string `json:"path"`
-		} `json:"chnroutes"`
-		Rules      []RouterRule `json:"rules"`
-		ProxyNodes []ProxyNode  `json:"proxy_nodes,omitempty"`
-	} `json:"router"`
+	Router Router `json:"router"`
 
 	SmartProxy struct {
 		Enabled                bool  `json:"enabled"`
@@ -53,35 +73,15 @@ type Config struct {
 		HijackRules []DNSHijackRule     `json:"hijack_rules"`
 	} `json:"dns"`
 
-	ConnectionSettings struct {
-		TCPTimeoutSeconds int `json:"tcp_timeout_seconds"`
-		UDPTimeoutSeconds int `json:"udp_timeout_seconds"`
-	} `json:"connection_settings"`
-
 	Logging struct {
-		Level            string `json:"level"`
-		EnableUserLogs   bool   `json:"enable_user_logs"`
-		EnableAccessLogs bool   `json:"enable_access_logs"`
-		LogFile          string `json:"log_file"`
+		Level        string `json:"level"`
+		OutputFile   string `json:"output_file"`
+		EnableTime   bool   `json:"enable_time"`
+		Prefix       string `json:"prefix"`
+		EnableColors bool   `json:"enable_colors"`
 	} `json:"logging"`
 
-	NATTraversal struct {
-		Enabled          bool     `json:"enabled"`
-		Mode             string   `json:"mode"`          // "auto", "direct", "fullcone", "holepunch", "turn"
-		STUNServers      []string `json:"stun_servers"`  // STUN服务器列表
-		TURNServer       string   `json:"turn_server"`   // TURN服务器地址
-		TURNUsername     string   `json:"turn_username"` // TURN用户名
-		TURNPassword     string   `json:"turn_password"` // TURN密码
-		UPnPEnabled      bool     `json:"upnp_enabled"`  // 是否启用UPnP
-		PortMappingRange struct {
-			Start int `json:"start"` // 端口映射起始端口
-			End   int `json:"end"`   // 端口映射结束端口
-		} `json:"port_mapping_range"`
-		KeepAliveInterval int  `json:"keepalive_interval"` // 保活间隔（秒）
-		STUNTimeout      int  `json:"stun_timeout"`       // STUN请求超时时间（秒）
-		HolePunchCount   int  `json:"hole_punch_count"`   // 打洞包发送次数
-		HolePunchDelay   int  `json:"hole_punch_delay"`   // 打洞包间隔（毫秒）
-	} `json:"nat_traversal"`
+	NATTraversal NATTraversal `json:"nat_traversal"`
 }
 
 // AuthUser 认证用户结构体
@@ -305,8 +305,6 @@ func (m *Manager) createDefaultConfig() error {
 	defaultConfig.Listener.DNSPort = 1053
 	defaultConfig.Listener.IPv6Enabled = true
 
-	defaultConfig.SOCKS5.MaxConnections = 1000
-	defaultConfig.SOCKS5.CleanupInterval = 300
 	defaultConfig.SOCKS5.EnableAuth = false
 	defaultConfig.SOCKS5.AuthUsers = []AuthUser{
 		{
@@ -349,13 +347,11 @@ func (m *Manager) createDefaultConfig() error {
 	}
 	defaultConfig.DNS.HijackRules = []DNSHijackRule{}
 
-	defaultConfig.ConnectionSettings.TCPTimeoutSeconds = 60
-	defaultConfig.ConnectionSettings.UDPTimeoutSeconds = 300
-
 	defaultConfig.Logging.Level = "info"
-	defaultConfig.Logging.EnableUserLogs = true
-	defaultConfig.Logging.EnableAccessLogs = true
-	defaultConfig.Logging.LogFile = "proxy.log"
+	defaultConfig.Logging.OutputFile = ""
+	defaultConfig.Logging.EnableTime = true
+	defaultConfig.Logging.Prefix = ""
+	defaultConfig.Logging.EnableColors = true
 
 	// NAT穿透默认配置
 	defaultConfig.NATTraversal.Enabled = false

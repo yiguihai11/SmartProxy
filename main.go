@@ -1,12 +1,15 @@
 package main
 
 import (
-	"log"
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
 	"net"
 	"os"
 	"os/signal"
 	"smartproxy/config"
 	"smartproxy/dns"
+	"smartproxy/logger"
 	"smartproxy/socks5"
 	"smartproxy/web"
 	"strconv"
@@ -36,33 +39,55 @@ func main() {
 		}
 	}
 
-	// 加载主配置以获取 probing_ports 和 SOCKS5端口
+	// 加载主配置
 	mainCfgManager := config.NewManager(configPath)
 	if err := mainCfgManager.Load(); err != nil {
-		log.Fatalf("Failed to load main config file: %v", err)
+		fmt.Fprintf(os.Stderr, "Failed to load main config file: %v\n", err)
+		os.Exit(1)
 	}
 
+	// 初始化日志系统
+	cfg := mainCfgManager.GetConfig()
+	logConfig := logger.Config{
+		Level:        cfg.Logging.Level,
+		OutputFile:   cfg.Logging.OutputFile,
+		EnableTime:   cfg.Logging.EnableTime,
+		Prefix:       cfg.Logging.Prefix,
+		EnableColors: cfg.Logging.EnableColors && cfg.Logging.OutputFile == "", // 文件输出时不启用颜色
+	}
+
+	mainLogger, err := logger.New(logConfig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
+		os.Exit(1)
+	}
+	defer mainLogger.Close()
+
 	// 从配置文件读取SOCKS5端口（如果配置文件中有设置则覆盖命令行参数）
-	configPort := mainCfgManager.GetConfig().Listener.SOCKS5Port
+	configPort := cfg.Listener.SOCKS5Port
 	if configPort > 0 {
 		port = configPort // 使用配置文件中的端口
-		log.Printf("Using SOCKS5 port from config: %d", configPort)
+		mainLogger.Info("Using SOCKS5 port from config: %d", configPort)
 	} else {
-		log.Printf("Using SOCKS5 port from command line or default: %d", port)
+		mainLogger.Info("Using SOCKS5 port from command line or default: %d", port)
 	}
 
 	probingPorts := mainCfgManager.GetConfig().SmartProxy.ProbingPorts
 
 	server, err := socks5.NewSOCKS5ServerWithConfig(port, configPath, probingPorts)
 	if err != nil {
-		log.Fatalf("Failed to create SOCKS5 server: %v", err)
+		logger.Fatal("Failed to create SOCKS5 server: %v", err)
+	}
+
+	// 初始化内存监控器
+	memoryMonitor := socks5.GetGlobalMemoryMonitor()
+	if memoryMonitor == nil {
+		memoryMonitor = socks5.NewMemoryMonitor(30 * time.Second) // 30秒更新间隔
+		mainLogger.Info("Memory monitor initialized with 30s update interval")
 	}
 
 	// 获取Router实例，用于DNS模块
 	router := server.GetRouter()
-
-	// 获取BlacklistManager实例，用于Web API统计（现在返回nil，因为使用BlockedItemsManager）
-	blacklistManager := server.GetBlacklistManager()
 
 	// 创建Web服务器配置
 	webConfig := web.WebConfig{
@@ -71,15 +96,10 @@ func main() {
 	}
 
 	// 创建Web服务器，传入配置管理器
-	webServer := web.NewWebServer(mainCfgManager, webConfig, log.New(os.Stdout, "[Web] ", log.LstdFlags))
-
-	// 设置黑名单管理器到Web服务器（现在为空，因为使用BlockedItemsManager）
-	if blacklistManager != nil {
-		webServer.SetBlacklistManager(blacklistManager)
-	}
+	webServer := web.NewWebServer(mainCfgManager, webConfig, logger.NewLogger().WithField("prefix", "[Web]"))
 
 	// 从配置文件读取DNS配置
-	cfg := mainCfgManager.GetConfig()
+	cfg = mainCfgManager.GetConfig()
 	var cnServers []string
 	var foreignServers []string
 
@@ -111,7 +131,7 @@ func main() {
 		ProxyNodes:      []dns.ProxyNode{},
 	}
 
-	dnsServer := dns.NewSmartDNSServer(dnsConfig, dnsPort, log.New(os.Stdout, "[DNS] ", log.LstdFlags), router)
+	dnsServer := dns.NewSmartDNSServer(dnsConfig, dnsPort, logger.NewLogger().WithField("prefix", "[DNS]"), router)
 
 	// Web server initialized successfully
 
@@ -124,44 +144,44 @@ func main() {
 	localIP := getLocalIP()
 
 	// 使用配置文件中的端口，其他服务端口也由配置文件决定
-	log.Printf("Config file: %s", configPath)
-	log.Printf("Services started:")
-	log.Printf("  SOCKS5 proxy: %s:%d", localIP, port)
-	log.Printf("  DNS server:   %s:%d", localIP, dnsPort)
-	log.Printf("  Web UI:       http://%s:%d", localIP, webPort)
+	mainLogger.Info("Config file: %s", configPath)
+	mainLogger.Info("Services started:")
+	mainLogger.Info("  SOCKS5 proxy: %s:%d", localIP, port)
+	mainLogger.Info("  DNS server:   %s:%d", localIP, dnsPort)
+	mainLogger.Info("  Web UI:       http://%s:%d", localIP, webPort)
 
 	// 启动SOCKS5服务器
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		log.Printf("Starting SOCKS5 proxy server on port %d", port)
+		mainLogger.Info("Starting SOCKS5 proxy server on port %d", port)
 		if err := server.Start(); err != nil {
-			log.Printf("SOCKS5 server error: %v", err)
+			mainLogger.Error("SOCKS5 server error: %v", err)
 		}
-		log.Printf("SOCKS5 server stopped")
+		mainLogger.Info("SOCKS5 server stopped")
 	}()
 
 	// 启动Web服务器
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		log.Printf("Starting Web interface on port %d", webPort)
-		log.Printf("Web interface: http://127.0.0.1:%d", webPort)
+		mainLogger.Info("Starting Web interface on port %d", webPort)
+		mainLogger.Info("Web interface: http://127.0.0.1:%d", webPort)
 		if err := webServer.Start(); err != nil {
-			log.Printf("Web server error: %v", err)
+			mainLogger.Error("Web server error: %v", err)
 		}
-		log.Printf("Web server stopped")
+		mainLogger.Info("Web server stopped")
 	}()
 
 	// 启动DNS服务器
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		log.Printf("Starting DNS server on port %d", dnsPort)
+		mainLogger.Info("Starting DNS server on port %d", dnsPort)
 		if err := dnsServer.Start(); err != nil {
-			log.Printf("DNS server error: %v", err)
+			mainLogger.Error("DNS server error: %v", err)
 		}
-		log.Printf("DNS server stopped")
+		mainLogger.Info("DNS server stopped")
 	}()
 
 	// 等待中断信号
@@ -169,22 +189,22 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	sig := <-sigChan
-	log.Printf("\nReceived signal %v, shutting down gracefully...", sig)
+	mainLogger.Info("\nReceived signal %v, shutting down gracefully...", sig)
 
 	// 优雅关闭各个服务
-	log.Printf("Stopping SOCKS5 server...")
+	mainLogger.Info("Stopping SOCKS5 server...")
 	if err := server.Stop(); err != nil {
-		log.Printf("Error stopping SOCKS5 server: %v", err)
+		mainLogger.Error("Error stopping SOCKS5 server: %v", err)
 	}
 
-	log.Printf("Stopping Web server...")
+	mainLogger.Info("Stopping Web server...")
 	if err := webServer.Stop(); err != nil {
-		log.Printf("Error stopping Web server: %v", err)
+		mainLogger.Error("Error stopping Web server: %v", err)
 	}
 
-	log.Printf("Stopping DNS server...")
+	mainLogger.Info("Stopping DNS server...")
 	if err := dnsServer.Stop(); err != nil {
-		log.Printf("Error stopping DNS server: %v", err)
+		mainLogger.Error("Error stopping DNS server: %v", err)
 	}
 
 	// 等待所有goroutine完成，最多等待10秒
@@ -196,35 +216,70 @@ func main() {
 
 	select {
 	case <-done:
-		log.Printf("All services stopped gracefully")
+		logger.Info("All services stopped gracefully")
 	case <-time.After(10 * time.Second):
-		log.Printf("Warning: Some services did not stop within timeout")
+		logger.Warn("Warning: Some services did not stop within timeout")
 	}
 
-	log.Printf("SmartProxy stopped")
+	logger.Info("SmartProxy stopped")
 }
 
-// getLocalIP 获取本地IP地址
+// getLocalIP 获取本地IP地址 - 智能选择IPv4/IPv6
 func getLocalIP() string {
-	// 尝试创建UDP连接获取本地IP
-	conn, err := net.Dial("udp", "8.8.8.8:80")
-	if err != nil {
-		// 如果失败，尝试其他方法
-		if addrs, err := net.InterfaceAddrs(); err == nil {
-			for _, addr := range addrs {
-				if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
-					if ipNet.IP.To4() != nil {
-						return ipNet.IP.String()
-					}
+	// 读取IPv6配置
+	ipv6Enabled := false
+	configPath := "conf/config.json"
+	if data, err := ioutil.ReadFile(configPath); err == nil {
+		var config struct {
+			Listener struct {
+				IPv6Enabled bool `json:"ipv6_enabled"`
+			} `json:"listener"`
+		}
+		if json.Unmarshal(data, &config) == nil {
+			ipv6Enabled = config.Listener.IPv6Enabled
+		}
+	}
+
+	// 根据IPv6配置选择测试目标
+	testTargets := []string{"8.8.8.8:80"}
+	if ipv6Enabled {
+		testTargets = []string{"[2001:4860:4860::8888]:80", "8.8.8.8:80"}
+	}
+
+	for _, target := range testTargets {
+		if conn, err := net.Dial("udp", target); err == nil {
+			localAddr := conn.LocalAddr().(*net.UDPAddr)
+			conn.Close()
+			// 如果启用了IPv6且获取到IPv6地址，优先返回
+			if ipv6Enabled && localAddr.IP.To4() == nil {
+				return localAddr.IP.String()
+			}
+			// 否则返回获取到的地址
+			return localAddr.IP.String()
+		}
+	}
+
+	// 回退到接口地址查询
+	if addrs, err := net.InterfaceAddrs(); err == nil {
+		for _, addr := range addrs {
+			if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
+				// 如果启用了IPv6，优先返回IPv6
+				if ipv6Enabled && ipNet.IP.To4() == nil {
+					return ipNet.IP.String()
+				}
+				// 否则优先返回IPv4
+				if ipNet.IP.To4() != nil {
+					return ipNet.IP.String()
 				}
 			}
 		}
-		return "127.0.0.1"
 	}
-	defer conn.Close()
 
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	return localAddr.IP.String()
+	// 最后的回退地址
+	if ipv6Enabled {
+		return "::1"
+	}
+	return "127.0.0.1"
 }
 
 // convertHijackRules 转换配置文件中的劫持规则到DNS模块格式

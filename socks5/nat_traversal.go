@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
+	"smartproxy/logger"
 	"net"
 	"strings"
 	"sync"
@@ -44,7 +44,7 @@ type NATConfig struct {
 
 // NATTraversal NAT穿透管理器
 type NATTraversal struct {
-	logger     *log.Logger
+	logger     *logger.SlogLogger
 	publicIP   string
 	publicPort int
 	natType    NATType
@@ -64,13 +64,13 @@ type NATMapping struct {
 }
 
 // NewNATTraversal 创建NAT穿透管理器
-func NewNATTraversal(configPath string, logger *log.Logger) *NATTraversal {
+func NewNATTraversal(configPath string, logger *logger.SlogLogger) *NATTraversal {
 	// 加载配置
 	config := loadNATConfig(configPath, logger)
 
 	// 如果配置禁用了NAT穿透，返回空的管理器
 	if !config.Enabled {
-		logger.Printf("NAT穿透功能已禁用")
+		logger.Info("NAT穿透功能已禁用")
 		return &NATTraversal{
 			logger:  logger,
 			config:  config,
@@ -86,9 +86,9 @@ func NewNATTraversal(configPath string, logger *log.Logger) *NATTraversal {
 		mapping:    make(map[string]*NATMapping),
 	}
 
-	logger.Printf("NAT穿透模式: %s", config.Mode)
-	logger.Printf("STUN服务器数量: %d", len(config.STUNServers))
-	logger.Printf("UPnP: %s", map[bool]string{true: "启用", false: "禁用"}[config.UPnPEnabled])
+	logger.Info("NAT穿透模式: %s", config.Mode)
+	logger.Info("STUN服务器数量: %d", len(config.STUNServers))
+	logger.Info("UPnP: %s", map[bool]string{true: "启用", false: "禁用"}[config.UPnPEnabled])
 
 	// 启动时检测NAT类型
 	go nt.detectNATType()
@@ -97,7 +97,7 @@ func NewNATTraversal(configPath string, logger *log.Logger) *NATTraversal {
 }
 
 // loadNATConfig 加载NAT配置
-func loadNATConfig(configPath string, logger *log.Logger) *NATConfig {
+func loadNATConfig(configPath string, logger *logger.SlogLogger) *NATConfig {
 	config := &NATConfig{
 		Enabled: false, // 默认禁用
 		Mode:    "auto",
@@ -120,12 +120,12 @@ func loadNATConfig(configPath string, logger *log.Logger) *NATConfig {
 			if natConfig, exists := fullConfig["nat_traversal"]; exists {
 				if natBytes, err := json.Marshal(natConfig); err == nil {
 					json.Unmarshal(natBytes, config)
-					logger.Printf("从配置文件加载NAT设置成功")
+					logger.Info("从配置文件加载NAT设置成功")
 				}
 			}
 		}
 	} else {
-		logger.Printf("无法读取配置文件，使用默认NAT设置: %v", err)
+		logger.Warn("无法读取配置文件，使用默认NAT设置: %v", err)
 	}
 
 	return config
@@ -138,7 +138,7 @@ func (nt *NATTraversal) ReloadConfig() {
 		nt.mutex.Lock()
 		nt.config = newConfig
 		nt.mutex.Unlock()
-		nt.logger.Printf("NAT配置已重新加载")
+		nt.logger.Info("NAT配置已重新加载")
 	}
 }
 
@@ -152,12 +152,12 @@ func (nt *NATTraversal) IsEnabled() bool {
 
 // detectNATType 检测NAT类型
 func (nt *NATTraversal) detectNATType() {
-	nt.logger.Printf("检测NAT类型...")
+	nt.logger.Info("检测NAT类型...")
 
 	// 使用STUN协议检测公网IP和端口
 	ip, port, err := nt.getPublicIPViaSTUN()
 	if err != nil {
-		nt.logger.Printf("STUN检测失败: %v", err)
+		nt.logger.Info("STUN检测失败: %v", err)
 		nt.natType = NATUnknown
 		return
 	}
@@ -171,12 +171,12 @@ func (nt *NATTraversal) detectNATType() {
 	// 判断NAT类型
 	if ip == localIP {
 		nt.natType = NATOpen
-		nt.logger.Printf("检测到开放网络（公网IP）: %s:%d", ip, port)
+		nt.logger.Info("检测到开放网络（公网IP）: %s:%d", ip, port)
 	} else {
 		// 需要更复杂的检测来确定具体的NAT类型
 		// 这里简化处理，假设是Full Cone NAT
 		nt.natType = NATFullCone
-		nt.logger.Printf("检测到NAT环境，公网IP: %s:%d", ip, port)
+		nt.logger.Info("检测到NAT环境，公网IP: %s:%d", ip, port)
 	}
 }
 
@@ -189,10 +189,10 @@ func (nt *NATTraversal) getPublicIPViaSTUN() (string, int, error) {
 	for _, server := range nt.config.STUNServers {
 		ip, port, err := nt.querySTUNServer(server)
 		if err == nil {
-			nt.logger.Printf("STUN服务器 %s 成功: %s:%d", server, ip, port)
+			nt.logger.Info("STUN服务器 %s 成功: %s:%d", server, ip, port)
 			return ip, port, nil
 		}
-		nt.logger.Printf("STUN服务器 %s 失败: %v", server, err)
+		nt.logger.Info("STUN服务器 %s 失败: %v", server, err)
 	}
 	return "", 0, fmt.Errorf("所有STUN服务器都不可用")
 }
@@ -247,29 +247,72 @@ func (nt *NATTraversal) querySTUNServer(server string) (string, int, error) {
 
 	// 返回模拟的公网IP和端口
 	// 实际应该从STUN响应中解析
-	return "203.0.113.1", 54321, nil
+	// 根据NATTraversal的配置返回合适的地址类型
+	if nt != nil && nt.config != nil && nt.isIPv6Enabled() {
+		return "2001:db8::1", 54321, nil // IPv6测试地址
+	}
+	return "203.0.113.1", 54321, nil // IPv4测试地址
 }
 
-// getLocalIP 获取本地IP
+// getLocalIP 获取本地IP - 优先返回IPv6（如果启用）
 func (nt *NATTraversal) getLocalIP() string {
-	conn, err := net.Dial("udp", "8.8.8.8:80")
-	if err != nil {
-		return "127.0.0.1"
+	// 根据IPv6配置选择测试目标
+	testTargets := []string{"8.8.8.8:80"}
+	if nt != nil && nt.isIPv6Enabled() {
+		testTargets = []string{"[2001:4860:4860::8888]:80", "8.8.8.8:80"}
 	}
-	defer conn.Close()
 
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	return localAddr.IP.String()
+	for _, target := range testTargets {
+		if conn, err := net.Dial("udp", target); err == nil {
+			localAddr := conn.LocalAddr().(*net.UDPAddr)
+			conn.Close()
+			// 如果启用了IPv6且获取到IPv6地址，优先返回
+			if nt != nil && nt.isIPv6Enabled() && localAddr.IP.To4() == nil {
+				return localAddr.IP.String()
+			}
+			// 否则返回获取到的地址
+			return localAddr.IP.String()
+		}
+	}
+
+	// 回退到接口地址查询
+	if addrs, err := net.InterfaceAddrs(); err == nil {
+		for _, addr := range addrs {
+			if ipNet, ok := addr.(*net.IPNet); ok && !ipNet.IP.IsLoopback() {
+				// 如果启用了IPv6，优先返回IPv6
+				if nt != nil && nt.isIPv6Enabled() && ipNet.IP.To4() == nil {
+					return ipNet.IP.String()
+				}
+				// 否则优先返回IPv4
+				if ipNet.IP.To4() != nil {
+					return ipNet.IP.String()
+				}
+			}
+		}
+	}
+
+	// 最后的回退地址
+	if nt != nil && nt.isIPv6Enabled() {
+		return "::1"
+	}
+	return "127.0.0.1"
+}
+
+// isIPv6Enabled 检查是否启用了IPv6
+func (nt *NATTraversal) isIPv6Enabled() bool {
+	// 这里可以添加更复杂的IPv6检测逻辑
+	// 暂时返回true，表示支持IPv6
+	return true
 }
 
 // PerformUDPHolePunching 执行UDP打洞
 func (nt *NATTraversal) PerformUDPHolePunching(targetIP string, targetPort int, localPort int) error {
 	if nt.natType == NATOpen {
-		nt.logger.Printf("开放网络，无需打洞")
+		nt.logger.Info("开放网络，无需打洞")
 		return nil
 	}
 
-	nt.logger.Printf("执行UDP打洞: %s:%d -> %s:%d", nt.publicIP, localPort, targetIP, targetPort)
+	nt.logger.Info("执行UDP打洞: %s:%d -> %s:%d", nt.publicIP, localPort, targetIP, targetPort)
 
 	// 创建本地UDP socket
 	localAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", localPort))
@@ -307,7 +350,7 @@ func (nt *NATTraversal) PerformUDPHolePunching(targetIP string, targetPort int, 
 		time.Sleep(punchDelay)
 	}
 
-	nt.logger.Printf("UDP打洞完成")
+	nt.logger.Info("UDP打洞完成")
 	return nil
 }
 
@@ -321,20 +364,20 @@ func (nt *NATTraversal) RequestPortMapping(internalPort int, externalPort int, p
 	if nt.config.UPnPEnabled {
 		err := nt.requestUPnPPortMapping(internalPort, externalPort, protocol)
 		if err == nil {
-			nt.logger.Printf("UPnP端口映射成功: %d -> %d", internalPort, externalPort)
+			nt.logger.Info("UPnP端口映射成功: %d -> %d", internalPort, externalPort)
 			return nil
 		}
-		nt.logger.Printf("UPnP失败: %v", err)
+		nt.logger.Info("UPnP失败: %v", err)
 	}
 
 	// 尝试PCP (Port Control Protocol)
 	err := nt.requestPCPPortMapping(internalPort, externalPort, protocol)
 	if err == nil {
-		nt.logger.Printf("PCP端口映射成功: %d -> %d", internalPort, externalPort)
+		nt.logger.Info("PCP端口映射成功: %d -> %d", internalPort, externalPort)
 		return nil
 	}
 
-	nt.logger.Printf("端口映射失败: %v", err)
+	nt.logger.Info("端口映射失败: %v", err)
 	return fmt.Errorf("无法创建端口映射")
 }
 
@@ -377,7 +420,7 @@ func (nt *NATTraversal) requestUPnPPortMapping(internalPort, externalPort int, p
 
 	// 解析IGD位置并添加端口映射
 	// 这里简化处理，实际需要完整的UPnP实现
-	nt.logger.Printf("检测到UPnP设备: %s", response[:min(50, len(response))])
+	nt.logger.Info("检测到UPnP设备: %s", response[:min(50, len(response))])
 
 	return nil
 }
@@ -385,7 +428,7 @@ func (nt *NATTraversal) requestUPnPPortMapping(internalPort, externalPort int, p
 // requestPCPPortMapping 请求PCP端口映射
 func (nt *NATTraversal) requestPCPPortMapping(internalPort, externalPort int, protocol string) error {
 	// PCP实现
-	nt.logger.Printf("PCP端口映射功能尚未实现")
+	nt.logger.Info("PCP端口映射功能尚未实现")
 	return fmt.Errorf("PCP功能尚未实现")
 }
 

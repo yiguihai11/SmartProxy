@@ -3,9 +3,8 @@ package socks5
 import (
 	"context"
 	"fmt"
-	"log"
-	"os"
 	"smartproxy/config"
+	"smartproxy/logger"
 	"sync"
 	"time"
 )
@@ -141,13 +140,13 @@ type RateLimiter struct {
 	globalDownload  *TokenBucket
 	stats           map[string]*RateLimitStats
 	mu              sync.RWMutex
-	logger          Logger
+	logger          *logger.SlogLogger
 }
 
 // NewRateLimiter 创建新的限速器
-func NewRateLimiter(logger Logger) *RateLimiter {
-	if logger == nil {
-		logger = log.New(os.Stdout, "[RateLimiter] ", log.LstdFlags)
+func NewRateLimiter(log *logger.SlogLogger) *RateLimiter {
+	if log == nil {
+		log = logger.NewLogger().WithField("prefix", "[RateLimiter]")
 	}
 
 	return &RateLimiter{
@@ -155,7 +154,7 @@ func NewRateLimiter(logger Logger) *RateLimiter {
 		uploadBuckets:   make(map[string]*TokenBucket),
 		downloadBuckets: make(map[string]*TokenBucket),
 		stats:           make(map[string]*RateLimitStats),
-		logger:          logger,
+		logger:          log,
 	}
 }
 
@@ -167,7 +166,7 @@ func (rl *RateLimiter) SetGlobalLimits(uploadBps, downloadBps int64) {
 	rl.globalUpload = NewTokenBucket(uploadBps*2, uploadBps) // 2秒突发
 	rl.globalDownload = NewTokenBucket(downloadBps*2, downloadBps)
 
-	rl.logger.Printf("Set global rate limits: upload=%d bps, download=%d bps", uploadBps, downloadBps)
+	rl.logger.Info("Set global rate limits: upload=%d bps, download=%d bps", uploadBps, downloadBps)
 }
 
 // AddRule 添加限速规则
@@ -202,7 +201,7 @@ func (rl *RateLimiter) AddRule(rule *RateLimitRule) error {
 		LastUpdate: time.Now(),
 	}
 
-	rl.logger.Printf("Added rate limit rule: %s (%s: %s)", rule.ID, rule.Type, key)
+	rl.logger.Info("Added rate limit rule: %s (%s: %s)", rule.ID, rule.Type, key)
 	return nil
 }
 
@@ -222,7 +221,7 @@ func (rl *RateLimiter) RemoveRule(ruleID string) bool {
 	delete(rl.downloadBuckets, key)
 	delete(rl.stats, key)
 
-	rl.logger.Printf("Removed rate limit rule: %s", ruleID)
+	rl.logger.Info("Removed rate limit rule: %s", ruleID)
 	return true
 }
 
@@ -500,6 +499,6 @@ func (rl *RateLimiter) LoadUserRateLimitsFromConfig(configUsers []config.AuthUse
 		}
 	}
 
-	rl.logger.Printf("Loaded rate limits for %d users from config", len(configUsers))
+	rl.logger.Info("Loaded rate limits for %d users from config", len(configUsers))
 	return nil
 }

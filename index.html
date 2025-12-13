@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <title>SmartProxy 管理面板</title>
-    <link href="layui-v2.13.1/layui/css/layui.css" rel="stylesheet">
+    <link href="web/static/layui-v2.13.1/layui/css/layui.css" rel="stylesheet">
     <style>
         :root {
             --sidebar-width: 240px;
@@ -95,70 +95,6 @@
         .config-group { margin-bottom: 30px; padding-bottom: 20px; border-bottom: 1px dashed #eee; }
         .config-group:last-child { border-bottom: none; }
         .sub-title { font-size: 14px; color: #666; margin-bottom: 15px; font-weight: 500; }
-
-        /* 密码显示/隐藏样式 */
-        .password-wrapper {
-            position: relative;
-            display: inline-block;
-            width: 100%;
-        }
-        .password-toggle {
-            position: absolute;
-            right: 10px;
-            top: 50%;
-            transform: translateY(-50%);
-            cursor: pointer;
-            color: #999;
-            font-size: 16px;
-            z-index: 10;
-            background: white;
-            padding: 0 5px;
-        }
-        .password-toggle:hover {
-            color: #666;
-        }
-        .layui-input-block .password-wrapper input,
-        .layui-input-inline .password-wrapper input {
-            padding-right: 35px;
-        }
-
-        /* DNS 服务器列表样式 */
-        .dns-list {
-            padding: 10px 0;
-        }
-        .dns-item {
-            display: flex;
-            margin-bottom: 8px;
-            align-items: center;
-        }
-        .dns-item input {
-            flex: 1;
-            margin-right: 10px;
-        }
-        .dns-item .layui-btn {
-            margin: 0;
-        }
-        .dns-item .add-btn,
-        .dns-item .remove-btn {
-            background-color: #FF5722;
-            color: white;
-            border: none;
-            padding: 0 10px;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        .dns-item .add-btn {
-            background-color: #009688;
-        }
-        .dns-item .add-btn:hover,
-        .dns-item .remove-btn:hover {
-            opacity: 0.8;
-        }
-        .dns-item .add-btn.layui-btn-disabled,
-        .dns-item .remove-btn.layui-btn-disabled {
-            background-color: #e6e6e6;
-            cursor: not-allowed;
-        }
     </style>
 </head>
 <body>
@@ -167,8 +103,7 @@
 
 <aside class="side-nav" id="sidebar">
     <div class="logo-box"><h1>SmartProxy</h1></div>
-    <div class="nav-item" data-page="home" data-label="运行状态"><i class="layui-icon layui-icon-home"></i> <span>运行状态</span></div>
-    <div class="nav-item" onclick="window.open('/memory.html', '_blank')" data-label="内存监控"><i class="layui-icon layui-icon-chart"></i> <span>内存监控</span></div>
+    <div class="nav-item active" data-page="home" data-label="运行状态"><i class="layui-icon layui-icon-home"></i> <span>运行状态</span></div>
     <div class="nav-item" data-page="listener" data-label="监听配置"><i class="layui-icon layui-icon-set"></i> <span>监听配置</span></div>
     <div class="nav-item" data-page="socks5" data-label="SOCKS5 配置"><i class="layui-icon layui-icon-username"></i> <span>SOCKS5 配置</span></div>
     <div class="nav-item" data-page="router" data-label="路由规则"><i class="layui-icon layui-icon-share"></i> <span>路由规则</span></div>
@@ -181,6 +116,7 @@
     <header class="app-header">
         <i class="layui-icon layui-icon-spread-left" id="toggleBtn" style="font-size: 22px; cursor: pointer; color: var(--primary-blue);"></i>
         <div id="title-display" style="margin-left:15px; font-weight: 500; font-size: 16px;">运行状态</div>
+        <span class="header-logo-text">智能代理，安全上网</span>
         <div class="status-area">
             <span style="color: var(--success-green);">正常运行</span>
             <span class="status-dot"></span>
@@ -399,17 +335,13 @@
                      <div class="layui-form-item">
                         <label class="layui-form-label">国内 DNS</label>
                         <div class="layui-input-block">
-                            <div id="dns-cn-list" class="dns-list">
-                                <!-- DNS 项将通过 JavaScript 动态添加 -->
-                            </div>
+                            <textarea name="dns_cn" class="layui-textarea" placeholder="每行一个DNS服务器"></textarea>
                         </div>
                     </div>
                     <div class="layui-form-item">
                         <label class="layui-form-label">国外 DNS</label>
                         <div class="layui-input-block">
-                            <div id="dns-foreign-list" class="dns-list">
-                                <!-- DNS 项将通过 JavaScript 动态添加 -->
-                            </div>
+                            <textarea name="dns_foreign" class="layui-textarea" placeholder="每行一个DNS服务器"></textarea>
                         </div>
                     </div>
                 </form>
@@ -475,10 +407,7 @@
                     <div class="layui-form-item">
                         <label class="layui-form-label">TURN 密码</label>
                         <div class="layui-input-inline">
-                            <div class="password-wrapper">
-                                <input type="password" name="turn_password" class="layui-input">
-                                <i class="layui-icon layui-icon-eye password-toggle"></i>
-                            </div>
+                            <input type="password" name="turn_password" class="layui-input">
                         </div>
                     </div>
                      <div class="layui-form-item">
@@ -591,8 +520,8 @@
     </footer>
 </main>
 
-<script src="chart.umd.min.js"></script>
-<script src="layui-v2.13.1/layui/layui.js"></script>
+<script src="web/static/chart.umd.min.js"></script>
+<script src="web/static/layui-v2.13.1/layui/layui.js"></script>
 
 <script>
 // ==================== SmartProxy 管理面板主程序 ====================
@@ -601,138 +530,8 @@ layui.use(['form', 'table', 'layer'], function(){
     const form = layui.form;
     const table = layui.table;
     const layer = layui.layer;
-
+    
     $('#year').text(new Date().getFullYear());
-
-    // ==================== 密码显示/隐藏功能 ====================
-    // 使用事件委托处理动态添加的密码框
-    $(document).on('click', '.password-toggle', function() {
-        const $icon = $(this);
-        const $input = $icon.siblings('input');
-        const type = $input.attr('type');
-
-        if (type === 'password') {
-            $input.attr('type', 'text');
-            $icon.removeClass('layui-icon-eye').addClass('layui-icon-eye-invisible');
-        } else {
-            $input.attr('type', 'password');
-            $icon.removeClass('layui-icon-eye-invisible').addClass('layui-icon-eye');
-        }
-    });
-
-    // ==================== DNS 服务器列表管理 ====================
-    // 创建 DNS 输入项
-    function createDnsItem(value = '', isFirstEmpty = false) {
-        const itemDiv = $('<div class="dns-item"></div>');
-        const input = $('<input type="text" class="layui-input" placeholder="例如: 8.8.8.8:53">').val(value);
-
-        // 添加/删除按钮
-        const btn = isFirstEmpty ?
-            $('<button type="button" class="layui-btn layui-btn-sm add-btn">+</button>') :
-            $('<button type="button" class="layui-btn layui-btn-sm remove-btn">-</button>');
-
-        itemDiv.append(input).append(btn);
-        return itemDiv;
-    }
-
-    // 初始化 DNS 列表
-    function initDnsList(groupId, dnsArray) {
-        const listContainer = $(`#dns-${groupId}-list`);
-        listContainer.empty();
-
-        // 添加现有的 DNS 服务器
-        if (dnsArray && dnsArray.length > 0) {
-            dnsArray.forEach(dns => {
-                if (dns && dns.trim() !== '') {
-                    listContainer.append(createDnsItem(dns.trim()));
-                }
-            });
-        }
-
-        // 总是添加一个空的输入框用于添加新的 DNS
-        listContainer.append(createDnsItem('', true));
-    }
-
-    // 更新 DNS 列表按钮状态
-    function updateDnsListButtons(container) {
-        const items = container.find('.dns-item');
-        items.each(function() {
-            const btn = $(this).find('button');
-            const input = $(this).find('input');
-            const isEmpty = !input.val().trim();
-            const isLast = $(this).is(':last-child');
-
-            if (isEmpty && isLast) {
-                // 最后一个空项显示 + 按钮
-                btn.removeClass('remove-btn layui-btn-disabled').addClass('add-btn').text('+').prop('disabled', false);
-            } else if (isEmpty && !isLast) {
-                // 非最后一个空项禁用按钮
-                btn.removeClass('add-btn remove-btn').addClass('layui-btn-disabled').text('-').prop('disabled', true);
-            } else {
-                // 有内容的项显示 - 按钮
-                btn.removeClass('add-btn layui-btn-disabled').addClass('remove-btn').text('-').prop('disabled', false);
-            }
-        });
-    }
-
-    // 获取 DNS 列表数据
-    function getDnsListData(groupId) {
-        const listContainer = $(`#dns-${groupId}-list`);
-        const dnsArray = [];
-
-        listContainer.find('.dns-item input').each(function() {
-            const value = $(this).val().trim();
-            if (value) {
-                dnsArray.push(value);
-            }
-        });
-
-        return dnsArray;
-    }
-
-    // 处理 DNS 列表点击事件
-    $(document).on('click', '.dns-item button', function() {
-        const item = $(this).closest('.dns-item');
-        const listContainer = item.closest('.dns-list');
-        const btn = $(this);
-        const input = item.find('input');
-
-        if (btn.hasClass('add-btn')) {
-            // 添加新的 DNS 项
-            if (input.val().trim()) {
-                listContainer.append(createDnsItem('', true));
-                btn.removeClass('add-btn').addClass('remove-btn').text('-');
-                updateDnsListButtons(listContainer);
-            }
-        } else if (btn.hasClass('remove-btn')) {
-            // 删除当前 DNS 项
-            item.remove();
-            updateDnsListButtons(listContainer);
-
-            // 确保至少有一个空输入框
-            if (listContainer.find('.dns-item').length === 0 ||
-                listContainer.find('.dns-item:last input').val().trim()) {
-                listContainer.append(createDnsItem('', true));
-            }
-            updateDnsListButtons(listContainer);
-        }
-    });
-
-    // 处理 DNS 输入框变化
-    $(document).on('input', '.dns-item input', function() {
-        const item = $(this).closest('.dns-item');
-        const listContainer = item.closest('.dns-list');
-        const input = $(this);
-        const btn = item.find('button');
-
-        // 如果输入框有内容且是最后一项，添加新的空输入框
-        if (input.val().trim() && item.is(':last-child')) {
-            listContainer.append(createDnsItem('', true));
-            btn.removeClass('add-btn').addClass('remove-btn').text('-');
-        }
-
-        updateDnsListButtons(listContainer);
-    });
 
     // 全局配置对象
     let config = null;
@@ -741,17 +540,19 @@ layui.use(['form', 'table', 'layer'], function(){
     
     // 从后端加载配置
     function loadConfig() {
-        // 从真实的后端 API 调用
-        fetch('/api/config')
-            .then(res => res.json())
-            .then(data => {
-                config = data;
-                initAllForms();
-                layer.msg('配置加载成功', {icon: 1});
-            })
-            .catch(err => {
-                layer.msg('配置加载失败: ' + err.message, {icon: 2});
-                // 如果 API 失败，使用默认配置
+        // TODO: 替换为真实的后端 API 调用
+        // fetch('/api/config')
+        //     .then(res => res.json())
+        //     .then(data => {
+        //         config = data;
+        //         initAllForms();
+        //         layer.msg('配置加载成功', {icon: 1});
+        //     })
+        //     .catch(err => {
+        //         layer.msg('配置加载失败: ' + err.message, {icon: 2});
+        //     });
+        
+        // 当前使用模拟数据
         config = {
   "listener": {
     "socks5_port": 1080,
@@ -1042,14 +843,14 @@ layui.use(['form', 'table', 'layer'], function(){
     "hole_punch_count": 3,
     "hole_punch_delay": 100
   }
-          };
-            initAllForms();
-        });
+};
+
+        initAllForms();
     }
 
     // 保存配置到后端
     function saveConfig() {
-        // 暂时注释掉真实的后端 API 调用，避免保存错误数据
+        // TODO: 替换为真实的后端 API 调用
         // fetch('/api/config', {
         //     method: 'POST',
         //     headers: {'Content-Type': 'application/json'},
@@ -1062,8 +863,8 @@ layui.use(['form', 'table', 'layer'], function(){
         // .catch(err => {
         //     layer.msg('配置保存失败: ' + err.message, {icon: 2});
         // });
-
-        layer.msg('配置修改功能已暂时禁用，请手动编辑配置文件', {icon: 0});
+        
+        layer.msg('配置已保存（需要连接后端 API）', {icon: 1});
         console.log('当前配置:', JSON.stringify(config, null, 2));
     }
 
@@ -1112,9 +913,10 @@ layui.use(['form', 'table', 'layer'], function(){
         });
 
         if (config.dns.groups) {
-            // 使用新的 DNS 列表初始化函数
-            initDnsList('cn', config.dns.groups.cn || []);
-            initDnsList('foreign', config.dns.groups.foreign || []);
+            form.val("dnsGroupsForm", {
+                "dns_cn": (config.dns.groups.cn || []).join('\n'),
+                "dns_foreign": (config.dns.groups.foreign || []).join('\n')
+            });
         }
 
         // NAT 配置
@@ -1378,10 +1180,7 @@ layui.use(['form', 'table', 'layer'], function(){
                         <div class="layui-form-item">
                             <label class="layui-form-label">密码</label>
                             <div class="layui-input-block">
-                                <div class="password-wrapper">
-                                    <input type="password" name="password" value="${data.password}" class="layui-input" placeholder="留空则不修改">
-                                    <i class="layui-icon layui-icon-eye password-toggle"></i>
-                                </div>
+                                <input type="password" name="password" value="${data.password}" class="layui-input" placeholder="留空则不修改">
                             </div>
                         </div>
                         <div class="layui-form-item">
@@ -1474,10 +1273,7 @@ layui.use(['form', 'table', 'layer'], function(){
                         <div class="layui-form-item">
                             <label class="layui-form-label">密码</label>
                             <div class="layui-input-block">
-                                <div class="password-wrapper">
-                                    <input type="password" name="password" class="layui-input" required lay-verify="required">
-                                    <i class="layui-icon layui-icon-eye password-toggle"></i>
-                                </div>
+                                <input type="password" name="password" class="layui-input" required lay-verify="required">
                             </div>
                         </div>
                         <div class="layui-form-item">
@@ -1604,9 +1400,9 @@ layui.use(['form', 'table', 'layer'], function(){
         config.dns.cache.cleanup_interval = parseInt(dnsData.cache_cleanup_interval);
 
         if (config.dns.groups) {
-            // 使用新的 DNS 列表获取函数
-            config.dns.groups.cn = getDnsListData('cn');
-            config.dns.groups.foreign = getDnsListData('foreign');
+            const dnsGroupsData = form.val('dnsGroupsForm');
+            config.dns.groups.cn = dnsGroupsData.dns_cn.split('\n').filter(ip => ip.trim() !== '');
+            config.dns.groups.foreign = dnsGroupsData.dns_foreign.split('\n').filter(ip => ip.trim() !== '');
         }
         saveConfig();
     });

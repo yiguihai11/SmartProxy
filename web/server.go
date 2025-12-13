@@ -6,12 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"smartproxy/config"
+	"smartproxy/logger"
 	"smartproxy/socks5"
+
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -51,7 +52,7 @@ type WebServer struct {
 	webConfig WebConfig
 	port      int
 	enabled   bool
-	logger    *log.Logger
+	logger    *logger.SlogLogger
 	server    *http.Server
 	startTime time.Time
 
@@ -61,8 +62,6 @@ type WebServer struct {
 	wsUpgrader websocket.Upgrader
 	clients    map[*websocket.Conn]bool
 	clientsMu  sync.RWMutex
-
-	blacklistManager *socks5.BlacklistManager
 
 	activeConnections map[string]*ConnectionInfo
 	connectionsMu     sync.RWMutex
@@ -81,9 +80,9 @@ type ConnectionInfo struct {
 }
 
 // NewWebServer creates a new WebServer instance.
-func NewWebServer(cfg *config.Manager, webCfg WebConfig, logger *log.Logger) *WebServer {
-	if logger == nil {
-		logger = log.New(os.Stdout, "[WebServer] ", log.LstdFlags)
+func NewWebServer(cfg *config.Manager, webCfg WebConfig, log *logger.SlogLogger) *WebServer {
+	if log == nil {
+		log = logger.NewLogger().WithField("prefix", "[WebServer]")
 	}
 	if webCfg.Port == 0 {
 		webCfg.Port = 8080
@@ -94,7 +93,7 @@ func NewWebServer(cfg *config.Manager, webCfg WebConfig, logger *log.Logger) *We
 		webConfig: webCfg,
 		port:      webCfg.Port,
 		enabled:   webCfg.Enabled,
-		logger:    logger,
+		logger:    log,
 		startTime: time.Now(),
 		stats:     Stats{StartTime: time.Now()},
 		wsUpgrader: websocket.Upgrader{
@@ -108,9 +107,45 @@ func NewWebServer(cfg *config.Manager, webCfg WebConfig, logger *log.Logger) *We
 	return ws
 }
 
-// SetBlacklistManager sets the blacklist manager for stats reporting
-func (ws *WebServer) SetBlacklistManager(blacklistManager *socks5.BlacklistManager) {
-	ws.blacklistManager = blacklistManager
+// loggingMiddleware logs all API requests
+func (ws *WebServer) loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		// Create a response writer wrapper to capture status code
+		rw := &responseWriter{ResponseWriter: w, statusCode: 200}
+
+		// Log the request
+		clientIP := r.RemoteAddr
+		if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
+			clientIP = realIP
+		} else if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			clientIP = strings.Split(xff, ",")[0]
+		}
+
+		// Process the request
+		next.ServeHTTP(rw, r)
+
+		// Log response
+		duration := time.Since(start)
+		ws.logger.Info("API %s %s - %d - %v - %s",
+			r.Method,
+			r.URL.Path,
+			rw.statusCode,
+			duration,
+			clientIP)
+	})
+}
+
+// responseWriter wraps http.ResponseWriter to capture status code
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
 }
 
 // setupRoutes configures the HTTP routes for the web server.
@@ -127,7 +162,14 @@ func (ws *WebServer) setupRoutes() {
 	mux.HandleFunc("/api/proxy-nodes", ws.handleProxyNodes)
 	mux.HandleFunc("/api/file/chnroutes", ws.handleFileChnroutes)
 	mux.HandleFunc("/api/file/chnroutes/save", ws.handleFileChnroutesSave)
-	mux.HandleFunc("/api/test", ws.handleTest) // 添加测试端点
+	
+	// 内存监控API
+	mux.HandleFunc("/api/memory/stats", ws.handleMemoryStats)
+	mux.HandleFunc("/api/memory/usage", ws.handleMemoryUsage)
+	mux.HandleFunc("/api/memory/efficiency", ws.handleMemoryEfficiency)
+	mux.HandleFunc("/api/memory/history", ws.handleMemoryHistory)
+	mux.HandleFunc("/api/memory/pools", ws.handleMemoryPools)
+
 	mux.HandleFunc("/", ws.handleStatic)
 
 	listenAddr := fmt.Sprintf(":%d", ws.port)
@@ -136,20 +178,20 @@ func (ws *WebServer) setupRoutes() {
 	}
 	ws.server = &http.Server{
 		Addr:    listenAddr,
-		Handler: ws.corsMiddleware(mux),
+		Handler: ws.corsMiddleware(ws.loggingMiddleware(mux)),
 	}
 }
 
 // Start begins listening for web requests.
 func (ws *WebServer) Start() error {
 	if !ws.enabled {
-		ws.logger.Printf("Web interface disabled")
+		ws.logger.Info("Web interface disabled")
 		return nil
 	}
-	ws.logger.Printf("Starting web server on http://localhost:%d", ws.port)
+	ws.logger.Info("Starting web server on http://localhost:%d", ws.port)
 	go func() {
 		if err := ws.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			ws.logger.Printf("Web server error: %v", err)
+			ws.logger.Info("Web server error: %v", err)
 		}
 	}()
 	return nil
@@ -205,16 +247,10 @@ func (ws *WebServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 // handleBlacklistStats provides blacklist statistics and performance metrics.
 func (ws *WebServer) handleBlacklistStats(w http.ResponseWriter, r *http.Request) {
-	if ws.blacklistManager == nil {
-		ws.sendJSONResponse(w, APIResponse{
-			Success: false,
-			Error:   "Blacklist manager not available",
-		})
-		return
-	}
-
-	stats := ws.blacklistManager.GetStats()
-	ws.sendJSONResponse(w, APIResponse{Success: true, Data: stats})
+	ws.sendJSONResponse(w, APIResponse{
+		Success: false,
+		Error:   "Blacklist manager (old version) not available. Please use Blocked Items API.",
+	})
 }
 
 // handleStats provides server statistics.
@@ -240,38 +276,6 @@ func (ws *WebServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	ws.sendJSONResponse(w, APIResponse{Success: true, Data: stats})
 }
 
-// handleTest handles test API requests
-func (ws *WebServer) handleTest(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var testData struct {
-		Type    string `json:"type"`
-		Message string `json:"message"`
-	}
-	err := json.NewDecoder(r.Body).Decode(&testData)
-	if err != nil {
-		ws.logger.Printf("Failed to decode test request: %v", err)
-		ws.sendJSONResponse(w, APIResponse{Success: false, Error: "Invalid JSON data"})
-		return
-	}
-
-	ws.logger.Printf("Test request received: Type=%s, Message=%s", testData.Type, testData.Message)
-
-	// 根据类型触发不同的响应
-	switch testData.Type {
-	case "success":
-		ws.sendJSONResponse(w, APIResponse{Success: true, Data: map[string]interface{}{"received": testData.Message}})
-	case "alert":
-		ws.sendJSONResponse(w, APIResponse{Success: true, Data: map[string]interface{}{"message": testData.Message}})
-	case "error":
-		ws.sendJSONResponse(w, APIResponse{Success: true, Data: map[string]interface{}{"error": testData.Message}})
-	default:
-		ws.sendJSONResponse(w, APIResponse{Success: true, Data: map[string]interface{}{"message": "Unknown test type"}})
-	}
-}
 
 // handleConfig handles getting and setting the main application config.
 func (ws *WebServer) handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -326,12 +330,6 @@ func (ws *WebServer) mergeConfigs(current, new *config.Config) *config.Config {
 	merged.Listener.IPv6Enabled = new.Listener.IPv6Enabled
 
 	// SOCKS5配置
-	if new.SOCKS5.MaxConnections != 0 {
-		merged.SOCKS5.MaxConnections = new.SOCKS5.MaxConnections
-	}
-	if new.SOCKS5.CleanupInterval != 0 {
-		merged.SOCKS5.CleanupInterval = new.SOCKS5.CleanupInterval
-	}
 	// EnableAuth是布尔值，直接覆盖
 	merged.SOCKS5.EnableAuth = new.SOCKS5.EnableAuth
 	// 如果新的AuthUsers不为空，则覆盖
@@ -386,25 +384,17 @@ func (ws *WebServer) mergeConfigs(current, new *config.Config) *config.Config {
 	if new.DNS.HijackRules != nil {
 		merged.DNS.HijackRules = new.DNS.HijackRules
 	}
-
-	// Connection Settings
-	if new.ConnectionSettings.TCPTimeoutSeconds != 0 {
-		merged.ConnectionSettings.TCPTimeoutSeconds = new.ConnectionSettings.TCPTimeoutSeconds
-	}
-	if new.ConnectionSettings.UDPTimeoutSeconds != 0 {
-		merged.ConnectionSettings.UDPTimeoutSeconds = new.ConnectionSettings.UDPTimeoutSeconds
-	}
-
 	// Logging配置
 	if new.Logging.Level != "" {
 		merged.Logging.Level = new.Logging.Level
 	}
-	// EnableUserLogs和EnableAccessLogs是布尔值，直接覆盖
-	merged.Logging.EnableUserLogs = new.Logging.EnableUserLogs
-	merged.Logging.EnableAccessLogs = new.Logging.EnableAccessLogs
-	if new.Logging.LogFile != "" {
-		merged.Logging.LogFile = new.Logging.LogFile
+	if new.Logging.OutputFile != "" {
+		merged.Logging.OutputFile = new.Logging.OutputFile
 	}
+	// 其他布尔值直接覆盖
+	merged.Logging.EnableTime = new.Logging.EnableTime
+	merged.Logging.EnableColors = new.Logging.EnableColors
+	merged.Logging.Prefix = new.Logging.Prefix
 
 	return &merged
 }
@@ -582,7 +572,7 @@ func (ws *WebServer) getContentType(filePath string) string {
 func (ws *WebServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := ws.wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		ws.logger.Printf("WebSocket upgrade failed: %v", err)
+		ws.logger.Info("WebSocket upgrade failed: %v", err)
 		return
 	}
 	defer conn.Close()
@@ -603,4 +593,123 @@ func (ws *WebServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+}
+
+// handleMemoryStats 处理内存统计请求
+func (ws *WebServer) handleMemoryStats(w http.ResponseWriter, r *http.Request) {
+	monitor := socks5.GetGlobalMemoryMonitor()
+	if monitor == nil {
+		ws.sendJSONResponse(w, APIResponse{
+			Success: false,
+			Error:   "Memory monitor not initialized",
+		})
+		return
+	}
+
+	stats := monitor.GetStats()
+	ws.sendJSONResponse(w, APIResponse{
+		Success: true,
+		Data:    stats,
+	})
+}
+
+// handleMemoryUsage 处理内存使用报告请求
+func (ws *WebServer) handleMemoryUsage(w http.ResponseWriter, r *http.Request) {
+	monitor := socks5.GetGlobalMemoryMonitor()
+	if monitor == nil {
+		ws.sendJSONResponse(w, APIResponse{
+			Success: false,
+			Error:   "Memory monitor not initialized",
+		})
+		return
+	}
+
+	report := monitor.GetMemoryUsageReport()
+	ws.sendJSONResponse(w, APIResponse{
+		Success: true,
+		Data:    report,
+	})
+}
+
+// handleMemoryEfficiency 处理内存效率报告请求
+func (ws *WebServer) handleMemoryEfficiency(w http.ResponseWriter, r *http.Request) {
+	monitor := socks5.GetGlobalMemoryMonitor()
+	if monitor == nil {
+		ws.sendJSONResponse(w, APIResponse{
+			Success: false,
+			Error:   "Memory monitor not initialized",
+		})
+		return
+	}
+
+	efficiency := monitor.GetMemoryEfficiency()
+	ws.sendJSONResponse(w, APIResponse{
+		Success: true,
+		Data:    efficiency,
+	})
+}
+
+// handleMemoryHistory 处理内存历史记录请求
+func (ws *WebServer) handleMemoryHistory(w http.ResponseWriter, r *http.Request) {
+	monitor := socks5.GetGlobalMemoryMonitor()
+	if monitor == nil {
+		ws.sendJSONResponse(w, APIResponse{
+			Success: false,
+			Error:   "Memory monitor not initialized",
+		})
+		return
+	}
+
+	// 获取查询参数
+	limitParam := r.URL.Query().Get("limit")
+	limit := 50 // 默认返回最近50条记录
+	if limitParam != "" {
+		if parsedLimit, err := json.Number(limitParam).Int64(); err == nil && parsedLimit > 0 {
+			limit = int(parsedLimit)
+		}
+	}
+
+	history := monitor.GetHistory()
+
+	// 根据limit参数返回指定数量的记录
+	if len(history) > limit {
+		history = history[len(history)-limit:]
+	}
+
+	ws.sendJSONResponse(w, APIResponse{
+		Success: true,
+		Data: map[string]interface{}{
+			"total_records": len(monitor.GetHistory()),
+			"limit":         limit,
+			"history":       history,
+		},
+	})
+}
+
+// handleMemoryPools 处理内存池统计请求
+func (ws *WebServer) handleMemoryPools(w http.ResponseWriter, r *http.Request) {
+	// 获取全局缓冲区池和连接池的统计信息
+	bufferStats := socks5.GetBufferPoolStats()
+	connectionStats := socks5.GetConnectionPoolStats()
+
+	pools := map[string]interface{}{
+		"buffer_pool": bufferStats,
+		"connection_pool": map[string]interface{}{
+			"active_connections":   connectionStats.ActiveConnections,
+			"pooled_connections":   connectionStats.PooledConnections,
+			"total_requests":       connectionStats.TotalRequests,
+			"hits":                 connectionStats.Hits,
+			"misses":               connectionStats.Misses,
+			"created_connections":  connectionStats.CreatedConnections,
+			"reused_connections":   connectionStats.ReusedConnections,
+			"hit_rate_percent":     socks5.GetConnectionHitRate(),
+			"reuse_rate_percent":   socks5.GetConnectionReuseRate(),
+			"last_access":          connectionStats.LastAccess.Format(time.RFC3339),
+		},
+	}
+
+	ws.sendJSONResponse(w, APIResponse{
+		Success: true,
+		Data:    pools,
+	})
 }

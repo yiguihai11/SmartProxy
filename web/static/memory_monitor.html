@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartProxy 内存监控</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 2rem;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            padding: 20px;
+        }
+        .stat-card {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            border-left: 4px solid #667eea;
+        }
+        .stat-card h3 {
+            margin: 0 0 10px 0;
+            color: #333;
+            font-size: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+        .stat-unit {
+            color: #666;
+            font-size: 0.9rem;
+        }
+        .section {
+            margin: 20px;
+            padding: 20px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .section h2 {
+            margin-top: 0;
+            color: #333;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+        .pool-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .pool-stat {
+            text-align: center;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 6px;
+        }
+        .pool-stat-label {
+            font-size: 0.9rem;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        .pool-stat-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #333;
+        }
+        .refresh-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1rem;
+            margin: 10px 0;
+        }
+        .refresh-btn:hover {
+            background: #5a6fd8;
+        }
+        .loading {
+            text-align: center;
+            color: #666;
+            padding: 40px;
+        }
+        .error {
+            background: #fee;
+            color: #c33;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 10px 0;
+        }
+        .timestamp {
+            color: #666;
+            font-size: 0.9rem;
+            text-align: right;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>SmartProxy 内存监控</h1>
+            <p>实时监控内存使用情况和对象池性能</p>
+            <button class="refresh-btn" onclick="loadData()">刷新数据</button>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>系统内存分配</h3>
+                <div class="stat-value" id="allocated-memory">-</div>
+                <div class="stat-unit">已分配内存 (MB)</div>
+            </div>
+            <div class="stat-card">
+                <h3>活跃连接数</h3>
+                <div class="stat-value" id="active-connections">-</div>
+                <div class="stat-unit">当前活跃连接</div>
+            </div>
+            <div class="stat-card">
+                <h3>GC 运行次数</h3>
+                <div class="stat-value" id="gc-count">-</div>
+                <div class="stat-unit">垃圾回收次数</div>
+            </div>
+            <div class="stat-card">
+                <h3>内存压力</h3>
+                <div class="stat-value" id="memory-pressure">-</div>
+                <div class="stat-unit">当前内存压力</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>缓冲区池统计</h2>
+            <div class="pool-stats" id="buffer-pool-stats">
+                <div class="loading">加载中...</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>连接池统计</h2>
+            <div class="pool-stats" id="connection-pool-stats">
+                <div class="loading">加载中...</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>内存效率</h2>
+            <div class="pool-stats" id="memory-efficiency">
+                <div class="loading">加载中...</div>
+            </div>
+        </div>
+
+        <div class="timestamp" id="last-update">
+            最后更新: -
+        </div>
+    </div>
+
+    <script>
+        async function loadData() {
+            try {
+                // 加载基本内存统计
+                const memoryResponse = await fetch('/api/memory/stats');
+                const memoryData = await memoryResponse.json();
+
+                if (memoryData.success) {
+                    const stats = memoryData.data;
+                    document.getElementById('allocated-memory').textContent =
+                        (stats.alloc / 1024 / 1024).toFixed(2);
+                    document.getElementById('active-connections').textContent =
+                        stats.activeConnections || 0;
+                    document.getElementById('gc-count').textContent =
+                        stats.numGC || 0;
+                }
+
+                // 加载内存使用报告
+                const usageResponse = await fetch('/api/memory/usage');
+                const usageData = await usageResponse.json();
+
+                if (usageData.success) {
+                    const report = usageData.data;
+                    // 更新内存压力（如果有）
+                    if (report.pool_stats && report.pool_stats.buffer_pool) {
+                        const memoryUsage = (report.system_memory.allocated_bytes / 1024 / 1024).toFixed(2);
+                        document.getElementById('allocated-memory').textContent = memoryUsage;
+                    }
+                }
+
+                // 加载内存效率
+                const efficiencyResponse = await fetch('/api/memory/efficiency');
+                const efficiencyData = await efficiencyResponse.json();
+
+                if (efficiencyData.success) {
+                    const efficiency = efficiencyData.data;
+                    document.getElementById('memory-pressure').textContent =
+                        efficiency.memory_pressure || 'unknown';
+
+                    // 更新效率统计
+                    document.getElementById('memory-efficiency').innerHTML = `
+                        <div class="pool-stat">
+                            <div class="pool-stat-label">GC 效率</div>
+                            <div class="pool-stat-value">${efficiency.gc_efficiency_percent?.toFixed(1) || 0}%</div>
+                        </div>
+                        <div class="pool-stat">
+                            <div class="pool-stat-label">池化效率</div>
+                            <div class="pool-stat-value">${efficiency.pool_efficiency_percent?.toFixed(1) || 0}%</div>
+                        </div>
+                        <div class="pool-stat">
+                            <div class="pool-stat-label">总请求数</div>
+                            <div class="pool-stat-value">${efficiency.total_requests || 0}</div>
+                        </div>
+                        <div class="pool-stat">
+                            <div class="pool-stat-label">命中率</div>
+                            <div class="pool-stat-value">${efficiency.total_hits || 0}</div>
+                        </div>
+                    `;
+                }
+
+                // 加载池统计
+                const poolsResponse = await fetch('/api/memory/pools');
+                const poolsData = await poolsResponse.json();
+
+                if (poolsData.success) {
+                    const pools = poolsData.data;
+
+                    // 更新缓冲区池统计
+                    if (pools.buffer_pool) {
+                        const bufferPool = pools.buffer_pool;
+                        document.getElementById('buffer-pool-stats').innerHTML = `
+                            <div class="pool-stat">
+                                <div class="pool-stat-label">活跃对象</div>
+                                <div class="pool-stat-value">${bufferPool.active_objects || 0}</div>
+                            </div>
+                            <div class="pool-stat">
+                                <div class="pool-stat-label">池中对象</div>
+                                <div class="pool-stat-value">${bufferPool.pooled_objects || 0}</div>
+                            </div>
+                            <div class="pool-stat">
+                                <div class="pool-stat-label">命中率</div>
+                                <div class="pool-stat-value">${bufferPool.hit_rate_percent?.toFixed(1) || 0}%</div>
+                            </div>
+                            <div class="pool-stat">
+                                <div class="pool-stat-label">内存使用</div>
+                                <div class="pool-stat-value">${(bufferPool.total_memory_mb || 0).toFixed(1)}MB</div>
+                            </div>
+                        `;
+                    }
+
+                    // 更新连接池统计
+                    if (pools.connection_pool) {
+                        const connectionPool = pools.connection_pool;
+                        document.getElementById('connection-pool-stats').innerHTML = `
+                            <div class="pool-stat">
+                                <div class="pool-stat-label">活跃连接</div>
+                                <div class="pool-stat-value">${connectionPool.active_connections || 0}</div>
+                            </div>
+                            <div class="pool-stat">
+                                <div class="pool-stat-label">池中连接</div>
+                                <div class="pool-stat-value">${connectionPool.pooled_connections || 0}</div>
+                            </div>
+                            <div class="pool-stat">
+                                <div class="pool-stat-label">命中率</div>
+                                <div class="pool-stat-value">${connectionPool.hit_rate_percent?.toFixed(1) || 0}%</div>
+                            </div>
+                            <div class="pool-stat">
+                                <div class="pool-stat-label">重用率</div>
+                                <div class="pool-stat-value">${connectionPool.reuse_rate_percent?.toFixed(1) || 0}%</div>
+                            </div>
+                        `;
+                    }
+                }
+
+                // 更新时间戳
+                document.getElementById('last-update').textContent =
+                    `最后更新: ${new Date().toLocaleString()}`;
+
+            } catch (error) {
+                console.error('加载数据失败:', error);
+                document.querySelectorAll('.loading').forEach(el => {
+                    el.innerHTML = '<div class="error">加载数据失败</div>';
+                });
+            }
+        }
+
+        // 页面加载时获取数据
+        loadData();
+
+        // 每30秒自动刷新数据
+        setInterval(loadData, 30000);
+    </script>
+</body>
+</html>

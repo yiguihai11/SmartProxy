@@ -287,7 +287,6 @@ func (r *Router) MatchRule(host, detectedHost string, port int) MatchResult {
 	// 尝试域名匹配（只对非IP地址进行域名匹配）
 	if hostnameToMatch != "" && net.ParseIP(hostnameToMatch) == nil {
 		if rule := r.matchDomainRule(hostnameToMatch); rule != nil {
-			fmt.Printf("[Router DEBUG] Domain rule matched: %s -> action=%s\n", hostnameToMatch, rule.Action)
 			return MatchResult{
 				Action:             rule.Action,
 				Match:              true,
@@ -306,7 +305,6 @@ func (r *Router) MatchRule(host, detectedHost string, port int) MatchResult {
 		} else {
 			// 2a. 自定义IP规则
 			if action, found, rule := r.ipTrie.Lookup(host); found {
-				fmt.Printf("[Router DEBUG] IP rule matched: %s -> action=%s\n", host, action)
 				return MatchResult{
 					Action:             action,
 					Match:              true,
@@ -318,7 +316,6 @@ func (r *Router) MatchRule(host, detectedHost string, port int) MatchResult {
 
 			// 2b. 中国IP检查
 			if action, found, rule := r.chinaTrie.Lookup(host); found {
-				fmt.Printf("[Router DEBUG] China IP matched: %s -> action=%s\n", host, action)
 				return MatchResult{
 					Action:             action,
 					Match:              true,
@@ -335,7 +332,6 @@ func (r *Router) MatchRule(host, detectedHost string, port int) MatchResult {
 	for i := range r.rules {
 		rule := &r.rules[i]
 		if r.matchPortRule(rule, portStr) {
-			fmt.Printf("[Router DEBUG] Port rule matched: port=%s, action=%s, description=%s\n", portStr, rule.Action, rule.Description)
 			return MatchResult{
 				Action:             rule.Action,
 				Match:              true,
@@ -346,7 +342,6 @@ func (r *Router) MatchRule(host, detectedHost string, port int) MatchResult {
 		}
 	}
 
-	fmt.Printf("[Router DEBUG] No rule matched for host=%s, detectedHost=%s, port=%s\n", host, detectedHost, portStr)
 
 	// 4. 默认行为
 	return MatchResult{
