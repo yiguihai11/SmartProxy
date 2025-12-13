@@ -745,7 +745,8 @@ layui.use(['form', 'table', 'layer'], function(){
         fetch('/api/config')
             .then(res => res.json())
             .then(data => {
-                config = data;
+                // API 返回的是 {success: true, data: {...}} 格式
+                config = data.success ? data.data : data;
                 initAllForms();
                 layer.msg('配置加载成功', {icon: 1});
             })
@@ -1070,6 +1071,12 @@ layui.use(['form', 'table', 'layer'], function(){
     // ==================== 初始化所有表单 ====================
     
     function initAllForms() {
+        // 安全检查
+        if (!config || !config.listener) {
+            layer.msg('配置格式错误', {icon: 2});
+            return;
+        }
+
         // 监听配置
         form.val("listenerForm", {
             "socks5_port": config.listener.socks5_port,
@@ -1111,10 +1118,14 @@ layui.use(['form', 'table', 'layer'], function(){
             "cache_cleanup_interval": config.dns.cache.cleanup_interval
         });
 
-        if (config.dns.groups) {
+        if (config.dns && config.dns.groups) {
             // 使用新的 DNS 列表初始化函数
             initDnsList('cn', config.dns.groups.cn || []);
             initDnsList('foreign', config.dns.groups.foreign || []);
+        } else {
+            // 如果没有 DNS 配置，初始化空列表
+            initDnsList('cn', []);
+            initDnsList('foreign', []);
         }
 
         // NAT 配置
