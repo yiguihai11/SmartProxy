@@ -140,23 +140,29 @@
         }
         .dns-item .add-btn,
         .dns-item .remove-btn {
-            background-color: #FF5722;
-            color: white;
+            background-color: transparent;
+            color: #666;
             border: none;
-            padding: 0 10px;
+            padding: 0;
             cursor: pointer;
             transition: all 0.3s;
+            font-size: 18px;
         }
         .dns-item .add-btn {
-            background-color: #009688;
+            color: #009688;
         }
-        .dns-item .add-btn:hover,
+        .dns-item .remove-btn {
+            color: #FF5722;
+        }
+        .dns-item .add-btn:hover {
+            color: #00796b;
+        }
         .dns-item .remove-btn:hover {
-            opacity: 0.8;
+            color: #d84315;
         }
         .dns-item .add-btn.layui-btn-disabled,
         .dns-item .remove-btn.layui-btn-disabled {
-            background-color: #e6e6e6;
+            color: #e6e6e6;
             cursor: not-allowed;
         }
     </style>
@@ -220,21 +226,21 @@
                     <div class="layui-form-item">
                         <label class="layui-form-label">SOCKS5 端口</label>
                         <div class="layui-input-inline">
-                            <input type="number" name="socks5_port" class="layui-input port-input" placeholder="1080">
+                            <input type="number" name="socks5_port" class="layui-input port-input" placeholder="1080" min="1" max="65535" step="1">
                         </div>
                         <div class="layui-form-mid port-tip"></div>
                     </div>
                     <div class="layui-form-item">
                         <label class="layui-form-label">Web 管理端口</label>
                         <div class="layui-input-inline">
-                            <input type="number" name="web_port" class="layui-input port-input" placeholder="8080">
+                            <input type="number" name="web_port" class="layui-input port-input" placeholder="8080" min="1" max="65535" step="1">
                         </div>
                         <div class="layui-form-mid port-tip"></div>
                     </div>
                     <div class="layui-form-item">
                         <label class="layui-form-label">DNS 端口</label>
                         <div class="layui-input-inline">
-                            <input type="number" name="dns_port" class="layui-input port-input" placeholder="1053">
+                            <input type="number" name="dns_port" class="layui-input port-input" placeholder="1053" min="1" max="65535" step="1">
                         </div>
                         <div class="layui-form-mid port-tip"></div>
                     </div>
@@ -306,8 +312,10 @@
                     </div>
                     <div class="layui-form-item">
                         <label class="layui-form-label">探测端口</label>
-                        <div class="layui-input-inline">
-                            <input type="text" name="probing_ports" class="layui-input" placeholder="80,443,8080">
+                        <div class="layui-input-block">
+                            <div id="probing-ports-list" class="dns-list">
+                                <!-- 探测端口项将通过 JavaScript 动态添加 -->
+                            </div>
                         </div>
                     </div>
                 </form>
@@ -440,9 +448,10 @@
                     <div class="layui-form-item">
                         <label class="layui-form-label">启用 NAT 穿透</label>
                         <div class="layui-input-block">
-                            <input type="checkbox" name="nat_enabled" lay-skin="switch" lay-text="开启|关闭">
+                            <input type="checkbox" name="nat_enabled" lay-filter="nat_enabled" lay-skin="switch" lay-text="开启|关闭">
                         </div>
                     </div>
+                    <div id="nat-config-items">
                     <div class="layui-form-item">
                         <label class="layui-form-label">模式</label>
                         <div class="layui-input-inline">
@@ -520,6 +529,7 @@
                         <div class="layui-input-inline">
                             <input type="number" name="hole_punch_delay" class="layui-input" placeholder="100">
                         </div>
+                    </div>
                     </div>
                     <div class="layui-form-item" style="padding-left: 110px; margin-top: 25px;">
                         <button type="button" class="layui-btn layui-btn-normal" id="saveNatConfig">
@@ -628,8 +638,8 @@ layui.use(['form', 'table', 'layer'], function(){
 
         // 添加/删除按钮
         const btn = isFirstEmpty ?
-            $('<button type="button" class="layui-btn layui-btn-sm add-btn">+</button>') :
-            $('<button type="button" class="layui-btn layui-btn-sm remove-btn">-</button>');
+            $('<button type="button" class="layui-btn layui-btn-sm add-btn"><i class="layui-icon layui-icon-add-1"></i></button>') :
+            $('<button type="button" class="layui-btn layui-btn-sm remove-btn"><i class="layui-icon layui-icon-delete"></i></button>');
 
         itemDiv.append(input).append(btn);
         return itemDiv;
@@ -658,19 +668,23 @@ layui.use(['form', 'table', 'layer'], function(){
         const items = container.find('.dns-item');
         items.each(function() {
             const btn = $(this).find('button');
+            const icon = btn.find('i');
             const input = $(this).find('input');
             const isEmpty = !input.val().trim();
             const isLast = $(this).is(':last-child');
 
             if (isEmpty && isLast) {
-                // 最后一个空项显示 + 按钮
-                btn.removeClass('remove-btn layui-btn-disabled').addClass('add-btn').text('+').prop('disabled', false);
+                // 最后一个空项显示添加图标
+                btn.removeClass('remove-btn layui-btn-disabled').addClass('add-btn').prop('disabled', false);
+                icon.removeClass('layui-icon-delete').addClass('layui-icon-add-1');
             } else if (isEmpty && !isLast) {
                 // 非最后一个空项禁用按钮
-                btn.removeClass('add-btn remove-btn').addClass('layui-btn-disabled').text('-').prop('disabled', true);
+                btn.removeClass('add-btn remove-btn').addClass('layui-btn-disabled').prop('disabled', true);
+                icon.removeClass('layui-icon-add-1 layui-icon-delete').addClass('layui-icon-delete');
             } else {
-                // 有内容的项显示 - 按钮
-                btn.removeClass('add-btn layui-btn-disabled').addClass('remove-btn').text('-').prop('disabled', false);
+                // 有内容的项显示删除图标
+                btn.removeClass('add-btn layui-btn-disabled').addClass('remove-btn').prop('disabled', false);
+                icon.removeClass('layui-icon-add-1').addClass('layui-icon-delete');
             }
         });
     }
@@ -733,6 +747,56 @@ layui.use(['form', 'table', 'layer'], function(){
 
         updateDnsListButtons(listContainer);
     });
+
+    // ==================== 探测端口列表管理 ====================
+    // 创建探测端口输入项
+    function createPortItem(value = '', isFirstEmpty = false) {
+        const itemDiv = $('<div class="dns-item"></div>');
+        const input = $('<input type="number" class="layui-input" placeholder="例如: 80">').val(value);
+        input.attr('min', '1');
+        input.attr('max', '65535');
+
+        // 添加/删除按钮
+        const btn = isFirstEmpty ?
+            $('<button type="button" class="layui-btn layui-btn-sm add-btn"><i class="layui-icon layui-icon-add-1"></i></button>') :
+            $('<button type="button" class="layui-btn layui-btn-sm remove-btn"><i class="layui-icon layui-icon-delete"></i></button>');
+
+        itemDiv.append(input).append(btn);
+        return itemDiv;
+    }
+
+    // 初始化探测端口列表
+    function initPortsList(portsArray) {
+        const listContainer = $('#probing-ports-list');
+        listContainer.empty();
+
+        // 添加现有的端口
+        if (portsArray && portsArray.length > 0) {
+            portsArray.forEach(port => {
+                if (port && port > 0 && port <= 65535) {
+                    listContainer.append(createPortItem(port));
+                }
+            });
+        }
+
+        // 总是添加一个空的输入框用于添加新的端口
+        listContainer.append(createPortItem('', true));
+    }
+
+    // 获取探测端口列表数据
+    function getPortsListData() {
+        const listContainer = $('#probing-ports-list');
+        const portsArray = [];
+
+        listContainer.find('.dns-item input').each(function() {
+            const value = parseInt($(this).val());
+            if (value && value > 0 && value <= 65535) {
+                portsArray.push(value);
+            }
+        });
+
+        return portsArray;
+    }
 
     // 全局配置对象
     let config = null;
@@ -1098,9 +1162,15 @@ layui.use(['form', 'table', 'layer'], function(){
         form.val("smartProxyForm", {
             "smart_proxy_enabled": config.smart_proxy.enabled,
             "timeout_ms": config.smart_proxy.timeout_ms,
-            "blacklist_expiry_minutes": config.smart_proxy.blacklist_expiry_minutes,
-            "probing_ports": (config.smart_proxy.probing_ports || []).join(',')
+            "blacklist_expiry_minutes": config.smart_proxy.blacklist_expiry_minutes
         });
+
+        // 初始化探测端口列表
+        if (config.smart_proxy && config.smart_proxy.probing_ports) {
+            initPortsList(config.smart_proxy.probing_ports);
+        } else {
+            initPortsList([]);
+        }
 
         // CHNRoutes 配置
         if (config.router.chnroutes) {
@@ -1147,6 +1217,13 @@ layui.use(['form', 'table', 'layer'], function(){
             });
         }
 
+        // 根据 NAT 穿透开关状态显示/隐藏配置项
+        if (config.nat_traversal && config.nat_traversal.enabled) {
+            $('#nat-config-items').show();
+        } else {
+            $('#nat-config-items').hide();
+        }
+
         // 日志配置
         form.val("loggingForm", {
             "log_level": config.logging.level,
@@ -1161,7 +1238,17 @@ layui.use(['form', 'table', 'layer'], function(){
         renderNodesTable();
         renderHijackTable();
 
-        form.render();
+        // 监听 NAT 穿透开关
+    form.on('switch(nat_enabled)', function(data){
+        const isChecked = data.elem.checked;
+        if (isChecked) {
+            $('#nat-config-items').show();
+        } else {
+            $('#nat-config-items').hide();
+        }
+    });
+
+    form.render();
     }
 
     // ==================== 工具函数 ====================
@@ -1596,7 +1683,8 @@ layui.use(['form', 'table', 'layer'], function(){
         config.smart_proxy.enabled = smartProxyData.smart_proxy_enabled === 'on';
         config.smart_proxy.timeout_ms = parseInt(smartProxyData.timeout_ms);
         config.smart_proxy.blacklist_expiry_minutes = parseInt(smartProxyData.blacklist_expiry_minutes);
-        config.smart_proxy.probing_ports = smartProxyData.probing_ports.split(',').map(p => parseInt(p.trim())).filter(p => !isNaN(p));
+        // 使用新的探测端口列表获取函数
+        config.smart_proxy.probing_ports = getPortsListData();
 
         if (config.router.chnroutes) {
             const chnroutesData = form.val('chnroutesForm');
