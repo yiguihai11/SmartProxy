@@ -622,8 +622,22 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
 
     // 添加时间段
     window.addTimeSlot = function(btn) {
-        const container = btn.closest('.layui-input-block').find('#allowed-hours-list');
-        const index = container.children().length;
+        // 使用原生方法查找容器
+        let parentDiv = btn.parentElement;
+        while (parentDiv) {
+            if (parentDiv.classList && parentDiv.classList.contains('layui-input-block')) {
+                break;
+            }
+            parentDiv = parentDiv.parentElement;
+        }
+
+        let container = parentDiv ? parentDiv.querySelector('#allowed-hours-list') : null;
+        if (!container) {
+            console.error('Container not found!');
+            return;
+        }
+
+        const index = container.children.length;
         const timeSlotHtml = `
             <div class="time-slot-item" style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center;" data-index="${index}">
                 <input type="text" class="layui-input time-start" placeholder="开始时间" readonly style="width: 35%;">
@@ -634,30 +648,52 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                 </button>
             </div>
         `;
-        container.append(timeSlotHtml);
+
+        container.insertAdjacentHTML('beforeend', timeSlotHtml);
 
         // 初始化时间选择器
         layui.use('laydate', function(){
             const laydate = layui.laydate;
 
-            laydate.render({
-                elem: container.find(`[data-index="${index}"] .time-start`)[0],
-                type: 'time',
-                format: 'HH:mm'
-            });
+            const startInput = container.querySelector(`[data-index="${index}"] .time-start`);
+            const endInput = container.querySelector(`[data-index="${index}"] .time-end`);
 
-            laydate.render({
-                elem: container.find(`[data-index="${index}"] .time-end`)[0],
-                type: 'time',
-                format: 'HH:mm'
-            });
+            if (startInput) {
+                laydate.render({
+                    elem: startInput,
+                    type: 'time',
+                    format: 'HH:mm'
+                });
+            }
+
+            if (endInput) {
+                laydate.render({
+                    elem: endInput,
+                    type: 'time',
+                    format: 'HH:mm'
+                });
+            }
         });
     };
 
     // 添加单个小时
     window.addSingleHour = function(btn) {
-        const container = btn.closest('.layui-input-block').find('#allowed-hours-list');
-        const index = container.children().length;
+        // 使用原生方法查找容器
+        let parentDiv = btn.parentElement;
+        while (parentDiv) {
+            if (parentDiv.classList && parentDiv.classList.contains('layui-input-block')) {
+                break;
+            }
+            parentDiv = parentDiv.parentElement;
+        }
+
+        let container = parentDiv ? parentDiv.querySelector('#allowed-hours-list') : null;
+        if (!container) {
+            console.error('Container not found!');
+            return;
+        }
+
+        const index = container.children.length;
         const hourHtml = `
             <div class="hour-item" style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center;" data-index="${index}">
                 <input type="number" class="layui-input single-hour" placeholder="小时 (0-23)" min="0" max="23" style="width: 30%;">
@@ -667,34 +703,51 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                 </button>
             </div>
         `;
-        container.append(hourHtml);
+        container.insertAdjacentHTML('beforeend', hourHtml);
     };
 
     // 删除时间项
     window.removeTimeItem = function(btn) {
-        btn.closest('.time-slot-item, .hour-item').remove();
+        const item = btn.closest('.time-slot-item') || btn.closest('.hour-item');
+        if (item) {
+            item.remove();
+        }
     };
 
     // 星期选择辅助函数
     window.selectAllDays = function() {
-        $('input[name^="allowed_days_"]').prop('checked', true);
+        const checkboxes = document.querySelectorAll('input[name^="allowed_days_"]');
+        checkboxes.forEach(cb => cb.checked = true);
         layui.form.render('checkbox');
     };
 
     window.selectWeekdays = function() {
-        $('input[name^="allowed_days_"]').prop('checked', false);
-        $('input[name="allowed_days_monday"], input[name="allowed_days_tuesday"], input[name="allowed_days_wednesday"], input[name="allowed_days_thursday"], input[name="allowed_days_friday"]').prop('checked', true);
+        const checkboxes = document.querySelectorAll('input[name^="allowed_days_"]');
+        checkboxes.forEach(cb => cb.checked = false);
+
+        const weekdays = ['allowed_days_monday', 'allowed_days_tuesday', 'allowed_days_wednesday', 'allowed_days_thursday', 'allowed_days_friday'];
+        weekdays.forEach(name => {
+            const cb = document.querySelector(`input[name="${name}"]`);
+            if (cb) cb.checked = true;
+        });
         layui.form.render('checkbox');
     };
 
     window.selectWeekends = function() {
-        $('input[name^="allowed_days_"]').prop('checked', false);
-        $('input[name="allowed_days_saturday"], input[name="allowed_days_sunday"]').prop('checked', true);
+        const checkboxes = document.querySelectorAll('input[name^="allowed_days_"]');
+        checkboxes.forEach(cb => cb.checked = false);
+
+        const weekend = ['allowed_days_saturday', 'allowed_days_sunday'];
+        weekend.forEach(name => {
+            const cb = document.querySelector(`input[name="${name}"]`);
+            if (cb) cb.checked = true;
+        });
         layui.form.render('checkbox');
     };
 
     window.clearAllDays = function() {
-        $('input[name^="allowed_days_"]').prop('checked', false);
+        const checkboxes = document.querySelectorAll('input[name^="allowed_days_"]');
+        checkboxes.forEach(cb => cb.checked = false);
         layui.form.render('checkbox');
     };
 
@@ -712,7 +765,8 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
         };
 
         Object.keys(dayMap).forEach(checkboxName => {
-            if ($(`input[name="${checkboxName}"]:checked`).length > 0) {
+            const cb = document.querySelector(`input[name="${checkboxName}"]`);
+            if (cb && cb.checked) {
                 days.push(dayMap[checkboxName]);
             }
         });
@@ -722,23 +776,27 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
 
     // 收集所有时间配置
     function collectAllowedHours() {
-        const container = $('#allowed-hours-list');
+        const container = document.getElementById('allowed-hours-list');
+        if (!container) return [];
+
         const hours = [];
 
         // 收集时间段
-        container.find('.time-slot-item').each(function() {
-            const start = $(this).find('.time-start').val();
-            const end = $(this).find('.time-end').val();
-            if (start && end) {
-                hours.push(`${start}-${end}`);
+        const timeSlots = container.querySelectorAll('.time-slot-item');
+        timeSlots.forEach(item => {
+            const start = item.querySelector('.time-start');
+            const end = item.querySelector('.time-end');
+            if (start && end && start.value && end.value) {
+                hours.push(`${start.value}-${end.value}`);
             }
         });
 
         // 收集单个小时
-        container.find('.hour-item').each(function() {
-            const hour = $(this).find('.single-hour').val();
-            if (hour !== '') {
-                hours.push(parseInt(hour));
+        const hourItems = container.querySelectorAll('.hour-item');
+        hourItems.forEach(item => {
+            const hour = item.querySelector('.single-hour');
+            if (hour && hour.value !== '') {
+                hours.push(parseInt(hour.value));
             }
         });
 
@@ -747,8 +805,10 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
 
     // 初始化现有时间配置
     function initAllowedHours(hours) {
-        const container = $('#allowed-hours-list');
-        container.empty();
+        const container = document.getElementById('allowed-hours-list');
+        if (!container) return;
+
+        container.innerHTML = '';
         allowedHoursArray = hours || [];
 
         let index = 0;
@@ -766,7 +826,7 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                         </button>
                     </div>
                 `;
-                container.append(timeSlotHtml);
+                container.insertAdjacentHTML('beforeend', timeSlotHtml);
             } else if (typeof hour === 'number') {
                 // 单个小时
                 const hourHtml = `
@@ -778,7 +838,7 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                         </button>
                     </div>
                 `;
-                container.append(hourHtml);
+                container.insertAdjacentHTML('beforeend', hourHtml);
             }
             index++;
         });
@@ -787,9 +847,9 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
         layui.use('laydate', function(){
             const laydate = layui.laydate;
 
-            container.find('.time-start, .time-end').each(function() {
+            container.querySelectorAll('.time-start, .time-end').forEach(function(input) {
                 laydate.render({
-                    elem: this,
+                    elem: input,
                     type: 'time',
                     format: 'HH:mm'
                 });
