@@ -1252,7 +1252,6 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
     
     // 监听 NAT 模式选择变化 - 使用layui方式
     form.on('select(nat_mode)', function(data){
-        alert('当前选择模式: ' + data.value);
         updateNatSettingsVisibility();
     });
 
@@ -1265,8 +1264,11 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
         settingGroups.forEach(function(group) {
             const modes = group.getAttribute('data-modes').split(',');
 
-            // 如果当前模式在组的支持列表中，或者模式是auto，则显示
-            if (modes.includes(selectedMode) || selectedMode === 'auto') {
+            // auto模式只显示通用设置（即不显示任何nat-settings-group）
+            // 特定模式显示对应的配置项
+            if (selectedMode === 'auto') {
+                group.style.display = 'none';
+            } else if (modes.includes(selectedMode)) {
                 group.style.display = 'block';
             } else {
                 group.style.display = 'none';
