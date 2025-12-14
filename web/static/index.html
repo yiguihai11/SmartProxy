@@ -1251,24 +1251,40 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
         alert(123);
     });
 
-    // 监听 NAT 模式选择变化 - 使用原生JavaScript
-    // 等待layui渲染完成后再绑定事件
-    setTimeout(function() {
-        alert('开始绑定NAT模式监听器');  // 测试JS执行
-        const natModeSelect = document.querySelector('select[name="nat_mode"]');
-        console.log('找到的select元素:', natModeSelect);
+    // 监听 NAT 模式选择变化 - 先尝试layui方式
+    form.on('select(nat_mode)', function(data){
+        alert('layui方式触发 - 选择的值: ' + data.value);
+        updateNatSettingsVisibility();
+    });
 
-        if (natModeSelect) {
-            natModeSelect.addEventListener('change', function(e) {
-                console.log('NAT模式选择变化:', e.target.value);
-                alert('选择的值: ' + e.target.value);
-                updateNatSettingsVisibility();
+    // 备用方案 - 使用原生JavaScript，监听layui生成的div
+    setTimeout(function() {
+        alert('开始绑定备用监听器');
+        // layui会将select转换为div，我们需要监听layui生成的元素
+        const natModeDiv = document.querySelector('div[lay-filter="nat_mode"]');
+        if (natModeDiv) {
+            // 监听layui生成的div的点击事件
+            natModeDiv.addEventListener('click', function(e) {
+                setTimeout(function() {
+                    const selectedText = natModeDiv.querySelector('.layui-select-title input').value;
+                    const selectedValue = document.querySelector('select[name="nat_mode"]').value;
+                    alert('点击后获取到的值: ' + selectedValue);
+                    updateNatSettingsVisibility();
+                }, 100);
             });
-            alert('监听器绑定成功');
+            alert('备用监听器绑定成功');
         } else {
-            alert('未找到nat_mode select元素');
+            // 如果没有layui生成的div，尝试直接监听原始select
+            const natModeSelect = document.querySelector('select[name="nat_mode"]');
+            if (natModeSelect) {
+                natModeSelect.addEventListener('change', function(e) {
+                    alert('原生change事件触发: ' + e.target.value);
+                    updateNatSettingsVisibility();
+                });
+                alert('原生监听器绑定成功');
+            }
         }
-    }, 1000);  // 延迟1秒确保layui渲染完成
+    }, 1000);
 
     // 根据选择的模式更新设置组的可见性
     function updateNatSettingsVisibility() {
