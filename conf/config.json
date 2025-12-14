@@ -38,6 +38,9 @@
             "timezone": "Asia/Shanghai",
             "effective_dates": [
               "2024-01-01"
+            ],
+            "expired_dates": [
+              "2025-12-31"
             ]
           }
         }
@@ -76,11 +79,80 @@
           ],
           "time_restriction": {
             "allowed_hours": [
-              "19:00-23:00"
+              "19:00-23:00",
+              "14:00-16:00"
             ],
             "allowed_days": [
               "saturday",
               "sunday"
+            ],
+            "timezone": "Asia/Shanghai"
+          }
+        }
+      },
+      {
+        "username": "vip",
+        "password": "VipPass@123",
+        "enabled": true,
+        "user_groups": [
+          "vip"
+        ],
+        "rate_limit": {
+          "upload_bps": 20971520,
+          "download_bps": 20971520
+        },
+        "connection_limit": {
+          "max_connections": 20,
+          "expires_after_minutes": 4320,
+          "time_restriction": {
+            "allowed_hours": [
+              9,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22
+            ],
+            "allowed_days": [
+              "monday",
+              "tuesday",
+              "wednesday",
+              "thursday",
+              "friday",
+              "saturday",
+              "sunday"
+            ],
+            "timezone": "UTC",
+            "effective_dates": [
+              "2024-01-01"
+            ]
+          }
+        }
+      },
+      {
+        "username": "night_user",
+        "password": "NightUser@123",
+        "enabled": true,
+        "user_groups": [
+          "user"
+        ],
+        "rate_limit": {
+          "upload_bps": 2097152,
+          "download_bps": 2097152
+        },
+        "connection_limit": {
+          "max_connections": 3,
+          "expires_after_minutes": 720,
+          "time_restriction": {
+            "allowed_hours": [
+              "22:00-06:00"
+            ],
+            "allowed_days": [
+              "saturday-sunday"
             ],
             "timezone": "Asia/Shanghai"
           }
