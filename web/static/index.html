@@ -1252,6 +1252,7 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
 
     // 监听 NAT 模式选择变化 - 使用原生JavaScript
     document.addEventListener('DOMContentLoaded', function() {
+    alert(123);
         const natModeSelect = document.querySelector('select[name="nat_mode"]');
         if (natModeSelect) {
             natModeSelect.addEventListener('change', function(e) {
@@ -2055,6 +2056,7 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
 
     // 初始化加载配置
     loadConfig();
+    alert('页面JS加载完成');
 });
 </script>
 </body>
