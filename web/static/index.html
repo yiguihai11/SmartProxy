@@ -1556,9 +1556,6 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                 form.render('select');
                 form.render('select', 'editUserForm');
 
-                // 调试：确保select正确渲染
-                alert('Form rendered, select elements: ' + $(layero).find('select').length);
-
                 $(layero).find('#saveEditUser').on('click', function(){
                     const formData = form.val('editUserForm');
                     const user = config.socks5.auth_users[data.id];
