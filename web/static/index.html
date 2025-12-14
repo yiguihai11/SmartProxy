@@ -606,11 +606,12 @@
 
 <script>
 // ==================== SmartProxy 管理面板主程序 ====================
-layui.use(['form', 'table', 'layer'], function(){
+layui.use(['form', 'table', 'layer', 'laydate'], function(){
     const $ = layui.$;
     const form = layui.form;
     const table = layui.table;
     const layer = layui.layer;
+    const laydate = layui.laydate;
 
     $('#year').text(new Date().getFullYear());
 
@@ -1466,6 +1467,7 @@ layui.use(['form', 'table', 'layer'], function(){
     function editUser(data) {
         const connLimit = data.connection_limit || {};
         const rateLimit = data.rate_limit || {};
+        const timeRestriction = connLimit.time_restriction || {};
         layer.open({
             type: 1,
             title: '编辑用户 - ' + data.username,
@@ -1486,6 +1488,12 @@ layui.use(['form', 'table', 'layer'], function(){
                                     <input type="password" name="password" value="${data.password}" class="layui-input" placeholder="留空则不修改">
                                     <i class="layui-icon layui-icon-eye password-toggle"></i>
                                 </div>
+                            </div>
+                        </div>
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">用户组</label>
+                            <div class="layui-input-block">
+                                <input type="text" name="user_groups" value="${(data.user_groups || []).join(', ')}" class="layui-input" placeholder="例如: admin, user">
                             </div>
                         </div>
                         <div class="layui-form-item">
@@ -1524,6 +1532,41 @@ layui.use(['form', 'table', 'layer'], function(){
                                 <textarea name="block_from_ips" class="layui-textarea" placeholder="每行一个IP或CIDR">${(connLimit.block_from_ips || []).join('\n')}</textarea>
                             </div>
                         </div>
+
+                        <div class="config-group">
+                            <div class="sub-title">时间限制</div>
+                            <div class="layui-form-item">
+                                <label class="layui-form-label">允许时间段</label>
+                                <div class="layui-input-block">
+                                    <input type="text" name="allowed_hours" value="${(timeRestriction.allowed_hours || []).join(', ')}" class="layui-input" placeholder="例如: 09:00-18:00">
+                                </div>
+                            </div>
+                            <div class="layui-form-item">
+                                <label class="layui-form-label">允许星期</label>
+                                <div class="layui-input-block">
+                                    <input type="text" name="allowed_days" value="${(timeRestriction.allowed_days || []).join(', ')}" class="layui-input" placeholder="例如: monday-friday">
+                                </div>
+                            </div>
+                            <div class="layui-form-item">
+                                <label class="layui-form-label">时区</label>
+                                <div class="layui-input-block">
+                                    <input type="text" name="timezone" value="${timeRestriction.timezone || 'Asia/Shanghai'}" class="layui-input">
+                                </div>
+                            </div>
+                            <div class="layui-form-item">
+                                <label class="layui-form-label">生效日期</label>
+                                <div class="layui-input-block">
+                                    <input type="text" id="effective-dates" name="effective_dates" class="layui-input" placeholder="点击选择日期范围" value="${(timeRestriction.effective_dates || []).join(', ')}">
+                                </div>
+                            </div>
+                            <div class="layui-form-item">
+                                <label class="layui-form-label">过期日期</label>
+                                <div class="layui-input-block">
+                                    <input type="text" id="expired-dates" name="expired_dates" class="layui-input" placeholder="点击选择日期范围" value="${(timeRestriction.expired_dates || []).join(', ')}">
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="layui-form-item">
                             <div class="layui-input-block">
                                 <button type="button" class="layui-btn" id="saveEditUser">保存</button>
@@ -1535,19 +1578,85 @@ layui.use(['form', 'table', 'layer'], function(){
             `,
             success: function(layero, index) {
                 form.render();
+
+                // 初始化日期选择器
+                laydate.render({
+                    elem: '#effective-dates',
+                    type: 'date',
+                    range: true,
+                    format: 'yyyy-MM-dd',
+                    trigger: 'click'
+                });
+
+                laydate.render({
+                    elem: '#expired-dates',
+                    type: 'date',
+                    range: true,
+                    format: 'yyyy-MM-dd',
+                    trigger: 'click'
+                });
+
                 $(layero).find('#saveEditUser').on('click', function(){
                     const formData = form.val('editUserForm');
                     const user = config.socks5.auth_users[data.id];
                     if(formData.password) user.password = formData.password;
+
+                    // 处理用户组
+                    if(formData.user_groups) {
+                        user.user_groups = formData.user_groups.split(',').map(g => g.trim()).filter(g => g);
+                    }
+
                     user.rate_limit = user.rate_limit || {};
                     user.rate_limit.upload_bps = parseInt(formData.upload_bps) || 0;
                     user.rate_limit.download_bps = parseInt(formData.download_bps) || 0;
-                    
+
                     user.connection_limit = user.connection_limit || {};
                     user.connection_limit.max_connections = parseInt(formData.max_connections) || 0;
                     user.connection_limit.expires_after_minutes = parseInt(formData.expires_after_minutes) || 0;
                     user.connection_limit.allow_from_ips = formData.allow_from_ips.split('\n').filter(ip => ip.trim() !== '');
                     user.connection_limit.block_from_ips = formData.block_from_ips.split('\n').filter(ip => ip.trim() !== '');
+
+                    // 处理时间限制
+                    user.connection_limit.time_restriction = user.connection_limit.time_restriction || {};
+
+                    // 处理允许时间段
+                    if(formData.allowed_hours) {
+                        user.connection_limit.time_restriction.allowed_hours = formData.allowed_hours.split(',').map(h => h.trim()).filter(h => h);
+                    }
+
+                    // 处理允许星期
+                    if(formData.allowed_days) {
+                        user.connection_limit.time_restriction.allowed_days = formData.allowed_days.split(',').map(d => d.trim()).filter(d => d);
+                    }
+
+                    // 处理时区
+                    if(formData.timezone) {
+                        user.connection_limit.time_restriction.timezone = formData.timezone;
+                    }
+
+                    // 处理生效日期
+                    if(formData.effective_dates) {
+                        const dateStr = formData.effective_dates.trim();
+                        if(dateStr.includes(' - ')) {
+                            // 日期范围
+                            user.connection_limit.time_restriction.effective_dates = dateStr.split(' - ').map(d => d.trim());
+                        } else if(dateStr) {
+                            // 逗号分隔的多个日期
+                            user.connection_limit.time_restriction.effective_dates = dateStr.split(',').map(d => d.trim()).filter(d => d);
+                        }
+                    }
+
+                    // 处理过期日期
+                    if(formData.expired_dates) {
+                        const dateStr = formData.expired_dates.trim();
+                        if(dateStr.includes(' - ')) {
+                            // 日期范围
+                            user.connection_limit.time_restriction.expired_dates = dateStr.split(' - ').map(d => d.trim());
+                        } else if(dateStr) {
+                            // 逗号分隔的多个日期
+                            user.connection_limit.time_restriction.expired_dates = dateStr.split(',').map(d => d.trim()).filter(d => d);
+                        }
+                    }
 
                     renderUserTable();
                     form.render();
