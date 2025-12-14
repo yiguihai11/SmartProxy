@@ -1251,17 +1251,15 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
     });
 
     // 监听 NAT 模式选择变化 - 使用原生JavaScript
-    document.addEventListener('DOMContentLoaded', function() {
-    alert(123);
-        const natModeSelect = document.querySelector('select[name="nat_mode"]');
-        if (natModeSelect) {
-            natModeSelect.addEventListener('change', function(e) {
-                console.log('NAT模式选择变化:', e.target.value);
-                alert('选择的值: ' + e.target.value);
-                updateNatSettingsVisibility();
-            });
-        }
-    });
+    alert(123);  // 测试JS执行
+    const natModeSelect = document.querySelector('select[name="nat_mode"]');
+    if (natModeSelect) {
+        natModeSelect.addEventListener('change', function(e) {
+            console.log('NAT模式选择变化:', e.target.value);
+            alert('选择的值: ' + e.target.value);
+            updateNatSettingsVisibility();
+        });
+    }
 
     // 根据选择的模式更新设置组的可见性
     function updateNatSettingsVisibility() {
