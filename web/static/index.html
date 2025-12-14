@@ -709,13 +709,16 @@ layui.use(['form', 'table', 'layer'], function(){
         const item = $(this).closest('.dns-item');
         const listContainer = item.closest('.dns-list');
         const btn = $(this);
+        const icon = btn.find('i');
         const input = item.find('input');
 
         if (btn.hasClass('add-btn')) {
             // 添加新的 DNS 项
             if (input.val().trim()) {
                 listContainer.append(createDnsItem('', true));
-                btn.removeClass('add-btn').addClass('remove-btn').text('-');
+                // 将当前按钮改为删除按钮
+                btn.removeClass('add-btn').addClass('remove-btn');
+                icon.removeClass('layui-icon-add-1').addClass('layui-icon-delete');
                 updateDnsListButtons(listContainer);
             }
         } else if (btn.hasClass('remove-btn')) {
@@ -738,11 +741,14 @@ layui.use(['form', 'table', 'layer'], function(){
         const listContainer = item.closest('.dns-list');
         const input = $(this);
         const btn = item.find('button');
+        const icon = btn.find('i');
 
         // 如果输入框有内容且是最后一项，添加新的空输入框
         if (input.val().trim() && item.is(':last-child')) {
             listContainer.append(createDnsItem('', true));
-            btn.removeClass('add-btn').addClass('remove-btn').text('-');
+            // 将当前按钮改为删除按钮
+            btn.removeClass('add-btn').addClass('remove-btn');
+            icon.removeClass('layui-icon-add-1').addClass('layui-icon-delete');
         }
 
         updateDnsListButtons(listContainer);
