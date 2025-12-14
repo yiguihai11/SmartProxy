@@ -825,9 +825,17 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                 layer.msg('配置加载失败: ' + err.message, {icon: 2});
                 layer.open({
                     type: 1,
-                    title: '错误',
-                    content: '<div style="padding: 20px;">无法连接到服务器，请检查服务器是否正常运行。</div>',
-                    area: ['400px', '200px']
+                    title: '连接错误',
+                    content: `
+                        <div style="padding: 20px; text-align: center;">
+                            <div style="margin-bottom: 15px;">
+                                <i class="layui-icon layui-icon-face-cry" style="font-size: 48px; color: #FF5722;"></i>
+                            </div>
+                            <div style="margin-bottom: 15px;">无法连接到服务器，请检查服务器是否正常运行。</div>
+                            <button type="button" class="layui-btn layui-btn-primary" onclick="location.reload()">重试</button>
+                        </div>
+                    `,
+                    area: ['400px', '250px']
                 });
             });
     }
