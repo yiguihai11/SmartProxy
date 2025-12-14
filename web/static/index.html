@@ -1250,22 +1250,17 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
         }
     });
 
-    // 监听 NAT 模式选择变化
-    form.on('select(nat_mode)', function(data){
-        console.log('NAT模式选择变化:', data);
-        alert('选择的值: ' + data.value);
-        updateNatSettingsVisibility();
+    // 监听 NAT 模式选择变化 - 使用原生JavaScript
+    document.addEventListener('DOMContentLoaded', function() {
+        const natModeSelect = document.querySelector('select[name="nat_mode"]');
+        if (natModeSelect) {
+            natModeSelect.addEventListener('change', function(e) {
+                console.log('NAT模式选择变化:', e.target.value);
+                alert('选择的值: ' + e.target.value);
+                updateNatSettingsVisibility();
+            });
+        }
     });
-
-    // 备用监听方式 - 直接使用原生JavaScript监听
-    const natModeSelect = document.querySelector('select[name="nat_mode"]');
-    if (natModeSelect) {
-        natModeSelect.addEventListener('change', function(e) {
-            console.log('NAT模式原生事件触发:', e.target.value);
-            alert('原生事件 - 选择的值: ' + e.target.value);
-            updateNatSettingsVisibility();
-        });
-    }
 
     // 根据选择的模式更新设置组的可见性
     function updateNatSettingsVisibility() {
