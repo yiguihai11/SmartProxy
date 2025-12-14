@@ -106,16 +106,16 @@
           "expires_after_minutes": 4320,
           "time_restriction": {
             "allowed_hours": [
-              9,
-              14,
-              15,
-              16,
-              17,
-              18,
-              19,
-              20,
-              21,
-              22
+              "09",
+              "14",
+              "15",
+              "16",
+              "17",
+              "18",
+              "19",
+              "20",
+              "21",
+              "22"
             ],
             "allowed_days": [
               "monday",
