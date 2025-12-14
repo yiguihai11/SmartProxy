@@ -675,6 +675,51 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
         btn.closest('.time-slot-item, .hour-item').remove();
     };
 
+    // 星期选择辅助函数
+    window.selectAllDays = function() {
+        $('input[name^="allowed_days_"]').prop('checked', true);
+        layui.form.render('checkbox');
+    };
+
+    window.selectWeekdays = function() {
+        $('input[name^="allowed_days_"]').prop('checked', false);
+        $('input[name="allowed_days_monday"], input[name="allowed_days_tuesday"], input[name="allowed_days_wednesday"], input[name="allowed_days_thursday"], input[name="allowed_days_friday"]').prop('checked', true);
+        layui.form.render('checkbox');
+    };
+
+    window.selectWeekends = function() {
+        $('input[name^="allowed_days_"]').prop('checked', false);
+        $('input[name="allowed_days_saturday"], input[name="allowed_days_sunday"]').prop('checked', true);
+        layui.form.render('checkbox');
+    };
+
+    window.clearAllDays = function() {
+        $('input[name^="allowed_days_"]').prop('checked', false);
+        layui.form.render('checkbox');
+    };
+
+    // 收集选中的星期
+    function collectAllowedDays() {
+        const days = [];
+        const dayMap = {
+            'allowed_days_monday': 'monday',
+            'allowed_days_tuesday': 'tuesday',
+            'allowed_days_wednesday': 'wednesday',
+            'allowed_days_thursday': 'thursday',
+            'allowed_days_friday': 'friday',
+            'allowed_days_saturday': 'saturday',
+            'allowed_days_sunday': 'sunday'
+        };
+
+        Object.keys(dayMap).forEach(checkboxName => {
+            if ($(`input[name="${checkboxName}"]:checked`).length > 0) {
+                days.push(dayMap[checkboxName]);
+            }
+        });
+
+        return days;
+    }
+
     // 收集所有时间配置
     function collectAllowedHours() {
         const container = $('#allowed-hours-list');
@@ -1433,14 +1478,19 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                             <div class="layui-form-item">
                                 <label class="layui-form-label">允许星期</label>
                                 <div class="layui-input-block">
-                                    <select name="allowed_days" lay-verify="">
-                                        <option value="">不限制</option>
-                                        <option value="monday-friday" ${(timeRestriction.allowed_days || []).includes('monday-friday') ? 'selected' : ''}>周一至周五</option>
-                                        <option value="saturday-sunday" ${(timeRestriction.allowed_days || []).includes('saturday-sunday') ? 'selected' : ''}>周六至周日</option>
-                                        <option value="weekdays" ${(timeRestriction.allowed_days || []).includes('monday,tuesday,wednesday,thursday,friday') ? 'selected' : ''}>工作日</option>
-                                        <option value="weekends" ${(timeRestriction.allowed_days || []).includes('saturday,sunday') ? 'selected' : ''}>周末</option>
-                                        <option value="all" ${(timeRestriction.allowed_days || []).length === 7 ? 'selected' : ''}>每天</option>
-                                    </select>
+                                    <input type="checkbox" name="allowed_days_monday" title="周一" ${(timeRestriction.allowed_days || []).includes('monday') ? 'checked' : ''}>
+                                    <input type="checkbox" name="allowed_days_tuesday" title="周二" ${(timeRestriction.allowed_days || []).includes('tuesday') ? 'checked' : ''}>
+                                    <input type="checkbox" name="allowed_days_wednesday" title="周三" ${(timeRestriction.allowed_days || []).includes('wednesday') ? 'checked' : ''}>
+                                    <input type="checkbox" name="allowed_days_thursday" title="周四" ${(timeRestriction.allowed_days || []).includes('thursday') ? 'checked' : ''}>
+                                    <input type="checkbox" name="allowed_days_friday" title="周五" ${(timeRestriction.allowed_days || []).includes('friday') ? 'checked' : ''}>
+                                    <input type="checkbox" name="allowed_days_saturday" title="周六" ${(timeRestriction.allowed_days || []).includes('saturday') ? 'checked' : ''}>
+                                    <input type="checkbox" name="allowed_days_sunday" title="周日" ${(timeRestriction.allowed_days || []).includes('sunday') ? 'checked' : ''}>
+                                    <div style="margin-top: 10px;">
+                                        <button type="button" class="layui-btn layui-btn-primary layui-btn-xs" onclick="selectAllDays()">全选</button>
+                                        <button type="button" class="layui-btn layui-btn-primary layui-btn-xs" onclick="selectWeekdays()">工作日</button>
+                                        <button type="button" class="layui-btn layui-btn-primary layui-btn-xs" onclick="selectWeekends()">周末</button>
+                                        <button type="button" class="layui-btn layui-btn-primary layui-btn-xs" onclick="clearAllDays()">清空</button>
+                                    </div>
                                 </div>
                             </div>
                             <div class="layui-form-item">
@@ -1541,24 +1591,11 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                     }
 
                     // 处理允许星期
-                    if(formData.allowed_days) {
-                        // 转换下拉选择值到实际格式
-                        let days = [];
-                        switch(formData.allowed_days) {
-                            case 'weekdays':
-                                days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
-                                break;
-                            case 'weekends':
-                                days = ['saturday', 'sunday'];
-                                break;
-                            case 'all':
-                                days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-                                break;
-                            default:
-                                // 使用原始值（如monday-friday, saturday-sunday）
-                                days = [formData.allowed_days];
-                        }
+                    const days = collectAllowedDays();
+                    if (days.length > 0) {
                         user.connection_limit.time_restriction.allowed_days = days;
+                    } else {
+                        delete user.connection_limit.time_restriction.allowed_days;
                     }
 
                     // 处理时区
