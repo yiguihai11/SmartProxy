@@ -1252,6 +1252,7 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
     
     // 监听 NAT 模式选择变化 - 使用layui方式
     form.on('select(nat_mode)', function(data){
+        alert('当前选择模式: ' + data.value);
         updateNatSettingsVisibility();
     });
 
