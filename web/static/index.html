@@ -616,6 +616,141 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
     $('#year').text(new Date().getFullYear());
 
     // ==================== 密码显示/隐藏功能 ====================
+
+    // 时间数组全局变量
+    let allowedHoursArray = [];
+
+    // 添加时间段
+    window.addTimeSlot = function(btn) {
+        const container = btn.closest('.layui-input-block').find('#allowed-hours-list');
+        const index = container.children().length;
+        const timeSlotHtml = `
+            <div class="time-slot-item" style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center;" data-index="${index}">
+                <input type="text" class="layui-input time-start" placeholder="开始时间" readonly style="width: 35%;">
+                <span style="color: #666;">至</span>
+                <input type="text" class="layui-input time-end" placeholder="结束时间" readonly style="width: 35%;">
+                <button type="button" class="layui-btn layui-btn-danger layui-btn-xs" onclick="removeTimeItem(this)">
+                    <i class="layui-icon layui-icon-close"></i>
+                </button>
+            </div>
+        `;
+        container.append(timeSlotHtml);
+
+        // 初始化时间选择器
+        layui.use('laydate', function(){
+            const laydate = layui.laydate;
+
+            laydate.render({
+                elem: container.find(`[data-index="${index}"] .time-start`)[0],
+                type: 'time',
+                format: 'HH:mm'
+            });
+
+            laydate.render({
+                elem: container.find(`[data-index="${index}"] .time-end`)[0],
+                type: 'time',
+                format: 'HH:mm'
+            });
+        });
+    };
+
+    // 添加单个小时
+    window.addSingleHour = function(btn) {
+        const container = btn.closest('.layui-input-block').find('#allowed-hours-list');
+        const index = container.children().length;
+        const hourHtml = `
+            <div class="hour-item" style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center;" data-index="${index}">
+                <input type="number" class="layui-input single-hour" placeholder="小时 (0-23)" min="0" max="23" style="width: 30%;">
+                <span style="color: #666;">点</span>
+                <button type="button" class="layui-btn layui-btn-danger layui-btn-xs" onclick="removeTimeItem(this)">
+                    <i class="layui-icon layui-icon-close"></i>
+                </button>
+            </div>
+        `;
+        container.append(hourHtml);
+    };
+
+    // 删除时间项
+    window.removeTimeItem = function(btn) {
+        btn.closest('.time-slot-item, .hour-item').remove();
+    };
+
+    // 收集所有时间配置
+    function collectAllowedHours() {
+        const container = $('#allowed-hours-list');
+        const hours = [];
+
+        // 收集时间段
+        container.find('.time-slot-item').each(function() {
+            const start = $(this).find('.time-start').val();
+            const end = $(this).find('.time-end').val();
+            if (start && end) {
+                hours.push(`${start}-${end}`);
+            }
+        });
+
+        // 收集单个小时
+        container.find('.hour-item').each(function() {
+            const hour = $(this).find('.single-hour').val();
+            if (hour !== '') {
+                hours.push(parseInt(hour));
+            }
+        });
+
+        return hours;
+    }
+
+    // 初始化现有时间配置
+    function initAllowedHours(hours) {
+        const container = $('#allowed-hours-list');
+        container.empty();
+        allowedHoursArray = hours || [];
+
+        let index = 0;
+        allowedHoursArray.forEach(hour => {
+            if (typeof hour === 'string' && hour.includes('-')) {
+                // 时间段
+                const [start, end] = hour.split('-');
+                const timeSlotHtml = `
+                    <div class="time-slot-item" style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center;" data-index="${index}">
+                        <input type="text" class="layui-input time-start" value="${start}" placeholder="开始时间" readonly style="width: 35%;">
+                        <span style="color: #666;">至</span>
+                        <input type="text" class="layui-input time-end" value="${end}" placeholder="结束时间" readonly style="width: 35%;">
+                        <button type="button" class="layui-btn layui-btn-danger layui-btn-xs" onclick="removeTimeItem(this)">
+                            <i class="layui-icon layui-icon-close"></i>
+                        </button>
+                    </div>
+                `;
+                container.append(timeSlotHtml);
+            } else if (typeof hour === 'number') {
+                // 单个小时
+                const hourHtml = `
+                    <div class="hour-item" style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center;" data-index="${index}">
+                        <input type="number" class="layui-input single-hour" value="${hour}" placeholder="小时 (0-23)" min="0" max="23" style="width: 30%;">
+                        <span style="color: #666;">点</span>
+                        <button type="button" class="layui-btn layui-btn-danger layui-btn-xs" onclick="removeTimeItem(this)">
+                            <i class="layui-icon layui-icon-close"></i>
+                        </button>
+                    </div>
+                `;
+                container.append(hourHtml);
+            }
+            index++;
+        });
+
+        // 初始化时间选择器
+        layui.use('laydate', function(){
+            const laydate = layui.laydate;
+
+            container.find('.time-start, .time-end').each(function() {
+                laydate.render({
+                    elem: this,
+                    type: 'time',
+                    format: 'HH:mm'
+                });
+            });
+        });
+    }
     // 使用事件委托处理动态添加的密码框
     $(document).on('click', '.password-toggle', function() {
         const $icon = $(this);
@@ -1275,13 +1410,24 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                         <div class="config-group">
                             <div class="sub-title">时间限制</div>
                             <div class="layui-form-item">
-                                <label class="layui-form-label">允许时间段</label>
+                                <label class="layui-form-label">允许时间</label>
                                 <div class="layui-input-block">
-                                    <div id="allowed-hours-container" style="display: flex; gap: 10px;">
-                                        <input type="text" id="allowed-hours-start" name="allowed_hours_start" value="${(timeRestriction.allowed_hours && timeRestriction.allowed_hours[0]) ? timeRestriction.allowed_hours[0].split('-')[0] : ''}" class="layui-input" placeholder="开始时间" readonly style="width: 45%;">
-                                        <input type="text" id="allowed-hours-end" name="allowed_hours_end" value="${(timeRestriction.allowed_hours && timeRestriction.allowed_hours[0]) ? timeRestriction.allowed_hours[0].split('-')[1] : ''}" class="layui-input" placeholder="结束时间" readonly style="width: 45%;">
+                                    <div class="layui-btn-group" style="margin-bottom: 10px;">
+                                        <button type="button" class="layui-btn layui-btn-primary layui-btn-sm" onclick="addTimeSlot(this)">
+                                            <i class="layui-icon layui-icon-add-1"></i> 添加时间段
+                                        </button>
+                                        <button type="button" class="layui-btn layui-btn-primary layui-btn-sm" onclick="addSingleHour(this)">
+                                            <i class="layui-icon layui-icon-time"></i> 添加小时
+                                        </button>
                                     </div>
-                                    <div style="margin-top: 5px; color: #999; font-size: 12px;">格式：小时:分钟，例如：09:00-18:00</div>
+                                    <div id="allowed-hours-list">
+                                        <!-- 动态生成的时间项 -->
+                                    </div>
+                                    <div style="margin-top: 10px; color: #666; font-size: 12px;">
+                                        支持格式：
+                                        <br>• 时间段：09:00-18:00（表示9点到18点）
+                                        <br>• 单个小时：9、14、20（表示9点、14点、20点）
+                                    </div>
                                 </div>
                             </div>
                             <div class="layui-form-item">
@@ -1335,59 +1481,33 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                 </div>
             `,
             success: function(layero, index) {
-                form.render();
-
-                // 初始化时间选择器
-                laydate.render({
-                    elem: '#allowed-hours-start',
-                    type: 'time',
-                    format: 'HH:mm',
-                    trigger: 'click',
-                    done: function(value) {
-                        // 验证时间格式
-                        if (value) {
-                            $(this.elem).val(value);
-                        }
-                    }
-                });
-
-                laydate.render({
-                    elem: '#allowed-hours-end',
-                    type: 'time',
-                    format: 'HH:mm',
-                    trigger: 'click',
-                    done: function(value) {
-                        // 验证时间格式
-                        if (value) {
-                            $(this.elem).val(value);
-                        }
-                    }
-                });
+                // 初始化时间配置
+                initAllowedHours(timeRestriction.allowed_hours || []);
 
                 // 初始化日期选择器
                 laydate.render({
                     elem: '#effective-dates',
                     type: 'date',
                     format: 'yyyy-MM-dd',
-                    trigger: 'click',
-                    done: function(value) {
-                        if (value) {
-                            $(this.elem).val(value);
-                        }
-                    }
+                    trigger: 'click'
                 });
 
                 laydate.render({
                     elem: '#expired-dates',
                     type: 'date',
                     format: 'yyyy-MM-dd',
-                    trigger: 'click',
-                    done: function(value) {
-                        if (value) {
-                            $(this.elem).val(value);
-                        }
-                    }
+                    trigger: 'click'
                 });
+
+                // 最后渲染表单，确保所有元素都已准备好
+                form.render();
+
+                // 特别渲染select元素
+                form.render('select');
+                form.render('select', 'editUserForm');
+
+                // 调试：确保select正确渲染
+                alert('Form rendered, select elements: ' + $(layero).find('select').length);
 
                 $(layero).find('#saveEditUser').on('click', function(){
                     const formData = form.val('editUserForm');
@@ -1412,15 +1532,11 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                     // 处理时间限制
                     user.connection_limit.time_restriction = user.connection_limit.time_restriction || {};
 
-                    // 处理允许时间段
-                    if(formData.allowed_hours_start && formData.allowed_hours_end) {
-                        const start = formData.allowed_hours_start.trim();
-                        const end = formData.allowed_hours_end.trim();
-                        if(start && end) {
-                            user.connection_limit.time_restriction.allowed_hours = [`${start}-${end}`];
-                        }
-                    } else if(formData.allowed_hours_start || formData.allowed_hours_end) {
-                        // 清除时间段如果只有一个时间
+                    // 收集所有允许时间
+                    const hours = collectAllowedHours();
+                    if (hours.length > 0) {
+                        user.connection_limit.time_restriction.allowed_hours = hours;
+                    } else {
                         delete user.connection_limit.time_restriction.allowed_hours;
                     }
 
