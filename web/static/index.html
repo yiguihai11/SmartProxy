@@ -1248,7 +1248,6 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
         } else {
             natConfigItems.style.display = 'none';
         }
-        alert(123);
     });
 
     // 使用轮询方式监听 NAT 模式选择变化
@@ -1259,7 +1258,6 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
         if (natModeSelect) {
             const currentValue = natModeSelect.value;
             if (lastNatModeValue !== currentValue && lastNatModeValue !== '') {
-                alert('NAT模式已改变: ' + lastNatModeValue + ' -> ' + currentValue);
                 updateNatSettingsVisibility();
             }
             lastNatModeValue = currentValue;
@@ -1274,7 +1272,6 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
         const natModeSelect = document.querySelector('select[name="nat_mode"]');
         if (natModeSelect) {
             lastNatModeValue = natModeSelect.value;
-            alert('初始NAT模式值: ' + lastNatModeValue);
         }
     }, 1000);
 
@@ -2071,7 +2068,6 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
 
     // 初始化加载配置
     loadConfig();
-    alert('页面JS加载完成');
 });
 </script>
 </body>
