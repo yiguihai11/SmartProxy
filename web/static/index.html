@@ -1216,10 +1216,11 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
         }
 
         // 根据 NAT 穿透开关状态显示/隐藏配置项
+        const natConfigItems = document.querySelector('#nat-config-items');
         if (config.nat_traversal && config.nat_traversal.enabled) {
-            $('#nat-config-items').show();
+            natConfigItems.style.display = 'block';
         } else {
-            $('#nat-config-items').hide();
+            natConfigItems.style.display = 'none';
         }
 
         // 日志配置
@@ -1239,34 +1240,47 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
         // 监听 NAT 穿透开关
     form.on('switch(nat_enabled)', function(data){
         const isChecked = data.elem.checked;
+        const natConfigItems = document.querySelector('#nat-config-items');
         if (isChecked) {
-            $('#nat-config-items').show();
+            natConfigItems.style.display = 'block';
             // 初始显示/隐藏设置组
             updateNatSettingsVisibility();
         } else {
-            $('#nat-config-items').hide();
+            natConfigItems.style.display = 'none';
         }
     });
 
     // 监听 NAT 模式选择变化
     form.on('select(nat_mode)', function(data){
+        console.log('NAT模式选择变化:', data);
+        alert('选择的值: ' + data.value);
         updateNatSettingsVisibility();
     });
 
+    // 备用监听方式 - 直接使用原生JavaScript监听
+    const natModeSelect = document.querySelector('select[name="nat_mode"]');
+    if (natModeSelect) {
+        natModeSelect.addEventListener('change', function(e) {
+            console.log('NAT模式原生事件触发:', e.target.value);
+            alert('原生事件 - 选择的值: ' + e.target.value);
+            updateNatSettingsVisibility();
+        });
+    }
+
     // 根据选择的模式更新设置组的可见性
     function updateNatSettingsVisibility() {
-        const selectedMode = $('select[name="nat_mode"]').val();
+        const selectedMode = document.querySelector('select[name="nat_mode"]').value;
 
         // 遍历所有设置组
-        $('.nat-settings-group').each(function() {
-            const $group = $(this);
-            const modes = $group.data('modes').toString().split(',');
+        const settingGroups = document.querySelectorAll('.nat-settings-group');
+        settingGroups.forEach(function(group) {
+            const modes = group.getAttribute('data-modes').split(',');
 
             // 如果当前模式在组的支持列表中，或者模式是auto，则显示
             if (modes.includes(selectedMode) || selectedMode === 'auto') {
-                $group.show();
+                group.style.display = 'block';
             } else {
-                $group.hide();
+                group.style.display = 'none';
             }
         });
     }
