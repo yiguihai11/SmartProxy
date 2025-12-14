@@ -460,74 +460,104 @@
                                 <option value="stun">STUN</option>
                                 <option value="turn">TURN</option>
                                 <option value="upnp">UPnP</option>
+                                <option value="holepunch">UDP打洞</option>
                             </select>
                         </div>
                     </div>
-                    <div class="layui-form-item">
-                        <label class="layui-form-label">STUN 服务器</label>
-                        <div class="layui-input-block">
-                            <textarea name="stun_servers" class="layui-textarea" placeholder="每行一个STUN服务器"></textarea>
-                        </div>
-                    </div>
-                    <div class="layui-form-item">
-                        <label class="layui-form-label">TURN 服务器</label>
-                        <div class="layui-input-inline">
-                            <input type="text" name="turn_server" class="layui-input" placeholder="e.g., turn.example.com:3478">
-                        </div>
-                    </div>
-                    <div class="layui-form-item">
-                        <label class="layui-form-label">TURN 用户名</label>
-                        <div class="layui-input-inline">
-                            <input type="text" name="turn_username" class="layui-input">
-                        </div>
-                    </div>
-                    <div class="layui-form-item">
-                        <label class="layui-form-label">TURN 密码</label>
-                        <div class="layui-input-inline">
-                            <div class="password-wrapper">
-                                <input type="password" name="turn_password" class="layui-input">
-                                <i class="layui-icon layui-icon-eye password-toggle"></i>
-                            </div>
-                        </div>
-                    </div>
-                     <div class="layui-form-item">
-                        <label class="layui-form-label">启用 UPnP</label>
-                        <div class="layui-input-block">
-                            <input type="checkbox" name="upnp_enabled" lay-skin="switch" lay-text="开启|关闭">
-                        </div>
-                    </div>
-                    <div class="layui-form-item">
-                        <label class="layui-form-label">端口范围</label>
-                        <div class="layui-input-inline" style="width: 100px;">
-                            <input type="number" name="port_start" class="layui-input" placeholder="Start">
-                        </div>
-                        <div class="layui-form-mid">-</div>
-                        <div class="layui-input-inline" style="width: 100px;">
-                            <input type="number" name="port_end" class="layui-input" placeholder="End">
-                        </div>
-                    </div>
+                    <!-- 通用设置 -->
                     <div class="layui-form-item">
                         <label class="layui-form-label">保活间隔 (秒)</label>
                         <div class="layui-input-inline">
                             <input type="number" name="keepalive_interval" class="layui-input" placeholder="30">
                         </div>
                     </div>
-                     <div class="layui-form-item">
-                        <label class="layui-form-label">STUN 超时 (秒)</label>
-                        <div class="layui-input-inline">
-                            <input type="number" name="stun_timeout" class="layui-input" placeholder="5">
+
+                    <!-- STUN 设置 -->
+                    <div class="nat-settings-group" data-modes="stun,auto" style="border-top: 1px solid #f0f0f0; padding-top: 15px; margin-top: 15px;">
+                        <div style="color: #666; font-size: 12px; margin-bottom: 10px; padding-left: 10px;">
+                            <i class="layui-icon layui-icon-tips"></i> STUN协议配置
+                        </div>
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">STUN 服务器</label>
+                            <div class="layui-input-block">
+                                <textarea name="stun_servers" class="layui-textarea" placeholder="每行一个STUN服务器"></textarea>
+                            </div>
+                        </div>
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">STUN 超时 (秒)</label>
+                            <div class="layui-input-inline">
+                                <input type="number" name="stun_timeout" class="layui-input" placeholder="5">
+                            </div>
                         </div>
                     </div>
-                    <div class="layui-form-item">
-                        <label class="layui-form-label">打洞次数</label>
-                        <div class="layui-input-inline">
-                            <input type="number" name="hole_punch_count" class="layui-input" placeholder="3">
+
+                    <!-- TURN 设置 -->
+                    <div class="nat-settings-group" data-modes="turn,auto" style="border-top: 1px solid #f0f0f0; padding-top: 15px; margin-top: 15px;">
+                        <div style="color: #666; font-size: 12px; margin-bottom: 10px; padding-left: 10px;">
+                            <i class="layui-icon layui-icon-tips"></i> TURN中继服务器配置
+                        </div>
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">TURN 服务器</label>
+                            <div class="layui-input-inline">
+                                <input type="text" name="turn_server" class="layui-input" placeholder="e.g., turn.example.com:3478">
+                            </div>
+                        </div>
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">TURN 用户名</label>
+                            <div class="layui-input-inline">
+                                <input type="text" name="turn_username" class="layui-input">
+                            </div>
+                        </div>
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">TURN 密码</label>
+                            <div class="layui-input-inline">
+                                <div class="password-wrapper">
+                                    <input type="password" name="turn_password" class="layui-input">
+                                    <i class="layui-icon layui-icon-eye password-toggle"></i>
+                                </div>
+                            </div>
                         </div>
                     </div>
-                    <div class="layui-form-item">
-                        <label class="layui-form-label">打洞延时 (ms)</label>
-                        <div class="layui-input-inline">
-                            <input type="number" name="hole_punch_delay" class="layui-input" placeholder="100">
+
+                    <!-- UPnP 设置 -->
+                    <div class="nat-settings-group" data-modes="upnp,auto" style="border-top: 1px solid #f0f0f0; padding-top: 15px; margin-top: 15px;">
+                        <div style="color: #666; font-size: 12px; margin-bottom: 10px; padding-left: 10px;">
+                            <i class="layui-icon layui-icon-tips"></i> UPnP端口映射配置
+                        </div>
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">启用 UPnP</label>
+                            <div class="layui-input-block">
+                                <input type="checkbox" name="upnp_enabled" lay-skin="switch" lay-text="开启|关闭">
+                            </div>
+                        </div>
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">端口范围</label>
+                            <div class="layui-input-inline" style="width: 100px;">
+                                <input type="number" name="port_start" class="layui-input" placeholder="Start">
+                            </div>
+                            <div class="layui-form-mid">-</div>
+                            <div class="layui-input-inline" style="width: 100px;">
+                                <input type="number" name="port_end" class="layui-input" placeholder="End">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 打洞设置 -->
+                    <div class="nat-settings-group" data-modes="holepunch,auto" style="border-top: 1px solid #f0f0f0; padding-top: 15px; margin-top: 15px;">
+                        <div style="color: #666; font-size: 12px; margin-bottom: 10px; padding-left: 10px;">
+                            <i class="layui-icon layui-icon-tips"></i> UDP打洞模式配置
+                        </div>
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">打洞次数</label>
+                            <div class="layui-input-inline">
+                                <input type="number" name="hole_punch_count" class="layui-input" placeholder="3">
+                            </div>
+                        </div>
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">打洞延时 (ms)</label>
+                            <div class="layui-input-inline">
+                                <input type="number" name="hole_punch_delay" class="layui-input" placeholder="100">
+                            </div>
                         </div>
                     </div>
                     </div>
@@ -1211,12 +1241,40 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
         const isChecked = data.elem.checked;
         if (isChecked) {
             $('#nat-config-items').show();
+            // 初始显示/隐藏设置组
+            updateNatSettingsVisibility();
         } else {
             $('#nat-config-items').hide();
         }
     });
 
+    // 监听 NAT 模式选择变化
+    form.on('select(nat_mode)', function(data){
+        updateNatSettingsVisibility();
+    });
+
+    // 根据选择的模式更新设置组的可见性
+    function updateNatSettingsVisibility() {
+        const selectedMode = $('select[name="nat_mode"]').val();
+
+        // 遍历所有设置组
+        $('.nat-settings-group').each(function() {
+            const $group = $(this);
+            const modes = $group.data('modes').toString().split(',');
+
+            // 如果当前模式在组的支持列表中，或者模式是auto，则显示
+            if (modes.includes(selectedMode) || selectedMode === 'auto') {
+                $group.show();
+            } else {
+                $group.hide();
+            }
+        });
+    }
+
     form.render();
+
+    // 初始化 NAT 设置可见性
+    updateNatSettingsVisibility();
     }
 
     // ==================== 工具函数 ====================
