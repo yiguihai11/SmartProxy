@@ -1277,31 +1277,50 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                             <div class="layui-form-item">
                                 <label class="layui-form-label">允许时间段</label>
                                 <div class="layui-input-block">
-                                    <input type="text" name="allowed_hours" value="${(timeRestriction.allowed_hours || []).join(', ')}" class="layui-input" placeholder="例如: 09:00-18:00">
+                                    <div id="allowed-hours-container" style="display: flex; gap: 10px;">
+                                        <input type="text" id="allowed-hours-start" name="allowed_hours_start" value="${(timeRestriction.allowed_hours && timeRestriction.allowed_hours[0]) ? timeRestriction.allowed_hours[0].split('-')[0] : ''}" class="layui-input" placeholder="开始时间" readonly style="width: 45%;">
+                                        <input type="text" id="allowed-hours-end" name="allowed_hours_end" value="${(timeRestriction.allowed_hours && timeRestriction.allowed_hours[0]) ? timeRestriction.allowed_hours[0].split('-')[1] : ''}" class="layui-input" placeholder="结束时间" readonly style="width: 45%;">
+                                    </div>
+                                    <div style="margin-top: 5px; color: #999; font-size: 12px;">格式：小时:分钟，例如：09:00-18:00</div>
                                 </div>
                             </div>
                             <div class="layui-form-item">
                                 <label class="layui-form-label">允许星期</label>
                                 <div class="layui-input-block">
-                                    <input type="text" name="allowed_days" value="${(timeRestriction.allowed_days || []).join(', ')}" class="layui-input" placeholder="例如: monday-friday">
+                                    <select name="allowed_days" lay-verify="">
+                                        <option value="">不限制</option>
+                                        <option value="monday-friday" ${(timeRestriction.allowed_days || []).includes('monday-friday') ? 'selected' : ''}>周一至周五</option>
+                                        <option value="saturday-sunday" ${(timeRestriction.allowed_days || []).includes('saturday-sunday') ? 'selected' : ''}>周六至周日</option>
+                                        <option value="weekdays" ${(timeRestriction.allowed_days || []).includes('monday,tuesday,wednesday,thursday,friday') ? 'selected' : ''}>工作日</option>
+                                        <option value="weekends" ${(timeRestriction.allowed_days || []).includes('saturday,sunday') ? 'selected' : ''}>周末</option>
+                                        <option value="all" ${(timeRestriction.allowed_days || []).length === 7 ? 'selected' : ''}>每天</option>
+                                    </select>
                                 </div>
                             </div>
                             <div class="layui-form-item">
                                 <label class="layui-form-label">时区</label>
                                 <div class="layui-input-block">
-                                    <input type="text" name="timezone" value="${timeRestriction.timezone || 'Asia/Shanghai'}" class="layui-input">
+                                    <select name="timezone" lay-verify="">
+                                        <option value="UTC" ${timeRestriction.timezone === 'UTC' ? 'selected' : ''}>UTC</option>
+                                        <option value="Asia/Shanghai" ${(!timeRestriction.timezone || timeRestriction.timezone === 'Asia/Shanghai') ? 'selected' : ''}>Asia/Shanghai (中国)</option>
+                                        <option value="Asia/Tokyo" ${timeRestriction.timezone === 'Asia/Tokyo' ? 'selected' : ''}>Asia/Tokyo (日本)</option>
+                                        <option value="Asia/Seoul" ${timeRestriction.timezone === 'Asia/Seoul' ? 'selected' : ''}>Asia/Seoul (韩国)</option>
+                                        <option value="America/New_York" ${timeRestriction.timezone === 'America/New_York' ? 'selected' : ''}>America/New_York (纽约)</option>
+                                        <option value="Europe/London" ${timeRestriction.timezone === 'Europe/London' ? 'selected' : ''}>Europe/London (伦敦)</option>
+                                        <option value="Europe/Paris" ${timeRestriction.timezone === 'Europe/Paris' ? 'selected' : ''}>Europe/Paris (巴黎)</option>
+                                    </select>
                                 </div>
                             </div>
                             <div class="layui-form-item">
                                 <label class="layui-form-label">生效日期</label>
                                 <div class="layui-input-block">
-                                    <input type="text" id="effective-dates" name="effective_dates" class="layui-input" placeholder="点击选择日期范围" value="${(timeRestriction.effective_dates || []).join(', ')}">
+                                    <input type="text" id="effective-dates" name="effective_dates" class="layui-input" placeholder="选择生效日期" readonly>
                                 </div>
                             </div>
                             <div class="layui-form-item">
                                 <label class="layui-form-label">过期日期</label>
                                 <div class="layui-input-block">
-                                    <input type="text" id="expired-dates" name="expired_dates" class="layui-input" placeholder="点击选择日期范围" value="${(timeRestriction.expired_dates || []).join(', ')}">
+                                    <input type="text" id="expired-dates" name="expired_dates" class="layui-input" placeholder="选择过期日期" readonly>
                                 </div>
                             </div>
                         </div>
@@ -1318,21 +1337,56 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
             success: function(layero, index) {
                 form.render();
 
+                // 初始化时间选择器
+                laydate.render({
+                    elem: '#allowed-hours-start',
+                    type: 'time',
+                    format: 'HH:mm',
+                    trigger: 'click',
+                    done: function(value) {
+                        // 验证时间格式
+                        if (value) {
+                            $(this.elem).val(value);
+                        }
+                    }
+                });
+
+                laydate.render({
+                    elem: '#allowed-hours-end',
+                    type: 'time',
+                    format: 'HH:mm',
+                    trigger: 'click',
+                    done: function(value) {
+                        // 验证时间格式
+                        if (value) {
+                            $(this.elem).val(value);
+                        }
+                    }
+                });
+
                 // 初始化日期选择器
                 laydate.render({
                     elem: '#effective-dates',
                     type: 'date',
-                    range: true,
                     format: 'yyyy-MM-dd',
-                    trigger: 'click'
+                    trigger: 'click',
+                    done: function(value) {
+                        if (value) {
+                            $(this.elem).val(value);
+                        }
+                    }
                 });
 
                 laydate.render({
                     elem: '#expired-dates',
                     type: 'date',
-                    range: true,
                     format: 'yyyy-MM-dd',
-                    trigger: 'click'
+                    trigger: 'click',
+                    done: function(value) {
+                        if (value) {
+                            $(this.elem).val(value);
+                        }
+                    }
                 });
 
                 $(layero).find('#saveEditUser').on('click', function(){
@@ -1359,13 +1413,36 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                     user.connection_limit.time_restriction = user.connection_limit.time_restriction || {};
 
                     // 处理允许时间段
-                    if(formData.allowed_hours) {
-                        user.connection_limit.time_restriction.allowed_hours = formData.allowed_hours.split(',').map(h => h.trim()).filter(h => h);
+                    if(formData.allowed_hours_start && formData.allowed_hours_end) {
+                        const start = formData.allowed_hours_start.trim();
+                        const end = formData.allowed_hours_end.trim();
+                        if(start && end) {
+                            user.connection_limit.time_restriction.allowed_hours = [`${start}-${end}`];
+                        }
+                    } else if(formData.allowed_hours_start || formData.allowed_hours_end) {
+                        // 清除时间段如果只有一个时间
+                        delete user.connection_limit.time_restriction.allowed_hours;
                     }
 
                     // 处理允许星期
                     if(formData.allowed_days) {
-                        user.connection_limit.time_restriction.allowed_days = formData.allowed_days.split(',').map(d => d.trim()).filter(d => d);
+                        // 转换下拉选择值到实际格式
+                        let days = [];
+                        switch(formData.allowed_days) {
+                            case 'weekdays':
+                                days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'];
+                                break;
+                            case 'weekends':
+                                days = ['saturday', 'sunday'];
+                                break;
+                            case 'all':
+                                days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+                                break;
+                            default:
+                                // 使用原始值（如monday-friday, saturday-sunday）
+                                days = [formData.allowed_days];
+                        }
+                        user.connection_limit.time_restriction.allowed_days = days;
                     }
 
                     // 处理时区
@@ -1375,26 +1452,12 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
 
                     // 处理生效日期
                     if(formData.effective_dates) {
-                        const dateStr = formData.effective_dates.trim();
-                        if(dateStr.includes(' - ')) {
-                            // 日期范围
-                            user.connection_limit.time_restriction.effective_dates = dateStr.split(' - ').map(d => d.trim());
-                        } else if(dateStr) {
-                            // 逗号分隔的多个日期
-                            user.connection_limit.time_restriction.effective_dates = dateStr.split(',').map(d => d.trim()).filter(d => d);
-                        }
+                        user.connection_limit.time_restriction.effective_dates = [formData.effective_dates.trim()];
                     }
 
                     // 处理过期日期
                     if(formData.expired_dates) {
-                        const dateStr = formData.expired_dates.trim();
-                        if(dateStr.includes(' - ')) {
-                            // 日期范围
-                            user.connection_limit.time_restriction.expired_dates = dateStr.split(' - ').map(d => d.trim());
-                        } else if(dateStr) {
-                            // 逗号分隔的多个日期
-                            user.connection_limit.time_restriction.expired_dates = dateStr.split(',').map(d => d.trim()).filter(d => d);
-                        }
+                        user.connection_limit.time_restriction.expired_dates = [formData.expired_dates.trim()];
                     }
 
                     renderUserTable();
@@ -1444,7 +1507,7 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                         <div class="layui-form-item">
                             <label class="layui-form-label">用户组</label>
                             <div class="layui-input-block">
-                                <select name="user_group" lay-search="" lay-verify="required">
+                                <select name="user_group" lay-search="{caseSensitive:false, fuzzy: true}" lay-creatable="" lay-verify="required">
                                     <option value="">选择或输入用户组</option>
                                     ${userGroupsArray.map(group => `<option value="${group}">${group}</option>`).join('')}
                                     <option value="">--- 推荐 ---</option>
