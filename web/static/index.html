@@ -1224,15 +1224,11 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                         <div class="layui-form-item">
                             <label class="layui-form-label">用户组</label>
                             <div class="layui-input-block">
-                                <select name="user_groups" multiple lay-verify="required">
+                                <select name="user_groups" lay-verify="required">
                                     <option value="">请选择用户组</option>
                                     ${userGroupsArray.map(group =>
-                                        `<option value="${group}" ${(data.user_groups || []).includes(group) ? 'selected' : ''}>${group}</option>`
+                                        `<option value="${group}" ${(data.user_groups || [])[0] === group ? 'selected' : ''}>${group}</option>`
                                     ).join('')}
-                                    <option value="" disabled>---</option>
-                                    <option value="admin" ${(data.user_groups || []).includes('admin') ? 'selected' : ''}>admin</option>
-                                    <option value="user" ${(data.user_groups || []).includes('user') ? 'selected' : ''}>user</option>
-                                    <option value="guest" ${(data.user_groups || []).includes('guest') ? 'selected' : ''}>guest</option>
                                 </select>
                             </div>
                         </div>
@@ -1341,9 +1337,9 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                     const user = config.socks5.auth_users[data.id];
                     if(formData.password) user.password = formData.password;
 
-                    // 处理用户组 - layui多选下拉框返回数组
+                    // 处理用户组 - layui单选下拉框返回字符串
                     if(formData.user_groups) {
-                        user.user_groups = Array.isArray(formData.user_groups) ? formData.user_groups : [formData.user_groups];
+                        user.user_groups = [formData.user_groups];
                     }
 
                     user.rate_limit = user.rate_limit || {};
