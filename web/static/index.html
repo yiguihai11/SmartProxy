@@ -455,7 +455,7 @@
                     <div class="layui-form-item">
                         <label class="layui-form-label">模式</label>
                         <div class="layui-input-inline">
-                            <select name="nat_mode">
+                            <select name="nat_mode" lay-filter="nat_mode">
                                 <option value="auto">自动</option>
                                 <option value="stun">STUN</option>
                                 <option value="turn">TURN</option>
@@ -1249,31 +1249,11 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
             natConfigItems.style.display = 'none';
         }
     });
-
-    // 使用轮询方式监听 NAT 模式选择变化
-    let lastNatModeValue = '';
-
-    function checkNatModeChange() {
-        const natModeSelect = document.querySelector('select[name="nat_mode"]');
-        if (natModeSelect) {
-            const currentValue = natModeSelect.value;
-            if (lastNatModeValue !== currentValue && lastNatModeValue !== '') {
-                updateNatSettingsVisibility();
-            }
-            lastNatModeValue = currentValue;
-        }
-    }
-
-    // 每500毫秒检查一次值的变化
-    setInterval(checkNatModeChange, 500);
-
-    // 初始化当前值
-    setTimeout(function() {
-        const natModeSelect = document.querySelector('select[name="nat_mode"]');
-        if (natModeSelect) {
-            lastNatModeValue = natModeSelect.value;
-        }
-    }, 1000);
+    
+    // 监听 NAT 模式选择变化 - 使用layui方式
+    form.on('select(nat_mode)', function(data){
+        updateNatSettingsVisibility();
+    });
 
     // 根据选择的模式更新设置组的可见性
     function updateNatSettingsVisibility() {
