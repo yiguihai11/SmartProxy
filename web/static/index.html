@@ -1248,18 +1248,27 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
         } else {
             natConfigItems.style.display = 'none';
         }
+        alert(123);
     });
 
     // 监听 NAT 模式选择变化 - 使用原生JavaScript
-    alert(123);  // 测试JS执行
-    const natModeSelect = document.querySelector('select[name="nat_mode"]');
-    if (natModeSelect) {
-        natModeSelect.addEventListener('change', function(e) {
-            console.log('NAT模式选择变化:', e.target.value);
-            alert('选择的值: ' + e.target.value);
-            updateNatSettingsVisibility();
-        });
-    }
+    // 等待layui渲染完成后再绑定事件
+    setTimeout(function() {
+        alert('开始绑定NAT模式监听器');  // 测试JS执行
+        const natModeSelect = document.querySelector('select[name="nat_mode"]');
+        console.log('找到的select元素:', natModeSelect);
+
+        if (natModeSelect) {
+            natModeSelect.addEventListener('change', function(e) {
+                console.log('NAT模式选择变化:', e.target.value);
+                alert('选择的值: ' + e.target.value);
+                updateNatSettingsVisibility();
+            });
+            alert('监听器绑定成功');
+        } else {
+            alert('未找到nat_mode select元素');
+        }
+    }, 1000);  // 延迟1秒确保layui渲染完成
 
     // 根据选择的模式更新设置组的可见性
     function updateNatSettingsVisibility() {
