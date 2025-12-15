@@ -5,6 +5,18 @@ import (
 	"time"
 )
 
+// BufferUsage 缓冲区使用类型
+type BufferUsage int
+
+const (
+	BufferUsageSNI     BufferUsage = iota // SNI/Host检测
+	BufferUsageHeader                    // HTTP头
+	BufferUsageSmall                     // 小型请求
+	BufferUsageMedium                    // 中等数据
+	BufferUsageLarge                     // 大数据
+	BufferUsageHuge                      // 大文件
+)
+
 // MultiSizeBufferPool 多尺寸缓冲区池
 type BufferPool struct {
 	pools map[int]*sync.Pool
@@ -16,14 +28,17 @@ type BufferPool struct {
 // NewBufferPool 创建多尺寸缓冲区池
 func NewBufferPool() *BufferPool {
 	sizes := []int{
-		64,    // 64B  - 小包头
+		64,    // 64B  - 小包头/SNI检测
 		256,   // 256B - HTTP头
+		512,   // 512B - DNS响应
 		1024,  // 1KB  - 小数据包
+		2048,  // 2KB  - 小型请求
 		4096,  // 4KB  - 默认大小
 		8192,  // 8KB  - 中等数据
 		16384, // 16KB - 大数据
 		32768, // 32KB - 视频包
 		65536, // 64KB - 最大缓冲区
+		131072, // 128KB - 大文件传输
 	}
 
 	pool := &BufferPool{
@@ -90,6 +105,68 @@ func (p *BufferPool) Get(size int) []byte {
 	p.stats.mutex.Unlock()
 
 	return make([]byte, size)
+}
+
+// GetOptimized 智能获取缓冲区
+func (p *BufferPool) GetOptimized(usage BufferUsage) []byte {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	var size int
+	switch usage {
+	case BufferUsageSNI:
+		size = 64 // SNI检测只需要小缓冲区
+	case BufferUsageHeader:
+		size = 256 // HTTP头
+	case BufferUsageSmall:
+		size = 2048 // 小型请求
+	case BufferUsageMedium:
+		size = 8192 // 中等数据
+	case BufferUsageLarge:
+		size = 32768 // 大数据
+	case BufferUsageHuge:
+		size = 131072 // 大文件
+	default:
+		size = 4096 // 默认大小
+	}
+
+	// 获取合适大小的缓冲区
+	return p.Get(size)
+}
+
+// GetBestSize 根据实际数据获取最佳大小的缓冲区
+func (p *BufferPool) GetBestSize(data []byte) []byte {
+	// 根据数据长度选择最合适的缓冲区
+	length := len(data)
+
+	switch {
+	case length <= 64:
+		return p.Get(64)
+	case length <= 256:
+		return p.Get(256)
+	case length <= 512:
+		return p.Get(512)
+	case length <= 1024:
+		return p.Get(1024)
+	case length <= 2048:
+		return p.Get(2048)
+	case length <= 4096:
+		return p.Get(4096)
+	case length <= 8192:
+		return p.Get(8192)
+	case length <= 16384:
+		return p.Get(16384)
+	case length <= 32768:
+		return p.Get(32768)
+	case length <= 65536:
+		return p.Get(65536)
+	default:
+		// 对于超大数据，返回原数据或创建128KB缓冲区
+		if length <= 131072 {
+			return p.Get(131072)
+		}
+		return data // 直接返回原数据
+	}
 }
 
 // Put 归还缓冲区

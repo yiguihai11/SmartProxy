@@ -1,6 +1,7 @@
 package socks5
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
@@ -1495,7 +1496,7 @@ func (c *Connection) relay() error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_, err := io.Copy(targetWriter, c.clientConn)
+		err := c.relayClientToTargetOptimized(ctx, targetWriter, rateLimitKey)
 		if err != nil {
 			copyErr = err
 			cancel()
@@ -1523,8 +1524,18 @@ func (c *Connection) relay() error {
 
 // relayTargetToClientOptimized 优化版的目标到客户端数据流处理
 func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io.Writer, rateLimitKey string, copyErr *error) {
-	buf := bufferPool.Get(32768) // 使用32KB缓冲区用于大数据传输
+	// 使用 bufio.Reader/Writer 减少系统调用
+	buf := bufferPool.GetOptimized(BufferUsageLarge)  // 32KB
 	defer bufferPool.Put(buf)
+	reader := bufio.NewReaderSize(c.targetConn, len(buf))
+
+	// 使用 bufio.Writer 优化写入（减少系统调用）
+	var bufferedWriter *bufio.Writer
+	if _, ok := writer.(*bufio.Writer); !ok {
+		bufferedWriter = bufio.NewWriterSize(writer, len(buf))
+		defer bufferedWriter.Flush()
+		writer = bufferedWriter
+	}
 
 	for {
 		select {
@@ -1533,91 +1544,42 @@ func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io
 		default:
 		}
 
-		n, err := c.targetConn.Read(buf)
+		n, err := reader.Read(buf)
 		if err != nil {
-			// 检查连接是否被重置（GFW干扰）
-			if opErr, ok := err.(*net.OpError); ok {
-				if syscallErr, ok := opErr.Err.(*os.SyscallError); ok {
-					if errno, ok := syscallErr.Err.(syscall.Errno); ok && errno == 104 {
-						if c.targetHost != "" {
-							c.logInfo("⚠️  Direct connection to %s reset by peer (errno 104), switching to proxy", c.targetHost)
+			// 优化：先检查最常见的错误
+			if err == io.EOF {
+				return // 正常结束
+			}
 
-							// 获取目标端口
-							_, portStr, err := net.SplitHostPort(c.targetAddr)
-							if err != nil {
-								// 如果没有端口，尝试从连接中获取
-								if c.targetConn != nil {
-									if remoteAddr := c.targetConn.RemoteAddr(); remoteAddr != nil {
-										_, portStr, _ = net.SplitHostPort(remoteAddr.String())
-									}
-								}
-							}
+			// 处理连接重置的特殊情况
+			if strings.Contains(err.Error(), "connection reset") || strings.Contains(err.Error(), "errno 104") {
+				if c.targetHost != "" {
+					c.logInfo("⚠️  Direct connection to %s reset by peer, switching to proxy", c.targetHost)
+					c.handleErrorAndAddToBlocked(err, c.targetHost, c.targetAddr)
 
-							// 添加到BlockedItemsManager
-							var port uint16 = 80
-							if p, err := strconv.Atoi(portStr); err == nil {
-								port = uint16(p)
-							}
-							// 优先使用detectedHost（域名），如果为空则使用targetAddr（IP）
-							hostToAdd := c.detectedHost
-							if hostToAdd == "" {
-								hostToAdd = c.targetAddr
-							}
-							c.AddToBlockedItems(hostToAdd, c.targetAddr, port, FailureReasonRST)
+					// 尝试切换到代理连接
+					if proxyConn, proxyErr := c.switchToProxyAndReplay(); proxyErr == nil {
+						// 成功切换到代理，更新目标连接并继续读取
+						oldConn := c.targetConn
+						c.targetConn = proxyConn
+						c.logInfo("✅ Successfully switched to proxy for %s", c.targetHost)
+						oldConn.Close()
 
-							// 尝试切换到代理连接
-							if proxyConn, proxyErr := c.switchToProxyAndReplay(); proxyErr == nil {
-								// 成功切换到代理，更新目标连接并继续读取
-								oldConn := c.targetConn
-								c.targetConn = proxyConn
-								c.logInfo("✅ Successfully switched to proxy for %s", c.targetHost)
-								oldConn.Close()
-
-								// 使用 io.Copy 继续从新代理连接读取数据
-								_, err := io.Copy(writer, c.targetConn)
-								if err != nil {
-									*copyErr = err
-									return
-								}
-								return
-							} else {
-								c.logInfo("❌ Failed to switch to proxy: %v", proxyErr)
-							}
-						}
-					}
-				} else {
-					// 处理其他类型的连接错误
-					if c.targetHost != "" {
-						// 获取目标端口
-						_, portStr, err := net.SplitHostPort(c.targetAddr)
+						// 从新代理连接继续读取数据
+						_, err := io.Copy(writer, c.targetConn)
 						if err != nil {
-							if c.targetConn != nil {
-								if remoteAddr := c.targetConn.RemoteAddr(); remoteAddr != nil {
-									_, portStr, _ = net.SplitHostPort(remoteAddr.String())
-								}
-							}
+							*copyErr = err
+							return
 						}
-
-						// 端口转换为uint16
-						var port uint16 = 80
-						if p, err := strconv.Atoi(portStr); err == nil {
-							port = uint16(p)
-						}
-
-						// 根据错误类型分类并添加到BlockedItemsManager
-						// 优先使用detectedHost（域名），如果为空则使用targetAddr（IP）
-						hostToAdd := c.detectedHost
-						if hostToAdd == "" {
-							hostToAdd = c.targetAddr
-						}
-						if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-							c.AddToBlockedItems(hostToAdd, c.targetAddr, port, FailureReasonTimeout)
-						} else if opErr, ok := err.(*net.OpError); ok && opErr.Timeout() {
-							c.AddToBlockedItems(hostToAdd, c.targetAddr, port, FailureReasonTimeout)
-						} else {
-							c.AddToBlockedItems(hostToAdd, c.targetAddr, port, FailureReasonConnectionRefused)
-						}
+						return
+					} else {
+						c.logInfo("❌ Failed to switch to proxy: %v", proxyErr)
 					}
+				}
+			} else {
+				// 其他错误类型的通用处理
+				if c.targetHost != "" {
+					c.handleErrorAndAddToBlocked(err, c.targetHost, c.targetAddr)
 				}
 			}
 			*copyErr = err
@@ -1644,6 +1606,58 @@ func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io
 		if _, err := writer.Write(buf[:n]); err != nil {
 			*copyErr = err
 			return
+		}
+	}
+}
+
+// relayClientToTargetOptimized 优化版的客户端到目标数据流处理
+func (c *Connection) relayClientToTargetOptimized(ctx context.Context, writer io.Writer, rateLimitKey string) error {
+	// 使用 bufio.Reader/Writer 减少系统调用
+	buf := bufferPool.GetOptimized(BufferUsageLarge)  // 32KB
+	defer bufferPool.Put(buf)
+	reader := bufio.NewReaderSize(c.clientConn, len(buf))
+
+	// 使用 bufio.Writer 优化写入（减少系统调用）
+	var bufferedWriter *bufio.Writer
+	if _, ok := writer.(*bufio.Writer); !ok {
+		bufferedWriter = bufio.NewWriterSize(writer, len(buf))
+		defer bufferedWriter.Flush()
+		writer = bufferedWriter
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		n, err := reader.Read(buf)
+		if err != nil {
+			// 优化：先检查最常见的错误
+			if err == io.EOF {
+				return nil // 正常结束
+			}
+			return err
+		}
+
+		// 应用上传限速，使用带超时的等待
+		if c.server.rateLimiter != nil {
+			waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			err := c.server.rateLimiter.WaitForUpload(waitCtx, rateLimitKey, int64(n))
+			cancel()
+			if err != nil {
+				// 限速等待失败或超时
+				if err == context.DeadlineExceeded {
+					c.logInfo("Rate limit wait timeout for %s", rateLimitKey)
+				}
+				return err
+			}
+		}
+
+		// 转发数据到目标
+		if _, err := writer.Write(buf[:n]); err != nil {
+			return err
 		}
 	}
 }
@@ -1855,6 +1869,52 @@ func (c *Connection) AddToBlockedItems(targetHost, targetAddr string, port uint1
 
 	// 添加到BlockedItemsManager
 	c.server.blockedItems.AddBlockedDomain(targetHost, fmt.Sprintf("%d", port), targetIP, failureReason)
+}
+
+// handleErrorAndAddToBlocked 统一的错误处理和添加到黑名单的逻辑
+func (c *Connection) handleErrorAndAddToBlocked(err error, targetHost, targetAddr string) {
+	// 获取端口号
+	port := uint16(80)
+	if _, portStr, perr := net.SplitHostPort(c.targetAddr); perr == nil {
+		if p, err := strconv.Atoi(portStr); err == nil {
+			port = uint16(p)
+		}
+	}
+
+	// 优先使用检测到的域名
+	hostToAdd := c.detectedHost
+	if hostToAdd == "" {
+		hostToAdd = targetHost
+	}
+
+	// 根据错误类型分类
+	if err == io.EOF {
+		// 正常关闭，不需要添加到黑名单
+		return
+	}
+
+	if err == context.Canceled {
+		// 上下文取消，不需要添加到黑名单
+		return
+	}
+
+	if strings.Contains(err.Error(), "connection reset") || strings.Contains(err.Error(), "errno 104") {
+		c.AddToBlockedItems(hostToAdd, targetAddr, port, FailureReasonRST)
+		return
+	}
+
+	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		c.AddToBlockedItems(hostToAdd, targetAddr, port, FailureReasonTimeout)
+		return
+	}
+
+	if opErr, ok := err.(*net.OpError); ok && opErr.Timeout() {
+		c.AddToBlockedItems(hostToAdd, targetAddr, port, FailureReasonTimeout)
+		return
+	}
+
+	// 其他错误
+	c.AddToBlockedItems(hostToAdd, targetAddr, port, FailureReasonConnectionRefused)
 }
 
 // isProbingPort 检查端口是否在需要嗅探的列表中
