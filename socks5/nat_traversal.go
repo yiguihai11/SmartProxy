@@ -88,7 +88,32 @@ func NewNATTraversal(configPath string, logger *logger.SlogLogger) *NATTraversal
 
 	logger.Info("NAT穿透模式: %s", config.Mode)
 	logger.Info("STUN服务器数量: %d", len(config.STUNServers))
-	logger.Info("UPnP: %s", map[bool]string{true: "启用", false: "禁用"}[config.UPnPEnabled])
+
+	// 显示详细的配置信息
+	if config.Mode == "auto" {
+		logger.Info("Auto模式说明: 将自动尝试以下功能（如果配置）:")
+		if len(config.STUNServers) > 0 {
+			logger.Info("  - STUN: 检测NAT类型和公网地址")
+		} else {
+			logger.Info("  - STUN: 未配置服务器")
+		}
+		if config.UPnPEnabled {
+			logger.Info("  - UPnP: 自动端口映射")
+		} else {
+			logger.Info("  - UPnP: 已禁用")
+		}
+		if config.TURNServer != "" {
+			logger.Info("  - TURN: 使用中继服务器")
+		} else {
+			logger.Info("  - TURN: 未配置")
+		}
+	} else {
+		if config.UPnPEnabled {
+			logger.Info("UPnP: 已启用")
+		} else {
+			logger.Info("UPnP: 已禁用")
+		}
+	}
 
 	// 启动时检测NAT类型
 	go nt.detectNATType()
@@ -154,11 +179,24 @@ func (nt *NATTraversal) IsEnabled() bool {
 func (nt *NATTraversal) detectNATType() {
 	nt.logger.Info("检测NAT类型...")
 
+	// 检查当前模式
+	mode := nt.config.Mode
+	nt.logger.Info("NAT穿透模式: %s (自动选择最佳策略)", mode)
+
+	// 检查各项功能的启用状态
+	if !nt.config.UPnPEnabled {
+		nt.logger.Info("UPnP: 未启用，跳过UPnP端口映射")
+	}
+	if nt.config.TURNServer == "" {
+		nt.logger.Info("TURN: 未配置TURN服务器，跳过TURN中继")
+	}
+
 	// 使用STUN协议检测公网IP和端口
 	ip, port, err := nt.getPublicIPViaSTUN()
 	if err != nil {
-		nt.logger.Info("STUN检测失败: %v", err)
-		nt.natType = NATUnknown
+		nt.logger.Info("STUN检测失败: %v (将使用本地NAT模式)", err)
+		nt.logger.Info("注意: STUN失败不影响UDP代理功能，仍可正常使用")
+		nt.natType = NATFullCone // STUN失败时默认使用Full Cone模式
 		return
 	}
 
