@@ -303,8 +303,7 @@ func (m *UDPSessionManager) CreateFullConeMapping(internalAddr *net.UDPAddr) (*F
 	m.logger.Info("Full Cone mapping created: %s -> external port %d", internalAddr, extPort)
 
 	// 启动监听协程
-	// handleFullConeTraffic 现在禁用 - 响应在 forwardUDPPacketWithFullCone 中处理
-		// go m.handleFullConeTraffic(mapping)
+	go m.handleFullConeTraffic(mapping)
 
 	return mapping, nil
 }
@@ -942,48 +941,6 @@ func (c *Connection) forwardUDPPacketWithFullCone(udpConn *net.UDPConn, packet *
 		if err != nil {
 			c.logError("UDP: Full Cone forward failed: %v", err)
 		}
-
-		// 等待响应并发送回客户端
-		go func() {
-			c.logInfo("UDP: [DEBUG] Starting response handler for %s", targetAddr)
-			mapping, exists := c.server.udpSessions.GetFullConeMapping(clientAddr)
-			if !exists || mapping == nil {
-				c.logInfo("UDP: [DEBUG] No mapping found for response")
-				return
-			}
-
-			c.logInfo("UDP: [DEBUG] Waiting for response from %s", targetAddr)
-			mapping.ExternalConn.SetReadDeadline(time.Now().Add(5 * time.Second))
-			buffer := make([]byte, UDP_BUFFER_SIZE)
-			n, senderAddr, err := mapping.ExternalConn.ReadFromUDP(buffer)
-			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					c.logInfo("UDP: [DEBUG] Timeout waiting for response from %s", targetAddr)
-				} else {
-					c.logInfo("UDP: [DEBUG] Error reading response: %v", err)
-				}
-				return
-			}
-
-			c.logInfo("UDP: [DEBUG] Received %d bytes response from %s", n, senderAddr)
-
-			// 构建SOCKS5响应包
-			responsePacket, err := c.server.udpSessions.buildFullConeResponsePacket(senderAddr, buffer[:n])
-			if err != nil {
-				c.logInfo("UDP: [DEBUG] Failed to build response packet: %v", err)
-				return
-			}
-
-			c.logInfo("UDP: [DEBUG] Sending response to client (%d bytes)", len(responsePacket))
-			// 通过客户端的UDP连接发回响应
-			_, err = udpConn.WriteToUDP(responsePacket, clientAddr)
-			if err != nil {
-				c.logInfo("UDP: [DEBUG] Failed to send response to client: %v", err)
-				return
-			}
-
-			c.logInfo("UDP: [DEBUG] Response successfully sent to client")
-		}()
 
 	case ActionProxy:
 		proxyNode := c.server.router.GetProxyNode(result.ProxyNode)
