@@ -50,6 +50,9 @@ const (
 	UDP_SESSION_TTL   = 10 * time.Minute
 	// DNS 查询通常很小，使用较小的缓冲区
 	DNS_BUFFER_SIZE   = 512
+	// UDP空闲超时配置
+	UDP_IDLE_TIMEOUT   = 30 * time.Second // 空闲超时时间
+	UDP_MAX_IDLE_COUNT = 3               // 最大允许空闲次数（30秒 x 3 = 90秒）
 )
 
 // formatNetworkAddress 格式化网络地址，正确处理IPv6地址
@@ -119,11 +122,17 @@ func (c *PrependingConn) Read(p []byte) (int, error) {
 
 // UDPSession UDP会话信息
 type UDPSession struct {
-	ClientAddr   *net.UDPAddr
-	TargetAddr   *net.UDPAddr
-	CreatedAt    time.Time
-	LastActivity time.Time
-	TargetHost   string
+	ClientAddr      *net.UDPAddr
+	TargetAddr      *net.UDPAddr
+	CreatedAt       time.Time
+	LastActivity    time.Time
+	TargetHost      string
+	// 空闲超时管理
+	idleTimeout     time.Duration // 空闲超时时间
+	maxIdleCount    int           // 最大允许空闲次数
+	currentIdleCount int          // 当前空闲次数
+	timeoutTimer    *time.Timer   // 超时计时器
+	closing         bool          // 是否正在关闭
 }
 
 // UDPPacket SOCKS5 UDP数据包结构
@@ -180,16 +189,24 @@ func (m *UDPSessionManager) AddSession(clientAddr, targetAddr *net.UDPAddr, targ
 	defer m.mutex.Unlock()
 
 	session := &UDPSession{
-		ClientAddr:   clientAddr,
-		TargetAddr:   targetAddr,
-		CreatedAt:    time.Now(),
-		LastActivity: time.Now(),
-		TargetHost:   targetHost,
+		ClientAddr:       clientAddr,
+		TargetAddr:       targetAddr,
+		CreatedAt:        time.Now(),
+		LastActivity:     time.Now(),
+		TargetHost:       targetHost,
+		idleTimeout:      UDP_IDLE_TIMEOUT,
+		maxIdleCount:     UDP_MAX_IDLE_COUNT,
+		currentIdleCount: 0,
+		timeoutTimer:     nil,
+		closing:          false,
 	}
+
+	// 启动空闲超时计时器
+	session.startIdleTimer(m)
 
 	key := clientAddr.String()
 	m.sessions[key] = session
-	m.logger.Info("UDP session added: %s -> %s (%s)", clientAddr, targetAddr, targetHost)
+	m.logger.Info("UDP session added: %s -> %s (%s), idle timeout: %v", clientAddr, targetAddr, targetHost, UDP_IDLE_TIMEOUT)
 
 	return session
 }
@@ -208,10 +225,88 @@ func (m *UDPSessionManager) RemoveSession(clientAddr *net.UDPAddr) {
 	defer m.mutex.Unlock()
 
 	key := clientAddr.String()
-	if _, exists := m.sessions[key]; exists {
+	if session, exists := m.sessions[key]; exists {
+		// 停止空闲计时器
+		session.stopIdleTimer()
 		delete(m.sessions, key)
 		m.logger.Info("UDP session removed: %s", clientAddr)
 	}
+}
+
+// startIdleTimer 启动空闲计时器
+func (s *UDPSession) startIdleTimer(manager *UDPSessionManager) {
+	if s.timeoutTimer != nil {
+		s.timeoutTimer.Stop()
+	}
+
+	s.timeoutTimer = time.AfterFunc(s.idleTimeout, func() {
+		manager.handleSessionTimeout(s)
+	})
+}
+
+// stopIdleTimer 停止空闲计时器
+func (s *UDPSession) stopIdleTimer() {
+	if s.timeoutTimer != nil {
+		s.timeoutTimer.Stop()
+		s.timeoutTimer = nil
+	}
+}
+
+// updateActivity 更新活动时间并重置计时器
+func (s *UDPSession) updateActivity(manager *UDPSessionManager) {
+	if s.closing {
+		return
+	}
+
+	now := time.Now()
+	s.LastActivity = now
+	s.currentIdleCount = 0 // 有活动就重置计数
+	s.startIdleTimer(manager)
+}
+
+// handleSessionTimeout 处理会话超时
+func (m *UDPSessionManager) handleSessionTimeout(session *UDPSession) {
+	if session.closing {
+		return
+	}
+
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	// 检查会话是否仍然存在
+	key := session.ClientAddr.String()
+	if currentSession, exists := m.sessions[key]; !exists || currentSession != session {
+		return // 会话已不存在
+	}
+
+	session.currentIdleCount++
+
+	// 检查空闲次数
+	if session.currentIdleCount >= session.maxIdleCount {
+		m.logger.Info("UDP session %s: idle timeout reached (%d times, total %v), closing",
+			session.ClientAddr, session.currentIdleCount, time.Since(session.CreatedAt))
+		m.closeSession(session)
+		return
+	}
+
+	// 发送警告并继续等待
+	m.logger.Info("UDP session %s: idle warning (%d/%d), waiting for activity",
+		session.ClientAddr, session.currentIdleCount, session.maxIdleCount)
+
+	// 重启计时器继续监控
+	session.startIdleTimer(m)
+}
+
+// closeSession 关闭会话
+func (m *UDPSessionManager) closeSession(session *UDPSession) {
+	session.closing = true
+	session.stopIdleTimer()
+
+	key := session.ClientAddr.String()
+	delete(m.sessions, key)
+
+	m.logger.Info("UDP session closed due to inactivity: %s -> %s (total time: %v)",
+		session.ClientAddr, session.TargetAddr, time.Since(session.CreatedAt))
 }
 
 // cleanupExpiredSessions 清理过期会话
@@ -815,35 +910,59 @@ func (c *Connection) handleUDPAssociateRequest(atype byte) error {
 
 // handleUDPRelayWithFullCone 处理Full Cone NAT UDP数据转发
 func (c *Connection) handleUDPRelayWithFullCone(udpConn *net.UDPConn) {
-	c.logInfo("Full Cone UDP relay started")
+	c.logInfo("Full Cone UDP relay started (idle timeout: %v)", UDP_IDLE_TIMEOUT)
 
 	defer udpConn.Close()
 
 	buffer := make([]byte, UDP_BUFFER_SIZE)
 
-	for {
-		// 设置超时以防止资源泄漏
-		udpConn.SetReadDeadline(time.Now().Add(UDP_ASSOC_TIMEOUT))
+	// 初始化空闲超时管理
+	idleCount := 0
+	idleTimer := time.NewTimer(UDP_IDLE_TIMEOUT)
+	defer idleTimer.Stop()
 
-		n, clientAddr, err := udpConn.ReadFromUDP(buffer)
-		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				c.logWarn("UDP association timeout")
+	for {
+		// 设置读取超时
+		udpConn.SetReadDeadline(time.Now().Add(UDP_IDLE_TIMEOUT))
+
+		select {
+		case <-idleTimer.C:
+			// 空闲超时
+			idleCount++
+			if idleCount >= UDP_MAX_IDLE_COUNT {
+				c.logInfo("UDP association: idle timeout reached (%d times), closing", idleCount)
 				return
 			}
-			c.logError("UDP read error: %v", err)
+			c.logInfo("UDP association: idle warning (%d/%d), waiting for activity", idleCount, UDP_MAX_IDLE_COUNT)
+			idleTimer.Reset(UDP_IDLE_TIMEOUT)
 			continue
-		}
 
-		// 解析 SOCKS5 UDP 数据包
-		packet, err := c.parseUDPPacket(buffer[:n])
-		if err != nil {
-			c.logError("Failed to parse UDP packet: %v", err)
-			continue
-		}
+		default:
+			// 尝试读取数据
+			n, clientAddr, err := udpConn.ReadFromUDP(buffer)
+			if err != nil {
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					// 超时，继续检查空闲定时器
+					continue
+				}
+				c.logError("UDP read error: %v", err)
+				continue
+			}
 
-		// 使用Full Cone NAT转发数据
-		go c.forwardUDPPacketWithFullCone(udpConn, packet, clientAddr)
+			// 有数据活动，重置空闲计数和计时器
+			idleCount = 0
+			idleTimer.Reset(UDP_IDLE_TIMEOUT)
+
+			// 解析 SOCKS5 UDP 数据包
+			packet, err := c.parseUDPPacket(buffer[:n])
+			if err != nil {
+				c.logError("Failed to parse UDP packet: %v", err)
+				continue
+			}
+
+			// 使用Full Cone NAT转发数据
+			go c.forwardUDPPacketWithFullCone(udpConn, packet, clientAddr)
+		}
 	}
 }
 
