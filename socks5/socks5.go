@@ -1565,13 +1565,10 @@ func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io
 						c.logInfo("✅ Successfully switched to proxy for %s", c.targetHost)
 						oldConn.Close()
 
-						// 从新代理连接继续读取数据
-						_, err := io.Copy(writer, c.targetConn)
-						if err != nil {
-							*copyErr = err
-							return
-						}
-						return
+						// 从新代理连接继续读取数据，使用相同的优化逻辑
+						// 更新reader以使用新的连接
+						reader.Reset(c.targetConn)
+						continue // 继续主循环
 					} else {
 						c.logInfo("❌ Failed to switch to proxy: %v", proxyErr)
 					}
@@ -1606,6 +1603,14 @@ func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io
 		if _, err := writer.Write(buf[:n]); err != nil {
 			*copyErr = err
 			return
+		}
+
+		// 如果使用了bufio.Writer，立即刷新以确保数据及时发送
+		if bufferedWriter != nil {
+			if err := bufferedWriter.Flush(); err != nil {
+				*copyErr = err
+				return
+			}
 		}
 	}
 }
@@ -1658,6 +1663,13 @@ func (c *Connection) relayClientToTargetOptimized(ctx context.Context, writer io
 		// 转发数据到目标
 		if _, err := writer.Write(buf[:n]); err != nil {
 			return err
+		}
+
+		// 如果使用了bufio.Writer，立即刷新以确保数据及时发送
+		if bufferedWriter != nil {
+			if err := bufferedWriter.Flush(); err != nil {
+				return err
+			}
 		}
 	}
 }
