@@ -323,6 +323,7 @@ func (m *UDPSessionManager) GetFullConeMapping(internalAddr *net.UDPAddr) (*Full
 	return mapping, exists
 }
 
+
 // handleFullConeTraffic - 已移除
 // 原函数存在bug：错误地尝试直接连接到客户端UDP端口
 // UDP响应处理现在在forwardUDPPacketWithFullCone中完成
@@ -899,6 +900,7 @@ func (c *Connection) forwardUDPPacketWithFullCone(udpConn *net.UDPConn, packet *
 		err := c.server.udpSessions.SendViaFullCone(clientAddr, targetAddr, packet.DATA)
 		if err != nil {
 			c.logError("UDP: Full Cone forward failed: %v", err)
+			return
 		}
 
 		// 等待响应并发送回客户端
@@ -912,15 +914,17 @@ func (c *Connection) forwardUDPPacketWithFullCone(udpConn *net.UDPConn, packet *
 			// 设置读取超时
 			mapping.ExternalConn.SetReadDeadline(time.Now().Add(5 * time.Second))
 
-			// 根据目标端口选择合适的缓冲区大小
+			// 从缓冲区池获取缓冲区
 			var bufferSize int
 			if targetPort == 53 { // DNS 端口
 				bufferSize = DNS_BUFFER_SIZE
 			} else {
-				bufferSize = UDP_BUFFER_SIZE
+				bufferSize = 2048 // 大多数UDP包不会超过2KB
 			}
-			buffer := make([]byte, bufferSize)
-			n, senderAddr, err := mapping.ExternalConn.ReadFromUDP(buffer)
+			buf := bufferPool.Get(bufferSize)
+			defer bufferPool.Put(buf)
+
+			n, senderAddr, err := mapping.ExternalConn.ReadFromUDP(buf)
 			if err != nil {
 				// 超时或错误，直接返回
 				return
@@ -930,7 +934,7 @@ func (c *Connection) forwardUDPPacketWithFullCone(udpConn *net.UDPConn, packet *
 			c.logDebug("UDP: Received %d bytes response from %s:%d", n, senderAddr.IP.String(), senderAddr.Port)
 
 			// 构建SOCKS5响应包
-			responsePacket, err := c.server.udpSessions.buildFullConeResponsePacket(senderAddr, buffer[:n])
+			responsePacket, err := c.server.udpSessions.buildFullConeResponsePacket(senderAddr, buf[:n])
 			if err != nil {
 				return
 			}
