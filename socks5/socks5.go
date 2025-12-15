@@ -321,56 +321,12 @@ func (m *UDPSessionManager) GetFullConeMapping(internalAddr *net.UDPAddr) (*Full
 	return mapping, exists
 }
 
-// handleFullConeTraffic 处理Full Cone NAT流量
-func (m *UDPSessionManager) handleFullConeTraffic(mapping *FullConeMapping) {
-	defer mapping.ExternalConn.Close()
-
-	buffer := make([]byte, UDP_BUFFER_SIZE)
-
-	// 创建连接到内部客户端的UDP连接
-	internalConn, err := net.DialUDP("udp", nil, mapping.InternalAddr)
-	if err != nil {
-		m.logger.Info("Failed to dial internal client: %v", err)
-		return
-	}
-	defer internalConn.Close()
-
-	for {
-		// 设置超时
-		mapping.ExternalConn.SetReadDeadline(time.Now().Add(UDP_ASSOC_TIMEOUT))
-
-		n, senderAddr, err := mapping.ExternalConn.ReadFromUDP(buffer)
-		if err != nil {
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				m.logger.Info("Full Cone mapping timeout for %s", mapping.InternalAddr)
-				return
-			}
-			m.logger.Info("Full Cone read error: %v", err)
-			continue
-		}
-
-		// 更新活动时间
-		mapping.LastActivity = time.Now()
-
-		// 记录目标端点
-		senderKey := senderAddr.String()
-		mapping.TargetEndpoints[senderKey] = true
-
-		// 构建SOCKS5响应包发送回内部客户端
-		responsePacket, err := m.buildFullConeResponsePacket(senderAddr, buffer[:n])
-		if err != nil {
-			m.logger.Info("Failed to build response packet: %v", err)
-			continue
-		}
-
-		// 发送回内部客户端
-		_, err = internalConn.Write(responsePacket)
-		if err != nil {
-			m.logger.Info("Failed to send response to internal client: %v", err)
-			continue
-		}
-	}
-}
+// handleFullConeTraffic - 已移除
+// 原函数存在bug：错误地尝试直接连接到客户端UDP端口
+// UDP响应处理现在在forwardUDPPacketWithFullCone中完成
+// func (m *UDPSessionManager) handleFullConeTraffic(mapping *FullConeMapping) {
+// 	DEAD CODE: 此函数已被移除
+// }
 
 // buildFullConeResponsePacket 构建Full Cone NAT响应包
 func (m *UDPSessionManager) buildFullConeResponsePacket(senderAddr *net.UDPAddr, data []byte) ([]byte, error) {
@@ -945,45 +901,34 @@ func (c *Connection) forwardUDPPacketWithFullCone(udpConn *net.UDPConn, packet *
 
 		// 等待响应并发送回客户端
 		go func() {
-			c.logInfo("UDP: [DEBUG] Starting response handler for %s", targetAddr)
+			// 获取映射
 			mapping, exists := c.server.udpSessions.GetFullConeMapping(clientAddr)
 			if !exists || mapping == nil {
-				c.logInfo("UDP: [DEBUG] No mapping found for response")
 				return
 			}
 
-			c.logInfo("UDP: [DEBUG] Waiting for response from %s", targetAddr)
+			// 设置读取超时
 			mapping.ExternalConn.SetReadDeadline(time.Now().Add(5 * time.Second))
 			buffer := make([]byte, UDP_BUFFER_SIZE)
 			n, senderAddr, err := mapping.ExternalConn.ReadFromUDP(buffer)
 			if err != nil {
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					c.logInfo("UDP: [DEBUG] Timeout waiting for response from %s", targetAddr)
-				} else {
-					c.logInfo("UDP: [DEBUG] Error reading response: %v", err)
-				}
+				// 超时或错误，直接返回
 				return
 			}
-
-			c.logInfo("UDP: [DEBUG] Received %d bytes response from %s", n, senderAddr)
 
 			// 构建SOCKS5响应包
 			responsePacket, err := c.server.udpSessions.buildFullConeResponsePacket(senderAddr, buffer[:n])
 			if err != nil {
-				c.logInfo("UDP: [DEBUG] Failed to build response packet: %v", err)
 				return
 			}
 
-			c.logInfo("UDP: [DEBUG] Sending response to client (%d bytes)", len(responsePacket))
 			// 通过客户端的UDP连接发回响应
 			_, err = udpConn.WriteToUDP(responsePacket, clientAddr)
 			if err != nil {
-				c.logInfo("UDP: [DEBUG] Failed to send response to client: %v", err)
 				return
 			}
-
-			c.logInfo("UDP: [DEBUG] Response successfully sent to client")
 		}()
+	
 
 	case ActionProxy:
 		proxyNode := c.server.router.GetProxyNode(result.ProxyNode)
