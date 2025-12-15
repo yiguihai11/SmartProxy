@@ -729,6 +729,7 @@ func (ws *WebServer) handleMemoryPools(w http.ResponseWriter, r *http.Request) {
 			"reused_connections":   connectionStats.ReusedConnections,
 			"hit_rate_percent":     socks5.GetConnectionHitRate(),
 			"reuse_rate_percent":   socks5.GetConnectionReuseRate(),
+			"pool_efficiency":      calculatePoolEfficiency(connectionStats),
 			"last_access":          connectionStats.LastAccess.Format(time.RFC3339),
 		},
 	}
@@ -737,4 +738,15 @@ func (ws *WebServer) handleMemoryPools(w http.ResponseWriter, r *http.Request) {
 		Success: true,
 		Data:    pools,
 	})
+}
+
+// calculatePoolEfficiency 计算连接池效率
+// 对于sync.Pool，我们通过池中的对象数量与创建的总对象数来评估效率
+func calculatePoolEfficiency(stats *socks5.ConnectionPoolStats) float64 {
+	if stats.CreatedConnections == 0 {
+		return 0
+	}
+	// 池效率 = 池中对象数 / 创建的总对象数
+	// 这表示有多少创建的对象被保留在池中供重用
+	return float64(stats.PooledConnections) / float64(stats.CreatedConnections) * 100
 }

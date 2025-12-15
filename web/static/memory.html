@@ -425,15 +425,15 @@
                     <div class="pool-stats">
                         <div class="pool-stat">
                             <div class="pool-stat-value" id="conn-active">-</div>
-                            <div class="pool-stat-label">活跃连接</div>
+                            <div class="pool-stat-label">活跃对象</div>
                         </div>
                         <div class="pool-stat">
-                            <div class="pool-stat-value" id="conn-hit-rate">-</div>
-                            <div class="pool-stat-label">命中率</div>
+                            <div class="pool-stat-value" id="conn-pooled">-</div>
+                            <div class="pool-stat-label">池中对象</div>
                         </div>
                         <div class="pool-stat">
-                            <div class="pool-stat-value" id="conn-reuse-rate">-</div>
-                            <div class="pool-stat-label">重用率</div>
+                            <div class="pool-stat-value" id="conn-created">-</div>
+                            <div class="pool-stat-label">已创建对象</div>
                         </div>
                         <div class="pool-stat">
                             <div class="pool-stat-value" id="conn-total">-</div>
@@ -755,13 +755,13 @@
                 const connectionPool = pools.connection_pool;
                 console.log('Connection Pool:', connectionPool);
 
-                // 根据实际的API响应调整字段名
+                // 更新连接池统计显示
                 document.getElementById('conn-active').textContent =
-                    connectionPool.active_connections || connectionPool.active_objects || 0;
-                document.getElementById('conn-hit-rate').textContent =
-                    (connectionPool.hit_rate_percent || 0).toFixed(1) + '%';
-                document.getElementById('conn-reuse-rate').textContent =
-                    (connectionPool.reuse_rate_percent || 0).toFixed(1) + '%';
+                    (connectionPool.active_connections || 0).toLocaleString();
+                document.getElementById('conn-pooled').textContent =
+                    (connectionPool.pooled_connections || 0).toLocaleString();
+                document.getElementById('conn-created').textContent =
+                    (connectionPool.created_connections || 0).toLocaleString();
                 document.getElementById('conn-total').textContent =
                     (connectionPool.total_requests || 0).toLocaleString();
             }
