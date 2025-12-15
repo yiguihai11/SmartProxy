@@ -49,10 +49,10 @@ const (
 	UDP_BUFFER_SIZE   = 64 * 1024
 	UDP_SESSION_TTL   = 10 * time.Minute
 	// DNS 查询通常很小，使用较小的缓冲区
-	DNS_BUFFER_SIZE   = 512
+	DNS_BUFFER_SIZE = 512
 	// UDP空闲超时配置
 	UDP_IDLE_TIMEOUT   = 30 * time.Second // 空闲超时时间
-	UDP_MAX_IDLE_COUNT = 3               // 最大允许空闲次数（30秒 x 3 = 90秒）
+	UDP_MAX_IDLE_COUNT = 3                // 最大允许空闲次数（30秒 x 3 = 90秒）
 )
 
 // formatNetworkAddress 格式化网络地址，正确处理IPv6地址
@@ -122,17 +122,17 @@ func (c *PrependingConn) Read(p []byte) (int, error) {
 
 // UDPSession UDP会话信息
 type UDPSession struct {
-	ClientAddr      *net.UDPAddr
-	TargetAddr      *net.UDPAddr
-	CreatedAt       time.Time
-	LastActivity    time.Time
-	TargetHost      string
+	ClientAddr   *net.UDPAddr
+	TargetAddr   *net.UDPAddr
+	CreatedAt    time.Time
+	LastActivity time.Time
+	TargetHost   string
 	// 空闲超时管理
-	idleTimeout     time.Duration // 空闲超时时间
-	maxIdleCount    int           // 最大允许空闲次数
-	currentIdleCount int          // 当前空闲次数
-	timeoutTimer    *time.Timer   // 超时计时器
-	closing         bool          // 是否正在关闭
+	idleTimeout      time.Duration // 空闲超时时间
+	maxIdleCount     int           // 最大允许空闲次数
+	currentIdleCount int           // 当前空闲次数
+	timeoutTimer     *time.Timer   // 超时计时器
+	closing          bool          // 是否正在关闭
 }
 
 // UDPPacket SOCKS5 UDP数据包结构
@@ -402,7 +402,7 @@ func (m *UDPSessionManager) CreateFullConeMapping(internalAddr *net.UDPAddr) (*F
 
 	// 启动监听协程
 	// handleFullConeTraffic 现在禁用 - 响应在 forwardUDPPacketWithFullCone 中处理
-		// go m.handleFullConeTraffic(mapping)
+	// go m.handleFullConeTraffic(mapping)
 
 	return mapping, nil
 }
@@ -418,7 +418,6 @@ func (m *UDPSessionManager) GetFullConeMapping(internalAddr *net.UDPAddr) (*Full
 	}
 	return mapping, exists
 }
-
 
 // handleFullConeTraffic - 已移除
 // 原函数存在bug：错误地尝试直接连接到客户端UDP端口
@@ -1066,9 +1065,8 @@ func (c *Connection) forwardUDPPacketWithFullCone(udpConn *net.UDPConn, packet *
 				return
 			}
 
-			c.logInfo("UDP: Response sent to client (%d bytes)", len(responsePacket))
+			c.logDebug("UDP: Response sent to client (%d bytes)", len(responsePacket))
 		}()
-	
 
 	case ActionProxy:
 		proxyNode := c.server.router.GetProxyNode(result.ProxyNode)
@@ -1644,7 +1642,7 @@ func (c *Connection) relay() error {
 // relayTargetToClientOptimized 优化版的目标到客户端数据流处理
 func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io.Writer, rateLimitKey string, copyErr *error) {
 	// 使用 bufio.Reader/Writer 减少系统调用
-	buf := bufferPool.GetOptimized(BufferUsageLarge)  // 32KB
+	buf := bufferPool.GetOptimized(BufferUsageLarge) // 32KB
 	defer bufferPool.Put(buf)
 	reader := bufio.NewReaderSize(c.targetConn, len(buf))
 
@@ -1737,7 +1735,7 @@ func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io
 // relayClientToTargetOptimized 优化版的客户端到目标数据流处理
 func (c *Connection) relayClientToTargetOptimized(ctx context.Context, writer io.Writer, rateLimitKey string) error {
 	// 使用 bufio.Reader/Writer 减少系统调用
-	buf := bufferPool.GetOptimized(BufferUsageLarge)  // 32KB
+	buf := bufferPool.GetOptimized(BufferUsageLarge) // 32KB
 	defer bufferPool.Put(buf)
 	reader := bufio.NewReaderSize(c.clientConn, len(buf))
 
@@ -1832,7 +1830,7 @@ func (c *Connection) switchToProxyAndReplay() (net.Conn, error) {
 
 	// 重放缓存的初始数据
 	if c.initialDataCached && len(c.initialData) > 0 {
-		c.logInfo("🔄 Replaying %d bytes of cached data to proxy connection", len(c.initialData))
+		c.logDebug("🔄 Replaying %d bytes of cached data to proxy connection", len(c.initialData))
 		if _, writeErr := proxyConn.Write(c.initialData); writeErr != nil {
 			proxyConn.Close()
 			return nil, fmt.Errorf("failed to replay data to proxy: %v", writeErr)
@@ -1981,7 +1979,6 @@ func (s *SOCKS5Server) GetRouter() *Router {
 func (s *SOCKS5Server) GetBlockedItemsManager() *BlockedItemsManager {
 	return s.blockedItems
 }
-
 
 // AddToBlockedItems 添加域名或IP到BlockedItemsManager
 func (c *Connection) AddToBlockedItems(targetHost, targetAddr string, port uint16, failureReason FailureReason) {
@@ -2425,7 +2422,7 @@ func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, origin
 	}
 
 	// 打印代理响应日志
-	c.logInfo("UDP-PROXY: Received %d bytes response from proxy %s:%d",
+	c.logDebug("UDP-PROXY: Received %d bytes response from proxy %s:%d",
 		len(responseData), proxyUDPAddr.IP.String(), proxyUDPAddr.Port)
 
 	// 构建返回给客户端的SOCKS5 UDP数据包
@@ -2445,7 +2442,7 @@ func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, origin
 		return fmt.Errorf("UDP-PROXY: failed to send reply to client: %v", err)
 	}
 
-	c.logInfo("UDP-PROXY: Response sent to client (%d bytes)", len(clientReply))
+	c.logDebug("UDP-PROXY: Response sent to client (%d bytes)", len(clientReply))
 	c.logInfo("UDP-PROXY: Successfully forwarded UDP packet via proxy %s", proxy.Name)
 	return nil
 }
