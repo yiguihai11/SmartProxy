@@ -5,6 +5,7 @@ import socket
 import struct
 import time
 import sys
+import socks
 
 class DNSQuery:
     """DNS查询类"""
@@ -190,7 +191,7 @@ class DNSQuery:
         return error_messages.get(rcode, f"Unknown error code: {rcode}")
 
 
-def dns_query(domain, dns_server, timeout=5, qtype='A'):
+def dns_query(domain, dns_server, timeout=5, qtype='A', use_socks5=False, socks5_host='127.0.0.1', socks5_port=1080):
     """执行DNS查询"""
     query = DNSQuery()
     query_packet = query.build_query(domain, qtype)
@@ -198,6 +199,11 @@ def dns_query(domain, dns_server, timeout=5, qtype='A'):
     # 创建UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(timeout)
+
+    # 如果使用SOCKS5代理
+    if use_socks5:
+        sock = socks.socksocket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.set_proxy(socks.SOCKS5, socks5_host, socks5_port)
 
     try:
         # 发送查询
@@ -216,6 +222,7 @@ def dns_query(domain, dns_server, timeout=5, qtype='A'):
             result['query_time'] = (end_time - start_time) * 1000  # 毫秒
             result['response_size'] = len(response)
             result['from_addr'] = addr[0]
+            result['via_socks5'] = use_socks5
 
         return result
 
@@ -224,14 +231,16 @@ def dns_query(domain, dns_server, timeout=5, qtype='A'):
             'error': True,
             'error_msg': f"Timeout after {timeout} seconds",
             'server': dns_server,
-            'domain': domain
+            'domain': domain,
+            'via_socks5': use_socks5
         }
     except Exception as e:
         return {
             'error': True,
             'error_msg': str(e),
             'server': dns_server,
-            'domain': domain
+            'domain': domain,
+            'via_socks5': use_socks5
         }
     finally:
         sock.close()
@@ -240,14 +249,17 @@ def dns_query(domain, dns_server, timeout=5, qtype='A'):
 def main():
     """主函数"""
     if len(sys.argv) < 2:
-        print("用法: python dns_query.py <domain> [type]")
+        print("用法: python dns_query.py <domain> [type] [--socks5]")
         print("示例: python dns_query.py www.baidu.com")
         print("      python dns_query.py www.baidu.com AAAA")
+        print("      python dns_query.py www.google.com A --socks5")
         print("\n支持的记录类型: A, AAAA, MX, TXT")
+        print("--socks5: 通过SOCKS5代理(127.0.0.1:1080)发送查询")
         sys.exit(1)
 
     domain = sys.argv[1]
-    qtype = sys.argv[2] if len(sys.argv) > 2 else 'A'
+    qtype = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith('--') else 'A'
+    use_socks5 = '--socks5' in sys.argv
 
     # DNS服务器列表
     dns_servers = [
@@ -256,13 +268,15 @@ def main():
     ]
 
     print(f"查询域名: {domain} (类型: {qtype})")
+    if use_socks5:
+        print("使用SOCKS5代理: 127.0.0.1:1080")
     print("-" * 80)
 
     for server_ip, server_name in dns_servers:
         print(f"\n查询服务器: {server_name} ({server_ip})")
         print("-" * 40)
 
-        result = dns_query(domain, server_ip, qtype=qtype)
+        result = dns_query(domain, server_ip, qtype=qtype, use_socks5=use_socks5)
 
         if result.get('error'):
             print(f"错误: {result['error_msg']}")
@@ -271,6 +285,8 @@ def main():
             print(f"查询时间: {result['query_time']:.2f} ms")
             print(f"响应大小: {result['response_size']} bytes")
             print(f"响应来源: {result['from_addr']}")
+            if result.get('via_socks5'):
+                print("(通过SOCKS5代理)")
 
             if result['answers']:
                 print("\n答案记录:")
