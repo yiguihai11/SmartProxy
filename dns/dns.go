@@ -156,6 +156,13 @@ func (dc *DNSCache) cleanup() {
 	}
 }
 
+// Size 返回当前缓存大小
+func (dc *DNSCache) Size() int {
+	dc.cleanupMu.RLock()
+	defer dc.cleanupMu.RUnlock()
+	return len(dc.cache)
+}
+
 // Stop 停止缓存系统
 func (dc *DNSCache) Stop() {
 	close(dc.cleanupDone)
@@ -895,6 +902,14 @@ func (s *SmartDNSServer) Start() error {
 }
 
 // Stop 停止DNS服务器
+// GetCacheSize 获取DNS缓存大小
+func (s *SmartDNSServer) GetCacheSize() int {
+	if s.resolver != nil && s.resolver.cache != nil {
+		return s.resolver.cache.Size()
+	}
+	return 0
+}
+
 func (s *SmartDNSServer) Stop() error {
 	s.logger.Info("Stopping Smart DNS server")
 	s.resolver.Stop()

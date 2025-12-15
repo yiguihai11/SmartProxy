@@ -133,6 +133,16 @@ func main() {
 
 	dnsServer := dns.NewSmartDNSServer(dnsConfig, dnsPort, logger.NewLogger().WithField("prefix", "[DNS]"), router)
 
+	// 设置内存监控器的DNS缓存回调
+	if memoryMonitor != nil {
+		memoryMonitor.SetDNSCacheUpdater(func() int64 {
+			if dnsServer != nil {
+				return int64(dnsServer.GetCacheSize())
+			}
+			return 0
+		})
+	}
+
 	// Web server initialized successfully
 
 	// 设置信号处理
@@ -191,33 +201,71 @@ func main() {
 	sig := <-sigChan
 	mainLogger.Info("\nReceived signal %v, shutting down gracefully...", sig)
 
-	// 优雅关闭各个服务
-	mainLogger.Info("Stopping SOCKS5 server...")
-	if err := server.Stop(); err != nil {
-		mainLogger.Error("Error stopping SOCKS5 server: %v", err)
-	}
+	// 并发停止所有服务以加快关闭速度
+	var stopWg sync.WaitGroup
+	stopWg.Add(4)
 
-	mainLogger.Info("Stopping Web server...")
-	if err := webServer.Stop(); err != nil {
-		mainLogger.Error("Error stopping Web server: %v", err)
-	}
+	// 停止SOCKS5服务器
+	go func() {
+		defer stopWg.Done()
+		mainLogger.Info("Stopping SOCKS5 server...")
+		if err := server.Stop(); err != nil {
+			mainLogger.Error("Error stopping SOCKS5 server: %v", err)
+		}
+	}()
 
-	mainLogger.Info("Stopping DNS server...")
-	if err := dnsServer.Stop(); err != nil {
-		mainLogger.Error("Error stopping DNS server: %v", err)
-	}
+	// 停止Web服务器
+	go func() {
+		defer stopWg.Done()
+		mainLogger.Info("Stopping Web server...")
+		if err := webServer.Stop(); err != nil {
+			mainLogger.Error("Error stopping Web server: %v", err)
+		}
+	}()
 
-	// 等待所有goroutine完成，最多等待10秒
+	// 停止DNS服务器
+	go func() {
+		defer stopWg.Done()
+		mainLogger.Info("Stopping DNS server...")
+		if err := dnsServer.Stop(); err != nil {
+			mainLogger.Error("Error stopping DNS server: %v", err)
+		}
+	}()
+
+	// 停止内存监控器
+	go func() {
+		defer stopWg.Done()
+		if memoryMonitor != nil {
+			memoryMonitor.Stop()
+			mainLogger.Info("Memory monitor stopped")
+		}
+	}()
+
+	// 等待所有服务停止完成，最多等待5秒
 	done := make(chan struct{})
 	go func() {
-		wg.Wait()
+		stopWg.Wait()
 		close(done)
 	}()
 
 	select {
 	case <-done:
+		mainLogger.Info("All services stopped gracefully")
+	case <-time.After(5 * time.Second):
+		mainLogger.Warn("Warning: Some services did not stop within 5 seconds timeout")
+	}
+
+	// 等待所有goroutine完成，最多等待5秒
+	allDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(allDone)
+	}()
+
+	select {
+	case <-allDone:
 		logger.Info("All services stopped gracefully")
-	case <-time.After(10 * time.Second):
+	case <-time.After(5 * time.Second):
 		logger.Warn("Warning: Some services did not stop within timeout")
 	}
 

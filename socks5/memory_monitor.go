@@ -51,6 +51,9 @@ type MemoryMonitor struct {
 	// 内存使用历史记录
 	history       []MemorySnapshot
 	maxHistory    int
+	// 回调函数用于获取实时数据
+	updateUDPSessions func() int64
+	updateDNSCache    func() int64
 }
 
 // MemorySnapshot 内存快照
@@ -132,6 +135,16 @@ func (mm *MemoryMonitor) updateMemoryStats() {
 		mm.stats.Sys = m.Sys
 		mm.stats.NumGC = m.NumGC
 		mm.stats.GCPause = m.PauseTotalNs
+	}
+
+	// 更新UDP会话数
+	if mm.updateUDPSessions != nil {
+		mm.stats.ActiveUDPSessions = mm.updateUDPSessions()
+	}
+
+	// 更新DNS缓存数
+	if mm.updateDNSCache != nil {
+		mm.stats.ActiveDNSCache = mm.updateDNSCache()
 	}
 
 	// 创建内存快照（直接复制，避免死锁）
@@ -249,6 +262,22 @@ func (mm *MemoryMonitor) UpdateActiveConnections(count int64) {
 	mm.stats.ActiveConnections = count
 }
 
+// IncrementActiveConnections 增加活跃连接数
+func (mm *MemoryMonitor) IncrementActiveConnections() {
+	mm.mutex.Lock()
+	defer mm.mutex.Unlock()
+	mm.stats.ActiveConnections++
+}
+
+// DecrementActiveConnections 减少活跃连接数
+func (mm *MemoryMonitor) DecrementActiveConnections() {
+	mm.mutex.Lock()
+	defer mm.mutex.Unlock()
+	if mm.stats.ActiveConnections > 0 {
+		mm.stats.ActiveConnections--
+	}
+}
+
 // UpdateActiveUDPSessions 更新活跃UDP会话数
 func (mm *MemoryMonitor) UpdateActiveUDPSessions(count int64) {
 	mm.mutex.Lock()
@@ -275,6 +304,16 @@ func (mm *MemoryMonitor) UnregisterPoolStats(name string) {
 	mm.mutex.Lock()
 	defer mm.mutex.Unlock()
 	delete(mm.stats.BufferPoolStats, name)
+}
+
+// SetUDPSessionsUpdater 设置UDP会话数更新回调
+func (mm *MemoryMonitor) SetUDPSessionsUpdater(updater func() int64) {
+	mm.updateUDPSessions = updater
+}
+
+// SetDNSCacheUpdater 设置DNS缓存数更新回调
+func (mm *MemoryMonitor) SetDNSCacheUpdater(updater func() int64) {
+	mm.updateDNSCache = updater
 }
 
 // GetMemoryUsageReport 获取内存使用报告

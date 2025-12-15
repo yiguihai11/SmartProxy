@@ -233,6 +233,42 @@ func (m *UDPSessionManager) RemoveSession(clientAddr *net.UDPAddr) {
 	}
 }
 
+// GetSessionCount 获取当前UDP会话数
+func (m *UDPSessionManager) GetSessionCount() int {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	return len(m.sessions)
+}
+
+// Stop 停止UDP会话管理器
+func (m *UDPSessionManager) Stop() {
+	if m.cleanupTick != nil {
+		m.cleanupTick.Stop()
+	}
+
+	// 关闭所有UDP连接
+	m.mutex.Lock()
+	for _, session := range m.sessions {
+		if session.timeoutTimer != nil {
+			session.timeoutTimer.Stop()
+		}
+	}
+	m.sessions = make(map[string]*UDPSession)
+	m.mutex.Unlock()
+
+	// 关闭所有Full Cone NAT映射
+	m.fullConeMutex.Lock()
+	for _, mapping := range m.fullConeMap {
+		if mapping.ExternalConn != nil {
+			mapping.ExternalConn.Close()
+		}
+	}
+	m.fullConeMap = make(map[string]*FullConeMapping)
+	m.fullConeMutex.Unlock()
+
+	m.logger.Info("UDP session manager stopped")
+}
+
 // startIdleTimer 启动空闲计时器
 func (s *UDPSession) startIdleTimer(manager *UDPSessionManager) {
 	if s.timeoutTimer != nil {
@@ -327,7 +363,7 @@ func (m *UDPSessionManager) cleanupExpiredSessions() {
 		for _, key := range expiredSessions {
 			if session := m.sessions[key]; session != nil {
 				delete(m.sessions, key)
-				m.logger.Info("UDP session expired: %s -> %s", session.ClientAddr, session.TargetAddr)
+				m.logger.Debug("UDP session expired: %s -> %s", session.ClientAddr, session.TargetAddr)
 			}
 		}
 		m.mutex.Unlock()
@@ -346,7 +382,7 @@ func (m *UDPSessionManager) cleanupExpiredSessions() {
 		for _, key := range expiredMappings {
 			if mapping := m.fullConeMap[key]; mapping != nil {
 				delete(m.fullConeMap, key)
-				m.logger.Info("Full Cone mapping expired: %s -> external port %d", mapping.InternalAddr, mapping.ExternalPort)
+				m.logger.Debug("Full Cone mapping expired: %s -> external port %d", mapping.InternalAddr, mapping.ExternalPort)
 			}
 		}
 		m.fullConeMutex.Unlock()
@@ -661,6 +697,17 @@ func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) 
 	}
 	logger.Info("Traffic detector: ✓ (HTTP/HTTPS/SNI detection)")
 
+	// 设置内存监控器的回调
+	if monitor := GetGlobalMemoryMonitor(); monitor != nil {
+		// 设置UDP会话数更新回调
+		monitor.SetUDPSessionsUpdater(func() int64 {
+			if udpSessions != nil {
+				return int64(udpSessions.GetSessionCount())
+			}
+			return 0
+		})
+	}
+
 	return server, nil
 }
 
@@ -685,8 +732,8 @@ func (s *SOCKS5Server) Start() error {
 
 		// 如果有TCPListener，使用SetDeadline
 		if s.tcpListener != nil {
-			// 设置accept超时
-			s.tcpListener.SetDeadline(time.Now().Add(1 * time.Second))
+			// 设置accept超时，减少为100ms以加快关闭速度
+			s.tcpListener.SetDeadline(time.Now().Add(100 * time.Millisecond))
 			clientConn, err = s.tcpListener.Accept()
 
 			// 检查是否是超时
@@ -726,6 +773,11 @@ func (s *SOCKS5Server) Stop() error {
 		s.blockedItems.Stop()
 	}
 
+	// Stop UDP session manager
+	if s.udpSessions != nil {
+		s.udpSessions.Stop()
+	}
+
 	if s.listener != nil {
 		err := s.listener.Close()
 		s.wg.Wait()
@@ -760,6 +812,12 @@ func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 	}()
 
 	s.logger.Info("New connection from %s", clientConn.RemoteAddr())
+
+	// 更新活跃连接数
+	if monitor := GetGlobalMemoryMonitor(); monitor != nil {
+		monitor.IncrementActiveConnections()
+		defer monitor.DecrementActiveConnections()
+	}
 
 	// 认证协商
 	if err := conn.handleAuthentication(); err != nil {

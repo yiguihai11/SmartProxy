@@ -325,10 +325,28 @@
             <div class="stat-card">
                 <div class="stat-icon green">🔗</div>
                 <div class="stat-value" id="active-connections">-</div>
-                <div class="stat-label">活跃连接数</div>
+                <div class="stat-label">TCP连接数</div>
                 <div class="stat-change positive">
                     <span>✓</span>
                     <span>正常运行</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon blue">📡</div>
+                <div class="stat-value" id="udp-sessions">-</div>
+                <div class="stat-label">UDP会话数</div>
+                <div class="stat-change positive">
+                    <span>📊</span>
+                    <span>实时更新</span>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon orange">💾</div>
+                <div class="stat-value" id="dns-cache">-</div>
+                <div class="stat-label">DNS缓存数</div>
+                <div class="stat-change positive">
+                    <span>🔄</span>
+                    <span>自动清理</span>
                 </div>
             </div>
             <div class="stat-card">
@@ -359,7 +377,7 @@
                 </div>
             </div>
             <div class="chart-card">
-                <h3>📊 连接数变化</h3>
+                <h3>📊 TCP/UDP/DNS 实时监控</h3>
                 <div class="chart-container">
                     <canvas id="connectionsChart"></canvas>
                 </div>
@@ -436,7 +454,9 @@
         let autoRefreshInterval;
         let memoryChart, connectionsChart, poolEfficiencyChart, bufferAllocationChart;
         let memoryHistory = [];
-        let connectionsHistory = [];
+        let tcpHistory = [];
+        let udpHistory = [];
+        let dnsHistory = [];
         let previousStats = {};
 
         // 初始化图表
@@ -476,20 +496,41 @@
                 type: 'line',
                 data: {
                     labels: [],
-                    datasets: [{
-                        label: '活跃连接数',
-                        data: [],
-                        borderColor: '#43e97b',
-                        backgroundColor: 'rgba(67, 233, 123, 0.1)',
-                        tension: 0.4,
-                        fill: true
-                    }]
+                    datasets: [
+                        {
+                            label: 'TCP连接数',
+                            data: [],
+                            borderColor: '#43e97b',
+                            backgroundColor: 'rgba(67, 233, 123, 0.1)',
+                            tension: 0.4,
+                            fill: false
+                        },
+                        {
+                            label: 'UDP会话数',
+                            data: [],
+                            borderColor: '#667eea',
+                            backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                            tension: 0.4,
+                            fill: false
+                        },
+                        {
+                            label: 'DNS缓存数',
+                            data: [],
+                            borderColor: '#f6ad55',
+                            backgroundColor: 'rgba(246, 173, 85, 0.1)',
+                            tension: 0.4,
+                            fill: false
+                        }
+                    ]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
                     plugins: {
-                        legend: { display: false }
+                        legend: {
+                            display: true,
+                            position: 'bottom'
+                        }
                     },
                     scales: {
                         y: {
@@ -595,7 +636,12 @@
             document.getElementById('allocated-memory').textContent = allocatedMB;
 
             const activeConnections = stats.active_connections || 0;
+            const activeUDPSessions = stats.active_udp_sessions || 0;
+            const activeDNSCache = stats.active_dns_cache || 0;
+
             document.getElementById('active-connections').textContent = activeConnections;
+            document.getElementById('udp-sessions').textContent = activeUDPSessions;
+            document.getElementById('dns-cache').textContent = activeDNSCache;
 
             const gcCount = stats.num_gc || 0;
             document.getElementById('gc-count').textContent = gcCount;
@@ -622,19 +668,32 @@
             previousStats = stats;
 
             // 添加到历史记录
+            const currentTime = new Date().toLocaleTimeString();
             memoryHistory.push({
-                time: new Date().toLocaleTimeString(),
+                time: currentTime,
                 value: parseFloat(allocatedMB)
             });
 
-            connectionsHistory.push({
-                time: new Date().toLocaleTimeString(),
+            tcpHistory.push({
+                time: currentTime,
                 value: activeConnections
+            });
+
+            udpHistory.push({
+                time: currentTime,
+                value: activeUDPSessions
+            });
+
+            dnsHistory.push({
+                time: currentTime,
+                value: activeDNSCache
             });
 
             // 限制历史记录长度
             if (memoryHistory.length > 20) memoryHistory.shift();
-            if (connectionsHistory.length > 20) connectionsHistory.shift();
+            if (tcpHistory.length > 20) tcpHistory.shift();
+            if (udpHistory.length > 20) udpHistory.shift();
+            if (dnsHistory.length > 20) dnsHistory.shift();
         }
 
         // 更新内存使用
@@ -718,9 +777,11 @@
             }
 
             // 更新连接数图表
-            if (connectionsHistory.length > 0) {
-                connectionsChart.data.labels = connectionsHistory.map(h => h.time);
-                connectionsChart.data.datasets[0].data = connectionsHistory.map(h => h.value);
+            if (tcpHistory.length > 0) {
+                connectionsChart.data.labels = tcpHistory.map(h => h.time);
+                connectionsChart.data.datasets[0].data = tcpHistory.map(h => h.value);
+                connectionsChart.data.datasets[1].data = udpHistory.map(h => h.value);
+                connectionsChart.data.datasets[2].data = dnsHistory.map(h => h.value);
                 connectionsChart.update();
             }
 

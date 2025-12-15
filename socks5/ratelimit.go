@@ -307,15 +307,21 @@ func (rl *RateLimiter) WaitForUpload(ctx context.Context, identifier string, byt
 	rl.mu.RUnlock()
 
 	// 等待最严格的限制
+	rl.mu.RLock()
 	for _, rule := range rules {
 		bucket := rl.uploadBuckets[rule.Key]
+		rl.mu.RUnlock()
+
 		if bucket != nil {
 			if err := bucket.WaitFor(ctx, bytes); err != nil {
 				rl.updateStats(rule.Key, bytes, 0, bytes, 0)
 				return err
 			}
 		}
+
+		rl.mu.RLock()
 	}
+	rl.mu.RUnlock()
 
 	rl.updateStats(identifier, bytes, bytes, 0, 0)
 	return nil
@@ -341,15 +347,21 @@ func (rl *RateLimiter) WaitForDownload(ctx context.Context, identifier string, b
 	rl.mu.RUnlock()
 
 	// 等待最严格的限制
+	rl.mu.RLock()
 	for _, rule := range rules {
 		bucket := rl.downloadBuckets[rule.Key]
+		rl.mu.RUnlock()
+
 		if bucket != nil {
 			if err := bucket.WaitFor(ctx, bytes); err != nil {
 				rl.updateStats(rule.Key, bytes, 0, 0, bytes)
 				return err
 			}
 		}
+
+		rl.mu.RLock()
 	}
+	rl.mu.RUnlock()
 
 	rl.updateStats(identifier, bytes, bytes, 0, 0)
 	return nil
@@ -373,6 +385,9 @@ func (rl *RateLimiter) matchesRule(rule *RateLimitRule, identifier string) bool 
 
 // updateStats 更新统计信息
 func (rl *RateLimiter) updateStats(key string, total, allowed, throttled, dropped int64) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
 	stats, exists := rl.stats[key]
 	if !exists {
 		stats = &RateLimitStats{LastUpdate: time.Now()}
