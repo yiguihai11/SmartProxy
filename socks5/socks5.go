@@ -916,6 +916,9 @@ func (c *Connection) forwardUDPPacketWithFullCone(udpConn *net.UDPConn, packet *
 				return
 			}
 
+			// 打印响应日志
+			c.logInfo("UDP: Received %d bytes response from %s:%d", n, senderAddr.IP.String(), senderAddr.Port)
+
 			// 构建SOCKS5响应包
 			responsePacket, err := c.server.udpSessions.buildFullConeResponsePacket(senderAddr, buffer[:n])
 			if err != nil {
@@ -925,8 +928,11 @@ func (c *Connection) forwardUDPPacketWithFullCone(udpConn *net.UDPConn, packet *
 			// 通过客户端的UDP连接发回响应
 			_, err = udpConn.WriteToUDP(responsePacket, clientAddr)
 			if err != nil {
+				c.logError("UDP: Failed to send response to client: %v", err)
 				return
 			}
+
+			c.logInfo("UDP: Response sent to client (%d bytes)", len(responsePacket))
 		}()
 	
 
@@ -2213,6 +2219,10 @@ func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, origin
 		return nil
 	}
 
+	// 打印代理响应日志
+	c.logInfo("UDP-PROXY: Received %d bytes response from proxy %s:%d",
+		len(responseData), proxyUDPAddr.IP.String(), proxyUDPAddr.Port)
+
 	// 构建返回给客户端的SOCKS5 UDP数据包
 	clientReply, err := c.buildUDPPacket(
 		proxyUDPAddr.IP.String(),
@@ -2230,6 +2240,7 @@ func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, origin
 		return fmt.Errorf("UDP-PROXY: failed to send reply to client: %v", err)
 	}
 
+	c.logInfo("UDP-PROXY: Response sent to client (%d bytes)", len(clientReply))
 	c.logInfo("UDP-PROXY: Successfully forwarded UDP packet via proxy %s", proxy.Name)
 	return nil
 }
