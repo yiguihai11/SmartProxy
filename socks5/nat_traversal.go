@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"smartproxy/logger"
 	"net"
+	"smartproxy/logger"
 	"strings"
 	"sync"
 	"time"
@@ -36,10 +36,10 @@ type NATConfig struct {
 		Start int `json:"start"` // 端口映射起始端口
 		End   int `json:"end"`   // 端口映射结束端口
 	} `json:"port_mapping_range"`
-	KeepAliveInterval int  `json:"keepalive_interval"` // 保活间隔（秒）
-	STUNTimeout      int  `json:"stun_timeout"`       // STUN请求超时时间（秒）
-	HolePunchCount   int  `json:"hole_punch_count"`   // 打洞包发送次数
-	HolePunchDelay   int  `json:"hole_punch_delay"`   // 打洞包间隔（毫秒）
+	KeepAliveInterval int `json:"keepalive_interval"` // 保活间隔（秒）
+	STUNTimeout       int `json:"stun_timeout"`       // STUN请求超时时间（秒）
+	HolePunchCount    int `json:"hole_punch_count"`   // 打洞包发送次数
+	HolePunchDelay    int `json:"hole_punch_delay"`   // 打洞包间隔（毫秒）
 }
 
 // NATTraversal NAT穿透管理器
@@ -91,27 +91,27 @@ func NewNATTraversal(configPath string, logger *logger.SlogLogger) *NATTraversal
 
 	// 显示详细的配置信息
 	if config.Mode == "auto" {
-		logger.Info("Auto模式说明: 将自动尝试以下功能（如果配置）:")
+		logger.Debug("Auto模式说明: 将自动尝试以下功能（如果配置）:")
 		if len(config.STUNServers) > 0 {
-			logger.Info("  - STUN: 检测NAT类型和公网地址")
+			logger.Debug("  - STUN: 检测NAT类型和公网地址")
 		} else {
-			logger.Info("  - STUN: 未配置服务器")
+			logger.Debug("  - STUN: 未配置服务器")
 		}
 		if config.UPnPEnabled {
-			logger.Info("  - UPnP: 自动端口映射")
+			logger.Debug("  - UPnP: 自动端口映射")
 		} else {
-			logger.Info("  - UPnP: 已禁用")
+			logger.Debug("  - UPnP: 已禁用")
 		}
 		if config.TURNServer != "" {
-			logger.Info("  - TURN: 使用中继服务器")
+			logger.Debug("  - TURN: 使用中继服务器")
 		} else {
-			logger.Info("  - TURN: 未配置")
+			logger.Debug("  - TURN: 未配置")
 		}
 	} else {
 		if config.UPnPEnabled {
-			logger.Info("UPnP: 已启用")
+			logger.Debug("UPnP: 已启用")
 		} else {
-			logger.Info("UPnP: 已禁用")
+			logger.Debug("UPnP: 已禁用")
 		}
 	}
 
@@ -131,10 +131,10 @@ func loadNATConfig(configPath string, logger *logger.SlogLogger) *NATConfig {
 			"stun1.l.google.com:19302",
 			"stun2.l.google.com:19302",
 		},
-		UPnPEnabled:        false,
-		KeepAliveInterval: 30, // 30秒保活
-		STUNTimeout:       5,  // 5秒超时
-		HolePunchCount:    3,  // 发送3个打洞包
+		UPnPEnabled:       false,
+		KeepAliveInterval: 30,  // 30秒保活
+		STUNTimeout:       5,   // 5秒超时
+		HolePunchCount:    3,   // 发送3个打洞包
 		HolePunchDelay:    100, // 100毫秒间隔
 	}
 

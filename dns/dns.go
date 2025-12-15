@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"smartproxy/logger"
 	"math/rand"
 	"net"
+	"smartproxy/logger"
 	"strings"
 	"sync"
 	"time"
@@ -56,20 +56,20 @@ func (dc *DNSCache) Get(key string) *dns.Msg {
 
 	entry, exists := dc.cache[key]
 	if !exists {
-		dc.logger.Info("Cache miss for %s", key)
+		dc.logger.Debug("Cache miss for %s", key)
 		return nil
 	}
 
 	// 检查是否过期
 	if time.Now().After(entry.Expiry) {
 		delete(dc.cache, key)
-		dc.logger.Info("Cache expired for %s", key)
+		dc.logger.Debug("Cache expired for %s", key)
 		return nil
 	}
 
 	// 更新访问时间
 	entry.Access = time.Now()
-	dc.logger.Info("Cache hit for %s", key)
+	dc.logger.Debug("Cache hit for %s", key)
 
 	// 返回消息的副本
 	msg := entry.Msg.Copy()
@@ -108,7 +108,7 @@ func (dc *DNSCache) Put(key string, msg *dns.Msg) {
 	}
 
 	dc.cache[key] = entry
-	dc.logger.Info("Cached %s with TTL %ds", key, minTTL)
+	dc.logger.Debug("Cached %s with TTL %ds", key, minTTL)
 }
 
 // evictOldest 驱逐最旧的缓存条目
@@ -665,7 +665,7 @@ func (r *Resolver) Resolve(msg *dns.Msg) (*dns.Msg, error) {
 	// 检查缓存
 	if cached := r.cache.Get(cacheKey); cached != nil {
 		cached.Id = msg.Id
-		r.logger.Info("Serving cached response for %s", domain)
+		r.logger.Debug("Serving cached response for %s", domain)
 		return cached, nil
 	}
 
