@@ -545,7 +545,7 @@
             poolEfficiencyChart = new Chart(poolEfficiencyCtx, {
                 type: 'doughnut',
                 data: {
-                    labels: ['缓冲区池命中率', '连接池命中率'],
+                    labels: ['缓冲区池命中率', '连接池效率'],
                     datasets: [{
                         data: [0, 0],
                         backgroundColor: ['#667eea', '#43e97b'],
@@ -785,10 +785,14 @@
                 connectionsChart.update();
             }
 
-            // 更新对象池效率图（示例数据）
+            // 更新对象池效率图
             const bufferHitRate = parseFloat(document.getElementById('buffer-hit-rate').textContent) || 0;
-            const connHitRate = parseFloat(document.getElementById('conn-hit-rate').textContent) || 0;
-            poolEfficiencyChart.data.datasets[0].data = [bufferHitRate, connHitRate];
+            // 对于连接池，我们使用池效率（池中对象数/创建对象数）
+            const connPooled = parseInt(document.getElementById('conn-pooled').textContent) || 0;
+            const connCreated = parseInt(document.getElementById('conn-created').textContent) || 0;
+            const connEfficiency = connCreated > 0 ? (connPooled / connCreated) * 100 : 0;
+
+            poolEfficiencyChart.data.datasets[0].data = [bufferHitRate, connEfficiency];
             poolEfficiencyChart.update();
         }
 
