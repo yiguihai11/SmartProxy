@@ -692,8 +692,33 @@ func (ws *WebServer) handleMemoryPools(w http.ResponseWriter, r *http.Request) {
 	bufferStats := socks5.GetBufferPoolStats()
 	connectionStats := socks5.GetConnectionPoolStats()
 
+	// 计算缓冲区池命中率
+	var bufferHitRate float64
+	if bufferStats.TotalRequests > 0 {
+		bufferHitRate = float64(bufferStats.Hits) / float64(bufferStats.TotalRequests) * 100
+	}
+
+	// 转换内存使用为MB
+	var bufferMemoryMB float64
+	if bufferStats.TotalMemoryUsed > 0 {
+		bufferMemoryMB = float64(bufferStats.TotalMemoryUsed) / 1024 / 1024
+	}
+
 	pools := map[string]interface{}{
-		"buffer_pool": bufferStats,
+		"buffer_pool": map[string]interface{}{
+			"active_objects":    bufferStats.ActiveObjects,
+			"pooled_objects":    bufferStats.PooledObjects,
+			"total_requests":    bufferStats.TotalRequests,
+			"hits":              bufferStats.Hits,
+			"misses":            bufferStats.Misses,
+			"evictions":         bufferStats.Evictions,
+			"total_memory_used": bufferStats.TotalMemoryUsed,
+			"pool_memory_used":  bufferStats.PoolMemoryUsed,
+			"max_pool_size":     bufferStats.MaxPoolSize,
+			"last_access":       bufferStats.LastAccess.Format(time.RFC3339),
+			"hit_rate_percent":  bufferHitRate,
+			"total_memory_mb":   bufferMemoryMB,
+		},
 		"connection_pool": map[string]interface{}{
 			"active_connections":   connectionStats.ActiveConnections,
 			"pooled_connections":   connectionStats.PooledConnections,
