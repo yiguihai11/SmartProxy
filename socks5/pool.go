@@ -317,8 +317,8 @@ func (p *ConnectionPool) Get() *Connection {
 	// 尝试从池中获取
 	conn := p.pool.Get().(*Connection)
 
-	// 检查是否是新创建的连接
-	if conn.clientConn == nil && conn.targetConn == nil {
+	// 检查是否是新创建的连接（通过 sessionID 来判断）
+	if conn.sessionID == "" {
 		p.stats.mutex.Lock()
 		p.stats.Misses++
 		p.stats.mutex.Unlock()
@@ -332,16 +332,10 @@ func (p *ConnectionPool) Get() *Connection {
 	return conn
 }
 
-// Put 将连接对象放回池中（需要重置）
+// Put 将连接对象放回池中（不重置，因为调用方已经重置）
 func (p *ConnectionPool) Put(conn *Connection) {
-	// 重置连接对象状态
-	conn.clientConn = nil
-	conn.targetConn = nil
-	conn.username = ""
-	conn.targetAddr = ""
-	conn.targetHost = ""
-	conn.detectedHost = ""
-	conn.protocol = ""
+	// 注意：连接对象的清理工作已经在调用方完成
+	// 这里不应该重复清理，以免影响连接池的复用统计
 
 	p.stats.mutex.Lock()
 	p.stats.ActiveConnections-- // 活跃连接减少

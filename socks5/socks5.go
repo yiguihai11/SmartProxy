@@ -237,7 +237,8 @@ func (m *UDPSessionManager) RemoveSession(clientAddr *net.UDPAddr) {
 func (m *UDPSessionManager) GetSessionCount() int {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
-	return len(m.sessions)
+	// 返回Full Cone映射数（当前实现使用Full Cone NAT）
+	return len(m.fullConeMap)
 }
 
 // Stop 停止UDP会话管理器
@@ -701,8 +702,8 @@ func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) 
 	if monitor := GetGlobalMemoryMonitor(); monitor != nil {
 		// 设置UDP会话数更新回调
 		monitor.SetUDPSessionsUpdater(func() int64 {
-			if s.udpSessions != nil {
-				return int64(s.udpSessions.GetSessionCount())
+			if server.udpSessions != nil {
+				return int64(server.udpSessions.GetSessionCount())
 			}
 			return 0
 		})
