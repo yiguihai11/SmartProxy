@@ -170,6 +170,9 @@ func (ws *WebServer) setupRoutes() {
 	mux.HandleFunc("/api/memory/history", ws.handleMemoryHistory)
 	mux.HandleFunc("/api/memory/pools", ws.handleMemoryPools)
 
+	// 流量统计API
+	mux.HandleFunc("/api/traffic/stats", ws.handleTrafficStats)
+
 	mux.HandleFunc("/", ws.handleStatic)
 
 	listenAddr := fmt.Sprintf(":%d", ws.port)
@@ -749,4 +752,39 @@ func calculatePoolEfficiency(stats *socks5.ConnectionPoolStats) float64 {
 	// 池效率 = 池中对象数 / 创建的总对象数
 	// 这表示有多少创建的对象被保留在池中供重用
 	return float64(stats.PooledConnections) / float64(stats.CreatedConnections) * 100
+}
+
+// handleTrafficStats 处理流量统计请求
+func (ws *WebServer) handleTrafficStats(w http.ResponseWriter, r *http.Request) {
+	monitor := socks5.GetGlobalTrafficMonitor()
+	if monitor == nil {
+		ws.sendJSONResponse(w, APIResponse{
+			Success: false,
+			Error:   "Traffic monitor not initialized",
+		})
+		return
+	}
+
+	stats := monitor.GetStats()
+
+	// 转换为 KB/s
+	data := map[string]interface{}{
+		"total_upload":          stats.TotalUpload,
+		"total_download":        stats.TotalDownload,
+		"current_upload_speed":   stats.CurrentUploadSpeed,
+		"current_download_speed": stats.CurrentDownloadSpeed,
+		"active_connections":    stats.ActiveConnections,
+		"upload_history":        stats.UploadHistory,
+		"download_history":      stats.DownloadHistory,
+		// 添加便于前端使用的字段
+		"total_upload_mb":       float64(stats.TotalUpload) / 1024 / 1024,
+		"total_download_mb":     float64(stats.TotalDownload) / 1024 / 1024,
+		"upload_speed_kbps":     stats.CurrentUploadSpeed / 1024,
+		"download_speed_kbps":   stats.CurrentDownloadSpeed / 1024,
+	}
+
+	ws.sendJSONResponse(w, APIResponse{
+		Success: true,
+		Data:    data,
+	})
 }

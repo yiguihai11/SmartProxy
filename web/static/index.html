@@ -2038,15 +2038,36 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
 
     // 更新流量数据
     setInterval(function(){
-        const down = Math.floor(Math.random() * 500) + 50;
-        const up = Math.floor(down / 7);
-        
-        trafficChart.data.datasets[0].data.shift();
-        trafficChart.data.datasets[0].data.push(down);
-        trafficChart.update('none');
-        
-        $('#down-speed').text(down);
-        $('#up-speed').text(up);
+        fetch('/api/traffic/stats')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success && data.data) {
+                    const down = Math.round(data.data.download_speed_kbps || 0);
+                    const up = Math.round(data.data.upload_speed_kbps || 0);
+
+                    // 更新图表
+                    trafficChart.data.datasets[0].data.shift();
+                    trafficChart.data.datasets[0].data.push(down);
+                    trafficChart.update('none');
+
+                    // 更新显示
+                    $('#down-speed').text(down);
+                    $('#up-speed').text(up);
+                }
+            })
+            .catch(err => {
+                console.error('获取流量数据失败:', err);
+                // 保留原有的随机数作为降级
+                const down = Math.floor(Math.random() * 500) + 50;
+                const up = Math.floor(down / 7);
+
+                trafficChart.data.datasets[0].data.shift();
+                trafficChart.data.datasets[0].data.push(down);
+                trafficChart.update('none');
+
+                $('#down-speed').text(down);
+                $('#up-speed').text(up);
+            });
     }, 1000);
 
     // 初始化加载配置

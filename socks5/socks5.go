@@ -544,6 +544,7 @@ type Connection struct {
 	logger       *logger.SlogLogger
 	server       *SOCKS5Server
 	sessionID    string // 会话ID，用于追踪连接
+	connID       string // 连接ID，用于流量统计
 	username     string // 认证用户名，空表示未认证
 	targetAddr   string // 目标地址 (host:port)
 	targetHost   string // 目标主机名
@@ -819,6 +820,16 @@ func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 		monitor.IncrementActiveConnections()
 		defer monitor.DecrementActiveConnections()
 	}
+
+	// 添加到流量监控
+	connID := clientConn.RemoteAddr().String()
+	if trafficMonitor := GetGlobalTrafficMonitor(); trafficMonitor != nil {
+		trafficMonitor.AddConnection(connID)
+		defer trafficMonitor.RemoveConnection(connID)
+	}
+
+	// 保存connID供后续使用
+	conn.connID = connID
 
 	// 认证协商
 	if err := conn.handleAuthentication(); err != nil {
@@ -1759,6 +1770,13 @@ func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io
 			return
 		}
 
+		// 记录下载流量（从目标到客户端）
+		if n > 0 && c.connID != "" {
+			if trafficMonitor := GetGlobalTrafficMonitor(); trafficMonitor != nil {
+				trafficMonitor.RecordDownload(c.connID, int64(n))
+			}
+		}
+
 		// 使用高效的写入方式
 		if c.server.rateLimiter != nil {
 			// 应用下载限速，使用带超时的等待
@@ -1820,6 +1838,13 @@ func (c *Connection) relayClientToTargetOptimized(ctx context.Context, writer io
 				return nil // 正常结束
 			}
 			return err
+		}
+
+		// 记录上传流量（从客户端到目标）
+		if n > 0 && c.connID != "" {
+			if trafficMonitor := GetGlobalTrafficMonitor(); trafficMonitor != nil {
+				trafficMonitor.RecordUpload(c.connID, int64(n))
+			}
 		}
 
 		// 应用上传限速，使用带超时的等待

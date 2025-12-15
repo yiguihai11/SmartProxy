@@ -86,6 +86,13 @@ func main() {
 		mainLogger.Info("Memory monitor initialized with 30s update interval")
 	}
 
+	// 初始化流量监控器
+	trafficMonitor := socks5.GetGlobalTrafficMonitor()
+	if trafficMonitor == nil {
+		trafficMonitor = socks5.NewTrafficMonitor(1 * time.Second) // 1秒更新间隔
+		mainLogger.Info("Traffic monitor initialized with 1s update interval")
+	}
+
 	// 获取Router实例，用于DNS模块
 	router := server.GetRouter()
 
