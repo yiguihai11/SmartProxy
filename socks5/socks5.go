@@ -47,6 +47,8 @@ const (
 	UDP_ASSOC_TIMEOUT = 5 * time.Minute
 	UDP_BUFFER_SIZE   = 64 * 1024
 	UDP_SESSION_TTL   = 10 * time.Minute
+	// DNS 查询通常很小，使用较小的缓冲区
+	DNS_BUFFER_SIZE   = 512
 )
 
 // formatNetworkAddress 格式化网络地址，正确处理IPv6地址
@@ -379,7 +381,7 @@ func (m *UDPSessionManager) SendViaFullCone(internalAddr *net.UDPAddr, targetAdd
 		return fmt.Errorf("failed to send via Full Cone: %v", err)
 	}
 
-	m.logger.Info("Full Cone send: %s -> %s (%d bytes)", internalAddr, targetAddr, len(data))
+	m.logger.Debug("Full Cone send: %s -> %s (%d bytes)", internalAddr, targetAddr, len(data))
 	return nil
 }
 
@@ -909,7 +911,15 @@ func (c *Connection) forwardUDPPacketWithFullCone(udpConn *net.UDPConn, packet *
 
 			// 设置读取超时
 			mapping.ExternalConn.SetReadDeadline(time.Now().Add(5 * time.Second))
-			buffer := make([]byte, UDP_BUFFER_SIZE)
+
+			// 根据目标端口选择合适的缓冲区大小
+			var bufferSize int
+			if targetPort == 53 { // DNS 端口
+				bufferSize = DNS_BUFFER_SIZE
+			} else {
+				bufferSize = UDP_BUFFER_SIZE
+			}
+			buffer := make([]byte, bufferSize)
 			n, senderAddr, err := mapping.ExternalConn.ReadFromUDP(buffer)
 			if err != nil {
 				// 超时或错误，直接返回
@@ -917,7 +927,7 @@ func (c *Connection) forwardUDPPacketWithFullCone(udpConn *net.UDPConn, packet *
 			}
 
 			// 打印响应日志
-			c.logInfo("UDP: Received %d bytes response from %s:%d", n, senderAddr.IP.String(), senderAddr.Port)
+			c.logDebug("UDP: Received %d bytes response from %s:%d", n, senderAddr.IP.String(), senderAddr.Port)
 
 			// 构建SOCKS5响应包
 			responsePacket, err := c.server.udpSessions.buildFullConeResponsePacket(senderAddr, buffer[:n])
