@@ -389,7 +389,7 @@
                 </div>
             </div>
             <div class="chart-card">
-                <h3>🔄 缓冲区分配</h3>
+                <h3>📊 缓冲区池统计分析</h3>
                 <div class="chart-container">
                     <canvas id="bufferAllocationChart"></canvas>
                 </div>
@@ -569,11 +569,17 @@
             bufferAllocationChart = new Chart(bufferAllocationCtx, {
                 type: 'bar',
                 data: {
-                    labels: ['64B', '256B', '1KB', '4KB', '8KB', '16KB', '32KB', '64KB'],
+                    labels: ['活跃对象', '池中对象', '命中率', '未命中次数', '总请求数'],
                     datasets: [{
-                        label: '活跃对象数',
-                        data: [0, 0, 0, 0, 0, 0, 0, 0],
-                        backgroundColor: '#764ba2'
+                        label: '缓冲区池统计',
+                        data: [0, 0, 0, 0, 0],
+                        backgroundColor: [
+                            'rgba(118, 75, 162, 0.8)',  // 活跃对象 - 深紫色
+                            'rgba(102, 126, 234, 0.8)', // 池中对象 - 蓝色
+                            'rgba(67, 233, 123, 0.8)',  // 命中率 - 绿色
+                            'rgba(246, 173, 85, 0.8)',  // 未命中 - 橙色
+                            'rgba(240, 147, 251, 0.8)'  // 总请求数 - 粉色
+                        ]
                     }]
                 },
                 options: {
@@ -750,6 +756,15 @@
                 document.getElementById('buffer-memory').textContent =
                     (bufferPool.total_memory_mb || 0).toFixed(1);
 
+                // 保存池中对象数用于图表
+                if (!document.getElementById('buffer-pooled')) {
+                    const pooledInput = document.createElement('input');
+                    pooledInput.id = 'buffer-pooled';
+                    pooledInput.type = 'hidden';
+                    document.body.appendChild(pooledInput);
+                }
+                document.getElementById('buffer-pooled').value = bufferPool.pooled_objects || 0;
+
                 console.log('Buffer Pool:', bufferPool);
             }
 
@@ -796,6 +811,23 @@
 
             poolEfficiencyChart.data.datasets[0].data = [bufferHitRate, connEfficiency];
             poolEfficiencyChart.update();
+
+            // 更新缓冲区分配图
+            const bufferActive = parseInt(document.getElementById('buffer-active').textContent) || 0;
+            const bufferPooledElement = document.getElementById('buffer-pooled');
+            const bufferPooled = bufferPooledElement ? parseInt(bufferPooledElement.value) : 0;
+            const bufferTotalRequests = parseInt(document.getElementById('buffer-total-requests').textContent) || 0;
+            const bufferHits = parseInt((bufferTotalRequests * bufferHitRate / 100).toFixed(0)) || 0;
+            const bufferMisses = bufferTotalRequests - bufferHits;
+
+            bufferAllocationChart.data.datasets[0].data = [
+                bufferActive,
+                bufferPooled,
+                bufferHitRate,
+                bufferMisses,
+                bufferTotalRequests
+            ];
+            bufferAllocationChart.update();
         }
 
         // 自动刷新控制
