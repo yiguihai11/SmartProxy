@@ -701,8 +701,8 @@ func NewSOCKS5ServerWithConfig(port int, configPath string, probingPorts []int) 
 	if monitor := GetGlobalMemoryMonitor(); monitor != nil {
 		// 设置UDP会话数更新回调
 		monitor.SetUDPSessionsUpdater(func() int64 {
-			if udpSessions != nil {
-				return int64(udpSessions.GetSessionCount())
+			if s.udpSessions != nil {
+				return int64(s.udpSessions.GetSessionCount())
 			}
 			return 0
 		})

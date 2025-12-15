@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Memory API</title>
+</head>
+<body>
+    <h1>Memory API Test</h1>
+    <div id="output"></div>
+
+    <script>
+        // 测试所有API端点
+        async function testAPIs() {
+            const output = document.getElementById('output');
+            output.innerHTML = '<h2>Testing APIs...</h2>';
+
+            try {
+                // 测试 pools API
+                const poolsResponse = await fetch('/api/memory/pools');
+                const poolsData = await poolsResponse.json();
+                output.innerHTML += '<h3>Pools API:</h3><pre>' + JSON.stringify(poolsData, null, 2) + '</pre>';
+
+                // 测试 stats API
+                const statsResponse = await fetch('/api/memory/stats');
+                const statsData = await statsResponse.json();
+                output.innerHTML += '<h3>Stats API:</h3><pre>' + JSON.stringify(statsData, null, 2) + '</pre>';
+
+                output.innerHTML += '<h2>All APIs working!</h2>';
+            } catch (error) {
+                output.innerHTML += '<h2>Error:</h2><pre>' + error.message + '</pre>';
+                console.error('API test error:', error);
+            }
+        }
+
+        testAPIs();
+    </script>
+</body>
+</html>

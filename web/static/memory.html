@@ -457,6 +457,7 @@
         let tcpHistory = [];
         let udpHistory = [];
         let dnsHistory = [];
+        let connectionsHistory = []; // 导出数据使用
         let previousStats = {};
 
         // 初始化图表
@@ -626,6 +627,7 @@
 
             } catch (error) {
                 console.error('加载数据失败:', error);
+                alert('加载监控数据失败: ' + error.message + '\n\n详细信息: ' + error.stack);
                 showError('无法加载监控数据');
             }
         }
@@ -849,6 +851,7 @@
             document.getElementById('autoRefresh').addEventListener('change', toggleAutoRefresh);
             toggleAutoRefresh();
         });
+        alert(123);
     </script>
 </body>
 </html>
