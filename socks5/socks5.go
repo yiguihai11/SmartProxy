@@ -11,10 +11,12 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
+	"os"
 	"smartproxy/logger"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -1679,6 +1681,14 @@ func (c *Connection) relay() error {
 
 // relayTargetToClient 目标到客户端数据流处理
 func (c *Connection) relayTargetToClient(ctx context.Context, writer io.Writer, rateLimitKey string, copyErr *error) {
+	// 解析目标端口
+	targetPort := uint16(80)
+	if _, portStr, err := net.SplitHostPort(c.targetAddr); err == nil {
+		if p, err := strconv.Atoi(portStr); err == nil {
+			targetPort = uint16(p)
+		}
+	}
+
 	// 使用 bufio.Reader/Writer 减少系统调用
 	buf := bufferPool.GetOptimized(BufferUsageLarge) // 32KB
 	defer bufferPool.Put(buf)
@@ -1706,32 +1716,73 @@ func (c *Connection) relayTargetToClient(ctx context.Context, writer io.Writer, 
 				return // 正常结束
 			}
 
-			// 处理连接重置的特殊情况
-			if strings.Contains(err.Error(), "connection reset") || strings.Contains(err.Error(), "errno 104") {
-				if c.targetHost != "" {
-					c.logInfo("⚠️  Direct connection to %s reset by peer, switching to proxy", c.targetHost)
-					c.handleErrorAndAddToBlocked(err, c.targetHost, c.targetAddr)
+			// 优先使用检测到的主机名
+			hostName := c.detectedHost
+			if hostName == "" {
+				hostName = c.targetHost
+			}
 
-					// 尝试切换到代理连接
-					if proxyConn, proxyErr := c.switchToProxyAndReplay(); proxyErr == nil {
-						// 成功切换到代理，更新目标连接并继续读取
-						oldConn := c.targetConn
-						c.targetConn = proxyConn
-						c.logInfo("✅ Successfully switched to proxy for %s", c.targetHost)
-						oldConn.Close()
+			// 检查系统错误码
+			if opErr, ok := err.(*net.OpError); ok {
+				if sysErr, ok := opErr.Err.(*os.SyscallError); ok {
+					if errno, ok := sysErr.Err.(syscall.Errno); ok {
+						if errno == syscall.ECONNRESET { // 104
+							// 连接被重置
+							if hostName != "" {
+								c.logInfo("⚠️ Direct connection to %s reset by peer, switching to proxy", hostName)
+								c.AddToBlockedItems(hostName, c.targetAddr, targetPort, FailureReasonRST)
 
-						// 从新代理连接继续读取数据，使用相同的优化逻辑
-						// 更新reader以使用新的连接
-						reader.Reset(c.targetConn)
-						continue // 继续主循环
+								// 尝试切换到代理连接
+								if proxyConn, proxyErr := c.switchToProxyAndReplay(); proxyErr == nil {
+									// 成功切换到代理，更新目标连接并继续读取
+									oldConn := c.targetConn
+									c.targetConn = proxyConn
+									c.logInfo("✅ Successfully switched to proxy for %s", hostName)
+									oldConn.Close()
+
+									// 从新代理连接继续读取数据，使用相同的优化逻辑
+									// 更新reader以使用新的连接
+									reader.Reset(c.targetConn)
+									continue // 继续主循环
+								} else {
+									c.logInfo("❌ Failed to switch to proxy: %v", proxyErr)
+								}
+							}
+						} else if errno == syscall.ETIMEDOUT { // 110
+							// 连接超时
+							if hostName != "" {
+								c.logInfo("⚠️ Connection to %s timed out", hostName)
+								c.AddToBlockedItems(hostName, c.targetAddr, targetPort, FailureReasonTimeout)
+							}
+						} else {
+							// 其他系统错误
+							if hostName != "" {
+								c.AddToBlockedItems(hostName, c.targetAddr, targetPort, FailureReasonConnectionRefused)
+							}
+						}
 					} else {
-						c.logInfo("❌ Failed to switch to proxy: %v", proxyErr)
+						// 其他类型的错误
+						if hostName != "" {
+							c.AddToBlockedItems(hostName, c.targetAddr, targetPort, FailureReasonConnectionRefused)
+						}
+					}
+				} else {
+					// 网络错误
+					if opErr.Timeout() {
+						if hostName != "" {
+							c.logInfo("⚠️ Connection to %s timed out", hostName)
+							c.AddToBlockedItems(hostName, c.targetAddr, targetPort, FailureReasonTimeout)
+						}
+					} else {
+						if hostName != "" {
+							c.AddToBlockedItems(hostName, c.targetAddr, targetPort, FailureReasonConnectionRefused)
+						}
 					}
 				}
 			} else {
-				// 其他错误类型的通用处理
-				if c.targetHost != "" {
-					c.handleErrorAndAddToBlocked(err, c.targetHost, c.targetAddr)
+				// 非网络错误
+				if hostName != "" {
+					c.AddToBlockedItems(hostName, c.targetAddr, targetPort, FailureReasonConnectionRefused)
 				}
 			}
 			*copyErr = err
