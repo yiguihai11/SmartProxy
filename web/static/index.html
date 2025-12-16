@@ -1679,6 +1679,11 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                 form.render('select');
                 form.render('select', 'editUserForm');
 
+                // 初始化速率显示
+                $(layero).find('input[name="upload_bps"], input[name="download_bps"]').each(function() {
+                    updateRateDisplay(this);
+                });
+
                 $(layero).find('#saveEditUser').on('click', function(){
                     const formData = form.val('editUserForm');
                     const user = config.socks5.auth_users[data.id];
@@ -1839,6 +1844,12 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
             `,
             success: function(layero, index) {
                 form.render();
+
+                // 初始化速率显示
+                $(layero).find('input[name="upload_bps"], input[name="download_bps"]').each(function() {
+                    updateRateDisplay(this);
+                });
+
                 $(layero).find('#saveNewUser').on('click', function(){
                     const formData = form.val('addUserForm');
                     if(!formData.username || !formData.password) {
@@ -2376,6 +2387,52 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
             $(this).addClass('port-warning');
             $tip.addClass('show text-warning').html('<i class="layui-icon layui-icon-tips"></i> 建议使用 >1024');
         }
+    });
+
+    // ==================== 速率转换工具 ====================
+
+    // 转换 bps 为人类可读格式
+    function formatBytesPerSecond(bps) {
+        if (bps === 0 || bps === '') return '0 B/s';
+
+        const units = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'];
+        let value = parseFloat(bps);
+        let unitIndex = 0;
+
+        while (value >= 1024 && unitIndex < units.length - 1) {
+            value = value / 1024;
+            unitIndex++;
+        }
+
+        return `${value.toFixed(2)} ${units[unitIndex]}`;
+    }
+
+    // 更新速率显示
+    function updateRateDisplay(input) {
+        const $input = $(input);
+        const value = $input.val();
+        const $display = $input.siblings('.rate-display');
+
+        if (value && value > 0) {
+            const formatted = formatBytesPerSecond(value);
+            if ($display.length === 0) {
+                $input.after(`<div class="rate-display" style="color: #999; font-size: 12px; margin-top: 5px;">${formatted}</div>`);
+            } else {
+                $display.text(formatted);
+            }
+        } else {
+            $display.remove();
+        }
+    }
+
+    // 为速率输入框添加实时更新
+    $(document).on('input', 'input[name="upload_bps"], input[name="download_bps"]', function() {
+        updateRateDisplay(this);
+    });
+
+    // 对话框关闭时清理速率显示
+    $(document).on('click', '.layui-layer-close', function() {
+        $('.rate-display').remove();
     });
 
     // ==================== 流量图表 ====================
