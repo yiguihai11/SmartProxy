@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartProxy 综合调试页面</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            padding: 20px;
+            background-color: #f5f7fa;
+        }
+        .header {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .header h1 {
+            margin: 0 0 10px 0;
+            color: #2d3748;
+        }
+        .header p {
+            margin: 0;
+            color: #718096;
+        }
+        .controls {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .btn {
+            padding: 10px 20px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .btn:hover {
+            background: #0056b3;
+        }
+        .btn.refresh {
+            background: #28a745;
+        }
+        .btn.refresh:hover {
+            background: #1e7e34;
+        }
+        .btn.clear {
+            background: #dc3545;
+        }
+        .btn.clear:hover {
+            background: #c82333;
+        }
+        .endpoint-group {
+            background: white;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .endpoint-header {
+            background: #667eea;
+            color: white;
+            padding: 15px 20px;
+            font-weight: bold;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .endpoint-header:hover {
+            background: #5a67d8;
+        }
+        .endpoint-header span {
+            font-size: 0.9em;
+            opacity: 0.8;
+        }
+        .endpoint-content {
+            padding: 20px;
+            display: none;
+        }
+        .endpoint-content.active {
+            display: block;
+        }
+        pre {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 15px;
+            overflow-x: auto;
+            border-radius: 5px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .error {
+            background: #fed7d7;
+            color: #c53030;
+            padding: 15px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .status.success {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+        .status.error {
+            background: #fed7d7;
+            color: #c53030;
+        }
+        .timestamp {
+            font-size: 12px;
+            color: #718096;
+            margin-top: 10px;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔍 SmartProxy 综合调试页面</h1>
+        <p>实时查看所有 API 端点的响应数据，用于调试和监控</p>
+    </div>
+
+    <div class="controls">
+        <button class="btn refresh" onclick="loadAllData()">🔄 刷新所有数据</button>
+        <button class="btn" onclick="toggleAutoRefresh()">⏱️ 自动刷新 (关闭)</button>
+        <button class="btn" onclick="expandAll()">📂 展开所有</button>
+        <button class="btn" onclick="collapseAll()">📁 折叠所有</button>
+        <button class="btn clear" onclick="clearData()">🗑️ 清空数据</button>
+    </div>
+
+    <div id="output"></div>
+
+    <script>
+        let autoRefreshInterval = null;
+        let isAutoRefreshOn = false;
+
+        // API 端点列表
+        const endpoints = [
+            // 系统状态
+            {
+                path: '/api/health',
+                name: '健康检查',
+                group: '系统状态',
+                description: '检查服务是否正常运行'
+            },
+            {
+                path: '/api/status',
+                name: '服务器状态',
+                group: '系统状态',
+                description: '服务器运行时间和状态信息'
+            },
+            {
+                path: '/api/stats',
+                name: '统计信息',
+                group: '系统状态',
+                description: '活跃连接、请求统计等'
+            },
+            {
+                path: '/api/blacklist',
+                name: '黑名单统计',
+                group: '系统状态',
+                description: '被屏蔽的域名和IP统计'
+            },
+
+            // 流量统计
+            {
+                path: '/api/traffic/stats',
+                name: '流量统计',
+                group: '流量统计',
+                description: '总上传/下载流量、活跃连接数'
+            },
+
+            // 内存监控
+            {
+                path: '/api/memory/stats',
+                name: '内存基础统计',
+                group: '内存监控',
+                description: '已分配内存、GC次数等'
+            },
+            {
+                path: '/api/memory/usage',
+                name: '内存使用详情',
+                group: '内存监控',
+                description: '系统内存使用情况'
+            },
+            {
+                path: '/api/memory/efficiency',
+                name: '内存效率分析',
+                group: '内存监控',
+                description: '内存压力和池效率'
+            },
+            {
+                path: '/api/memory/pools',
+                name: '对象池统计',
+                group: '内存监控',
+                description: '缓冲区池和连接池详细信息'
+            },
+
+            // 配置管理
+            {
+                path: '/api/config',
+                name: '系统配置',
+                group: '配置管理',
+                description: '代理、路由等配置信息',
+                method: 'GET'
+            },
+
+            // 用户和代理节点
+            {
+                path: '/api/users',
+                name: '用户列表',
+                group: '用户管理',
+                description: 'SOCKS5认证用户列表'
+            },
+            {
+                path: '/api/proxy-nodes',
+                name: '代理节点',
+                group: '代理节点',
+                description: '可用的代理节点配置'
+            },
+            {
+                path: '/api/rules',
+                name: '路由规则',
+                group: '路由规则',
+                description: '智能路由规则配置'
+            }
+        ];
+
+        // 按组分类端点
+        const groupedEndpoints = endpoints.reduce((acc, endpoint) => {
+            if (!acc[endpoint.group]) {
+                acc[endpoint.group] = [];
+            }
+            acc[endpoint.group].push(endpoint);
+            return acc;
+        }, {});
+
+        // 渲染页面
+        function renderPage() {
+            const output = document.getElementById('output');
+            let html = '';
+
+            for (const [groupName, groupEndpoints] of Object.entries(groupedEndpoints)) {
+                html += `
+                    <div class="endpoint-group">
+                        <div class="endpoint-header" onclick="toggleGroup('${groupName}')">
+                            <span>${groupName} (${groupEndpoints.length})</span>
+                            <span>▼</span>
+                        </div>
+                        <div class="endpoint-content active" id="group-${groupName}">
+                `;
+
+                for (const endpoint of groupEndpoints) {
+                    html += `
+                        <h4 style="margin-bottom: 5px; color: #4a5568;">
+                            <a href="#" onclick="toggleEndpoint('${endpoint.path}')" style="text-decoration: none; color: inherit;">
+                                ${endpoint.name}
+                            </a>
+                            <span class="status" id="status-${endpoint.path}">⏳</span>
+                        </h4>
+                        <p style="color: #718096; margin: 5px 0 10px 0;">
+                            <strong>路径:</strong> <code>${endpoint.path}</code> |
+                            <strong>描述:</strong> ${endpoint.description}
+                        </p>
+                        <div id="content-${endpoint.path}"></div>
+                    `;
+                }
+
+                html += `
+                        </div>
+                    </div>
+                `;
+            }
+
+            output.innerHTML = html;
+        }
+
+        // 加载单个端点数据
+        async function loadEndpoint(endpoint) {
+            const statusEl = document.getElementById(`status-${endpoint.path}`);
+            const contentEl = document.getElementById(`content-${endpoint.path}`);
+
+            statusEl.textContent = '🔄';
+            statusEl.className = 'status';
+
+            try {
+                const startTime = Date.now();
+                const response = await fetch(endpoint.path);
+                const responseTime = Date.now() - startTime;
+
+                const data = await response.json();
+
+                statusEl.textContent = '✓';
+                statusEl.className = 'status success';
+
+                let content = `
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <span><strong>响应时间:</strong> ${responseTime}ms</span>
+                        <span><strong>状态码:</strong> ${response.status}</span>
+                        <span><strong>时间戳:</strong> ${new Date().toLocaleString()}</span>
+                    </div>
+                `;
+
+                if (data.success) {
+                    content += `
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+
+                    // 特殊处理某些数据
+                    if (endpoint.path === '/api/traffic/stats') {
+                        content += `
+                            <div style="margin-top: 10px; padding: 10px; background: #e6fffa; border-radius: 5px;">
+                                <strong>📊 流量摘要:</strong><br>
+                                总上传: ${(data.data.total_upload_mb || 0).toFixed(2)} MB<br>
+                                总下载: ${(data.data.total_download_mb || 0).toFixed(2)} MB<br>
+                                活跃连接: ${data.data.active_connections || 0}
+                            </div>
+                        `;
+                    } else if (endpoint.path === '/api/memory/pools') {
+                        content += `
+                            <div style="margin-top: 10px; padding: 10px; background: #f0fff4; border-radius: 5px;">
+                                <strong>💾 对象池摘要:</strong><br>
+                                缓冲区池命中率: ${(data.data.buffer_pool?.hit_rate_percent || 0).toFixed(1)}%<br>
+                                连接池命中率: ${(data.data.connection_pool?.hit_rate_percent || 0).toFixed(1)}%
+                            </div>
+                        `;
+                    }
+                } else {
+                    content += `<div class="error">❌ 错误: ${data.error || '未知错误'}</div>`;
+                }
+
+                contentEl.innerHTML = content;
+
+            } catch (error) {
+                statusEl.textContent = '✗';
+                statusEl.className = 'status error';
+
+                contentEl.innerHTML = `
+                    <div class="error">
+                        <strong>请求失败:</strong> ${error.message}<br>
+                        <strong>时间戳:</strong> ${new Date().toLocaleString()}
+                    </div>
+                `;
+            }
+        }
+
+        // 加载所有数据
+        async function loadAllData() {
+            console.log('开始加载所有API数据...');
+
+            // 并行加载所有端点
+            const promises = endpoints.map(endpoint => loadEndpoint(endpoint));
+            await Promise.all(promises);
+
+            console.log('所有API数据加载完成');
+        }
+
+        // 切换自动刷新
+        function toggleAutoRefresh() {
+            const btn = event.target;
+            isAutoRefreshOn = !isAutoRefreshOn;
+
+            if (isAutoRefreshOn) {
+                btn.textContent = '⏱️ 自动刷新 (开启)';
+                btn.style.background = '#ffc107';
+                btn.style.color = '#000';
+
+                autoRefreshInterval = setInterval(() => {
+                    loadAllData();
+                }, 5000); // 每5秒刷新一次
+            } else {
+                btn.textContent = '⏱️ 自动刷新 (关闭)';
+                btn.style.background = '#007bff';
+                btn.style.color = '#fff';
+
+                if (autoRefreshInterval) {
+                    clearInterval(autoRefreshInterval);
+                    autoRefreshInterval = null;
+                }
+            }
+        }
+
+        // 切换组展开/折叠
+        function toggleGroup(groupName) {
+            const content = document.getElementById(`group-${groupName}`);
+            content.classList.toggle('active');
+        }
+
+        // 展开所有组
+        function expandAll() {
+            document.querySelectorAll('.endpoint-content').forEach(el => {
+                el.classList.add('active');
+            });
+        }
+
+        // 折叠所有组
+        function collapseAll() {
+            document.querySelectorAll('.endpoint-content').forEach(el => {
+                el.classList.remove('active');
+            });
+        }
+
+        // 清空数据
+        function clearData() {
+            endpoints.forEach(endpoint => {
+                const contentEl = document.getElementById(`content-${endpoint.path}`);
+                const statusEl = document.getElementById(`status-${endpoint.path}`);
+
+                if (contentEl) contentEl.innerHTML = '<em style="color: #999;">数据已清空</em>';
+                if (statusEl) {
+                    statusEl.textContent = '?';
+                    statusEl.className = 'status';
+                }
+            });
+        }
+
+        // 页面加载时初始化
+        window.onload = function() {
+            renderPage();
+            // 自动加载一次数据
+            loadAllData();
+        };
+    </script>
+</body>
+</html>
