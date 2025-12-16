@@ -1966,10 +1966,10 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                             <label class="layui-form-label">动作</label>
                             <div class="layui-input-block">
                                 <select name="action" lay-filter="actionSelect">
-                                    <option value="proxy" ${!isEdit || data.action === 'proxy' ? 'selected' : ''}>代理</option>
-                                    <option value="allow" ${isEdit && data.action === 'allow' ? 'selected' : ''}>直连</option>
-                                    <option value="deny" ${isEdit && data.action === 'deny' ? 'selected' : ''}>走代理</option>
-                                    <option value="block" ${isEdit && data.action === 'block' ? 'selected' : ''}>屏蔽</option>
+                                    <option value="proxy" ${!isEdit || data.action === 'proxy' ? 'selected' : ''}>代理 (proxy) - 通过指定代理节点</option>
+                                    <option value="allow" ${isEdit && data.action === 'allow' ? 'selected' : ''}>直连 (allow) - 直接连接</option>
+                                    <option value="deny" ${isEdit && data.action === 'deny' ? 'selected' : ''}>走代理 (deny) - 使用默认代理</option>
+                                    <option value="block" ${isEdit && data.action === 'block' ? 'selected' : ''}>屏蔽 (block) - 拒绝连接</option>
                                 </select>
                             </div>
                         </div>
