@@ -2030,15 +2030,48 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
             responsive: true,
             maintainAspectRatio: false,
             plugins: {
-                legend: { display: false },
-                tooltip: { enabled: false }
+                legend: {
+                    display: true,
+                    position: 'top',
+                    labels: {
+                        color: '#666',
+                        font: {
+                            size: 12
+                        }
+                    }
+                },
+                tooltip: {
+                    enabled: true,
+                    mode: 'index',
+                    intersect: false,
+                    callbacks: {
+                        label: function(context) {
+                            let label = context.dataset.label || '';
+                            if (label) {
+                                label += ': ';
+                            }
+                            if (context.parsed.y !== null) {
+                                label += context.parsed.y + ' KB/s';
+                            }
+                            return label;
+                        }
+                    }
+                }
             },
             scales: {
                 x: { display: false },
-                y: { 
+                y: {
                     beginAtZero: true,
                     ticks: { color: '#999' },
-                    grid: { color: 'rgba(0,0,0,0.05)' }
+                    grid: { color: 'rgba(0,0,0,0.05)' },
+                    title: {
+                        display: true,
+                        text: '速度 (KB/s)',
+                        color: '#666',
+                        font: {
+                            size: 12
+                        }
+                    }
                 }
             },
             animation: { duration: 0 }
