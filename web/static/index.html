@@ -2060,7 +2060,17 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                 }
             },
             scales: {
-                x: { display: false },
+                x: {
+                    display: true,
+                    ticks: {
+                        color: '#999',
+                        maxRotation: 0,
+                        autoSkip: true
+                    },
+                    grid: {
+                        display: false
+                    }
+                },
                 y: {
                     beginAtZero: true,
                     ticks: { color: '#999' },
@@ -2102,7 +2112,13 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                     const uploadKBps = Math.round(uploadSpeed / 1024);
                     const downloadKBps = Math.round(downloadSpeed / 1024);
 
+                    // 获取当前时间
+                    const now = new Date();
+                    const timeStr = now.toLocaleTimeString();
+
                     // 更新图表
+                    trafficChart.data.labels.shift();
+                    trafficChart.data.labels.push(timeStr);
                     trafficChart.data.datasets[0].data.shift();
                     trafficChart.data.datasets[0].data.push(downloadKBps);
                     trafficChart.data.datasets[1].data.shift();
@@ -2123,7 +2139,11 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                 // 保留原有的随机数作为降级
                 const down = Math.floor(Math.random() * 500) + 50;
                 const up = Math.floor(down / 7);
+                const now = new Date();
+                const timeStr = now.toLocaleTimeString();
 
+                trafficChart.data.labels.shift();
+                trafficChart.data.labels.push(timeStr);
                 trafficChart.data.datasets[0].data.shift();
                 trafficChart.data.datasets[0].data.push(down);
                 trafficChart.data.datasets[1].data.shift();
