@@ -1967,8 +1967,8 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                             <div class="layui-input-block">
                                 <select name="action">
                                     <option value="proxy" ${!isEdit || data.action === 'proxy' ? 'selected' : ''}>代理</option>
-                                    <option value="direct" ${isEdit && data.action === 'direct' ? 'selected' : ''}>直连</option>
-                                    <option value="deny" ${isEdit && data.action === 'deny' ? 'selected' : ''}>拒绝</option>
+                                    <option value="allow" ${isEdit && data.action === 'allow' ? 'selected' : ''}>直连</option>
+                                    <option value="deny" ${isEdit && data.action === 'deny' ? 'selected' : ''}>走代理</option>
                                     <option value="block" ${isEdit && data.action === 'block' ? 'selected' : ''}>屏蔽</option>
                                 </select>
                             </div>
