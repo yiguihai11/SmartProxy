@@ -1288,13 +1288,10 @@ func (c *Connection) detectAndConnect(targetAddr string, targetPort uint16) (net
 	var fakeAddr string
 	// 检查客户端地址类型
 	if clientAddr, ok := c.clientConn.RemoteAddr().(*net.TCPAddr); ok {
+		fakeAddr = "0.0.0.0" // IPv4客户端使用IPv4地址
 		if clientAddr.IP.To4() == nil {
 			fakeAddr = "::1" // IPv6客户端使用IPv6地址
-		} else {
-			fakeAddr = "0.0.0.0" // IPv4客户端使用IPv4地址
 		}
-	} else {
-		fakeAddr = "0.0.0.0" // 默认使用IPv4地址
 	}
 	if err := c.sendReply(REP_SUCCESS, fakeAddr, 0); err != nil {
 		return nil, fmt.Errorf("failed to send temporary success reply: %v", err)
@@ -1716,43 +1713,42 @@ func (c *Connection) relayTargetToClient(ctx context.Context, writer io.Writer, 
 				return // 正常结束
 			}
 
-			// 优先使用检测到的主机名，没有则使用目标地址
+			// 优先使用检测到的主机名
 			hostName := c.detectedHost
 			if hostName == "" {
 				hostName = c.targetHost
 			}
-			if hostName == "" {
-				hostName = c.targetAddr
-			}
+  // 检查系统错误码 - 只检查 ECONNRESET (104)
+  if opErr, ok := err.(*net.OpError); ok {
+      if sysErr, ok := opErr.Err.(*os.SyscallError); ok {
+          if errno, ok := sysErr.Err.(syscall.Errno); ok && errno == syscall.ECONNRESET {
+              // 连接被重置，尝试切换到代理
+              // 如果启用了智能代理并且是探测端口
+              if c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
+                  c.logInfo("⚠️ Direct connection to %s reset by peer, switching to proxy", hostName)
+                  c.AddToBlockedItems(hostName, c.targetAddr, targetPort, FailureReasonRST)
 
-			// 检查系统错误码 - 只检查 ECONNRESET (104)
-			if opErr, ok := err.(*net.OpError); ok {
-				if sysErr, ok := opErr.Err.(*os.SyscallError); ok {
-					if errno, ok := sysErr.Err.(syscall.Errno); ok && errno == syscall.ECONNRESET {
-						// 连接被重置，尝试切换到代理
-						c.logInfo("⚠️ Direct connection to %s reset by peer, switching to proxy", hostName)
-						c.AddToBlockedItems(hostName, c.targetAddr, targetPort, FailureReasonRST)
+                  // 尝试切换到代理连接
+                  if proxyConn, proxyErr := c.switchToProxyAndReplay(); proxyErr == nil {
+                      // 成功切换到代理，更新目标连接并继续读取
+                      oldConn := c.targetConn
+                      c.targetConn = proxyConn
+                      c.logInfo("✅ Successfully switched to proxy for %s", hostName)
+                      oldConn.Close()
 
-						// 尝试切换到代理连接
-						if proxyConn, proxyErr := c.switchToProxyAndReplay(); proxyErr == nil {
-							// 成功切换到代理，更新目标连接并继续读取
-							oldConn := c.targetConn
-							c.targetConn = proxyConn
-							c.logInfo("✅ Successfully switched to proxy for %s", hostName)
-							oldConn.Close()
-
-							// 从新代理连接继续读取数据，使用相同的优化逻辑
-							// 更新reader以使用新的连接
-							reader.Reset(c.targetConn)
-							continue // 继续主循环
-						} else {
-							c.logInfo("❌ Failed to switch to proxy: %v", proxyErr)
-						}
-					}
-				}
-			}
-			*copyErr = err
-			return
+                      // 从新代理连接继续读取数据，使用相同的优化逻辑
+                      // 更新reader以使用新的连接
+                      reader.Reset(c.targetConn)
+                      continue // 继续主循环
+                  } else {
+                      c.logInfo("❌ Failed to switch to proxy: %v", proxyErr)
+                  }
+              }
+          }
+      }
+  }
+  *copyErr = err
+  return
 		}
 
 		// 记录下载流量（从目标到客户端）
@@ -2066,52 +2062,6 @@ func (c *Connection) AddToBlockedItems(targetHost, targetAddr string, port uint1
 
 	// 添加到BlockedItemsManager
 	c.server.blockedItems.AddBlockedDomain(targetHost, fmt.Sprintf("%d", port), targetIP, failureReason)
-}
-
-// handleErrorAndAddToBlocked 统一的错误处理和添加到黑名单的逻辑
-func (c *Connection) handleErrorAndAddToBlocked(err error, targetHost, targetAddr string) {
-	// 获取端口号
-	port := uint16(80)
-	if _, portStr, perr := net.SplitHostPort(c.targetAddr); perr == nil {
-		if p, err := strconv.Atoi(portStr); err == nil {
-			port = uint16(p)
-		}
-	}
-
-	// 优先使用检测到的域名
-	hostToAdd := c.detectedHost
-	if hostToAdd == "" {
-		hostToAdd = targetHost
-	}
-
-	// 根据错误类型分类
-	if err == io.EOF {
-		// 正常关闭，不需要添加到黑名单
-		return
-	}
-
-	if err == context.Canceled {
-		// 上下文取消，不需要添加到黑名单
-		return
-	}
-
-	if strings.Contains(err.Error(), "connection reset") || strings.Contains(err.Error(), "errno 104") {
-		c.AddToBlockedItems(hostToAdd, targetAddr, port, FailureReasonRST)
-		return
-	}
-
-	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-		c.AddToBlockedItems(hostToAdd, targetAddr, port, FailureReasonTimeout)
-		return
-	}
-
-	if opErr, ok := err.(*net.OpError); ok && opErr.Timeout() {
-		c.AddToBlockedItems(hostToAdd, targetAddr, port, FailureReasonTimeout)
-		return
-	}
-
-	// 其他错误
-	c.AddToBlockedItems(hostToAdd, targetAddr, port, FailureReasonConnectionRefused)
 }
 
 // isProbingPort 检查端口是否在需要嗅探的列表中

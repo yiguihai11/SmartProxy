@@ -1829,7 +1829,6 @@ func (s *SOCKS5Server) GetBlockedItemsManager() *BlockedItemsManager {
 	return s.blockedItems
 }
 
-
 // AddToBlockedItems 添加域名或IP到BlockedItemsManager
 func (c *Connection) AddToBlockedItems(targetHost, targetAddr string, port uint16, failureReason FailureReason) {
 	if c.server.blockedItems == nil || targetHost == "" {

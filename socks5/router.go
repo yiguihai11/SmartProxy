@@ -342,7 +342,6 @@ func (r *Router) MatchRule(host, detectedHost string, port int) MatchResult {
 		}
 	}
 
-
 	// 4. 默认行为
 	return MatchResult{
 		Action: ActionDeny, // 默认走代理

@@ -9,7 +9,7 @@ import (
 type BufferUsage int
 
 const (
-	BufferUsageSNI     BufferUsage = iota // SNI/Host检测
+	BufferUsageSNI    BufferUsage = iota // SNI/Host检测
 	BufferUsageHeader                    // HTTP头
 	BufferUsageSmall                     // 小型请求
 	BufferUsageMedium                    // 中等数据
@@ -28,16 +28,16 @@ type BufferPool struct {
 // NewBufferPool 创建多尺寸缓冲区池
 func NewBufferPool() *BufferPool {
 	sizes := []int{
-		64,    // 64B  - 小包头/SNI检测
-		256,   // 256B - HTTP头
-		512,   // 512B - DNS响应
-		1024,  // 1KB  - 小数据包
-		2048,  // 2KB  - 小型请求
-		4096,  // 4KB  - 默认大小
-		8192,  // 8KB  - 中等数据
-		16384, // 16KB - 大数据
-		32768, // 32KB - 视频包
-		65536, // 64KB - 最大缓冲区
+		64,     // 64B  - 小包头/SNI检测
+		256,    // 256B - HTTP头
+		512,    // 512B - DNS响应
+		1024,   // 1KB  - 小数据包
+		2048,   // 2KB  - 小型请求
+		4096,   // 4KB  - 默认大小
+		8192,   // 8KB  - 中等数据
+		16384,  // 16KB - 大数据
+		32768,  // 32KB - 视频包
+		65536,  // 64KB - 最大缓冲区
 		131072, // 128KB - 大文件传输
 	}
 
@@ -252,15 +252,15 @@ func (p *BufferPool) GetHitRate() float64 {
 
 // ConnectionPoolStats 连接池统计信息
 type ConnectionPoolStats struct {
-	ActiveConnections int64     // 当前活跃连接数
-	PooledConnections int64     // 池中连接数
-	TotalRequests     int64     // 总请求次数
-	Hits              int64     // 命中次数
-	Misses            int64     // 未命中次数
-	CreatedConnections int64    // 新创建连接数
-	ReusedConnections  int64    // 重用连接数
-	LastAccess        time.Time // 最后访问时间
-	mutex             sync.RWMutex
+	ActiveConnections  int64     // 当前活跃连接数
+	PooledConnections  int64     // 池中连接数
+	TotalRequests      int64     // 总请求次数
+	Hits               int64     // 命中次数
+	Misses             int64     // 未命中次数
+	CreatedConnections int64     // 新创建连接数
+	ReusedConnections  int64     // 重用连接数
+	LastAccess         time.Time // 最后访问时间
+	mutex              sync.RWMutex
 }
 
 // ConnectionPool 连接对象池
@@ -351,14 +351,14 @@ func (p *ConnectionPool) GetConnectionStats() *ConnectionPoolStats {
 
 	// 返回统计信息的深拷贝
 	return &ConnectionPoolStats{
-		ActiveConnections: p.stats.ActiveConnections,
-		PooledConnections: p.stats.PooledConnections,
-		TotalRequests:     p.stats.TotalRequests,
-		Hits:              p.stats.Hits,
-		Misses:            p.stats.Misses,
+		ActiveConnections:  p.stats.ActiveConnections,
+		PooledConnections:  p.stats.PooledConnections,
+		TotalRequests:      p.stats.TotalRequests,
+		Hits:               p.stats.Hits,
+		Misses:             p.stats.Misses,
 		CreatedConnections: p.stats.CreatedConnections,
 		ReusedConnections:  p.stats.ReusedConnections,
-		LastAccess:        p.stats.LastAccess,
+		LastAccess:         p.stats.LastAccess,
 	}
 }
 

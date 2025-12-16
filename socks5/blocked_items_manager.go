@@ -3,8 +3,8 @@ package socks5
 import (
 	"crypto/sha256"
 	"fmt"
-	"smartproxy/logger"
 	"net"
+	"smartproxy/logger"
 	"sort"
 	"strings"
 	"sync"

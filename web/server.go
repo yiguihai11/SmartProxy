@@ -162,7 +162,7 @@ func (ws *WebServer) setupRoutes() {
 	mux.HandleFunc("/api/proxy-nodes", ws.handleProxyNodes)
 	mux.HandleFunc("/api/file/chnroutes", ws.handleFileChnroutes)
 	mux.HandleFunc("/api/file/chnroutes/save", ws.handleFileChnroutesSave)
-	
+
 	// 内存监控API
 	mux.HandleFunc("/api/memory/stats", ws.handleMemoryStats)
 	mux.HandleFunc("/api/memory/usage", ws.handleMemoryUsage)
@@ -278,7 +278,6 @@ func (ws *WebServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 	ws.sendJSONResponse(w, APIResponse{Success: true, Data: stats})
 }
-
 
 // handleConfig handles getting and setting the main application config.
 func (ws *WebServer) handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -723,17 +722,17 @@ func (ws *WebServer) handleMemoryPools(w http.ResponseWriter, r *http.Request) {
 			"total_memory_mb":   bufferMemoryMB,
 		},
 		"connection_pool": map[string]interface{}{
-			"active_connections":   connectionStats.ActiveConnections,
-			"pooled_connections":   connectionStats.PooledConnections,
-			"total_requests":       connectionStats.TotalRequests,
-			"hits":                 connectionStats.Hits,
-			"misses":               connectionStats.Misses,
-			"created_connections":  connectionStats.CreatedConnections,
-			"reused_connections":   connectionStats.ReusedConnections,
-			"hit_rate_percent":     socks5.GetConnectionHitRate(),
-			"reuse_rate_percent":   socks5.GetConnectionReuseRate(),
-			"pool_efficiency":      calculatePoolEfficiency(connectionStats),
-			"last_access":          connectionStats.LastAccess.Format(time.RFC3339),
+			"active_connections":  connectionStats.ActiveConnections,
+			"pooled_connections":  connectionStats.PooledConnections,
+			"total_requests":      connectionStats.TotalRequests,
+			"hits":                connectionStats.Hits,
+			"misses":              connectionStats.Misses,
+			"created_connections": connectionStats.CreatedConnections,
+			"reused_connections":  connectionStats.ReusedConnections,
+			"hit_rate_percent":    socks5.GetConnectionHitRate(),
+			"reuse_rate_percent":  socks5.GetConnectionReuseRate(),
+			"pool_efficiency":     calculatePoolEfficiency(connectionStats),
+			"last_access":         connectionStats.LastAccess.Format(time.RFC3339),
 		},
 	}
 
@@ -769,18 +768,18 @@ func (ws *WebServer) handleTrafficStats(w http.ResponseWriter, r *http.Request) 
 
 	// 转换为 KB/s
 	data := map[string]interface{}{
-		"total_upload":          stats.TotalUpload,
-		"total_download":        stats.TotalDownload,
+		"total_upload":           stats.TotalUpload,
+		"total_download":         stats.TotalDownload,
 		"current_upload_speed":   stats.CurrentUploadSpeed,
 		"current_download_speed": stats.CurrentDownloadSpeed,
-		"active_connections":    stats.ActiveConnections,
-		"upload_history":        stats.UploadHistory,
-		"download_history":      stats.DownloadHistory,
+		"active_connections":     stats.ActiveConnections,
+		"upload_history":         stats.UploadHistory,
+		"download_history":       stats.DownloadHistory,
 		// 添加便于前端使用的字段
-		"total_upload_mb":       float64(stats.TotalUpload) / 1024 / 1024,
-		"total_download_mb":     float64(stats.TotalDownload) / 1024 / 1024,
-		"upload_speed_kbps":     stats.CurrentUploadSpeed / 1024,
-		"download_speed_kbps":   stats.CurrentDownloadSpeed / 1024,
+		"total_upload_mb":     float64(stats.TotalUpload) / 1024 / 1024,
+		"total_download_mb":   float64(stats.TotalDownload) / 1024 / 1024,
+		"upload_speed_kbps":   stats.CurrentUploadSpeed / 1024,
+		"download_speed_kbps": stats.CurrentDownloadSpeed / 1024,
 	}
 
 	ws.sendJSONResponse(w, APIResponse{

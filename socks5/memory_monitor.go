@@ -9,16 +9,16 @@ import (
 // MemoryStats 内存统计信息
 type MemoryStats struct {
 	// 系统内存信息
-	Alloc      uint64  `json:"alloc"`        // 已分配的堆内存 (bytes)
-	TotalAlloc uint64  `json:"total_alloc"`  // 累计分配的内存 (bytes)
-	Sys        uint64  `json:"sys"`          // 从系统获得的内存 (bytes)
-	NumGC      uint32  `json:"num_gc"`       // GC运行次数
-	GCPause    uint64  `json:"gc_pause"`     // 累计GC暂停时间 (nanoseconds)
+	Alloc      uint64 `json:"alloc"`       // 已分配的堆内存 (bytes)
+	TotalAlloc uint64 `json:"total_alloc"` // 累计分配的内存 (bytes)
+	Sys        uint64 `json:"sys"`         // 从系统获得的内存 (bytes)
+	NumGC      uint32 `json:"num_gc"`      // GC运行次数
+	GCPause    uint64 `json:"gc_pause"`    // 累计GC暂停时间 (nanoseconds)
 
 	// 应用内存统计
-	ActiveConnections int64 `json:"active_connections"` // 当前活跃连接数
+	ActiveConnections int64 `json:"active_connections"`  // 当前活跃连接数
 	ActiveUDPSessions int64 `json:"active_udp_sessions"` // 当前活跃UDP会话数
-	ActiveDNSCache     int64 `json:"active_dns_cache"`    // DNS缓存条目数
+	ActiveDNSCache    int64 `json:"active_dns_cache"`    // DNS缓存条目数
 
 	// 缓冲区池统计
 	BufferPoolStats map[string]*PoolStats `json:"buffer_pool_stats"`
@@ -27,16 +27,16 @@ type MemoryStats struct {
 
 // PoolStats 对象池统计
 type PoolStats struct {
-	ActiveObjects   int64     `json:"active_objects"`   // 当前活跃对象数
-	PooledObjects   int64     `json:"pooled_objects"`   // 池中对象数
-	TotalRequests   int64     `json:"total_requests"`   // 总请求次数
-	Hits            int64     `json:"hits"`             // 命中次数
-	Misses          int64     `json:"misses"`           // 未命中次数
-	Evictions       int64     `json:"evictions"`        // 驱逐次数
+	ActiveObjects   int64     `json:"active_objects"`    // 当前活跃对象数
+	PooledObjects   int64     `json:"pooled_objects"`    // 池中对象数
+	TotalRequests   int64     `json:"total_requests"`    // 总请求次数
+	Hits            int64     `json:"hits"`              // 命中次数
+	Misses          int64     `json:"misses"`            // 未命中次数
+	Evictions       int64     `json:"evictions"`         // 驱逐次数
 	TotalMemoryUsed int64     `json:"total_memory_used"` // 总内存使用量 (bytes)
 	PoolMemoryUsed  int64     `json:"pool_memory_used"`  // 池中内存使用量 (bytes)
-	MaxPoolSize     int64     `json:"max_pool_size"`    // 池最大大小
-	LastAccess      time.Time `json:"last_access"`      // 最后访问时间
+	MaxPoolSize     int64     `json:"max_pool_size"`     // 池最大大小
+	LastAccess      time.Time `json:"last_access"`       // 最后访问时间
 	mutex           sync.RWMutex
 }
 
@@ -49,8 +49,8 @@ type MemoryMonitor struct {
 	ticker         *time.Ticker
 	mutex          sync.RWMutex
 	// 内存使用历史记录
-	history       []MemorySnapshot
-	maxHistory    int
+	history    []MemorySnapshot
+	maxHistory int
 	// 回调函数用于获取实时数据
 	updateUDPSessions func() int64
 	updateDNSCache    func() int64
@@ -58,11 +58,11 @@ type MemoryMonitor struct {
 
 // MemorySnapshot 内存快照
 type MemorySnapshot struct {
-	Timestamp       time.Time `json:"timestamp"`
-	MemoryStats     *MemoryStats `json:"memory_stats"`
-	LoadAverage     float64 `json:"load_average"`     // 负载平均值 (1分钟)
-	ConnectionsPerSec int64    `json:"connections_per_sec"` // 每秒连接数
-	RequestsPerSec  int64    `json:"requests_per_sec"`    // 每秒请求数
+	Timestamp         time.Time    `json:"timestamp"`
+	MemoryStats       *MemoryStats `json:"memory_stats"`
+	LoadAverage       float64      `json:"load_average"`        // 负载平均值 (1分钟)
+	ConnectionsPerSec int64        `json:"connections_per_sec"` // 每秒连接数
+	RequestsPerSec    int64        `json:"requests_per_sec"`    // 每秒请求数
 }
 
 // 全局内存监控器
@@ -80,7 +80,7 @@ func NewMemoryMonitor(updateInterval time.Duration) *MemoryMonitor {
 		stats: &MemoryStats{
 			BufferPoolStats: make(map[string]*PoolStats),
 		},
-		runtimeEnabled:  true,
+		runtimeEnabled: true,
 		updateInterval: updateInterval,
 		maxHistory:     100, // 保留最近100个快照
 		stopChan:       make(chan struct{}),
@@ -149,7 +149,7 @@ func (mm *MemoryMonitor) updateMemoryStats() {
 
 	// 创建内存快照（直接复制，避免死锁）
 	snapshot := MemorySnapshot{
-		Timestamp: time.Now(),
+		Timestamp:   time.Now(),
 		MemoryStats: mm.copyStatsDirect(),
 	}
 
@@ -182,11 +182,11 @@ func (mm *MemoryMonitor) copyStatsDirect() *MemoryStats {
 	}
 
 	return &MemoryStats{
-		Alloc:            mm.stats.Alloc,
-		TotalAlloc:       mm.stats.TotalAlloc,
-		Sys:              mm.stats.Sys,
-		NumGC:            mm.stats.NumGC,
-		GCPause:          mm.stats.GCPause,
+		Alloc:             mm.stats.Alloc,
+		TotalAlloc:        mm.stats.TotalAlloc,
+		Sys:               mm.stats.Sys,
+		NumGC:             mm.stats.NumGC,
+		GCPause:           mm.stats.GCPause,
 		ActiveConnections: mm.stats.ActiveConnections,
 		ActiveUDPSessions: mm.stats.ActiveUDPSessions,
 		ActiveDNSCache:    mm.stats.ActiveDNSCache,
@@ -219,11 +219,11 @@ func (mm *MemoryMonitor) getStatsCopy() *MemoryStats {
 	}
 
 	return &MemoryStats{
-		Alloc:            mm.stats.Alloc,
-		TotalAlloc:       mm.stats.TotalAlloc,
-		Sys:              mm.stats.Sys,
-		NumGC:            mm.stats.NumGC,
-		GCPause:          mm.stats.GCPause,
+		Alloc:             mm.stats.Alloc,
+		TotalAlloc:        mm.stats.TotalAlloc,
+		Sys:               mm.stats.Sys,
+		NumGC:             mm.stats.NumGC,
+		GCPause:           mm.stats.GCPause,
 		ActiveConnections: mm.stats.ActiveConnections,
 		ActiveUDPSessions: mm.stats.ActiveUDPSessions,
 		ActiveDNSCache:    mm.stats.ActiveDNSCache,
@@ -323,14 +323,14 @@ func (mm *MemoryMonitor) GetMemoryUsageReport() map[string]interface{} {
 	report := map[string]interface{}{
 		"timestamp": time.Now().Unix(),
 		"system_memory": map[string]interface{}{
-			"allocated_bytes":     stats.Alloc,
-			"total_allocated":    stats.TotalAlloc,
-			"system_bytes":       stats.Sys,
-			"gc_count":           stats.NumGC,
-			"gc_pause_ms":        stats.GCPause / 1000000, // 转换为毫秒
+			"allocated_bytes": stats.Alloc,
+			"total_allocated": stats.TotalAlloc,
+			"system_bytes":    stats.Sys,
+			"gc_count":        stats.NumGC,
+			"gc_pause_ms":     stats.GCPause / 1000000, // 转换为毫秒
 		},
 		"application_memory": map[string]interface{}{
-			"active_connections": stats.ActiveConnections,
+			"active_connections":  stats.ActiveConnections,
 			"active_udp_sessions": stats.ActiveUDPSessions,
 			"dns_cache_entries":   stats.ActiveDNSCache,
 		},
@@ -346,17 +346,17 @@ func (mm *MemoryMonitor) GetMemoryUsageReport() map[string]interface{} {
 		}
 
 		report["pool_stats"].(map[string]interface{})[name] = map[string]interface{}{
-			"active_objects":    poolStats.ActiveObjects,
-			"pooled_objects":    poolStats.PooledObjects,
-			"total_requests":    poolStats.TotalRequests,
+			"active_objects":   poolStats.ActiveObjects,
+			"pooled_objects":   poolStats.PooledObjects,
+			"total_requests":   poolStats.TotalRequests,
 			"hits":             poolStats.Hits,
 			"misses":           poolStats.Misses,
-			"hit_rate_percent":  hitRate,
+			"hit_rate_percent": hitRate,
 			"evictions":        poolStats.Evictions,
-			"total_memory_mb":   poolStats.TotalMemoryUsed / 1024 / 1024,
-			"pool_memory_mb":    poolStats.PoolMemoryUsed / 1024 / 1024,
-			"max_pool_size":     poolStats.MaxPoolSize,
-			"last_access":       poolStats.LastAccess.Format(time.RFC3339),
+			"total_memory_mb":  poolStats.TotalMemoryUsed / 1024 / 1024,
+			"pool_memory_mb":   poolStats.PoolMemoryUsed / 1024 / 1024,
+			"max_pool_size":    poolStats.MaxPoolSize,
+			"last_access":      poolStats.LastAccess.Format(time.RFC3339),
 		}
 		poolStats.mutex.RUnlock()
 	}
@@ -416,12 +416,12 @@ func (mm *MemoryMonitor) GetMemoryEfficiency() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"gc_efficiency_percent": gcEfficiency,
+		"gc_efficiency_percent":   gcEfficiency,
 		"pool_efficiency_percent": poolEfficiency,
-		"total_requests": totalRequests,
-		"total_hits": totalHits,
-		"total_misses": totalRequests - totalHits,
-		"memory_pressure": mm.getMemoryPressure(),
+		"total_requests":          totalRequests,
+		"total_hits":              totalHits,
+		"total_misses":            totalRequests - totalHits,
+		"memory_pressure":         mm.getMemoryPressure(),
 	}
 }
 

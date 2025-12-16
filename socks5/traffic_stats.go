@@ -28,7 +28,7 @@ type TrafficStats struct {
 
 // TrafficMonitor 流量监控器
 type TrafficMonitor struct {
-	stats         *TrafficStats
+	stats          *TrafficStats
 	updateInterval time.Duration
 	stopChan       chan struct{}
 	ticker         *time.Ticker
@@ -61,7 +61,7 @@ func NewTrafficMonitor(updateInterval time.Duration) *TrafficMonitor {
 			DownloadHistory: make([]int64, 0, 60),
 		},
 		updateInterval:  updateInterval,
-		stopChan:       make(chan struct{}),
+		stopChan:        make(chan struct{}),
 		connectionStats: make(map[string]*ConnectionTraffic),
 	}
 

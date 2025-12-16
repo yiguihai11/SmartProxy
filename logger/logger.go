@@ -161,9 +161,9 @@ type SlogLogger struct {
 
 // Config 日志配置
 type Config struct {
-	Level        string `json:"level"`        // debug, info, warn, error
-	OutputFile   string `json:"output_file"`  // 日志文件路径，为空则输出到控制台
-	EnableTime   bool   `json:"enable_time"`  // 是否显示时间戳
+	Level        string `json:"level"`         // debug, info, warn, error
+	OutputFile   string `json:"output_file"`   // 日志文件路径，为空则输出到控制台
+	EnableTime   bool   `json:"enable_time"`   // 是否显示时间戳
 	Prefix       string `json:"prefix"`        // 日志前缀
 	EnableColors bool   `json:"enable_colors"` // 是否启用颜色（仅控制台输出）
 	MaxSize      int    `json:"max_size"`      // 日志文件最大大小(MB)
@@ -187,7 +187,6 @@ func NewLogger() *SlogLogger {
 	return NewLoggerWithOutput(os.Stdout, slog.LevelInfo)
 }
 
-
 // New 创建新的日志器（兼容原接口）
 func New(config Config) (*SlogLogger, error) {
 	var output io.Writer = os.Stdout
@@ -210,7 +209,7 @@ func New(config Config) (*SlogLogger, error) {
 	// 如果指定了输出文件
 	if config.OutputFile != "" {
 		// 创建目录
-		dir := strings.TrimSuffix(config.OutputFile, "/" + strings.TrimPrefix(config.OutputFile, "/"))
+		dir := strings.TrimSuffix(config.OutputFile, "/"+strings.TrimPrefix(config.OutputFile, "/"))
 		if lastSlash := strings.LastIndex(dir, "/"); lastSlash > 0 {
 			dir = dir[:lastSlash]
 			if err := os.MkdirAll(dir, 0755); err != nil {
@@ -291,9 +290,6 @@ func NewLoggerWithOutput(output io.Writer, level slog.Level) *SlogLogger {
 		attrs:  make([]slog.Attr, 0),
 	}
 }
-
-
-
 
 // isTerminal checks if the writer is a terminal
 func isTerminal(w io.Writer) bool {
@@ -627,4 +623,3 @@ func (l *SlogLogger) WithCaller() *SlogLogger {
 func WithCaller() *SlogLogger {
 	return defaultLogger.WithCaller()
 }
-
