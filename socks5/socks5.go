@@ -1716,10 +1716,13 @@ func (c *Connection) relayTargetToClient(ctx context.Context, writer io.Writer, 
 				return // 正常结束
 			}
 
-			// 优先使用检测到的主机名
+			// 优先使用检测到的主机名，没有则使用目标地址
 			hostName := c.detectedHost
 			if hostName == "" {
 				hostName = c.targetHost
+			}
+			if hostName == "" {
+				hostName = c.targetAddr
 			}
 
 			// 检查系统错误码 - 只检查 ECONNRESET (104)
@@ -1727,25 +1730,23 @@ func (c *Connection) relayTargetToClient(ctx context.Context, writer io.Writer, 
 				if sysErr, ok := opErr.Err.(*os.SyscallError); ok {
 					if errno, ok := sysErr.Err.(syscall.Errno); ok && errno == syscall.ECONNRESET {
 						// 连接被重置，尝试切换到代理
-						if hostName != "" {
-							c.logInfo("⚠️ Direct connection to %s reset by peer, switching to proxy", hostName)
-							c.AddToBlockedItems(hostName, c.targetAddr, targetPort, FailureReasonRST)
+						c.logInfo("⚠️ Direct connection to %s reset by peer, switching to proxy", hostName)
+						c.AddToBlockedItems(hostName, c.targetAddr, targetPort, FailureReasonRST)
 
-							// 尝试切换到代理连接
-							if proxyConn, proxyErr := c.switchToProxyAndReplay(); proxyErr == nil {
-								// 成功切换到代理，更新目标连接并继续读取
-								oldConn := c.targetConn
-								c.targetConn = proxyConn
-								c.logInfo("✅ Successfully switched to proxy for %s", hostName)
-								oldConn.Close()
+						// 尝试切换到代理连接
+						if proxyConn, proxyErr := c.switchToProxyAndReplay(); proxyErr == nil {
+							// 成功切换到代理，更新目标连接并继续读取
+							oldConn := c.targetConn
+							c.targetConn = proxyConn
+							c.logInfo("✅ Successfully switched to proxy for %s", hostName)
+							oldConn.Close()
 
-								// 从新代理连接继续读取数据，使用相同的优化逻辑
-								// 更新reader以使用新的连接
-								reader.Reset(c.targetConn)
-								continue // 继续主循环
-							} else {
-								c.logInfo("❌ Failed to switch to proxy: %v", proxyErr)
-							}
+							// 从新代理连接继续读取数据，使用相同的优化逻辑
+							// 更新reader以使用新的连接
+							reader.Reset(c.targetConn)
+							continue // 继续主循环
+						} else {
+							c.logInfo("❌ Failed to switch to proxy: %v", proxyErr)
 						}
 					}
 				}
