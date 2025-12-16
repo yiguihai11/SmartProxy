@@ -791,14 +791,10 @@ func (ws *WebServer) handleTrafficStats(w http.ResponseWriter, r *http.Request) 
 
 	stats := monitor.GetStats()
 
-	// 转换为 MB
 	data := map[string]interface{}{
 		"total_upload":       stats.TotalUpload,
 		"total_download":     stats.TotalDownload,
 		"active_connections": stats.ActiveConnections,
-		// 添加便于前端使用的字段
-		"total_upload_mb":   float64(stats.TotalUpload) / 1024 / 1024,
-		"total_download_mb": float64(stats.TotalDownload) / 1024 / 1024,
 	}
 
 	ws.sendJSONResponse(w, APIResponse{
