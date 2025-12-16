@@ -487,7 +487,7 @@ func (bm *BlockedItemsManager) GetList(limit int, offset int) map[string]interfa
 		}
 
 		// Check if item is expired
-		isExpired := bm.isItemExpired(item)
+		isExpired := time.Since(item.LastUpdated) > bm.ttl
 
 		itemsList[i] = map[string]interface{}{
 			"key":                item.Key,
