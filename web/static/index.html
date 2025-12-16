@@ -199,16 +199,16 @@
             <div class="layui-row layui-col-space15">
                 <div class="layui-col-md6 layui-col-xs12">
                     <div class="card stat-card">
-                        <div class="stat-label">上行速度</div>
+                        <div class="stat-label">上传总量</div>
                         <div class="stat-value" id="up-speed" style="color: var(--success-green);">0</div>
-                        <div class="stat-label">KB/s</div>
+                        <div class="stat-label">MB</div>
                     </div>
                 </div>
                 <div class="layui-col-md6 layui-col-xs12">
                     <div class="card stat-card">
-                        <div class="stat-label">下行速度</div>
+                        <div class="stat-label">下载总量</div>
                         <div class="stat-value" id="down-speed">0</div>
-                        <div class="stat-label">KB/s</div>
+                        <div class="stat-label">MB</div>
                     </div>
                 </div>
             </div>
@@ -2104,19 +2104,23 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                     const currentUpload = data.data.total_upload || 0;
                     const currentDownload = data.data.total_download || 0;
 
-                    // 计算速度 (bytes per second)
+                    // 计算速度 (bytes per second) - 图表用
                     const uploadSpeed = currentUpload - lastTrafficData.upload;
                     const downloadSpeed = currentDownload - lastTrafficData.download;
 
-                    // 转换为 KB/s
+                    // 转换为 KB/s - 图表用
                     const uploadKBps = Math.round(uploadSpeed / 1024);
                     const downloadKBps = Math.round(downloadSpeed / 1024);
+
+                    // 转换为 MB - 卡片显示用
+                    const uploadMB = (currentUpload / 1024 / 1024).toFixed(2);
+                    const downloadMB = (currentDownload / 1024 / 1024).toFixed(2);
 
                     // 获取当前时间
                     const now = new Date();
                     const timeStr = now.toLocaleTimeString();
 
-                    // 更新图表
+                    // 更新图表（仍然显示速度）
                     trafficChart.data.labels.shift();
                     trafficChart.data.labels.push(timeStr);
                     trafficChart.data.datasets[0].data.shift();
@@ -2125,9 +2129,9 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                     trafficChart.data.datasets[1].data.push(uploadKBps);
                     trafficChart.update('none');
 
-                    // 更新显示
-                    $('#up-speed').text(uploadKBps);
-                    $('#down-speed').text(downloadKBps);
+                    // 更新卡片显示（显示总流量）
+                    $('#up-speed').text(uploadMB);
+                    $('#down-speed').text(downloadMB);
 
                     // 保存当前数据供下次计算使用
                     lastTrafficData.upload = currentUpload;
