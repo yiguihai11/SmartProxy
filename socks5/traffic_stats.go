@@ -12,16 +12,8 @@ type TrafficStats struct {
 	TotalUpload   int64 `json:"total_upload"`
 	TotalDownload int64 `json:"total_download"`
 
-	// 当前速度（字节/秒）
-	CurrentUploadSpeed   int64 `json:"current_upload_speed"`
-	CurrentDownloadSpeed int64 `json:"current_download_speed"`
-
 	// 会话统计
 	ActiveConnections int64 `json:"active_connections"`
-
-	// 历史数据（用于图表）
-	UploadHistory   []int64 `json:"upload_history"`
-	DownloadHistory []int64 `json:"download_history"`
 
 	mutex sync.RWMutex
 }
@@ -56,10 +48,7 @@ func NewTrafficMonitor(updateInterval time.Duration) *TrafficMonitor {
 	}
 
 	monitor := &TrafficMonitor{
-		stats: &TrafficStats{
-			UploadHistory:   make([]int64, 0, 60), // 保留60个数据点
-			DownloadHistory: make([]int64, 0, 60),
-		},
+		stats: &TrafficStats{},
 		updateInterval:  updateInterval,
 		stopChan:        make(chan struct{}),
 		connectionStats: make(map[string]*ConnectionTraffic),
@@ -69,7 +58,7 @@ func NewTrafficMonitor(updateInterval time.Duration) *TrafficMonitor {
 	globalTrafficMonitor = monitor
 
 	// 立即执行一次更新
-	monitor.updateSpeed()
+	monitor.updateActiveConnections()
 
 	if monitor.updateInterval > 0 {
 		monitor.ticker = time.NewTicker(updateInterval)
@@ -92,35 +81,20 @@ func (tm *TrafficMonitor) startMonitoring() {
 	for {
 		select {
 		case <-tm.ticker.C:
-			tm.updateSpeed()
+			tm.updateActiveConnections()
 		case <-tm.stopChan:
 			return
 		}
 	}
 }
 
-// updateSpeed 更新当前速度
-func (tm *TrafficMonitor) updateSpeed() {
+// updateActiveConnections 更新活跃连接数
+func (tm *TrafficMonitor) updateActiveConnections() {
 	tm.mutex.Lock()
 	defer tm.mutex.Unlock()
 
 	// 更新活跃连接数
 	tm.stats.ActiveConnections = int64(len(tm.connectionStats))
-
-	// 这里可以实现更复杂的速度计算逻辑
-	// 暂时使用简单的平均值计算
-
-	// 保留历史数据
-	tm.stats.UploadHistory = append(tm.stats.UploadHistory, tm.stats.CurrentUploadSpeed)
-	tm.stats.DownloadHistory = append(tm.stats.DownloadHistory, tm.stats.CurrentDownloadSpeed)
-
-	// 限制历史记录长度
-	if len(tm.stats.UploadHistory) > 60 {
-		tm.stats.UploadHistory = tm.stats.UploadHistory[1:]
-	}
-	if len(tm.stats.DownloadHistory) > 60 {
-		tm.stats.DownloadHistory = tm.stats.DownloadHistory[1:]
-	}
 }
 
 // AddConnection 添加连接
@@ -172,17 +146,10 @@ func (tm *TrafficMonitor) GetStats() *TrafficStats {
 
 	// 返回副本
 	stats := &TrafficStats{
-		TotalUpload:          atomic.LoadInt64(&tm.stats.TotalUpload),
-		TotalDownload:        atomic.LoadInt64(&tm.stats.TotalDownload),
-		CurrentUploadSpeed:   tm.stats.CurrentUploadSpeed,
-		CurrentDownloadSpeed: tm.stats.CurrentDownloadSpeed,
-		ActiveConnections:    tm.stats.ActiveConnections,
-		UploadHistory:        make([]int64, len(tm.stats.UploadHistory)),
-		DownloadHistory:      make([]int64, len(tm.stats.DownloadHistory)),
+		TotalUpload:       atomic.LoadInt64(&tm.stats.TotalUpload),
+		TotalDownload:     atomic.LoadInt64(&tm.stats.TotalDownload),
+		ActiveConnections: tm.stats.ActiveConnections,
 	}
-
-	copy(stats.UploadHistory, tm.stats.UploadHistory)
-	copy(stats.DownloadHistory, tm.stats.DownloadHistory)
 
 	return stats
 }
@@ -202,8 +169,4 @@ func (tm *TrafficMonitor) Reset() {
 
 	atomic.StoreInt64(&tm.stats.TotalUpload, 0)
 	atomic.StoreInt64(&tm.stats.TotalDownload, 0)
-	tm.stats.CurrentUploadSpeed = 0
-	tm.stats.CurrentDownloadSpeed = 0
-	tm.stats.UploadHistory = tm.stats.UploadHistory[:0]
-	tm.stats.DownloadHistory = tm.stats.DownloadHistory[:0]
 }
