@@ -1965,7 +1965,7 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                         <div class="layui-form-item">
                             <label class="layui-form-label">动作</label>
                             <div class="layui-input-block">
-                                <select name="action">
+                                <select name="action" lay-filter="actionSelect">
                                     <option value="proxy" ${!isEdit || data.action === 'proxy' ? 'selected' : ''}>代理</option>
                                     <option value="allow" ${isEdit && data.action === 'allow' ? 'selected' : ''}>直连</option>
                                     <option value="deny" ${isEdit && data.action === 'deny' ? 'selected' : ''}>走代理</option>
@@ -1982,7 +1982,7 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                             </div>
                         </div>
 
-                        <div class="layui-form-item">
+                        <div class="layui-form-item" id="proxyNodeFormItem" style="${!isEdit || data.action === 'proxy' ? '' : 'display: none;'}">
                             <label class="layui-form-label">目标节点</label>
                             <div class="layui-input-block">
                                 <select name="target">
@@ -2014,6 +2014,16 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
             `,
             success: function(){
                 form.render();
+
+                // 监听动作选择变化
+                form.on('select(actionSelect)', function(data){
+                    const $proxyNodeItem = $('#proxyNodeFormItem');
+                    if (data.value === 'proxy') {
+                        $proxyNodeItem.show();
+                    } else {
+                        $proxyNodeItem.hide();
+                    }
+                });
 
                 // 监听表单提交
                 form.on('submit(saveRule)', function(formData){
