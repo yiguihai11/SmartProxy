@@ -65,6 +65,9 @@ type WebServer struct {
 
 	activeConnections map[string]*ConnectionInfo
 	connectionsMu     sync.RWMutex
+
+	blockedItemsManager *socks5.BlockedItemsManager
+	socks5Server       *socks5.SOCKS5Server
 }
 
 // ConnectionInfo holds information about an active connection.
@@ -81,6 +84,11 @@ type ConnectionInfo struct {
 
 // NewWebServer creates a new WebServer instance.
 func NewWebServer(cfg *config.Manager, webCfg WebConfig, log *logger.SlogLogger) *WebServer {
+	return NewWebServerWithSocks5(cfg, webCfg, log, nil)
+}
+
+// NewWebServerWithSocks5 创建 WebServer 并关联 SOCKS5Server
+func NewWebServerWithSocks5(cfg *config.Manager, webCfg WebConfig, log *logger.SlogLogger, socks5Server *socks5.SOCKS5Server) *WebServer {
 	if log == nil {
 		log = logger.NewLogger().WithField("prefix", "[WebServer]")
 	}
@@ -101,6 +109,12 @@ func NewWebServer(cfg *config.Manager, webCfg WebConfig, log *logger.SlogLogger)
 		},
 		clients:           make(map[*websocket.Conn]bool),
 		activeConnections: make(map[string]*ConnectionInfo),
+		socks5Server:       socks5Server,
+	}
+
+	// 如果有 SOCKS5Server，获取 BlockedItemsManager
+	if socks5Server != nil {
+		ws.blockedItemsManager = socks5Server.GetBlockedItemsManager()
 	}
 
 	ws.setupRoutes()
@@ -248,11 +262,22 @@ func (ws *WebServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	ws.sendJSONResponse(w, APIResponse{Success: true, Data: status})
 }
 
-// handleBlacklistStats provides blacklist statistics and performance metrics.
+// handleBlacklistStats provides blocked items statistics and performance metrics.
 func (ws *WebServer) handleBlacklistStats(w http.ResponseWriter, r *http.Request) {
+	if ws.blockedItemsManager == nil {
+		ws.sendJSONResponse(w, APIResponse{
+			Success: false,
+			Error:   "Blocked items manager not initialized",
+		})
+		return
+	}
+
+	// 获取统计信息
+	stats := ws.blockedItemsManager.GetStatistics()
+
 	ws.sendJSONResponse(w, APIResponse{
-		Success: false,
-		Error:   "Blacklist manager (old version) not available. Please use Blocked Items API.",
+		Success: true,
+		Data:    stats,
 	})
 }
 

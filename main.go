@@ -102,8 +102,8 @@ func main() {
 		Port:    webPort,
 	}
 
-	// 创建Web服务器，传入配置管理器
-	webServer := web.NewWebServer(mainCfgManager, webConfig, logger.NewLogger().WithField("prefix", "[Web]"))
+	// 创建Web服务器，传入配置管理器和 SOCKS5Server
+	webServer := web.NewWebServerWithSocks5(mainCfgManager, webConfig, logger.NewLogger().WithField("prefix", "[Web]"), server)
 
 	// 从配置文件读取DNS配置
 	cfg = mainCfgManager.GetConfig()
