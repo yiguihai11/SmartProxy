@@ -1453,7 +1453,7 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                 layer.msg('删除成功');
             });
         } else if(obj.event === 'edit'){
-            layer.msg('编辑规则: ' + obj.data.description);
+            editRule(obj.data);
         }
     });
 
@@ -1943,6 +1943,116 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
         config.logging.prefix = formData.prefix;
         saveConfig();
     });
+
+    // ==================== 路由规则编辑 ====================
+
+    // 新增路由规则
+    $('#addRuleBtn').on('click', function(){
+        editRule();
+    });
+
+    // 编辑路由规则
+    function editRule(data) {
+        const isEdit = data !== undefined;
+
+        layer.open({
+            type: 1,
+            title: isEdit ? '编辑路由规则' : '新增路由规则',
+            area: ['500px', '600px'],
+            content: `
+                <div style="padding: 20px;">
+                    <form class="layui-form" lay-filter="ruleForm">
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">动作</label>
+                            <div class="layui-input-block">
+                                <select name="action">
+                                    <option value="proxy" ${!isEdit || data.action === 'proxy' ? 'selected' : ''}>代理</option>
+                                    <option value="direct" ${isEdit && data.action === 'direct' ? 'selected' : ''}>直连</option>
+                                    <option value="deny" ${isEdit && data.action === 'deny' ? 'selected' : ''}>拒绝</option>
+                                    <option value="block" ${isEdit && data.action === 'block' ? 'selected' : ''}>屏蔽</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">匹配模式</label>
+                            <div class="layui-input-block">
+                                <textarea name="patterns" class="layui-textarea" placeholder="每行一个模式，支持域名、IP、CIDR等" rows="4">${isEdit ? data.patterns.join('\n') : ''}</textarea>
+                                <div class="layui-form-mid layui-word-aux">例如：*.google.com, 192.168.1.0/24</div>
+                            </div>
+                        </div>
+
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">目标节点</label>
+                            <div class="layui-input-block">
+                                <select name="target">
+                                    <option value="">请选择节点</option>
+                                    ${config.router.proxy_nodes.map((node, i) =>
+                                        `<option value="${i}" ${isEdit && data.target === node.name ? 'selected' : ''}>${node.name}</option>`
+                                    ).join('')}
+                                </select>
+                                <div class="layui-form-mid layui-word-aux">动作选择"代理"时需要指定目标节点</div>
+                            </div>
+                        </div>
+
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">描述</label>
+                            <div class="layui-input-block">
+                                <input type="text" name="description" value="${isEdit ? data.description || '' : ''}" class="layui-input" placeholder="规则描述">
+                            </div>
+                        </div>
+
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">优先级</label>
+                            <div class="layui-input-block">
+                                <input type="number" name="priority" value="${isEdit ? data.priority || 100 : 100}" class="layui-input" min="1" max="1000">
+                                <div class="layui-form-mid layui-word-aux">数字越小优先级越高</div>
+                            </div>
+                        </div>
+
+                        <div class="layui-form-item">
+                            <div class="layui-input-block">
+                                <button type="button" class="layui-btn" lay-submit lay-filter="saveRule">保存</button>
+                                <button type="button" class="layui-btn layui-btn-primary" onclick="layer.closeAll()">取消</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            `,
+            success: function(){
+                form.render();
+
+                // 监听表单提交
+                form.on('submit(saveRule)', function(formData){
+                    const ruleData = formData.field;
+
+                    // 处理匹配模式
+                    ruleData.patterns = ruleData.patterns.split('\n').filter(p => p.trim() !== '');
+
+                    // 获取目标节点名称
+                    if (ruleData.target) {
+                        ruleData.target = config.router.proxy_nodes[parseInt(ruleData.target)].name;
+                    }
+
+                    // 转换优先级
+                    ruleData.priority = parseInt(ruleData.priority);
+
+                    if (isEdit) {
+                        // 更新现有规则
+                        Object.assign(config.router.rules[data.id], ruleData);
+                        layer.msg('规则更新成功');
+                    } else {
+                        // 添加新规则
+                        config.router.rules.push(ruleData);
+                        layer.msg('规则添加成功');
+                    }
+
+                    renderRulesTable();
+                    layer.closeAll();
+                });
+            }
+        });
+    }
 
     // 重新加载配置
     $('#reloadConfig').on('click', function(){
