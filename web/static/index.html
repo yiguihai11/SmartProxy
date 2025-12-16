@@ -2011,7 +2011,16 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                 data: Array(20).fill(0),
                 borderColor: '#1677ff',
                 backgroundColor: 'rgba(22,119,255,0.05)',
-                fill: true,
+                fill: false,
+                tension: 0.4,
+                pointRadius: 0,
+                borderWidth: 2
+            }, {
+                label: '上行速度',
+                data: Array(20).fill(0),
+                borderColor: '#ff5722',
+                backgroundColor: 'rgba(255,87,34,0.05)',
+                fill: false,
                 tension: 0.4,
                 pointRadius: 0,
                 borderWidth: 2
@@ -2036,23 +2045,43 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
         }
     });
 
+    // 存储上一次的流量数据，用于计算速度
+    let lastTrafficData = {
+        upload: 0,
+        download: 0
+    };
+
     // 更新流量数据
     setInterval(function(){
         fetch('/api/traffic/stats')
             .then(response => response.json())
             .then(data => {
                 if (data.success && data.data) {
-                    const down = Math.round(data.data.download_speed_kbps || 0);
-                    const up = Math.round(data.data.upload_speed_kbps || 0);
+                    const currentUpload = data.data.total_upload || 0;
+                    const currentDownload = data.data.total_download || 0;
+
+                    // 计算速度 (bytes per second)
+                    const uploadSpeed = currentUpload - lastTrafficData.upload;
+                    const downloadSpeed = currentDownload - lastTrafficData.download;
+
+                    // 转换为 KB/s
+                    const uploadKBps = Math.round(uploadSpeed / 1024);
+                    const downloadKBps = Math.round(downloadSpeed / 1024);
 
                     // 更新图表
                     trafficChart.data.datasets[0].data.shift();
-                    trafficChart.data.datasets[0].data.push(down);
+                    trafficChart.data.datasets[0].data.push(downloadKBps);
+                    trafficChart.data.datasets[1].data.shift();
+                    trafficChart.data.datasets[1].data.push(uploadKBps);
                     trafficChart.update('none');
 
                     // 更新显示
-                    $('#down-speed').text(down);
-                    $('#up-speed').text(up);
+                    $('#up-speed').text(uploadKBps);
+                    $('#down-speed').text(downloadKBps);
+
+                    // 保存当前数据供下次计算使用
+                    lastTrafficData.upload = currentUpload;
+                    lastTrafficData.download = currentDownload;
                 }
             })
             .catch(err => {
@@ -2063,6 +2092,8 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
 
                 trafficChart.data.datasets[0].data.shift();
                 trafficChart.data.datasets[0].data.push(down);
+                trafficChart.data.datasets[1].data.shift();
+                trafficChart.data.datasets[1].data.push(up);
                 trafficChart.update('none');
 
                 $('#down-speed').text(down);
