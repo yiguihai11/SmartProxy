@@ -326,8 +326,8 @@
                         content += `
                             <div style="margin-top: 10px; padding: 10px; background: #e6fffa; border-radius: 5px;">
                                 <strong>📊 流量摘要:</strong><br>
-                                总上传: ${(data.data.total_upload_mb || 0).toFixed(2)} MB<br>
-                                总下载: ${(data.data.total_download_mb || 0).toFixed(2)} MB<br>
+                                总上传: ${((data.data.total_upload || 0) / 1024 / 1024).toFixed(2)} MB<br>
+                                总下载: ${((data.data.total_download || 0) / 1024 / 1024).toFixed(2)} MB<br>
                                 活跃连接: ${data.data.active_connections || 0}
                             </div>
                         `;
