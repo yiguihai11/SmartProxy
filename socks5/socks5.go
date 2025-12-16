@@ -1240,13 +1240,10 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 		if c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
 			// 检查是否在屏蔽列表中
 			if c.server.blockedItems != nil {
-				// 优先使用detectedHost（域名），如果没有则使用targetHost，最后才使用targetAddr（IP）
+				// 优先使用检测到的主机名
 				key := c.detectedHost
 				if key == "" {
 					key = c.targetHost
-				}
-				if key == "" {
-					key = targetAddr
 				}
 				if c.server.blockedItems.IsBlocked(key) {
 					c.logInfo("🚫 %s is in blocked items, using proxy directly", key)
@@ -1256,12 +1253,12 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 					target := formatNetworkAddress(targetAddr, targetPort)
 					conn, err := net.DialTimeout("tcp", target, time.Duration(c.server.smartProxyTimeoutMs)*time.Millisecond)
 					if err != nil {
-								// For other errors, check if it's a timeout
-								if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-									c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonTimeout)
-								} else {
-									c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonConnectionRefused)
-								}
+						// For other errors, check if it's a timeout
+						if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+							c.AddToBlockedItems(key, targetAddr, targetPort, FailureReasonTimeout)
+						} else {
+							c.AddToBlockedItems(key, targetAddr, targetPort, FailureReasonConnectionRefused)
+						}
 						return nil, fmt.Errorf("direct connection failed: %v", err)
 					}
 					return conn, nil
@@ -1718,37 +1715,37 @@ func (c *Connection) relayTargetToClient(ctx context.Context, writer io.Writer, 
 			if hostName == "" {
 				hostName = c.targetHost
 			}
-  // 检查系统错误码 - 只检查 ECONNRESET (104)
-  if opErr, ok := err.(*net.OpError); ok {
-      if sysErr, ok := opErr.Err.(*os.SyscallError); ok {
-          if errno, ok := sysErr.Err.(syscall.Errno); ok && errno == syscall.ECONNRESET {
-              // 连接被重置，尝试切换到代理
-              // 如果启用了智能代理并且是探测端口
-              if c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
-                  c.logInfo("⚠️ Direct connection to %s reset by peer, switching to proxy", hostName)
-                  c.AddToBlockedItems(hostName, c.targetAddr, targetPort, FailureReasonRST)
+			// 检查系统错误码 - 只检查 ECONNRESET (104)
+			if opErr, ok := err.(*net.OpError); ok {
+				if sysErr, ok := opErr.Err.(*os.SyscallError); ok {
+					if errno, ok := sysErr.Err.(syscall.Errno); ok && errno == syscall.ECONNRESET {
+						// 连接被重置，尝试切换到代理
+						// 如果启用了智能代理并且是探测端口
+						if c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
+							c.logInfo("⚠️ Direct connection to %s reset by peer, switching to proxy", hostName)
+							c.AddToBlockedItems(hostName, c.targetAddr, targetPort, FailureReasonRST)
 
-                  // 尝试切换到代理连接
-                  if proxyConn, proxyErr := c.switchToProxyAndReplay(); proxyErr == nil {
-                      // 成功切换到代理，更新目标连接并继续读取
-                      oldConn := c.targetConn
-                      c.targetConn = proxyConn
-                      c.logInfo("✅ Successfully switched to proxy for %s", hostName)
-                      oldConn.Close()
+							// 尝试切换到代理连接
+							if proxyConn, proxyErr := c.switchToProxyAndReplay(); proxyErr == nil {
+								// 成功切换到代理，更新目标连接并继续读取
+								oldConn := c.targetConn
+								c.targetConn = proxyConn
+								c.logInfo("✅ Successfully switched to proxy for %s", hostName)
+								oldConn.Close()
 
-                      // 从新代理连接继续读取数据，使用相同的优化逻辑
-                      // 更新reader以使用新的连接
-                      reader.Reset(c.targetConn)
-                      continue // 继续主循环
-                  } else {
-                      c.logInfo("❌ Failed to switch to proxy: %v", proxyErr)
-                  }
-              }
-          }
-      }
-  }
-  *copyErr = err
-  return
+								// 从新代理连接继续读取数据，使用相同的优化逻辑
+								// 更新reader以使用新的连接
+								reader.Reset(c.targetConn)
+								continue // 继续主循环
+							} else {
+								c.logInfo("❌ Failed to switch to proxy: %v", proxyErr)
+							}
+						}
+					}
+				}
+			}
+			*copyErr = err
+			return
 		}
 
 		// 记录下载流量（从目标到客户端）
@@ -2047,7 +2044,16 @@ func (s *SOCKS5Server) GetBlockedItemsManager() *BlockedItemsManager {
 
 // AddToBlockedItems 添加域名或IP到BlockedItemsManager
 func (c *Connection) AddToBlockedItems(targetHost, targetAddr string, port uint16, failureReason FailureReason) {
-	if c.server.blockedItems == nil || targetHost == "" {
+	if c.server.blockedItems == nil {
+		return
+	}
+
+	// 如果 targetHost 为空，使用 AddBlockedIP 封禁 IP
+	if targetHost == "" {
+		// 尝试从 targetAddr 中提取 IP
+		if ip := net.ParseIP(targetAddr); ip != nil {
+			c.server.blockedItems.AddBlockedIP(targetAddr, fmt.Sprintf("%d", port), failureReason)
+		}
 		return
 	}
 
@@ -2060,7 +2066,7 @@ func (c *Connection) AddToBlockedItems(targetHost, targetAddr string, port uint1
 		}
 	}
 
-	// 添加到BlockedItemsManager
+	// 添加到BlockedItemsManager - 使用 AddBlockedDomain
 	c.server.blockedItems.AddBlockedDomain(targetHost, fmt.Sprintf("%d", port), targetIP, failureReason)
 }
 
