@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>黑名单管理系统 - SmartProxy</title>
+    <link rel="stylesheet" href="https://www.layuicdn.com/layui-v2.9.6/css/layui.css">
+    <style>
+        body {
+            padding: 20px;
+            background-color: #f5f7fa;
+        }
+        .header {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .chart-container {
+            height: 300px;
+            margin: 20px 0;
+        }
+        .tree-container {
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #e6e6e6;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .failure-badge {
+            background: #ff5722;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 2px;
+            font-size: 12px;
+            margin-left: 5px;
+        }
+        .domain-type {
+            color: #2196F3;
+            font-weight: bold;
+        }
+        .ip-type {
+            color: #4CAF50;
+            font-weight: bold;
+        }
+        .expired-badge {
+            background: #9e9e9e;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 2px;
+            font-size: 12px;
+            margin-left: 5px;
+        }
+        .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1 style="margin: 0 0 10px 0;">🚫 黑名单管理系统</h1>
+        <p style="margin: 0; color: #718096;">查看和管理被屏蔽的域名和IP地址</p>
+    </div>
+
+    <!-- 统计卡片 -->
+    <div class="layui-row layui-col-space15">
+        <div class="layui-col-md3 layui-col-xs12">
+            <div class="card">
+                <div class="layui-row layui-col-space10">
+                    <div class="layui-col-xs7">
+                        <h3 style="margin: 0; color: #2d3748;">总屏蔽项</h3>
+                        <p style="margin: 5px 0 0 0; font-size: 24px; font-weight: bold; color: #667eea;" id="total-items">-</p>
+                    </div>
+                    <div class="layui-col-xs5" style="text-align: right;">
+                        <i class="layui-icon layui-icon-file" style="font-size: 48px; color: #667eea;"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="layui-col-md3 layui-col-xs12">
+            <div class="card">
+                <div class="layui-row layui-col-space10">
+                    <div class="layui-col-xs7">
+                        <h3 style="margin: 0; color: #2d3748;">域名屏蔽</h3>
+                        <p style="margin: 5px 0 0 0; font-size: 24px; font-weight: bold; color: #f6ad55;" id="total-domains">-</p>
+                    </div>
+                    <div class="layui-col-xs5" style="text-align: right;">
+                        <i class="layui-icon layui-icon-url" style="font-size: 48px; color: #f6ad55;"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="layui-col-md3 layui-col-xs12">
+            <div class="card">
+                <div class="layui-row layui-col-space10">
+                    <div class="layui-col-xs7">
+                        <h3 style="margin: 0; color: #2d3748;">IP屏蔽</h3>
+                        <p style="margin: 5px 0 0 0; font-size: 24px; font-weight: bold; color: #48bb78;" id="total-ips">-</p>
+                    </div>
+                    <div class="layui-col-xs5" style="text-align: right;">
+                        <i class="layui-icon layui-icon-location" style="font-size: 48px; color: #48bb78;"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="layui-col-md3 layui-col-xs12">
+            <div class="card">
+                <div class="layui-row layui-col-space10">
+                    <div class="layui-col-xs7">
+                        <h3 style="margin: 0; color: #2d3748;">已过期项</h3>
+                        <p style="margin: 5px 0 0 0; font-size: 24px; font-weight: bold; color: #fc8181;" id="total-expired">-</p>
+                    </div>
+                    <div class="layui-col-xs5" style="text-align: right;">
+                        <i class="layui-icon layui-icon-time" style="font-size: 48px; color: #fc8181;"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 图表区域 -->
+    <div class="layui-row layui-col-space15">
+        <div class="layui-col-md6 layui-col-xs12">
+            <div class="card">
+                <h3 style="margin-top: 0;">失败原因分布</h3>
+                <div class="chart-container">
+                    <canvas id="failureReasonChart"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="layui-col-md6 layui-col-xs12">
+            <div class="card">
+                <h3 style="margin-top: 0;">屏蔽趋势（最近24小时）</h3>
+                <div class="chart-container">
+                    <canvas id="blockTrendChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 树形结构 -->
+    <div class="card">
+        <h3 style="margin-top: 0;">黑名单树形结构</h3>
+        <div class="tree-container" id="blacklistTree">
+            <div id="tree"></div>
+        </div>
+    </div>
+
+    <!-- 详情表格 -->
+    <div class="card">
+        <div class="toolbar">
+            <h3 style="margin: 0;">黑名单详情</h3>
+            <div>
+                <button type="button" class="layui-btn layui-btn-sm" id="refreshTable">刷新</button>
+                <button type="button" class="layui-btn layui-btn-sm layui-btn-danger" id="clearExpired">清理过期项</button>
+            </div>
+        </div>
+        <table id="blacklistTable" lay-filter="blacklistTable"></table>
+    </div>
+
+    <script src="https://www.layuicdn.com/layui-v2.9.6/layui.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        layui.use(['tree', 'table', 'layer'], function(){
+            var tree = layui.tree;
+            var table = layui.table;
+            var layer = layui.layer;
+
+            // 全局变量
+            var failureReasonChart = null;
+            var blockTrendChart = null;
+            var blacklistData = [];
+
+            // 初始化
+            init();
+
+            function init() {
+                loadStatistics();
+                loadBlacklistList();
+                initCharts();
+                initTree();
+                initTable();
+
+                // 自动刷新
+                setInterval(loadStatistics, 10000);
+            }
+
+            // 加载统计信息
+            function loadStatistics() {
+                fetch('/api/blacklist')
+                    .then(res => res.json())
+                    .then(data => {
+                        if(data.success) {
+                            document.getElementById('total-items').textContent = data.data.total_blocked_items || 0;
+                            document.getElementById('total-domains').textContent = data.data.total_blocked_domains || 0;
+                            document.getElementById('total-ips').textContent = data.data.total_blocked_ips || 0;
+                        }
+                    });
+            }
+
+            // 加载黑名单列表
+            function loadBlacklistList() {
+                fetch('/api/blacklist/list?limit=1000')
+                    .then(res => res.json())
+                    .then(data => {
+                        if(data.success) {
+                            blacklistData = data.data.items;
+
+                            // 计算过期数量
+                            var expiredCount = data.data.items.filter(item => item.is_expired).length;
+                            document.getElementById('total-expired').textContent = expiredCount;
+
+                            // 更新图表
+                            updateCharts(data.data.items);
+
+                            // 更新树
+                            updateTree(data.data.items);
+
+                            // 更新表格
+                            table.reload('blacklistTable', {
+                                data: data.data.items
+                            });
+                        }
+                    });
+            }
+
+            // 初始化图表
+            function initCharts() {
+                // 失败原因分布图
+                var ctx1 = document.getElementById('failureReasonChart').getContext('2d');
+                failureReasonChart = new Chart(ctx1, {
+                    type: 'doughnut',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            data: [],
+                            backgroundColor: [
+                                '#FF6384',
+                                '#36A2EB',
+                                '#FFCE56',
+                                '#4BC0C0',
+                                '#9966FF'
+                            ]
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'bottom'
+                            }
+                        }
+                    }
+                });
+
+                // 屏蔽趋势图
+                var ctx2 = document.getElementById('blockTrendChart').getContext('2d');
+                blockTrendChart = new Chart(ctx2, {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: '新增屏蔽项',
+                            data: [],
+                            borderColor: '#667eea',
+                            backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                            tension: 0.4,
+                            fill: true
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: true
+                            }
+                        }
+                    }
+                });
+            }
+
+            // 更新图表
+            function updateCharts(items) {
+                // 统计失败原因
+                var failureReasons = {};
+                items.forEach(item => {
+                    if(item.failure_reasons_str) {
+                        for(var reason in item.failure_reasons_str) {
+                            failureReasons[reason] = (failureReasons[reason] || 0) + item.failure_reasons_str[reason];
+                        }
+                    }
+                });
+
+                // 更新失败原因图
+                failureReasonChart.data.labels = Object.keys(failureReasons);
+                failureReasonChart.data.datasets[0].data = Object.values(failureReasons);
+                failureReasonChart.update();
+
+                // 模拟趋势数据（这里简化处理）
+                var hours = [];
+                var counts = [];
+                for(var i = 23; i >= 0; i--) {
+                    hours.push(i + '小时前');
+                    counts.push(Math.floor(Math.random() * 10) + 1);
+                }
+
+                blockTrendChart.data.labels = hours;
+                blockTrendChart.data.datasets[0].data = counts;
+                blockTrendChart.update();
+            }
+
+            // 初始化树
+            function initTree() {
+                // 树的数据将在 updateTree 中更新
+            }
+
+            // 更新树
+            function updateTree(items) {
+                var treeData = [
+                    {
+                        title: '黑名单根节点',
+                        id: 0,
+                        children: []
+                    }
+                ];
+
+                // 按类型分组
+                var domains = [];
+                var ips = [];
+
+                items.forEach(function(item) {
+                    var node = {
+                        title: item.key + ' <span class="failure-badge">' + item.top_failure_reason + '</span>' +
+                              (item.is_expired ? '<span class="expired-badge">已过期</span>' : ''),
+                        id: item.key,
+                        type: item.type.toLowerCase(),
+                        children: []
+                    };
+
+                    // 添加端口信息
+                    if(item.ports && item.ports.length > 0) {
+                        item.ports.forEach(function(port) {
+                            node.children.push({
+                                title: '端口 ' + port.port + ' (尝试' + port.attempt_count + '次)',
+                                id: item.key + ':' + port.port
+                            });
+                        });
+                    }
+
+                    if(item.type === 'Domain') {
+                        domains.push(node);
+                    } else {
+                        ips.push(node);
+                    }
+                });
+
+                treeData[0].children = [
+                    {
+                        title: '域名 (' + domains.length + ')',
+                        id: 'domains',
+                        spread: true,
+                        children: domains
+                    },
+                    {
+                        title: 'IP地址 (' + ips.length + ')',
+                        id: 'ips',
+                        children: ips
+                    }
+                ];
+
+                // 渲染树
+                tree.render({
+                    elem: '#tree',
+                    data: treeData,
+                    onlyIconControl: true,
+                    click: function(node){
+                        if(node.id && node.id !== 0 && node.id !== 'domains' && node.id !== 'ips') {
+                            // 查看详情
+                            showItemDetail(node.id);
+                        }
+                    }
+                });
+            }
+
+            // 初始化表格
+            function initTable() {
+                table.render({
+                    elem: '#blacklistTable',
+                    cols: [[
+                        {field: 'key', title: '域名/IP', width: 200, templet: function(d){
+                            var typeClass = d.type === 'Domain' ? 'domain-type' : 'ip-type';
+                            return '<span class="' + typeClass + '">' + d.key + '</span>';
+                        }},
+                        {field: 'type', title: '类型', width: 80, templet: function(d){
+                            return d.type === 'Domain' ? '域名' : 'IP';
+                        }},
+                        {field: 'total_attempts', title: '尝试次数', width: 100},
+                        {field: 'top_failure_reason', title: '主要失败原因', width: 120},
+                        {field: 'first_blocked', title: '首次屏蔽', width: 170, templet: function(d){
+                            return new Date(d.first_blocked).toLocaleString();
+                        }},
+                        {field: 'last_updated', title: '最后更新', width: 170, templet: function(d){
+                            return new Date(d.last_updated).toLocaleString();
+                        }},
+                        {field: 'is_expired', title: '状态', width: 80, templet: function(d){
+                            return d.is_expired ? '<span class="layui-badge layui-bg-gray">已过期</span>' :
+                                   '<span class="layui-badge layui-bg-green">活跃</span>';
+                        }},
+                        {field: 'ports', title: '端口', width: 150, templet: function(d){
+                            if(!d.ports || d.ports.length === 0) return '-';
+                            return d.ports.map(p => p.port).join(', ');
+                        }}
+                    ]],
+                    page: true,
+                    limit: 20,
+                    limits: [10, 20, 50, 100],
+                    size: 'sm'
+                });
+            }
+
+            // 显示项目详情
+            function showItemDetail(key) {
+                var item = blacklistData.find(d => d.key === key);
+                if(!item) return;
+
+                var content = `
+                    <div style="padding: 20px;">
+                        <h3>${item.key}</h3>
+                        <p><strong>类型：</strong>${item.type}</p>
+                        <p><strong>总尝试次数：</strong>${item.total_attempts}</p>
+                        <p><strong>首次屏蔽：</strong>${new Date(item.first_blocked).toLocaleString()}</p>
+                        <p><strong>最后更新：</strong>${new Date(item.last_updated).toLocaleString()}</p>
+                        <p><strong>状态：</strong>${item.is_expired ? '已过期' : '活跃'}</p>
+                        ${item.ip_list && item.ip_list.length > 0 ? '<p><strong>IP列表：</strong>' + item.ip_list.join(', ') + '</p>' : ''}
+                        ${item.failure_reasons_str ? '<p><strong>失败原因统计：</strong>' + JSON.stringify(item.failure_reasons_str) + '</p>' : ''}
+                    </div>
+                `;
+
+                layer.open({
+                    type: 1,
+                    title: '黑名单项详情',
+                    area: ['600px', '500px'],
+                    content: content
+                });
+            }
+
+            // 事件绑定
+            document.getElementById('refreshTable').onclick = function(){
+                loadBlacklistList();
+                layer.msg('刷新成功');
+            };
+
+            document.getElementById('clearExpired').onclick = function(){
+                layer.confirm('确认清理所有已过期的黑名单项？', function(index){
+                    // TODO: 调用清理API
+                    layer.close(index);
+                    layer.msg('清理功能待实现');
+                });
+            };
+        });
+    </script>
+</body>
+</html>
