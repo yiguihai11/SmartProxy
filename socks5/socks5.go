@@ -811,11 +811,22 @@ func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 		conn.clientConn = nil
 		conn.targetConn = nil
 		conn.sessionID = ""
+		conn.connID = ""
 		conn.username = ""
 		conn.targetAddr = ""
 		conn.targetHost = ""
 		conn.detectedHost = ""
 		conn.protocol = ""
+		// 清理敏感数据
+		if conn.initialData != nil {
+			// 清零数据防止内存泄露
+			for i := range conn.initialData {
+				conn.initialData[i] = 0
+			}
+			conn.initialData = nil
+		}
+		conn.initialDataCached = false
+		// 注意：logger 和 server 是共享引用，不应该重置
 		connectionPool.Put(conn)
 	}()
 
@@ -1261,8 +1272,11 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 		if c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
 			// 检查是否在屏蔽列表中
 			if c.server.blockedItems != nil {
-				// 优先使用检测到的主机名
+				// 优先使用检测到的主机名（SNI/Host）
 				key := c.detectedHost
+				if key == "" {
+					key = targetAddr
+				}
 				if c.server.blockedItems.IsBlocked(key) {
 					c.logInfo("🚫 %s is in blocked items, using proxy directly", key)
 				} else {
@@ -1745,6 +1759,7 @@ func (c *Connection) relayTargetToClient(ctx context.Context, writer io.Writer, 
 								// 成功切换到代理，更新目标连接并继续读取
 								oldConn := c.targetConn
 								c.targetConn = proxyConn
+
 								c.logInfo("✅ Successfully switched to proxy for %s", hostName)
 								oldConn.Close()
 
@@ -2063,6 +2078,10 @@ func (c *Connection) AddToBlockedItems(targetHost, targetAddr string, port uint1
 		return
 	}
 
+	// 调试日志
+	c.logInfo("[DEBUG] AddToBlockedItems - targetHost: '%s', targetAddr: '%s', detectedHost: '%s', connID: '%s'",
+		targetHost, targetAddr, c.detectedHost, c.connID)
+
 	// 如果 targetHost 为空，使用 AddBlockedIP 封禁 IP
 	if targetHost == "" {
 		// 尝试从 targetAddr 中提取 IP
@@ -2070,19 +2089,11 @@ func (c *Connection) AddToBlockedItems(targetHost, targetAddr string, port uint1
 			c.server.blockedItems.AddBlockedIP(targetAddr, fmt.Sprintf("%d", port), failureReason)
 		}
 		return
+	} else {
+		// 添加到BlockedItemsManager - 使用 AddBlockedDomain
+		// 在智能代理场景下，targetHost 总是域名（SNI检测到的主机名）
+		c.server.blockedItems.AddBlockedDomain(targetHost, fmt.Sprintf("%d", port), targetHost, failureReason)
 	}
-
-	// 确定目标IP地址
-	targetIP := targetHost
-	// 如果targetHost是域名且targetAddr包含IP，使用targetAddr中的IP
-	if net.ParseIP(targetHost) == nil { // targetHost不是IP
-		if ip := net.ParseIP(targetAddr); ip != nil {
-			targetIP = targetAddr
-		}
-	}
-
-	// 添加到BlockedItemsManager - 使用 AddBlockedDomain
-	c.server.blockedItems.AddBlockedDomain(targetHost, fmt.Sprintf("%d", port), targetIP, failureReason)
 }
 
 // isProbingPort 检查端口是否在需要嗅探的列表中

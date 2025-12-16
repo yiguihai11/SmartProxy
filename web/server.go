@@ -67,7 +67,7 @@ type WebServer struct {
 	connectionsMu     sync.RWMutex
 
 	blockedItemsManager *socks5.BlockedItemsManager
-	socks5Server       *socks5.SOCKS5Server
+	socks5Server        *socks5.SOCKS5Server
 }
 
 // ConnectionInfo holds information about an active connection.
@@ -109,7 +109,7 @@ func NewWebServerWithSocks5(cfg *config.Manager, webCfg WebConfig, log *logger.S
 		},
 		clients:           make(map[*websocket.Conn]bool),
 		activeConnections: make(map[string]*ConnectionInfo),
-		socks5Server:       socks5Server,
+		socks5Server:      socks5Server,
 	}
 
 	// 如果有 SOCKS5Server，获取 BlockedItemsManager

@@ -48,7 +48,7 @@ func NewTrafficMonitor(updateInterval time.Duration) *TrafficMonitor {
 	}
 
 	monitor := &TrafficMonitor{
-		stats: &TrafficStats{},
+		stats:           &TrafficStats{},
 		updateInterval:  updateInterval,
 		stopChan:        make(chan struct{}),
 		connectionStats: make(map[string]*ConnectionTraffic),
