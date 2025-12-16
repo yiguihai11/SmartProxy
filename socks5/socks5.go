@@ -514,6 +514,12 @@ func (m *UDPSessionManager) SendViaFullCone(internalAddr *net.UDPAddr, targetAdd
 		return fmt.Errorf("failed to send via Full Cone: %v", err)
 	}
 
+	// 记录UDP上传流量
+	if trafficMonitor := GetGlobalTrafficMonitor(); trafficMonitor != nil {
+		connID := internalAddr.String()
+		trafficMonitor.RecordUpload(connID, int64(len(data)))
+	}
+
 	m.logger.Debug("Full Cone send: %s -> %s (%d bytes)", internalAddr, targetAddr, len(data))
 	return nil
 }
@@ -969,6 +975,13 @@ func (c *Connection) handleUDPAssociateRequest(atype byte) error {
 		return fmt.Errorf("failed to listen on UDP: %v", err)
 	}
 
+	// 添加UDP关联连接到流量监控
+	if trafficMonitor := GetGlobalTrafficMonitor(); trafficMonitor != nil {
+		connID := c.clientConn.RemoteAddr().String()
+		trafficMonitor.AddConnection(connID)
+		defer trafficMonitor.RemoveConnection(connID)
+	}
+
 	// 启动 UDP 转发协程（使用Full Cone NAT）
 	go c.handleUDPRelayWithFullCone(udpConn)
 
@@ -1117,6 +1130,14 @@ func (c *Connection) forwardUDPPacketWithFullCone(udpConn *net.UDPConn, packet *
 			if err != nil {
 				// 超时或错误，直接返回
 				return
+			}
+
+			// 记录UDP下载流量
+			if n > 0 {
+				if trafficMonitor := GetGlobalTrafficMonitor(); trafficMonitor != nil {
+					connID := clientAddr.String()
+					trafficMonitor.RecordDownload(connID, int64(n))
+				}
 			}
 
 			// 打印响应日志
@@ -2391,6 +2412,12 @@ func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, origin
 		return fmt.Errorf("UDP-PROXY: failed to send UDP packet to proxy: %v", err)
 	}
 
+	// 记录UDP上传流量（通过代理）
+	if trafficMonitor := GetGlobalTrafficMonitor(); trafficMonitor != nil {
+		connID := originalClientAddr.String()
+		trafficMonitor.RecordUpload(connID, int64(len(originalPacket.DATA)))
+	}
+
 	// 10. 设置超时并等待代理的响应
 	proxyUDPConn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	responseBuf := make([]byte, UDP_BUFFER_SIZE)
@@ -2438,6 +2465,14 @@ func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, origin
 	if len(responseData) == 0 {
 		c.logInfo("UDP-PROXY: No data in response from proxy")
 		return nil
+	}
+
+	// 记录UDP下载流量（通过代理）
+	if len(responseData) > 0 {
+		if trafficMonitor := GetGlobalTrafficMonitor(); trafficMonitor != nil {
+			connID := originalClientAddr.String()
+			trafficMonitor.RecordDownload(connID, int64(len(responseData)))
+		}
 	}
 
 	// 打印代理响应日志
