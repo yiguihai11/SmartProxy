@@ -1242,9 +1242,6 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 			if c.server.blockedItems != nil {
 				// 优先使用检测到的主机名
 				key := c.detectedHost
-				if key == "" {
-					key = c.targetHost
-				}
 				if c.server.blockedItems.IsBlocked(key) {
 					c.logInfo("🚫 %s is in blocked items, using proxy directly", key)
 				} else {
@@ -1712,9 +1709,6 @@ func (c *Connection) relayTargetToClient(ctx context.Context, writer io.Writer, 
 
 			// 优先使用检测到的主机名
 			hostName := c.detectedHost
-			if hostName == "" {
-				hostName = c.targetHost
-			}
 			// 检查系统错误码 - 只检查 ECONNRESET (104)
 			if opErr, ok := err.(*net.OpError); ok {
 				if sysErr, ok := opErr.Err.(*os.SyscallError); ok {
