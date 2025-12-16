@@ -1468,7 +1468,7 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                 layer.msg('删除成功');
             });
         } else if(obj.event === 'edit'){
-            layer.msg('编辑节点: ' + obj.data.name);
+            editProxyNode(obj.data);
         }
     });
 
@@ -2048,6 +2048,148 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                     }
 
                     renderRulesTable();
+                    layer.closeAll();
+                });
+            }
+        });
+    }
+
+    // ==================== 代理节点编辑 ====================
+
+    // 新增代理节点
+    $('#addNodeBtn').on('click', function(){
+        editProxyNode();
+    });
+
+    // 编辑代理节点
+    function editProxyNode(data) {
+        const isEdit = data !== undefined;
+
+        layer.open({
+            type: 1,
+            title: isEdit ? '编辑代理节点' : '新增代理节点',
+            area: ['500px', '650px'],
+            content: `
+                <div style="padding: 20px;">
+                    <form class="layui-form" lay-filter="nodeForm">
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">节点名称</label>
+                            <div class="layui-input-block">
+                                <input type="text" name="name" value="${isEdit ? data.name : ''}" class="layui-input" placeholder="唯一标识符" ${isEdit ? 'readonly' : ''}>
+                                <div class="layui-form-mid layui-word-aux">节点的唯一标识，不可重复</div>
+                            </div>
+                        </div>
+
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">节点类型</label>
+                            <div class="layui-input-block">
+                                <select name="type" lay-filter="nodeTypeSelect">
+                                    <option value="socks5" ${!isEdit || data.type === 'socks5' ? 'selected' : ''}>SOCKS5</option>
+                                    <option value="http" ${isEdit && data.type === 'http' ? 'selected' : ''}>HTTP</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">节点地址</label>
+                            <div class="layui-input-block">
+                                <input type="text" name="address" value="${isEdit ? data.address : ''}" class="layui-input" placeholder="例如: 127.0.0.1:1080">
+                                <div class="layui-form-mid layui-word-aux">IP地址或域名:端口</div>
+                            </div>
+                        </div>
+
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">认证方式</label>
+                            <div class="layui-input-block">
+                                <select name="auth_method" lay-filter="authMethodSelect">
+                                    <option value="" ${!isEdit || data.auth_method === '' ? 'selected' : ''}>无认证</option>
+                                    <option value="userpass" ${isEdit && data.auth_method === 'userpass' ? 'selected' : ''}>用户名密码</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="layui-form-item" id="authFields" style="${isEdit && data.auth_method === 'userpass' ? '' : 'display: none;'}">
+                            <div class="layui-row layui-col-space10">
+                                <div class="layui-col-md6">
+                                    <label class="layui-form-label">用户名</label>
+                                    <div class="layui-input-block">
+                                        <input type="text" name="username" value="${isEdit ? data.username || '' : ''}" class="layui-input" placeholder="用户名">
+                                    </div>
+                                </div>
+                                <div class="layui-col-md6">
+                                    <label class="layui-form-label">密码</label>
+                                    <div class="layui-input-block">
+                                        <input type="password" name="password" value="${isEdit ? data.password || '' : ''}" class="layui-input" placeholder="密码">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">描述</label>
+                            <div class="layui-input-block">
+                                <input type="text" name="description" value="${isEdit ? data.description || '' : ''}" class="layui-input" placeholder="节点描述">
+                            </div>
+                        </div>
+
+                        <div class="layui-form-item">
+                            <div class="layui-input-block">
+                                <input type="checkbox" name="enabled" title="启用节点" lay-skin="primary" ${!isEdit || data.enabled ? 'checked' : ''}>
+                            </div>
+                        </div>
+
+                        <div class="layui-form-item">
+                            <div class="layui-input-block">
+                                <button type="button" class="layui-btn" lay-submit lay-filter="saveNode">保存</button>
+                                <button type="button" class="layui-btn layui-btn-primary" onclick="layer.closeAll()">取消</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            `,
+            success: function(){
+                form.render();
+
+                // 监听认证方式变化
+                form.on('select(authMethodSelect)', function(data){
+                    const $authFields = $('#authFields');
+                    if (data.value === 'userpass') {
+                        $authFields.show();
+                    } else {
+                        $authFields.hide();
+                    }
+                });
+
+                // 监听表单提交
+                form.on('submit(saveNode)', function(formData){
+                    const nodeData = formData.field;
+
+                    // 处理复选框
+                    nodeData.enabled = nodeData.enabled === 'on';
+
+                    // 如果不是用户名密码认证，删除用户名和密码字段
+                    if (nodeData.auth_method !== 'userpass') {
+                        delete nodeData.username;
+                        delete nodeData.password;
+                    }
+
+                    if (isEdit) {
+                        // 更新现有节点
+                        Object.assign(config.router.proxy_nodes[data.id], nodeData);
+                        layer.msg('节点更新成功');
+                    } else {
+                        // 检查名称是否重复
+                        if (config.router.proxy_nodes.some(n => n.name === nodeData.name)) {
+                            layer.msg('节点名称已存在', {icon: 2});
+                            return;
+                        }
+                        // 添加新节点
+                        config.router.proxy_nodes.push(nodeData);
+                        layer.msg('节点添加成功');
+                    }
+
+                    renderNodesTable();
+                    renderRulesTable(); // 更新规则表格中的节点选项
                     layer.closeAll();
                 });
             }
