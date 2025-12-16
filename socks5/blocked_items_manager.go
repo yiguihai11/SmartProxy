@@ -499,6 +499,13 @@ func (bm *BlockedItemsManager) GetList(limit int, offset int) map[string]interfa
 			"ip_list":            item.IPList,
 			"top_failure_reason": topFailureReason,
 			"failure_reasons":    item.FailureReasons,
+            "failure_reasons_str": func() map[string]int {
+                result := make(map[string]int)
+                for reason, count := range item.FailureReasons {
+                    result[reason.String()] = count
+                }
+                return result
+            }(),
 			"is_expired":         isExpired,
 			"additional_info":    item.AdditionalInfo,
 		}
