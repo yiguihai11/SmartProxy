@@ -2086,6 +2086,8 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                                 <select name="type" lay-filter="nodeTypeSelect">
                                     <option value="socks5" ${!isEdit || data.type === 'socks5' ? 'selected' : ''}>SOCKS5</option>
                                     <option value="http" ${isEdit && data.type === 'http' ? 'selected' : ''}>HTTP</option>
+                                    <option value="https" ${isEdit && data.type === 'https' ? 'selected' : ''}>HTTPS</option>
+                                    <option value="socks4" ${isEdit && data.type === 'socks4' ? 'selected' : ''}>SOCKS4</option>
                                 </select>
                             </div>
                         </div>
@@ -2102,7 +2104,7 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                             <label class="layui-form-label">认证方式</label>
                             <div class="layui-input-block">
                                 <select name="auth_method" lay-filter="authMethodSelect">
-                                    <option value="" ${!isEdit || data.auth_method === '' ? 'selected' : ''}>无认证</option>
+                                    <option value="none" ${!isEdit || data.auth_method === 'none' || data.auth_method === '' ? 'selected' : ''}>无认证</option>
                                     <option value="userpass" ${isEdit && data.auth_method === 'userpass' ? 'selected' : ''}>用户名密码</option>
                                 </select>
                             </div>
@@ -2171,6 +2173,9 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                     if (nodeData.auth_method !== 'userpass') {
                         delete nodeData.username;
                         delete nodeData.password;
+                    } else {
+                        // 确保认证方式字段正确
+                        nodeData.auth_method = 'userpass';
                     }
 
                     if (isEdit) {
