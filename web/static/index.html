@@ -1482,7 +1482,7 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
                 layer.msg('删除成功');
             });
         } else if(obj.event === 'edit'){
-            layer.msg('编辑劫持规则: ' + obj.data.pattern);
+            editHijackRule(obj.data);
         }
     });
 
@@ -2195,6 +2195,108 @@ layui.use(['form', 'table', 'layer', 'laydate'], function(){
 
                     renderNodesTable();
                     renderRulesTable(); // 更新规则表格中的节点选项
+                    layer.closeAll();
+                });
+            }
+        });
+    }
+
+    // ==================== DNS劫持规则编辑 ====================
+
+    // 新增DNS劫持规则
+    $('#addHijackBtn').on('click', function(){
+        editHijackRule();
+    });
+
+    // 编辑DNS劫持规则
+    function editHijackRule(data) {
+        const isEdit = data !== undefined;
+
+        layer.open({
+            type: 1,
+            title: isEdit ? '编辑DNS劫持规则' : '新增DNS劫持规则',
+            area: ['500px', '400px'],
+            content: `
+                <div style="padding: 20px;">
+                    <form class="layui-form" lay-filter="hijackForm">
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">域名模式</label>
+                            <div class="layui-input-block">
+                                <input type="text" name="pattern" value="${isEdit ? data.pattern : ''}" class="layui-input" placeholder="例如: ad.google.com 或 *.example.com">
+                                <div class="layui-form-mid layui-word-aux">支持通配符 *，例如 *.google.com</div>
+                            </div>
+                        </div>
+
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">目标地址</label>
+                            <div class="layui-input-block">
+                                <input type="text" name="target" value="${isEdit ? data.target : ''}" class="layui-input" placeholder="例如: 0.0.0.0 或 8.8.8.8">
+                                <div class="layui-form-mid layui-word-aux">DNS查询将返回此地址，0.0.0.0 表示屏蔽</div>
+                            </div>
+                        </div>
+
+                        <div class="layui-form-item">
+                            <label class="layui-form-label">描述</label>
+                            <div class="layui-input-block">
+                                <input type="text" name="description" value="${isEdit ? data.description || '' : ''}" class="layui-input" placeholder="规则描述">
+                            </div>
+                        </div>
+
+                        <div class="layui-form-item">
+                            <div class="layui-input-block">
+                                <button type="button" class="layui-btn" lay-submit lay-filter="saveHijack">保存</button>
+                                <button type="button" class="layui-btn layui-btn-primary" onclick="layer.closeAll()">取消</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            `,
+            success: function(){
+                form.render();
+
+                // 监听表单提交
+                form.on('submit(saveHijack)', function(formData){
+                    const ruleData = formData.field;
+
+                    // 验证必填字段
+                    if (!ruleData.pattern.trim()) {
+                        layer.msg('请输入域名模式', {icon: 2});
+                        return;
+                    }
+                    if (!ruleData.target.trim()) {
+                        layer.msg('请输入目标地址', {icon: 2});
+                        return;
+                    }
+
+                    // 验证IP地址格式（如果不是域名）
+                    const ipPattern = /^(\d{1,3}\.){3}\d{1,3}$/;
+                    if (ipPattern.test(ruleData.target)) {
+                        const parts = ruleData.target.split('.');
+                        for (let part of parts) {
+                            const num = parseInt(part);
+                            if (num < 0 || num > 255) {
+                                layer.msg('目标地址IP格式不正确', {icon: 2});
+                                return;
+                            }
+                        }
+                    }
+
+                    if (isEdit) {
+                        // 更新现有规则
+                        Object.assign(config.dns.hijack_rules[data.id], ruleData);
+                        layer.msg('规则更新成功');
+                    } else {
+                        // 检查模式是否重复
+                        if (config.dns.hijack_rules.some(r => r.pattern === ruleData.pattern)) {
+                            layer.msg('域名模式已存在', {icon: 2});
+                            return;
+                        }
+                        // 添加新规则
+                        config.dns.hijack_rules.push(ruleData);
+                        layer.msg('规则添加成功');
+                    }
+
+                    renderHijackTable();
                     layer.closeAll();
                 });
             }
