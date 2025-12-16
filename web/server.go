@@ -12,7 +12,7 @@ import (
 	"smartproxy/config"
 	"smartproxy/logger"
 	"smartproxy/socks5"
-
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -170,6 +170,7 @@ func (ws *WebServer) setupRoutes() {
 	mux.HandleFunc("/api/status", ws.handleStatus)
 	mux.HandleFunc("/api/stats", ws.handleStats)
 	mux.HandleFunc("/api/blacklist", ws.handleBlacklistStats)
+	mux.HandleFunc("/api/blacklist/list", ws.handleBlacklistList)
 	mux.HandleFunc("/api/config", ws.handleConfig)
 	mux.HandleFunc("/api/users", ws.handleUsers)
 	mux.HandleFunc("/api/rules", ws.handleRules)
@@ -278,6 +279,41 @@ func (ws *WebServer) handleBlacklistStats(w http.ResponseWriter, r *http.Request
 	ws.sendJSONResponse(w, APIResponse{
 		Success: true,
 		Data:    stats,
+	})
+}
+
+// handleBlacklistList provides a detailed list of blocked items with pagination
+func (ws *WebServer) handleBlacklistList(w http.ResponseWriter, r *http.Request) {
+	if ws.blockedItemsManager == nil {
+		ws.sendJSONResponse(w, APIResponse{
+			Success: false,
+			Error:   "Blocked items manager not initialized",
+		})
+		return
+	}
+
+	// 获取分页参数
+	limit := 50 // 默认每页50条
+	offset := 0
+
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 && l <= 1000 {
+			limit = l
+		}
+	}
+
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+			offset = o
+		}
+	}
+
+	// 获取黑名单列表
+	list := ws.blockedItemsManager.GetList(limit, offset)
+
+	ws.sendJSONResponse(w, APIResponse{
+		Success: true,
+		Data:    list,
 	})
 }
 

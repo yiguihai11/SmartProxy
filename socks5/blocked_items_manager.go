@@ -434,6 +434,86 @@ func (bm *BlockedItemsManager) GetStatistics() map[string]interface{} {
 	}
 }
 
+// GetList returns a detailed list of all blocked items
+func (bm *BlockedItemsManager) GetList(limit int, offset int) map[string]interface{} {
+	allItems := bm.items.GetAll()
+	total := len(allItems)
+
+	// Apply pagination
+	if offset >= total {
+		return map[string]interface{}{
+			"total":  total,
+			"offset": offset,
+			"limit":  limit,
+			"items":  []*BlockedItem{},
+		}
+	}
+
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+
+	// Get the slice for this page
+	items := allItems[offset:end]
+
+	// Convert to more JSON-friendly format
+	itemsList := make([]map[string]interface{}, len(items))
+	for i, item := range items {
+		item.mutex.RLock()
+
+		// Get the most common failure reason
+		var topFailureReason string
+		var topFailureCount int
+		for reason, count := range item.FailureReasons {
+			if count > topFailureCount {
+				topFailureCount = count
+				topFailureReason = reason.String()
+			}
+		}
+
+		// Get port information
+		portsList := make([]map[string]interface{}, len(item.Ports))
+		portIdx := 0
+		for port, info := range item.Ports {
+			portsList[portIdx] = map[string]interface{}{
+				"port":               port,
+				"attempt_count":      info.AttemptCount,
+				"last_attempt":       info.LastAttempt,
+				"last_failure_reason": info.LastFailureReason.String(),
+				"first_failure_time":  info.FirstFailureTime,
+			}
+			portIdx++
+		}
+
+		// Check if item is expired
+		isExpired := bm.isItemExpired(item)
+
+		itemsList[i] = map[string]interface{}{
+			"key":                item.Key,
+			"type":               item.Type.String(),
+			"first_blocked":      item.FirstBlocked,
+			"last_updated":       item.LastUpdated,
+			"total_attempts":     item.TotalAttempts,
+			"ports":              portsList,
+			"ip_list":            item.IPList,
+			"top_failure_reason": topFailureReason,
+			"failure_reasons":    item.FailureReasons,
+			"is_expired":         isExpired,
+			"additional_info":    item.AdditionalInfo,
+		}
+
+		item.mutex.RUnlock()
+	}
+
+	return map[string]interface{}{
+		"total":  total,
+		"offset": offset,
+		"limit":  limit,
+		"items":  itemsList,
+	}
+}
+
 // Remove removes a blocked item
 func (bm *BlockedItemsManager) Remove(key string) {
 	if bm.items.Delete(key) {
