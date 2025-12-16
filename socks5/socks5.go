@@ -11,12 +11,10 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
-	"os"
 	"smartproxy/logger"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -1227,28 +1225,10 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 	case ActionAllow:
 		c.logInfo("ALLOW by %s: %s -> %s", logContext, accessInfo, c.targetAddr)
 
-		// 纯粹直连，不回退代理
+		// 纯粹直连
 		target := formatNetworkAddress(targetAddr, targetPort)
 		conn, err := net.DialTimeout("tcp", target, 5*time.Second)
 		if err != nil {
-			// Check for connection reset (errno 104) which indicates GFW blocking
-			if errno, ok := err.(*net.OpError).Err.(*os.SyscallError); ok {
-				if syscallErr, ok := errno.Err.(syscall.Errno); ok && syscallErr == 104 {
-					c.logInfo("⚠️ Direct connection to %s reset by peer (errno 104), adding to blocked items", c.targetHost)
-					c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonRST)
-				} else {
-					// For other errors, check if it's a timeout
-					if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-						c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonTimeout)
-					} else {
-						c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonConnectionRefused)
-					}
-				}
-			} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonTimeout)
-			} else {
-				c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonConnectionRefused)
-			}
 			return nil, fmt.Errorf("direct connection failed: %v", err)
 		}
 
@@ -1274,24 +1254,12 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 					target := formatNetworkAddress(targetAddr, targetPort)
 					conn, err := net.DialTimeout("tcp", target, time.Duration(c.server.smartProxyTimeoutMs)*time.Millisecond)
 					if err != nil {
-						// Check for connection reset (errno 104) which indicates GFW blocking
-						if errno, ok := err.(*net.OpError).Err.(*os.SyscallError); ok {
-							if syscallErr, ok := errno.Err.(syscall.Errno); ok && syscallErr == 104 {
-								c.logInfo("⚠️ Direct connection to %s reset by peer (errno 104), adding to blocked items", c.targetHost)
-								c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonRST)
-							} else {
 								// For other errors, check if it's a timeout
 								if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 									c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonTimeout)
 								} else {
 									c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonConnectionRefused)
 								}
-							}
-						} else if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-							c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonTimeout)
-						} else {
-							c.AddToBlockedItems(c.targetHost, targetAddr, targetPort, FailureReasonConnectionRefused)
-						}
 						return nil, fmt.Errorf("direct connection failed: %v", err)
 					}
 					return conn, nil
@@ -1694,7 +1662,7 @@ func (c *Connection) relay() error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		c.relayTargetToClientOptimized(ctx, clientWriter, rateLimitKey, &copyErr)
+		c.relayTargetToClient(ctx, clientWriter, rateLimitKey, &copyErr)
 	}()
 
 	// 等待所有 goroutine 完成
@@ -1709,8 +1677,8 @@ func (c *Connection) relay() error {
 	return copyErr
 }
 
-// relayTargetToClientOptimized 优化版的目标到客户端数据流处理
-func (c *Connection) relayTargetToClientOptimized(ctx context.Context, writer io.Writer, rateLimitKey string, copyErr *error) {
+// relayTargetToClient 目标到客户端数据流处理
+func (c *Connection) relayTargetToClient(ctx context.Context, writer io.Writer, rateLimitKey string, copyErr *error) {
 	// 使用 bufio.Reader/Writer 减少系统调用
 	buf := bufferPool.GetOptimized(BufferUsageLarge) // 32KB
 	defer bufferPool.Put(buf)
