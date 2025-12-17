@@ -1187,7 +1187,7 @@ func (c *Connection) forwardUDPPacketWithFullCone(udpConn *net.UDPConn, packet *
 			c.logWarn("UDP: No rule matched for %s:%d and no default proxy configured. Dropping packet.", targetHost, packet.DSTPORT)
 			return
 		}
-		c.logInfo("UDP: No rule matched for %s:%d, using default proxy %s", targetHost, packet.DSTPORT, defaultProxy.Name)
+		c.logDebug("UDP: No rule matched for %s:%d, using default proxy %s", targetHost, packet.DSTPORT, defaultProxy.Name)
 		if err := c.forwardUDPPacketViaProxy(udpConn, packet, clientAddr, defaultProxy); err != nil {
 			c.logError("UDP: Failed to forward packet via default proxy %s: %v", defaultProxy.Name, err)
 		}
@@ -1281,13 +1281,13 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 				if c.server.blockedItems.IsBlocked(key) {
 					c.logInfo("🚫 %s is in blocked items, using proxy directly", key)
 				} else {
-					c.logInfo("✅ %s not in blocked items, trying direct connection", key)
+					c.logDebug("✅ %s not in blocked items, trying direct connection", key)
 					// 尝试直连
 					target := formatNetworkAddress(targetAddr, targetPort)
 					directConn, directErr := net.DialTimeout("tcp", target, time.Duration(c.server.smartProxyTimeoutMs)*time.Millisecond)
 					if directErr == nil {
 						// 直连成功
-						c.logInfo("✅ Direct connection successful for %s", key)
+						c.logDebug("✅ Direct connection successful for %s", key)
 						return directConn, nil
 					}
 
@@ -1299,7 +1299,7 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 						failureReason = FailureReasonConnectionRefused
 					}
 
-					c.logInfo("❌ Direct connection failed for %s: %v, trying proxy...", key, directErr)
+					c.logWarn("❌ Direct connection failed for %s: %v, trying proxy...", key, directErr)
 
 					// 获取默认代理
 					defaultProxy := c.server.router.GetDefaultProxy()
@@ -1313,7 +1313,7 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 							return proxyConn, nil
 						} else {
 							// 直连和代理都失败，说明目标不可达，不加入黑名单
-							c.logInfo("⛔ Both direct and proxy failed for %s (target unreachable)", key)
+							c.logError("⛔ Both direct and proxy failed for %s (target unreachable)", key)
 							return nil, fmt.Errorf("both direct and proxy failed for %s", key)
 						}
 					} else {
@@ -1372,7 +1372,7 @@ func (c *Connection) detectAndConnect(targetAddr string, targetPort uint16) (net
 			c.initialData = make([]byte, n)
 			copy(c.initialData, buf[:n])
 			c.initialDataCached = true
-			c.logInfo("Cached %d bytes of initial data for potential retry", n)
+			c.logDebug("Cached %d bytes of initial data for potential retry", n)
 
 			// 预置数据回连接（供正常流程使用）
 			prependingClientConn.mu.Lock()
@@ -1395,7 +1395,7 @@ func (c *Connection) detectAndConnect(targetAddr string, targetPort uint16) (net
 					hostname = result.Hostname
 				}
 				if hostname != "" {
-					c.logInfo("SNI/Host detected for port %d: %s", targetPort, hostname)
+					c.logDebug("SNI/Host detected for port %d: %s", targetPort, hostname)
 					detectedHost = hostname
 					c.detectedHost = hostname
 				}
@@ -1724,7 +1724,7 @@ func (c *Connection) relay() error {
 	wg.Wait()
 
 	if copyErr != nil {
-		c.logInfo("Relay finished with error: %v", copyErr)
+		c.logError("Relay finished with error: %v", copyErr)
 	} else {
 		c.logInfo("Connection closed successfully")
 	}
@@ -1799,8 +1799,8 @@ func (c *Connection) relayTargetToClient(ctx context.Context, writer io.Writer, 
 								continue // 继续主循环
 							} else {
 								// 直连和代理都失败，说明目标不可达，不加入黑名单
-								c.logInfo("⛔ Both direct and proxy failed for %s (target unreachable)", hostName)
-								c.logInfo("❌ Failed to switch to proxy: %v", proxyErr)
+								c.logError("⛔ Both direct and proxy failed for %s (target unreachable)", hostName)
+								c.logError("❌ Failed to switch to proxy: %v", proxyErr)
 							}
 						}
 					}
@@ -2111,7 +2111,7 @@ func (c *Connection) AddToBlockedItems(targetHost, targetAddr string, port uint1
 	}
 
 	// 调试日志
-	c.logInfo("[DEBUG] AddToBlockedItems - targetHost: '%s', targetAddr: '%s', detectedHost: '%s', connID: '%s'",
+	c.logDebug("AddToBlockedItems - targetHost: '%s', targetAddr: '%s', detectedHost: '%s', connID: '%s'",
 		targetHost, targetAddr, c.detectedHost, c.connID)
 
 	// 如果 targetHost 为空，使用 AddBlockedIP 封禁 IP
@@ -2147,12 +2147,12 @@ func (c *Connection) connectThroughProxy(proxy *ProxyNode, targetAddr string, ta
 		return nil, fmt.Errorf("proxy node is nil")
 	}
 
-	c.logInfo("DEBUG: Connecting via proxy: %s (%s)", proxy.Name, proxy.Address)
+	c.logDebug("Connecting via proxy: %s (%s)", proxy.Name, proxy.Address)
 
 	// 1. 连接到代理服务器
 	proxyConn, err := net.DialTimeout("tcp", proxy.Address, 5*time.Second)
 	if err != nil {
-		c.logInfo("DEBUG: Failed to connect to proxy '%s' at %s: %v", proxy.Name, proxy.Address, err)
+		c.logDebug("Failed to connect to proxy '%s' at %s: %v", proxy.Name, proxy.Address, err)
 
 		// 检测连接超时
 		if strings.Contains(err.Error(), "dial tcp") && strings.Contains(err.Error(), "i/o timeout") {
@@ -2161,7 +2161,7 @@ func (c *Connection) connectThroughProxy(proxy *ProxyNode, targetAddr string, ta
 
 		return nil, fmt.Errorf("failed to connect to proxy '%s' at %s: %v", proxy.Name, proxy.Address, err)
 	}
-	c.logInfo("DEBUG: Successfully connected to proxy: %s (%s)", proxy.Name, proxy.Address)
+	c.logDebug("Successfully connected to proxy: %s (%s)", proxy.Name, proxy.Address)
 
 	// 2. SOCKS5 握手
 	// 客户端问候: Version 5, 1 auth method, 0x02 for user/pass or 0x00 for no auth
@@ -2179,17 +2179,17 @@ func (c *Connection) connectThroughProxy(proxy *ProxyNode, targetAddr string, ta
 	// 读取代理服务器的回复
 	resp := make([]byte, 2)
 	if _, err := io.ReadFull(proxyConn, resp); err != nil {
-		c.logInfo("DEBUG: Proxy handshake reply read failed: %v", err)
+		c.logDebug("Proxy handshake reply read failed: %v", err)
 		proxyConn.Close()
 		return nil, fmt.Errorf("failed to read handshake reply from proxy: %v", err)
 	}
-	c.logInfo("DEBUG: Proxy handshake reply: version=%d, method=%d", resp[0], resp[1])
+	c.logDebug("Proxy handshake reply: version=%d, method=%d", resp[0], resp[1])
 	if resp[0] != SOCKS5_VERSION || resp[1] != authMethod {
-		c.logInfo("DEBUG: Proxy handshake failed: expected version=%d method=%d, got version=%d method=%d", SOCKS5_VERSION, authMethod, resp[0], resp[1])
+		c.logDebug("Proxy handshake failed: expected version=%d method=%d, got version=%d method=%d", SOCKS5_VERSION, authMethod, resp[0], resp[1])
 		proxyConn.Close()
 		return nil, fmt.Errorf("proxy handshake failed, unsupported auth method")
 	}
-	c.logInfo("DEBUG: Proxy handshake successful")
+	c.logDebug("Proxy handshake successful")
 
 	// 3. 如果需要，执行用户名/密码认证
 	if authMethod == 0x02 {
@@ -2237,41 +2237,41 @@ func (c *Connection) connectThroughProxy(proxy *ProxyNode, targetAddr string, ta
 	req = append(req, portBytes...)
 
 	if _, err := proxyConn.Write(req); err != nil {
-		c.logInfo("DEBUG: Failed to send connect request to proxy: %v", err)
+		c.logDebug("Failed to send connect request to proxy: %v", err)
 		proxyConn.Close()
 		return nil, fmt.Errorf("failed to send connect request to proxy: %v", err)
 	}
-	c.logInfo("DEBUG: Sent connect request to proxy, reading reply...")
+	c.logDebug("Sent connect request to proxy, reading reply...")
 
 	// 5. 读取代理的最终回复
 	finalResp := make([]byte, 4) // VER, REP, RSV, ATYP
 	if _, err := io.ReadFull(proxyConn, finalResp); err != nil {
-		c.logInfo("DEBUG: Failed to read final reply from proxy: %v", err)
+		c.logDebug("Failed to read final reply from proxy: %v", err)
 		proxyConn.Close()
 		return nil, fmt.Errorf("failed to read final reply from proxy: %v", err)
 	}
-	c.logInfo("DEBUG: Proxy final reply: version=%d, response=%d, rsv=%d, atyp=%d", finalResp[0], finalResp[1], finalResp[2], finalResp[3])
+	c.logDebug("Proxy final reply: version=%d, response=%d, rsv=%d, atyp=%d", finalResp[0], finalResp[1], finalResp[2], finalResp[3])
 	if finalResp[0] != SOCKS5_VERSION || finalResp[1] != REP_SUCCESS {
-		c.logInfo("DEBUG: Proxy connect command failed: expected version=%d response=%d, got version=%d response=%d", SOCKS5_VERSION, REP_SUCCESS, finalResp[0], finalResp[1])
+		c.logDebug("Proxy connect command failed: expected version=%d response=%d, got version=%d response=%d", SOCKS5_VERSION, REP_SUCCESS, finalResp[0], finalResp[1])
 		proxyConn.Close()
 		return nil, fmt.Errorf("proxy connect command failed with code %d", finalResp[1])
 	}
-	c.logInfo("DEBUG: Proxy connect command successful")
+	c.logDebug("Proxy connect command successful")
 	// 忽略剩余的 BND.ADDR 和 BND.PORT
 	// 这部分需要根据 ATYP 读取并丢弃
 	if err := drainReply(proxyConn, finalResp[3]); err != nil {
-		c.logInfo("DEBUG: Failed to drain final reply from proxy: %v", err)
+		c.logDebug("Failed to drain final reply from proxy: %v", err)
 		proxyConn.Close()
 		return nil, fmt.Errorf("failed to drain final reply from proxy: %v", err)
 	}
-	c.logInfo("DEBUG: Proxy connection established successfully")
+	c.logDebug("Proxy connection established successfully")
 
 	return proxyConn, nil
 }
 
 // forwardUDPPacketViaProxy 通过另一个SOCKS5代理转发UDP数据包
 func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, originalPacket *UDPPacket, originalClientAddr *net.UDPAddr, proxy *ProxyNode) error {
-	c.logInfo("UDP-PROXY: Attempting to forward packet for %s via %s", originalClientAddr, proxy.Address)
+	c.logDebug("UDP-PROXY: Attempting to forward packet for %s via %s", originalClientAddr, proxy.Address)
 
 	// 1. 连接到上游代理
 	proxyConn, err := net.DialTimeout("tcp", proxy.Address, 10*time.Second)
@@ -2298,7 +2298,7 @@ func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, origin
 	if resp[0] != SOCKS5_VERSION || resp[1] != authMethod {
 		return fmt.Errorf("UDP-PROXY: proxy handshake failed, unsupported auth method")
 	}
-	c.logInfo("UDP-PROXY: SOCKS5 handshake successful")
+	c.logDebug("UDP-PROXY: SOCKS5 handshake successful")
 
 	// 3. 如果需要，执行用户名/密码认证
 	if authMethod == 0x02 {
@@ -2325,7 +2325,7 @@ func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, origin
 		if authResp[0] != 0x01 || authResp[1] != 0x00 {
 			return fmt.Errorf("UDP-PROXY: proxy authentication failed")
 		}
-		c.logInfo("UDP-PROXY: Username/password authentication successful")
+		c.logDebug("UDP-PROXY: Username/password authentication successful")
 	}
 
 	// 4. 发送 UDP ASSOCIATE 请求
@@ -2403,7 +2403,7 @@ func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, origin
 		return fmt.Errorf("UDP-PROXY: unsupported address type in UDP associate reply: %d", assocResp[3])
 	}
 
-	c.logInfo("UDP-PROXY: UDP association established with proxy at %s", proxyUDPAddr)
+	c.logDebug("UDP-PROXY: UDP association established with proxy at %s", proxyUDPAddr)
 
 	// 7. 创建UDP连接到代理的UDP端口
 	proxyUDPConn, err := net.DialUDP("udp", nil, proxyUDPAddr)
@@ -2468,7 +2468,7 @@ func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, origin
 	if err != nil {
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 			// 超时，没有响应 - 这可能是正常的（UDP是无连接的）
-			c.logInfo("UDP-PROXY: No response from proxy (timeout)")
+			c.logDebug("UDP-PROXY: No response from proxy (timeout)")
 			return nil
 		}
 		return fmt.Errorf("UDP-PROXY: failed to read response from proxy: %v", err)
@@ -2506,7 +2506,7 @@ func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, origin
 	// 12. 将响应数据发送回原始客户端
 	responseData := respData[offset:]
 	if len(responseData) == 0 {
-		c.logInfo("UDP-PROXY: No data in response from proxy")
+		c.logDebug("UDP-PROXY: No data in response from proxy")
 		return nil
 	}
 
@@ -2540,6 +2540,6 @@ func (c *Connection) forwardUDPPacketViaProxy(parentUdpConn *net.UDPConn, origin
 	}
 
 	c.logDebug("UDP-PROXY: Response sent to client (%d bytes)", len(clientReply))
-	c.logInfo("UDP-PROXY: Successfully forwarded UDP packet via proxy %s", proxy.Name)
+	c.logDebug("UDP-PROXY: Successfully forwarded UDP packet via proxy %s", proxy.Name)
 	return nil
 }

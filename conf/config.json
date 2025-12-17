@@ -331,7 +331,7 @@
     ]
   },
   "logging": {
-    "level": "info",
+    "level": "debug",
     "output_file": "",
     "enable_time": true,
     "enable_colors": true,

@@ -63,6 +63,9 @@ func main() {
 	}
 	defer mainLogger.Close()
 
+	// 设置全局默认 logger 的级别，确保全局日志也遵循配置
+	logger.SetLevel(cfg.Logging.Level)
+
 	// 从配置文件读取SOCKS5端口（如果配置文件中有设置则覆盖命令行参数）
 	configPort := cfg.Listener.SOCKS5Port
 	if configPort > 0 {
@@ -103,7 +106,7 @@ func main() {
 	}
 
 	// 创建Web服务器，传入配置管理器和 SOCKS5Server
-	webServer := web.NewWebServerWithSocks5(mainCfgManager, webConfig, logger.NewLogger().WithField("prefix", "[Web]"), server)
+	webServer := web.NewWebServerWithSocks5(mainCfgManager, webConfig, mainLogger.WithField("prefix", "[Web]"), server)
 
 	// 从配置文件读取DNS配置
 	cfg = mainCfgManager.GetConfig()
@@ -138,7 +141,7 @@ func main() {
 		ProxyNodes:      []dns.ProxyNode{},
 	}
 
-	dnsServer := dns.NewSmartDNSServer(dnsConfig, dnsPort, logger.NewLogger().WithField("prefix", "[DNS]"), router)
+	dnsServer := dns.NewSmartDNSServer(dnsConfig, dnsPort, mainLogger.WithField("prefix", "[DNS]"), router)
 
 	// 设置内存监控器的DNS缓存回调
 	if memoryMonitor != nil {

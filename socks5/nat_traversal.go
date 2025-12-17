@@ -194,7 +194,7 @@ func (nt *NATTraversal) detectNATType() {
 	// 使用STUN协议检测公网IP和端口
 	ip, port, err := nt.getPublicIPViaSTUN()
 	if err != nil {
-		nt.logger.Info("STUN检测失败: %v (将使用本地NAT模式)", err)
+		nt.logger.Warn("STUN检测失败: %v (将使用本地NAT模式)", err)
 		nt.logger.Info("注意: STUN失败不影响UDP代理功能，仍可正常使用")
 		nt.natType = NATFullCone // STUN失败时默认使用Full Cone模式
 		return
@@ -230,7 +230,7 @@ func (nt *NATTraversal) getPublicIPViaSTUN() (string, int, error) {
 			nt.logger.Info("STUN服务器 %s 成功: %s:%d", server, ip, port)
 			return ip, port, nil
 		}
-		nt.logger.Info("STUN服务器 %s 失败: %v", server, err)
+		nt.logger.Warn("STUN服务器 %s 失败: %v", server, err)
 	}
 	return "", 0, fmt.Errorf("所有STUN服务器都不可用")
 }

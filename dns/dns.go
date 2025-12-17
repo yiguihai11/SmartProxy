@@ -890,10 +890,10 @@ func (s *SmartDNSServer) Start() error {
 
 	// 添加Router状态检查
 	if s.resolver != nil {
-		s.logger.Info("DNS DEBUG: Resolver is not nil, checking router...")
+		s.logger.Debug("DNS DEBUG: Resolver is not nil, checking router...")
 		// 这里我们不能直接访问resolver的router，因为它没有公开
 		// 但是可以调用一个简单的方法来验证
-		s.logger.Info("DNS DEBUG: DNS Server configuration loaded successfully")
+		s.logger.Debug("DNS DEBUG: DNS Server configuration loaded successfully")
 	} else {
 		s.logger.Info("DNS ERROR: Resolver is nil!")
 	}
