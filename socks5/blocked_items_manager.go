@@ -361,17 +361,17 @@ func NewBlockedItemsManager(ttlMinutes int, logger *logger.SlogLogger) *BlockedI
 }
 
 // AddBlockedDomain adds a blocked domain with failure information
-func (bm *BlockedItemsManager) AddBlockedDomain(domain, portStr, ip string, reason FailureReason) {
+func (bm *BlockedItemsManager) AddBlockedDomain(domain, portStr string, reason FailureReason) {
 	port := 80 // default port
 	if p, err := parsePort(portStr); err == nil {
 		port = p
 	}
 
 	key := strings.ToLower(strings.TrimSpace(domain))
-	bm.items.Add(key, ItemTypeDomain, port, reason, ip)
+	bm.items.Add(key, ItemTypeDomain, port, reason, "")
 
-	bm.logger.Info("🚫 Added blocked domain: %s (port: %d, reason: %s, ip: %s)",
-		key, port, reason, ip)
+	bm.logger.Info("🚫 Added blocked domain: %s (port: %d, reason: %s)",
+		key, port, reason)
 }
 
 // AddBlockedIP adds a blocked IP with failure information
