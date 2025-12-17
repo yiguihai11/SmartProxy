@@ -426,7 +426,7 @@
             // 使用API数据更新图表
             function updateChartsWithData(data) {
                 // 更新屏蔽率图
-                var blockRate = data.block_rate_percent || 0;
+                var blockRate = parseFloat((data.block_rate_percent || 0).toFixed(1));
                 var charts = Chart.getChart('blockRateChart');
                 if(charts) {
                     charts.data.datasets[0].data = [blockRate, 100 - blockRate];
