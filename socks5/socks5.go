@@ -1287,17 +1287,43 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 					c.logInfo("✅ %s not in blocked items, trying direct connection", key)
 					// 尝试直连
 					target := formatNetworkAddress(targetAddr, targetPort)
-					conn, err := net.DialTimeout("tcp", target, time.Duration(c.server.smartProxyTimeoutMs)*time.Millisecond)
-					if err != nil {
-						// For other errors, check if it's a timeout
-						if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-							c.AddToBlockedItems(key, targetAddr, targetPort, FailureReasonTimeout)
-						} else {
-							c.AddToBlockedItems(key, targetAddr, targetPort, FailureReasonConnectionRefused)
-						}
-						return nil, fmt.Errorf("direct connection failed: %v", err)
+					directConn, directErr := net.DialTimeout("tcp", target, time.Duration(c.server.smartProxyTimeoutMs)*time.Millisecond)
+					if directErr == nil {
+						// 直连成功
+						c.logInfo("✅ Direct connection successful for %s", key)
+						return directConn, nil
 					}
-					return conn, nil
+
+					// 直连失败，记录错误原因
+					var failureReason FailureReason
+					if netErr, ok := directErr.(net.Error); ok && netErr.Timeout() {
+						failureReason = FailureReasonTimeout
+					} else {
+						failureReason = FailureReasonConnectionRefused
+					}
+
+					c.logInfo("❌ Direct connection failed for %s: %v, trying proxy...", key, directErr)
+
+					// 获取默认代理
+					defaultProxy := c.server.router.GetDefaultProxy()
+					if defaultProxy != nil {
+						// 尝试通过代理连接
+						proxyConn, proxyErr := c.connectThroughProxy(defaultProxy, targetAddr, targetPort)
+						if proxyErr == nil {
+							// 代理连接成功，说明是GFW封锁（直连被阻断，代理可通）
+							c.logInfo("🔒 GFW detected: %s is blocked directly but accessible via proxy", key)
+							c.AddToBlockedItems(key, targetAddr, targetPort, failureReason)
+							return proxyConn, nil
+						} else {
+							// 直连和代理都失败，说明目标不可达，不加入黑名单
+							c.logInfo("⛔ Both direct and proxy failed for %s (target unreachable)", key)
+							return nil, fmt.Errorf("both direct and proxy failed for %s", key)
+						}
+					} else {
+						// 没有可用代理，无法判断，不加入黑名单
+						c.logInfo("⚠️ No proxy available, cannot determine if %s is blocked by GFW", key)
+						return nil, fmt.Errorf("direct connection failed and no proxy available: %v", directErr)
+					}
 				}
 			}
 		}
@@ -1756,11 +1782,14 @@ func (c *Connection) relayTargetToClient(ctx context.Context, writer io.Writer, 
 						// 如果启用了智能代理并且是探测端口
 						if c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
 							c.logInfo("⚠️ Direct connection to %s reset by peer, switching to proxy", hostName)
-							c.AddToBlockedItems(hostName, c.targetAddr, targetPort, FailureReasonRST)
 
 							// 尝试切换到代理连接
 							if proxyConn, proxyErr := c.switchToProxyAndReplay(); proxyErr == nil {
-								// 成功切换到代理，更新目标连接并继续读取
+								// 代理切换成功，说明是GFW封锁（直连被RST，代理可通）
+								c.logInfo("🔒 GFW detected: %s is blocked directly but accessible via proxy (RST)", hostName)
+								c.AddToBlockedItems(hostName, c.targetAddr, targetPort, FailureReasonRST)
+
+								// 更新目标连接并继续读取
 								oldConn := c.targetConn
 								c.targetConn = proxyConn
 
@@ -1772,6 +1801,8 @@ func (c *Connection) relayTargetToClient(ctx context.Context, writer io.Writer, 
 								reader.Reset(c.targetConn)
 								continue // 继续主循环
 							} else {
+								// 直连和代理都失败，说明目标不可达，不加入黑名单
+								c.logInfo("⛔ Both direct and proxy failed for %s (target unreachable)", hostName)
 								c.logInfo("❌ Failed to switch to proxy: %v", proxyErr)
 							}
 						}
