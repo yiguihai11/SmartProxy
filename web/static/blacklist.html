@@ -274,6 +274,9 @@
                             // 更新树
                             updateTree(data.data.items);
 
+                            // 计算协议分布
+                            calculateProtocolDistribution(data.data.items);
+
                             // 更新表格
                             table.reload('blacklistTable', {
                                 data: data.data.items
@@ -430,15 +433,35 @@
                     charts.update();
                 }
 
-                // 更新协议占比图
-                var protocolStats = data.protocol_stats || {};
-                var httpCount = protocolStats.http || 0;
-                var httpsCount = protocolStats.https || 0;
-                var unknownCount = protocolStats.unknown || 0;
+                // 协议分布在前端计算
+                calculateProtocolDistribution(blacklistData);
+            }
 
-                charts = Chart.getChart('protocolChart');
+            // 计算协议分布
+            function calculateProtocolDistribution(items) {
+                var protocolStats = {
+                    http: 0,
+                    https: 0,
+                    unknown: 0
+                };
+
+                items.forEach(function(item) {
+                    if(item.ports && item.ports.length > 0) {
+                        item.ports.forEach(function(port) {
+                            if(port.port === 80) {
+                                protocolStats.http++;
+                            } else if(port.port === 443) {
+                                protocolStats.https++;
+                            } else {
+                                protocolStats.unknown++;
+                            }
+                        });
+                    }
+                });
+
+                var charts = Chart.getChart('protocolChart');
                 if(charts) {
-                    charts.data.datasets[0].data = [httpCount, httpsCount, unknownCount];
+                    charts.data.datasets[0].data = [protocolStats.http, protocolStats.https, protocolStats.unknown];
                     charts.update();
                 }
             }
