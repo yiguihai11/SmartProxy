@@ -248,7 +248,7 @@
                             document.getElementById('total-domains').textContent = data.data.total_blocked_domains || 0;
                             document.getElementById('total-ips').textContent = data.data.total_blocked_ips || 0;
                             document.getElementById('total-attempts').textContent = data.data.total_attempts || 0;
-                            document.getElementById('block-rate').textContent = (data.data.block_rate_percent || 0).toFixed(2) + '%';
+                            document.getElementById('block-rate').textContent = Math.round(data.data.block_rate_percent || 0) + '%';
 
                             // 更新图表数据
                             updateChartsWithData(data.data);

@@ -1278,9 +1278,6 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 			if c.server.blockedItems != nil {
 				// 优先使用检测到的主机名（SNI/Host）
 				key := c.detectedHost
-				if key == "" {
-					key = targetAddr
-				}
 				if c.server.blockedItems.IsBlocked(key) {
 					c.logInfo("🚫 %s is in blocked items, using proxy directly", key)
 				} else {
