@@ -745,7 +745,7 @@ func (s *SOCKS5Server) Start() error {
 			clientConn, err = s.tcpListener.Accept()
 
 			// 检查是否是超时
-			if netErr, ok := err.(net.Error); ok && ok && netErr.Timeout() {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				continue // 继续下一次accept
 			}
 		} else {

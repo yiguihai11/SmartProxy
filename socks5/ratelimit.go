@@ -233,21 +233,30 @@ func (rl *RateLimiter) CheckUploadLimit(identifier string, bytes int64) bool {
 		return false
 	}
 
-	rl.mu.RLock()
-	defer rl.mu.RUnlock()
+	// 先获取需要检查的规则，避免长时间持锁
+	var matchingRules []*RateLimitRule
+	var matchingBuckets []*TokenBucket
 
-	// 检查特定规则
+	rl.mu.RLock()
 	for _, rule := range rl.rules {
 		if !rule.Enabled || rule.UploadLimit <= 0 {
 			continue
 		}
-
 		if rl.matchesRule(rule, identifier) {
-			bucket, exists := rl.uploadBuckets[rule.Key]
-			if exists && !bucket.Allow(bytes) {
-				rl.updateStats(rule.Key, bytes, 0, bytes, 0)
-				return false
+			matchingRules = append(matchingRules, rule)
+			if bucket, exists := rl.uploadBuckets[rule.Key]; exists {
+				matchingBuckets = append(matchingBuckets, bucket)
 			}
+		}
+	}
+	rl.mu.RUnlock()
+
+	// 检查特定规则
+	for i, rule := range matchingRules {
+		bucket := matchingBuckets[i]
+		if bucket != nil && !bucket.Allow(bytes) {
+			rl.updateStats(rule.Key, bytes, 0, bytes, 0)
+			return false
 		}
 	}
 
@@ -264,21 +273,30 @@ func (rl *RateLimiter) CheckDownloadLimit(identifier string, bytes int64) bool {
 		return false
 	}
 
-	rl.mu.RLock()
-	defer rl.mu.RUnlock()
+	// 先获取需要检查的规则，避免长时间持锁
+	var matchingRules []*RateLimitRule
+	var matchingBuckets []*TokenBucket
 
-	// 检查特定规则
+	rl.mu.RLock()
 	for _, rule := range rl.rules {
 		if !rule.Enabled || rule.DownloadLimit <= 0 {
 			continue
 		}
-
 		if rl.matchesRule(rule, identifier) {
-			bucket, exists := rl.downloadBuckets[rule.Key]
-			if exists && !bucket.Allow(bytes) {
-				rl.updateStats(rule.Key, bytes, 0, 0, bytes)
-				return false
+			matchingRules = append(matchingRules, rule)
+			if bucket, exists := rl.downloadBuckets[rule.Key]; exists {
+				matchingBuckets = append(matchingBuckets, bucket)
 			}
+		}
+	}
+	rl.mu.RUnlock()
+
+	// 检查特定规则
+	for i, rule := range matchingRules {
+		bucket := matchingBuckets[i]
+		if bucket != nil && !bucket.Allow(bytes) {
+			rl.updateStats(rule.Key, bytes, 0, 0, bytes)
+			return false
 		}
 	}
 
