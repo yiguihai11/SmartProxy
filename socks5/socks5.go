@@ -2122,9 +2122,21 @@ func (c *Connection) AddToBlockedItems(targetHost, targetAddr string, port uint1
 		}
 		return
 	} else {
+		// 尝试从 targetAddr 中提取IP地址
+		var ipAddr string
+		if host, portStr, err := net.SplitHostPort(targetAddr); err == nil {
+			// targetAddr 是 host:port 格式，检查 host 是否是IP
+			if net.ParseIP(host) != nil {
+				ipAddr = host
+			}
+		} else if net.ParseIP(targetAddr) != nil {
+			// targetAddr 本身就是IP
+			ipAddr = targetAddr
+		}
+
 		// 添加到BlockedItemsManager - 使用 AddBlockedDomain
 		// 在智能代理场景下，targetHost 总是域名（SNI检测到的主机名）
-		c.server.blockedItems.AddBlockedDomain(targetHost, fmt.Sprintf("%d", port), targetHost, failureReason)
+		c.server.blockedItems.AddBlockedDomain(targetHost, fmt.Sprintf("%d", port), ipAddr, failureReason)
 	}
 }
 
