@@ -114,7 +114,7 @@
                 </div>
             </div>
         </div>
-        <div class="layui-col-md3 layui-col-xs12">
+        <div class="layui-col-md2 layui-col-xs6">
             <div class="card">
                 <div class="layui-row layui-col-space10">
                     <div class="layui-col-xs7">
@@ -127,11 +127,53 @@
                 </div>
             </div>
         </div>
+        <div class="layui-col-md2 layui-col-xs6">
+            <div class="card">
+                <div class="layui-row layui-col-space10">
+                    <div class="layui-col-xs7">
+                        <h3 style="margin: 0; color: #2d3748;">总访问次数</h3>
+                        <p style="margin: 5px 0 0 0; font-size: 24px; font-weight: bold; color: #4299e1;" id="total-attempts">-</p>
+                    </div>
+                    <div class="layui-col-xs5" style="text-align: right;">
+                        <i class="layui-icon layui-icon-chart-screen" style="font-size: 48px; color: #4299e1;"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="layui-col-md2 layui-col-xs6">
+            <div class="card">
+                <div class="layui-row layui-col-space10">
+                    <div class="layui-col-xs7">
+                        <h3 style="margin: 0; color: #2d3748;">屏蔽率</h3>
+                        <p style="margin: 5px 0 0 0; font-size: 24px; font-weight: bold; color: #9f7aea;" id="block-rate">-</p>
+                    </div>
+                    <div class="layui-col-xs5" style="text-align: right;">
+                        <i class="layui-icon layui-icon-rate" style="font-size: 48px; color: #9f7aea;"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- 图表区域 -->
     <div class="layui-row layui-col-space15">
-        <div class="layui-col-md6 layui-col-xs12">
+        <div class="layui-col-md3 layui-col-xs12">
+            <div class="card">
+                <h3 style="margin-top: 0;">屏蔽率</h3>
+                <div class="chart-container">
+                    <canvas id="blockRateChart"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="layui-col-md3 layui-col-xs12">
+            <div class="card">
+                <h3 style="margin-top: 0;">协议占比</h3>
+                <div class="chart-container">
+                    <canvas id="protocolChart"></canvas>
+                </div>
+            </div>
+        </div>
+        <div class="layui-col-md3 layui-col-xs12">
             <div class="card">
                 <h3 style="margin-top: 0;">失败原因分布</h3>
                 <div class="chart-container">
@@ -139,7 +181,7 @@
                 </div>
             </div>
         </div>
-        <div class="layui-col-md6 layui-col-xs12">
+        <div class="layui-col-md3 layui-col-xs12">
             <div class="card">
                 <h3 style="margin-top: 0;">屏蔽趋势（最近24小时）</h3>
                 <div class="chart-container">
@@ -205,6 +247,11 @@
                             document.getElementById('total-items').textContent = data.data.total_blocked_items || 0;
                             document.getElementById('total-domains').textContent = data.data.total_blocked_domains || 0;
                             document.getElementById('total-ips').textContent = data.data.total_blocked_ips || 0;
+                            document.getElementById('total-attempts').textContent = data.data.total_attempts || 0;
+                            document.getElementById('block-rate').textContent = (data.data.block_rate_percent || 0).toFixed(2) + '%';
+
+                            // 更新图表数据
+                            updateChartsWithData(data.data);
                         }
                     });
             }
@@ -237,9 +284,60 @@
 
             // 初始化图表
             function initCharts() {
+                // 屏蔽率环形图
+                var ctx0 = document.getElementById('blockRateChart').getContext('2d');
+                var blockRateChart = new Chart(ctx0, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['屏蔽率', '未屏蔽率'],
+                        datasets: [{
+                            data: [0, 100],
+                            backgroundColor: ['#f6ad55', '#e2e8f0']
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'bottom'
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        return context.label + ': ' + context.parsed + '%';
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+
+                // 协议占比图
+                var ctx1 = document.getElementById('protocolChart').getContext('2d');
+                var protocolChart = new Chart(ctx1, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['HTTP', 'HTTPS', '其他'],
+                        datasets: [{
+                            data: [0, 0, 0],
+                            backgroundColor: ['#f687b3', '#68d391', '#4299e1']
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'bottom'
+                            }
+                        }
+                    }
+                });
+
                 // 失败原因分布图
-                var ctx1 = document.getElementById('failureReasonChart').getContext('2d');
-                failureReasonChart = new Chart(ctx1, {
+                var ctx2 = document.getElementById('failureReasonChart').getContext('2d');
+                failureReasonChart = new Chart(ctx2, {
                     type: 'doughnut',
                     data: {
                         labels: [],
@@ -266,8 +364,8 @@
                 });
 
                 // 屏蔽趋势图
-                var ctx2 = document.getElementById('blockTrendChart').getContext('2d');
-                blockTrendChart = new Chart(ctx2, {
+                var ctx3 = document.getElementById('blockTrendChart').getContext('2d');
+                blockTrendChart = new Chart(ctx3, {
                     type: 'line',
                     data: {
                         labels: [],
@@ -320,6 +418,29 @@
                 blockTrendChart.data.labels = hours;
                 blockTrendChart.data.datasets[0].data = counts;
                 blockTrendChart.update();
+            }
+
+            // 使用API数据更新图表
+            function updateChartsWithData(data) {
+                // 更新屏蔽率图
+                var blockRate = data.block_rate_percent || 0;
+                var charts = Chart.getChart('blockRateChart');
+                if(charts) {
+                    charts.data.datasets[0].data = [blockRate, 100 - blockRate];
+                    charts.update();
+                }
+
+                // 更新协议占比图
+                var protocolStats = data.protocol_stats || {};
+                var httpCount = protocolStats.http || 0;
+                var httpsCount = protocolStats.https || 0;
+                var unknownCount = protocolStats.unknown || 0;
+
+                charts = Chart.getChart('protocolChart');
+                if(charts) {
+                    charts.data.datasets[0].data = [httpCount, httpsCount, unknownCount];
+                    charts.update();
+                }
             }
 
             // 初始化树

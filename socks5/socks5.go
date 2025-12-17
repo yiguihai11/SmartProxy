@@ -1270,6 +1270,10 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 
 	default:
 		if c.server.smartProxyEnabled && c.server.isProbingPort(int(targetPort)) {
+			// 统计总访问次数
+			if c.server.blockedItems != nil {
+				c.server.blockedItems.IncrementTotalAttempts()
+			}
 			// 检查是否在屏蔽列表中
 			if c.server.blockedItems != nil {
 				// 优先使用检测到的主机名（SNI/Host）

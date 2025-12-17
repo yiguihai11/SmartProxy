@@ -340,6 +340,8 @@ type BlockedItemsManager struct {
 	cleanupTicker *time.Ticker
 	stopCleanup   chan bool
 	logger        *logger.SlogLogger
+	totalAttempts int64 // 总访问次数
+	mutex         sync.RWMutex
 }
 
 // NewBlockedItemsManager creates a new BlockedItemsManager
@@ -410,6 +412,9 @@ func (bm *BlockedItemsManager) GetStatistics() map[string]interface{} {
 	ipCount := 0
 	var oldestBlock, newestBlock time.Time
 
+	// 统计协议类型
+	protocolStats := make(map[string]int)
+
 	for _, item := range allItems {
 		if item.Type == ItemTypeDomain {
 			domainCount++
@@ -423,15 +428,54 @@ func (bm *BlockedItemsManager) GetStatistics() map[string]interface{} {
 		if newestBlock.IsZero() || item.LastUpdated.After(newestBlock) {
 			newestBlock = item.LastUpdated
 		}
+
+		// 统计端口对应的协议
+		for port := range item.Ports {
+			switch port {
+			case 80:
+				protocolStats["http"]++
+			case 443:
+				protocolStats["https"]++
+			default:
+				protocolStats["unknown"]++
+			}
+		}
+	}
+
+	bm.mutex.RLock()
+	totalAttempts := bm.totalAttempts
+	bm.mutex.RUnlock()
+
+	// 计算屏蔽率
+	blockRate := float64(0)
+	if totalAttempts > 0 {
+		blockRate = float64(bm.items.Count()) / float64(totalAttempts) * 100
 	}
 
 	return map[string]interface{}{
 		"total_blocked_domains": domainCount,
 		"total_blocked_ips":     ipCount,
 		"total_blocked_items":   bm.items.Count(),
+		"total_attempts":        totalAttempts,
+		"block_rate_percent":    blockRate,
 		"oldest_block":          oldestBlock,
 		"newest_block":          newestBlock,
+		"protocol_stats":        protocolStats,
 	}
+}
+
+// IncrementTotalAttempts 增加总访问次数
+func (bm *BlockedItemsManager) IncrementTotalAttempts() {
+	bm.mutex.Lock()
+	bm.totalAttempts++
+	bm.mutex.Unlock()
+}
+
+// GetTotalAttempts 获取总访问次数
+func (bm *BlockedItemsManager) GetTotalAttempts() int64 {
+	bm.mutex.RLock()
+	defer bm.mutex.RUnlock()
+	return bm.totalAttempts
 }
 
 // GetList returns a detailed list of all blocked items
