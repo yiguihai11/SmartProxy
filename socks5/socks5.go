@@ -1280,6 +1280,8 @@ func (c *Connection) executeConnectionAction(result MatchResult, targetAddr stri
 				key := c.detectedHost
 				if c.server.blockedItems.IsBlocked(key) {
 					c.logInfo("🚫 %s is in blocked items, using proxy directly", key)
+					// 即使已经在黑名单中，也要更新时间戳
+					c.server.blockedItems.UpdateTimestamp(key)
 				} else {
 					c.logDebug("✅ %s not in blocked items, trying direct connection", key)
 					// 尝试直连

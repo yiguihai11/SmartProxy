@@ -85,7 +85,6 @@ type BlockedItem struct {
 	LastUpdated    time.Time              `json:"last_updated"`
 	TotalAttempts  int                    `json:"total_attempts"`
 	Ports          map[int]*PortInfo      `json:"ports"`           // Port-specific information
-	IPList         []string               `json:"ip_list"`         // List of IPs tried (for domains)
 	FailureReasons map[FailureReason]int  `json:"failure_reasons"` // Count of each failure type
 	AdditionalInfo map[string]interface{} `json:"additional_info"` // Extra information
 	mutex          sync.RWMutex           `json:"-"`
@@ -100,7 +99,6 @@ func NewBlockedItem(key string, itemType BlockedItemType) *BlockedItem {
 		FirstBlocked:   now,
 		LastUpdated:    now,
 		Ports:          make(map[int]*PortInfo),
-		IPList:         make([]string, 0),
 		FailureReasons: make(map[FailureReason]int),
 		AdditionalInfo: make(map[string]interface{}),
 	}
@@ -130,20 +128,6 @@ func (bi *BlockedItem) AddAttempt(port int, reason FailureReason, ip string) {
 	portInfo.AttemptCount++
 	portInfo.LastAttempt = now
 	portInfo.LastFailureReason = reason
-
-	// Add IP to list if not already present (for domains)
-	if bi.Type == ItemTypeDomain && ip != "" {
-		found := false
-		for _, existingIP := range bi.IPList {
-			if existingIP == ip {
-				found = true
-				break
-			}
-		}
-		if !found {
-			bi.IPList = append(bi.IPList, ip)
-		}
-	}
 }
 
 // GetSortedPorts returns ports sorted by attempt count (descending)
@@ -524,7 +508,6 @@ func (bm *BlockedItemsManager) GetList(limit int, offset int) map[string]interfa
 			"last_updated":       item.LastUpdated,
 			"total_attempts":     item.TotalAttempts,
 			"ports":              portsList,
-			"ip_list":            item.IPList,
 			"top_failure_reason": topFailureReason,
 			"failure_reasons":    item.FailureReasons,
             "failure_reasons_str": func() map[string]int {
@@ -553,6 +536,19 @@ func (bm *BlockedItemsManager) GetList(limit int, offset int) map[string]interfa
 func (bm *BlockedItemsManager) Remove(key string) {
 	if bm.items.Delete(key) {
 		bm.logger.Info("✅ Removed from blocked items: %s", key)
+	}
+}
+
+// UpdateTimestamp updates the last_updated timestamp for a blocked item
+func (bm *BlockedItemsManager) UpdateTimestamp(key string) {
+	shard := bm.items.getShard(key)
+	shard.mutex.Lock()
+	defer shard.mutex.Unlock()
+
+	if item, exists := shard.items[key]; exists {
+		item.mutex.Lock()
+		defer item.mutex.Unlock()
+		item.LastUpdated = time.Now()
 	}
 }
 
@@ -663,7 +659,6 @@ func (bi *BlockedItem) Copy() *BlockedItem {
 		LastUpdated:    bi.LastUpdated,
 		TotalAttempts:  bi.TotalAttempts,
 		Ports:          make(map[int]*PortInfo),
-		IPList:         make([]string, len(bi.IPList)),
 		FailureReasons: make(map[FailureReason]int),
 		AdditionalInfo: make(map[string]interface{}),
 	}
@@ -673,9 +668,6 @@ func (bi *BlockedItem) Copy() *BlockedItem {
 		portCopy := *v
 		itemCopy.Ports[k] = &portCopy
 	}
-
-	// Copy IP list
-	copy(itemCopy.IPList, bi.IPList)
 
 	// Copy failure reasons
 	for k, v := range bi.FailureReasons {

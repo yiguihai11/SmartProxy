@@ -47,9 +47,21 @@
             color: #2196F3;
             font-weight: bold;
         }
+        .domain-type:hover {
+            color: #1976D2;
+            text-decoration: underline;
+        }
         .ip-type {
             color: #4CAF50;
             font-weight: bold;
+        }
+        .ip-type:hover {
+            color: #388E3C;
+            text-decoration: underline;
+        }
+        .domain-type, .ip-type {
+            text-decoration: none;
+            transition: all 0.3s;
         }
         .expired-badge {
             background: #9e9e9e;
@@ -219,6 +231,101 @@
             var table = layui.table;
             var layer = layui.layer;
 
+            // BlockTrendManager - 管理屏蔽趋势数据
+            var BlockTrendManager = {
+                storageKey: 'smartproxy_block_trends',
+
+                // 添加屏蔽记录
+                addBlockRecord: function(timestamp) {
+                    var records = this.getAllRecords();
+                    records.push(timestamp);
+                    this.saveRecords(records);
+                },
+
+                // 获取所有记录
+                getAllRecords: function() {
+                    var data = localStorage.getItem(this.storageKey);
+                    return data ? JSON.parse(data) : [];
+                },
+
+                // 保存记录
+                saveRecords: function(records) {
+                    localStorage.setItem(this.storageKey, JSON.stringify(records));
+                },
+
+                // 清理24小时前的记录
+                cleanExpiredRecords: function() {
+                    var records = this.getAllRecords();
+                    var now = Date.now();
+                    var oneDayAgo = now - (24 * 60 * 60 * 1000);
+
+                    var filteredRecords = records.filter(function(timestamp) {
+                        return timestamp > oneDayAgo;
+                    });
+
+                    this.saveRecords(filteredRecords);
+                },
+
+                // 获取最近24小时的统计数据
+                get24HourStats: function() {
+                    this.cleanExpiredRecords(); // 先清理过期数据
+
+                    var records = this.getAllRecords();
+                    var now = Date.now();
+
+                    // 按24小时分组统计
+                    var hourlyStats = {};
+                    for(var i = 23; i >= 0; i--) {
+                        var hourStart = now - (i * 60 * 60 * 1000);
+                        var hourEnd = now - ((i - 1) * 60 * 60 * 1000);
+                        var hourKey = i + '小时前';
+                        hourlyStats[hourKey] = 0;
+
+                        records.forEach(function(timestamp) {
+                            if(timestamp >= hourStart && timestamp < hourEnd) {
+                                hourlyStats[hourKey]++;
+                            }
+                        });
+                    }
+
+                    return {
+                        labels: Object.keys(hourlyStats),
+                        data: Object.values(hourlyStats)
+                    };
+                },
+
+                // 从后端数据同步
+                syncWithBackend: function(items) {
+                    var me = this;
+                    var now = Date.now();
+                    var oneDayAgo = now - (24 * 60 * 60 * 1000);
+                    var existingRecords = this.getAllRecords();
+                    var recordMap = {};
+
+                    // 将现有记录转为Map便于查找
+                    existingRecords.forEach(function(timestamp) {
+                        recordMap[timestamp] = true;
+                    });
+
+                    // 添加新的记录（使用first_blocked时间）
+                    var hasNewRecords = false;
+                    items.forEach(function(item) {
+                        if(item.first_blocked) {
+                            var timestamp = new Date(item.first_blocked).getTime();
+                            if(timestamp > oneDayAgo && !recordMap[timestamp]) {
+                                me.addBlockRecord(timestamp);
+                                recordMap[timestamp] = true;
+                                hasNewRecords = true;
+                            }
+                        }
+                    });
+
+                    if(hasNewRecords) {
+                        me.cleanExpiredRecords();
+                    }
+                }
+            };
+
             // 全局变量
             var failureReasonChart = null;
             var blockTrendChart = null;
@@ -234,8 +341,23 @@
                 initTree();
                 initTable();
 
+                // 初始化趋势图
+                var stats = BlockTrendManager.get24HourStats();
+                blockTrendChart.data.labels = stats.labels;
+                blockTrendChart.data.datasets[0].data = stats.data;
+                blockTrendChart.update();
+
                 // 自动刷新
                 setInterval(loadStatistics, 10000);
+                setInterval(loadBlacklistList, 10000);
+
+                // 每分钟更新趋势图（确保时间准确）
+                setInterval(function(){
+                    var stats = BlockTrendManager.get24HourStats();
+                    blockTrendChart.data.labels = stats.labels;
+                    blockTrendChart.data.datasets[0].data = stats.data;
+                    blockTrendChart.update();
+                }, 60000);
             }
 
             // 加载统计信息
@@ -410,16 +532,11 @@
                 failureReasonChart.data.datasets[0].data = Object.values(failureReasons);
                 failureReasonChart.update();
 
-                // 模拟趋势数据（这里简化处理）
-                var hours = [];
-                var counts = [];
-                for(var i = 23; i >= 0; i--) {
-                    hours.push(i + '小时前');
-                    counts.push(Math.floor(Math.random() * 10) + 1);
-                }
-
-                blockTrendChart.data.labels = hours;
-                blockTrendChart.data.datasets[0].data = counts;
+                // 同步并更新趋势图
+                BlockTrendManager.syncWithBackend(items);
+                var stats = BlockTrendManager.get24HourStats();
+                blockTrendChart.data.labels = stats.labels;
+                blockTrendChart.data.datasets[0].data = stats.data;
                 blockTrendChart.update();
             }
 
@@ -546,7 +663,22 @@
                     cols: [[
                         {field: 'key', title: '域名/IP', width: 200, templet: function(d){
                             var typeClass = d.type === 'Domain' ? 'domain-type' : 'ip-type';
-                            return '<span class="' + typeClass + '">' + d.key + '</span>';
+
+                            // 判断协议
+                            var protocol = 'http';
+                            if(d.ports && d.ports.length > 0) {
+                                // 检查是否有443端口
+                                for(var i = 0; i < d.ports.length; i++) {
+                                    if(d.ports[i].port === 443) {
+                                        protocol = 'https';
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // 生成可点击的链接
+                            var url = protocol + '://' + d.key;
+                            return '<a href="' + url + '" target="_blank" class="' + typeClass + '">' + d.key + '</a>';
                         }},
                         {field: 'type', title: '类型', width: 80, templet: function(d){
                             return d.type === 'Domain' ? '域名' : 'IP';
