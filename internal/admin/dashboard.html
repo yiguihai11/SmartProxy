@@ -176,7 +176,7 @@ tr:last-child td{border-bottom:none}
 <button class="hamburger" id="hamburger" onclick="toggleDrawer()" aria-label="Toggle menu">☰</button>
 <div class="scrim" id="scrim" onclick="closeDrawer()"></div>
 <div class="sidebar">
-  <div class="sidebar-header"><div class="sidebar-logo">SP</div><div class="sidebar-title">SmartProxy <span>v1</span></div><button class="sidebar-close" id="sidebar-close" onclick="closeDrawer()" aria-label="Close menu">✕</button></div>
+  <div class="sidebar-header"><div class="sidebar-logo">SP</div><div class="sidebar-title">SmartProxy <span id="app-version"></span></div><button class="sidebar-close" id="sidebar-close" onclick="closeDrawer()" aria-label="Close menu">✕</button></div>
   <div class="sidebar-nav">
     <div class="nav-item section">Monitoring</div>
     <div class="nav-item active" data-view="dashboard"><span class="nav-icon">~</span><span>Overview</span></div>
@@ -1377,7 +1377,14 @@ document.querySelectorAll('.nav-item:not(.section)').forEach(function(item){
     if(ld[item.dataset.view])ld[item.dataset.view]();
   });
 });
+function loadVersion(){
+  fetch('/version').then(function(r){return r.json()}).then(function(d){
+    var el=document.getElementById('app-version');
+    if(el&&d.version)el.textContent='v'+d.version;
+  }).catch(function(){});
+}
 loadDashboard();
+loadVersion();
 function setDot(ok){
   document.querySelectorAll('.view-meta .dot').forEach(function(d){d.style.background=ok?'var(--green)':'var(--red)'});
 }
