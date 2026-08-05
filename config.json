@@ -1,0 +1,83 @@
+{
+  "log_level": "INFO",
+  "listen": {
+    "host": "::",
+    "port": 1080,
+    "auth": {
+      "username": "",
+      "password": ""
+    },
+    "relaxed_udp_origin_check": true,
+    "udp_associate_idle_timeout": 60,
+    "admin_socket": "/data/data/com.termux/files/home/tmp/smartproxy.sock",
+    "admin_port": 9090,
+    "admin_auth": {
+      "enabled": true,
+      "username": "root",
+      "password": "admin"
+    },
+    "admin_refresh_interval": 3
+  },
+  "tun": {
+    "enabled": false,
+    "name": "tun0",
+    "mtu": 1500,
+    "inet4_address": [
+      "172.19.0.1/30"
+    ],
+    "inet6_address": [
+      "fc00::1/64"
+    ],
+    "auto_route": false,
+    "stack": "gvisor",
+    "output_mark": 0,
+    "route_exclude_ports": [
+      22
+    ]
+  },
+  "upstream": {
+    "default": "failover",
+    "health_check": {
+      "enabled": true,
+      "url": "http://wifi.vivo.com.cn/generate_204",
+      "interval": 60,
+      "timeout": 5,
+      "failures": 2,
+      "successes": 1,
+      "open_cool_down": 30,
+      "auto_disable_if_single_proxy": true
+    },
+    "proxies": [
+      {
+        "alias": "ss-local",
+        "url": "socks5://127.0.0.1:1081"
+      }
+    ]
+  },
+  "routing": {
+    "chnroute_file": "chnroute.txt",
+    "acl_file": "acl.txt"
+  },
+  "dns": {
+    "enabled": true,
+    "cache": {
+      "size": 10000,
+      "ttl": 86400
+    },
+    "foreign": {
+      "ipv4": "8.8.8.8:53",
+      "ipv6": "[2001:4860:4860::8888]:53"
+    },
+    "query_timeout": 3,
+    "speed_check_mode": "tcp:443"
+  },
+  "smart_proxy": {
+    "enabled": true,
+    "timeout": 3,
+    "ports": [
+      80,
+      443
+    ],
+    "blacklist_ttl": 3600
+  }
+}

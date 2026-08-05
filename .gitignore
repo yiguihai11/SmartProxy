@@ -1,0 +1,16 @@
+# build artifacts
+/build/
+
+# stale binaries at repo root
+/socks5-router
+
+# logs & runtime sockets
+*.log
+*.sock
+
+# editor / OS cruft
+.DS_Store
+*.swp
+
+# local tooling config
+.claude/settings.local.json
