@@ -515,6 +515,7 @@ function openProxyDialog(i){
   document.getElementById('proxy-user').value='';
   document.getElementById('proxy-pass').value='';
   document.getElementById('proxy-server').value='';
+  document.getElementById('proxy-udpaddr').value=p?(p.udp_addr||''):'';
   var scheme='socks5';
   if(p){
     var u=null;
@@ -565,18 +566,24 @@ async function saveProxy(){
   if(user)url=scheme+'://'+encodeURIComponent(user)+':'+encodeURIComponent(pass)+'@'+server;
   try{var chk=new URL(url);if(!chk.hostname)throw new Error('bad host')}catch(e){alert('Invalid server address: '+server);return}
   var editing=document.getElementById('proxy-dialog').dataset.alias||'';
+  var udpaddr=document.getElementById('proxy-udpaddr').value.trim();
+  if(udpaddr && !/^\d+$/.test(udpaddr) && udpaddr.indexOf(':')<0){
+    alert('Invalid udp_addr: use a port ("1080") or "host:port" (e.g. 127.0.0.1:1080)');
+    return;
+  }
   try{
     await putProxyConfig(function(cfg){
       var ps=cfg.upstream.proxies;
+      function entry(){var e={alias:alias,url:url};if(udpaddr)e.udp_addr=udpaddr;return e}
       if(editing){
         for(var i=0;i<ps.length;i++){
-          if(ps[i].alias===editing){ps[i].alias=alias;ps[i].url=url;return}
+          if(ps[i].alias===editing){ps[i].alias=alias;ps[i].url=url;if(udpaddr)ps[i].udp_addr=udpaddr;else delete ps[i].udp_addr;return}
           if(ps[i].alias===alias){alert('Alias "'+alias+'" already exists');throw new Error('dup')}
         }
-        ps.push({alias:alias,url:url});
+        ps.push(entry());
       }else{
         for(var i=0;i<ps.length;i++){if(ps[i].alias===alias){alert('Alias "'+alias+'" already exists');throw new Error('dup')}}
-        ps.push({alias:alias,url:url});
+        ps.push(entry());
       }
     });
     closeProxyDialog();
@@ -616,15 +623,16 @@ async function fbLoad(path){
   var errEl=document.getElementById('fb-error');
   list.innerHTML='<div style="color:var(--text3);padding:8px 0">Loading...</div>';
   errEl.style.display='none';
-  var up=document.getElementById('fb-up-btn');
   try{
     var r=await fetch('/files?path='+encodeURIComponent(path||''));
     var data=await r.json();
     if(!r.ok)throw new Error(data.error||('HTTP '+r.status));
     fbCwd=data.path;
     document.getElementById('fb-path').textContent=data.path;
-    if(up)up.disabled=!data.parent;
     var html='';
+    if(data.parent){
+      html+='<div class="fb-item" onclick="fbGoUp()"><span class="fb-icon">📁</span>..</div>';
+    }
     data.entries.forEach(function(e){
       if(e.is_dir){
         html+='<div class="fb-item" onclick="fbEnter(\''+escAttr(e.name)+'\')"><span class="fb-icon">📁</span>'+escHtml(e.name)+'</div>';
@@ -637,7 +645,6 @@ async function fbLoad(path){
     list.innerHTML='';
     errEl.textContent='Error: '+e.message;
     errEl.style.display='block';
-    if(up)up.disabled=true;
   }
 }
 function fbEnter(name){fbLoad(fbCwd==='/'?('/'+name):(fbCwd+'/'+name))}
@@ -646,6 +653,43 @@ function filepathDir(p){
   if(p==='/'||!p)return p;
   var i=p.lastIndexOf('/');
   return i<=0?'/':p.slice(0,i);
+}
+function openNewFileModal(){
+  document.getElementById('fb-new-dir').textContent=fbCwd;
+  document.getElementById('fb-new-name').value='';
+  document.getElementById('fb-new-error').style.display='none';
+  document.getElementById('fb-new-overlay').classList.add('show');
+  setTimeout(function(){document.getElementById('fb-new-name').focus()},50);
+}
+function closeNewFileModal(){
+  document.getElementById('fb-new-overlay').classList.remove('show');
+}
+async function fbCreateFile(){
+  var inp=document.getElementById('fb-new-name');
+  var errEl=document.getElementById('fb-new-error');
+  var name=inp.value.trim();
+  if(!name){errEl.textContent='Filename is empty';errEl.style.display='block';return}
+  if(name.indexOf('/')>=0||name.indexOf('\\')>=0||name.indexOf('..')>=0){
+    errEl.textContent='Invalid filename: "/" "\\" and ".." are not allowed';
+    errEl.style.display='block';
+    return;
+  }
+  var path=fbCwd==='/'?('/'+name):(fbCwd+'/'+name);
+  var btn=document.getElementById('fb-new-confirm');
+  btn.disabled=true;
+  try{
+    var r=await fetch('/files/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:path})});
+    var data=await r.json();
+    if(!r.ok)throw new Error(data.error||('HTTP '+r.status));
+    closeNewFileModal();
+    fbLoad(fbCwd);
+    showCopyToast(document.getElementById('copy-toast'),'Created: '+name);
+  }catch(e){
+    errEl.textContent='Create failed: '+e.message;
+    errEl.style.display='block';
+  }finally{
+    btn.disabled=false;
+  }
 }
 async function fbPick(name){
   var path=fbCwd==='/'?('/'+name):(fbCwd+'/'+name);
@@ -1445,6 +1489,8 @@ es.onmessage=function(e){
     <input class="dialog-input" id="proxy-user" placeholder="username" autocomplete="off" oninput="updateProxyPreview()">
     <div class="dialog-label">Password <span style="text-transform:none;font-weight:400">(optional)</span></div>
     <input class="dialog-input" id="proxy-pass" type="password" placeholder="password" autocomplete="new-password" oninput="updateProxyPreview()">
+    <div class="dialog-label">UDP Relay <span style="text-transform:none;font-weight:400">(udp_addr, optional)</span></div>
+    <input class="dialog-input" id="proxy-udpaddr" placeholder="blank = SOCKS5 UDP ASSOCIATE | 1080 | host:port" autocomplete="off">
     <div class="dialog-desc" id="proxy-preview" style="display:none;font-family:var(--mono);font-size:.8rem"></div>
     <div class="dialog-actions">
       <button class="btn btn-sm" onclick="closeProxyDialog()">Cancel</button>
@@ -1459,8 +1505,20 @@ es.onmessage=function(e){
     <div class="fb-list" id="fb-list">Loading...</div>
     <div class="dialog-desc" id="fb-error" style="color:var(--red);display:none"></div>
     <div class="dialog-actions">
-      <button class="btn btn-sm" onclick="fbGoUp()" id="fb-up-btn" disabled>Parent</button>
+      <button class="btn btn-sm" onclick="openNewFileModal()">New File</button>
       <button class="btn btn-sm primary" onclick="closeFileBrowser()">Cancel</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="fb-new-overlay" onclick="if(event.target===this)closeNewFileModal()">
+  <div class="dialog" onclick="event.stopPropagation()">
+    <div class="dialog-title">New File</div>
+    <div class="dialog-desc" style="margin-bottom:14px">Create an empty file in <span id="fb-new-dir" style="font-family:var(--mono)"></span></div>
+    <input class="dialog-input" id="fb-new-name" placeholder="file name" onkeydown="if(event.key==='Enter')fbCreateFile()">
+    <div class="dialog-desc" id="fb-new-error" style="color:var(--red);display:none"></div>
+    <div class="dialog-actions">
+      <button class="btn btn-sm" onclick="closeNewFileModal()">Cancel</button>
+      <button class="btn btn-sm primary" id="fb-new-confirm" onclick="fbCreateFile()">Confirm</button>
     </div>
   </div>
 </div>

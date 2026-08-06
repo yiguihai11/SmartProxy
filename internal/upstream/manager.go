@@ -334,12 +334,13 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 }
 
 type ProxyInfo struct {
-	Alias  string              `json:"alias"`
-	URL    string              `json:"url"`
-	Host   string              `json:"host"`
-	Port   int                 `json:"port"`
-	Scheme string              `json:"scheme"`
-	Health ProxyHealthSnapshot `json:"health"`
+	Alias   string              `json:"alias"`
+	URL     string              `json:"url"`
+	Host    string              `json:"host"`
+	Port    int                 `json:"port"`
+	Scheme  string              `json:"scheme"`
+	UDPAddr string              `json:"udp_addr,omitempty"`
+	Health  ProxyHealthSnapshot `json:"health"`
 }
 
 func (m *Manager) Proxies() []ProxyInfo {
@@ -357,12 +358,13 @@ func (m *Manager) Proxies() []ProxyInfo {
 	for _, proxy := range m.defaultProxies {
 		alias := reverseMap[proxy]
 		infos = append(infos, ProxyInfo{
-			Alias:  alias,
-			URL:    proxy.URL,
-			Host:   proxy.Host,
-			Port:   proxy.Port,
-			Scheme: string(proxy.Scheme),
-			Health: proxy.health.Snapshot(),
+			Alias:   alias,
+			URL:     proxy.URL,
+			Host:    proxy.Host,
+			Port:    proxy.Port,
+			Scheme:  string(proxy.Scheme),
+			UDPAddr: proxy.UDPAddr,
+			Health:  proxy.health.Snapshot(),
 		})
 	}
 	return infos

@@ -177,6 +177,7 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/version", s.handleVersion)
 	mux.HandleFunc("/files", s.handleFiles)
 	mux.HandleFunc("/files/validate", s.handleFileValidate)
+	mux.HandleFunc("/files/create", s.handleFileCreate)
 	mux.HandleFunc("/acl/add", s.handleACLAdd)
 	mux.HandleFunc("/cm.js", s.handleCMJS)
 	mux.HandleFunc("/cm.css", s.handleCMCSS)
@@ -641,6 +642,61 @@ func (s *Server) handleFileValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+}
+
+// handleFileCreate creates an empty file at the given absolute path. The file
+// must not already exist — existing files are never overwritten (O_EXCL).
+func (s *Server) handleFileCreate(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Path == "" {
+		http.Error(w, "missing path", http.StatusBadRequest)
+		return
+	}
+	abs, err := filepath.Abs(req.Path)
+	if err != nil {
+		s.writeJSONError(w, http.StatusBadRequest, "invalid path: "+err.Error())
+		return
+	}
+	abs = filepath.Clean(abs)
+
+	parent := filepath.Dir(abs)
+	if info, err := os.Stat(parent); err != nil {
+		code := http.StatusBadRequest
+		if !os.IsNotExist(err) {
+			code = http.StatusInternalServerError
+		}
+		s.writeJSONError(w, code, "parent directory not accessible: "+err.Error())
+		return
+	} else if !info.IsDir() {
+		s.writeJSONError(w, http.StatusBadRequest, "not a directory: "+parent)
+		return
+	}
+
+	f, err := os.OpenFile(abs, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		code := http.StatusInternalServerError
+		switch {
+		case os.IsExist(err):
+			code = http.StatusConflict
+		case os.IsPermission(err):
+			code = http.StatusForbidden
+		}
+		s.writeJSONError(w, code, err.Error())
+		return
+	}
+	f.Close()
+	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "path": abs})
 }
 
 func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
