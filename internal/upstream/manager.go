@@ -230,21 +230,21 @@ func (m *Manager) Connect(ctx context.Context, host string, port int, domain str
 	return conn, "proxy"
 }
 
-func (m *Manager) AcquireDNSUDP(ctx context.Context, dnsHost string, dnsPort int) (*UDPProxyConn, error) {
-	return m.dnsUDPPool.Acquire(ctx, dnsHost, dnsPort, func(ctx context.Context, host string, port int) (*UDPProxyConn, error) {
+func (m *Manager) AcquireDNSUDP(ctx context.Context, dnsHost string, dnsPort int) (net.Conn, error) {
+	return m.dnsUDPPool.Acquire(ctx, dnsHost, dnsPort, func(ctx context.Context, host string, port int) (net.Conn, error) {
 		return m.UDPAssociate(ctx, host, port, "", nil)
 	})
 }
 
-func (m *Manager) ReleaseDNSUDP(conn *UDPProxyConn) {
+func (m *Manager) ReleaseDNSUDP(conn net.Conn) {
 	m.dnsUDPPool.Release(conn)
 }
 
-func (m *Manager) DiscardDNSUDP(conn *UDPProxyConn) {
+func (m *Manager) DiscardDNSUDP(conn net.Conn) {
 	m.dnsUDPPool.Discard(conn)
 }
 
-func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domain string, engine *rules.Engine) (*UDPProxyConn, error) {
+func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domain string, engine *rules.Engine) (net.Conn, error) {
 	result, selected := m.SelectProxy(host, port, domain, engine)
 	if result == "direct" {
 		return nil, fmt.Errorf("UDP direct is not supported")
@@ -263,7 +263,7 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 		return conn, err
 	}
 	for _, proxy := range m.orderedProxies() {
-		if proxy.Scheme == SchemeSOCKS5 || proxy.Scheme == SchemeSOCKS5H {
+		if proxy.SupportsUDP() {
 			if !proxy.IsAvailable() {
 				slog.Debug("UDPAssociate: skipping unhealthy proxy", "proxy", proxy.URL)
 				continue
@@ -291,7 +291,7 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 
 // UDPAssociateSelected uses a pre-selected proxy for UDP ASSOCIATE
 // (skipping the duplicate SelectProxy match)
-func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port int, selected *Proxy) (*UDPProxyConn, error) {
+func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port int, selected *Proxy) (net.Conn, error) {
 	if selected != nil {
 		slog.Debug("UDPAssociateSelected: using pre-selected proxy",
 			"proxy", selected.URL, "target", fmt.Sprintf("%s:%d", host, port))
@@ -307,7 +307,7 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 	}
 	// selected == nil: fall back to orderedProxies
 	for _, proxy := range m.orderedProxies() {
-		if proxy.Scheme == SchemeSOCKS5 || proxy.Scheme == SchemeSOCKS5H {
+		if proxy.SupportsUDP() {
 			if !proxy.IsAvailable() {
 				slog.Debug("UDPAssociateSelected: skipping unhealthy proxy", "proxy", proxy.URL)
 				continue

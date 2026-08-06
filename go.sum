@@ -30,6 +30,8 @@ github.com/sagernet/nftables v0.3.0-mod.2 h1:ck2KMU02OxL1eDFgGaWYglMDpoOZ7OHzxje
 github.com/sagernet/nftables v0.3.0-mod.2/go.mod h1:8kslHG4VvYNihcco+i6uxIX7qbT8A56T0y5q7U44ZaQ=
 github.com/sagernet/sing v0.8.10 h1:V5VZffy8rm4dtBVKIpKa8vibRR2SiJprtu/10DFUalU=
 github.com/sagernet/sing v0.8.10/go.mod h1:olXxWQNqRW/l2Q6JI3b2Qmz8iQnIFlOeeH8bx6JhgUA=
+github.com/sagernet/sing-shadowsocks v0.2.9 h1:Paep5zCszRKsEn8587O0MnhFWKJwDW1Y4zOYYlIxMkM=
+github.com/sagernet/sing-shadowsocks v0.2.9/go.mod h1:TE/Z6401Pi8tgr0nBZcM/xawAI6u3F6TTbz4nH/qw+8=
 github.com/sagernet/sing-tun v0.8.10 h1:1Kc1hr8/2YcnQrW00fWxt6LTnj1xYQO96ZcrhV7V3As=
 github.com/sagernet/sing-tun v0.8.10/go.mod h1:QvarqUtHfj1ULaRR+6kZOS/OoCE+pYGq67A5tyIy+dQ=
 github.com/sevlyar/go-daemon v0.1.7-0.20251110065050-63665fab0d07 h1:lWw0i8YZ8Nv7BZ1OiBjXD6YwWxqQaYDG+X5st6b8Tdg=
@@ -42,6 +44,8 @@ github.com/vishvananda/netns v0.0.4 h1:Oeaw1EM2JMxD51g9uhtC0D7erkIjgmj8+JZc26m1Y
 github.com/vishvananda/netns v0.0.4/go.mod h1:SpkAiCQRtJ6TvvxPnOSyH3BMl6unz3xZlaprSwhNNJM=
 go4.org/netipx v0.0.0-20231129151722-fdeea329fbba h1:0b9z3AuHCjxk0x/opv64kcgZLBseWJUpBw5I82+2U4M=
 go4.org/netipx v0.0.0-20231129151722-fdeea329fbba/go.mod h1:PLyyIXexvUFg3Owu6p/WfdlivPbZJsZdgWZlrGope/Y=
+golang.org/x/crypto v0.51.0 h1:IBPXwPfKxY7cWQZ38ZCIRPI50YLeevDLlLnyC5wRGTI=
+golang.org/x/crypto v0.51.0/go.mod h1:8AdwkbraGNABw2kOX6YFPs3WM22XqI4EXEd8g+x7Oc8=
 golang.org/x/exp v0.0.0-20240613232115-7f521ea00fb8 h1:yixxcjnhBmY0nkL253HFVIm0JsFHwrHdT3Yh6szTnfY=
 golang.org/x/exp v0.0.0-20240613232115-7f521ea00fb8/go.mod h1:jj3sYF3dwk5D+ghuXyeI3r5MFf+NT2An6/9dOA95KSI=
 golang.org/x/mobile v0.0.0-20260602190626-68735029466e h1:YxPXu/HWDTcSSrzSX+sCltsfcNCa/ZYVG43oslMouNU=

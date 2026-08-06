@@ -498,6 +498,11 @@ function setProxyScheme(v){
   if(!g)return;
   var b=g.querySelectorAll('.seg-btn');
   for(var i=0;i<b.length;i++)b[i].classList.toggle('active',b[i].getAttribute('data-val')===v);
+  // ss: 用户字段是加密方式名, udp_addr 不适用(内置 SS UDP relay)
+  var ul=document.getElementById('proxy-user-label');
+  if(ul)ul.textContent=(v==='ss')?'Method (encryption)':'Username';
+  var ur=document.getElementById('proxy-udpaddr-row');
+  if(ur)ur.style.display=(v==='ss')?'none':'';
   updateProxyPreview();
 }
 function getProxyScheme(){
@@ -505,6 +510,13 @@ function getProxyScheme(){
   if(!g)return 'socks5';
   var b=g.querySelector('.seg-btn.active');
   return b?b.getAttribute('data-val'):'socks5';
+}
+function b64urlDecode(s){
+  try{
+    s=s.replace(/-/g,'+').replace(/_/g,'/');
+    while(s.length%4!==0)s+='=';
+    return atob(s);
+  }catch(e){return ''}
 }
 function openProxyDialog(i){
   var p=(i>=0&&healthD.health.proxies[i])||null;
@@ -523,6 +535,16 @@ function openProxyDialog(i){
     if(u&&u.protocol){scheme=u.protocol.slice(0,-1);document.getElementById('proxy-server').value=u.host;
       if(u.username)document.getElementById('proxy-user').value=decodeURIComponent(u.username);
       if(u.password)document.getElementById('proxy-pass').value=decodeURIComponent(u.password);
+      // ss://base64(method:password)@host:port:URL 解析后 username 为整个编码串、password 为空。
+      // 解码回 method:password,让用户能直接编辑。
+      if(scheme==='ss'&&u.username&&!u.password){
+        var dec=b64urlDecode(u.username);
+        var ci=dec.indexOf(':');
+        if(ci>0){
+          document.getElementById('proxy-user').value=dec.slice(0,ci);
+          document.getElementById('proxy-pass').value=dec.slice(ci+1);
+        }
+      }
     }else{document.getElementById('proxy-server').value=p.url}
   }
   setProxyScheme(scheme);
@@ -1482,15 +1504,18 @@ es.onmessage=function(e){
       <button type="button" class="seg-btn" data-val="http" onclick="setProxyScheme('http')">HTTP</button>
       <button type="button" class="seg-btn" data-val="https" onclick="setProxyScheme('https')">HTTPS</button>
       <button type="button" class="seg-btn" data-val="socks4" onclick="setProxyScheme('socks4')">SOCKS4</button>
+      <button type="button" class="seg-btn" data-val="ss" onclick="setProxyScheme('ss')">SS</button>
     </div>
     <div class="dialog-label">Server (host:port)</div>
     <input class="dialog-input" id="proxy-server" placeholder="proxy.example.com:1080" autocomplete="off" oninput="updateProxyPreview()">
-    <div class="dialog-label">Username <span style="text-transform:none;font-weight:400">(optional)</span></div>
+    <div class="dialog-label"><span id="proxy-user-label">Username</span> <span style="text-transform:none;font-weight:400">(optional)</span></div>
     <input class="dialog-input" id="proxy-user" placeholder="username" autocomplete="off" oninput="updateProxyPreview()">
     <div class="dialog-label">Password <span style="text-transform:none;font-weight:400">(optional)</span></div>
     <input class="dialog-input" id="proxy-pass" type="password" placeholder="password" autocomplete="new-password" oninput="updateProxyPreview()">
-    <div class="dialog-label">UDP Relay <span style="text-transform:none;font-weight:400">(udp_addr, optional)</span></div>
-    <input class="dialog-input" id="proxy-udpaddr" placeholder="blank = SOCKS5 UDP ASSOCIATE | 1080 | host:port" autocomplete="off">
+    <div id="proxy-udpaddr-row">
+      <div class="dialog-label">UDP Relay <span style="text-transform:none;font-weight:400">(udp_addr, optional)</span></div>
+      <input class="dialog-input" id="proxy-udpaddr" placeholder="blank = SOCKS5 UDP ASSOCIATE | 1080 | host:port" autocomplete="off">
+    </div>
     <div class="dialog-desc" id="proxy-preview" style="display:none;font-family:var(--mono);font-size:.8rem"></div>
     <div class="dialog-actions">
       <button class="btn btn-sm" onclick="closeProxyDialog()">Cancel</button>

@@ -176,8 +176,7 @@ func TestParsePort(t *testing.T) {
 }
 
 func TestEncodeSOCKS5Addr_IPv4(t *testing.T) {
-	p := &Proxy{}
-	result := p.encodeSOCKS5Addr("192.168.1.1", 443)
+	result := encodeSocks5Addr("192.168.1.1", 443)
 
 	if len(result) != 7 {
 		t.Fatalf("len = %d, want 7", len(result))
@@ -195,8 +194,7 @@ func TestEncodeSOCKS5Addr_IPv4(t *testing.T) {
 }
 
 func TestEncodeSOCKS5Addr_IPv6(t *testing.T) {
-	p := &Proxy{}
-	result := p.encodeSOCKS5Addr("::1", 80)
+	result := encodeSocks5Addr("::1", 80)
 	if len(result) != 19 {
 		t.Fatalf("len = %d, want 19", len(result))
 	}
@@ -209,8 +207,7 @@ func TestEncodeSOCKS5Addr_IPv6(t *testing.T) {
 }
 
 func TestEncodeSOCKS5Addr_Domain(t *testing.T) {
-	p := &Proxy{}
-	result := p.encodeSOCKS5Addr("example.com", 8080)
+	result := encodeSocks5Addr("example.com", 8080)
 	if result[0] != 0x03 {
 		t.Errorf("ATYP = %d, want 3", result[0])
 	}
@@ -982,7 +979,6 @@ func BenchmarkNewProxy(b *testing.B) {
 }
 
 func BenchmarkEncodeSOCKS5Addr(b *testing.B) {
-	p := &Proxy{}
 	tests := []struct {
 		host string
 		port int
@@ -994,7 +990,7 @@ func BenchmarkEncodeSOCKS5Addr(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		for _, t := range tests {
-			p.encodeSOCKS5Addr(t.host, t.port)
+			encodeSocks5Addr(t.host, t.port)
 		}
 	}
 }

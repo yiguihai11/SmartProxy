@@ -7,6 +7,7 @@ require (
 	github.com/miekg/dns v1.1.72
 	github.com/sagernet/netlink v0.0.0-20240612041022-b9a21c07ac6a
 	github.com/sagernet/sing v0.8.10
+	github.com/sagernet/sing-shadowsocks v0.2.9
 	github.com/sagernet/sing-tun v0.8.10
 	github.com/sevlyar/go-daemon v0.1.7-0.20251110065050-63665fab0d07
 	github.com/stretchr/testify v1.11.1
@@ -30,6 +31,7 @@ require (
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/vishvananda/netns v0.0.4 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
+	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/exp v0.0.0-20240613232115-7f521ea00fb8 // indirect
 	golang.org/x/mobile v0.0.0-20260602190626-68735029466e // indirect
 	golang.org/x/mod v0.36.0 // indirect

@@ -20,13 +20,24 @@
 | `socks4` | SOCKS4，本地解析目标为 IPv4 后握手，回码 `0x5a` |
 | `http` | HTTP CONNECT 隧道，带 Basic `Proxy-Authorization` |
 | `https` | HTTP CONNECT over TLS（`tls.Client` + `HandshakeContext`） |
+| `ss` | Shadowsocks（经典 AEAD，内置实现，无需外部 `sslocal`）。URL 形如 `ss://base64(method:password)@host:port`，也兼容明文 `ss://method:password@host:port`。TCP + UDP 均支持，见 §3.1 |
 
-UDP ASSOCIATE 仅 `socks5` / `socks5h` 支持。
+UDP 支持：`socks5` / `socks5h`（标准 UDP ASSOCIATE，或 `udp_addr` 裸中继）与 `ss`（内置 SS UDP relay，见 §3.1）。
 
 ## §3 连接建立
 
-- **TCP**：`Proxy.Connect(ctx, host, port)` 按 scheme 分发（`socks5Connect` / `socks4Connect` / `httpConnect`）；`dial` 统一 10s 超时、TCP keepalive 30s + NoDelay。`Manager.ConnectDefault` 按 `orderedProxies()` 顺序逐个尝试可用代理，失败 `RecordFailure` 后继续下一个。
-- **UDP**：默认走 `socks5UDPAssociate` —— 握手后发 `{0x05,0x03,0x00,0x01,0,0,0,0,0,0}`，读 bind 地址（`0.0.0.0` / `::` 时替换为代理 Host）后 `DialUDP`，返回 `UDPProxyConn{UDPConn, tcpConn}`。`Manager.UDPAssociate` / `UDPAssociateSelected` 先按规则选指定代理，否则在默认代理里找 SOCKS5 支持者。
+- **TCP**：`Proxy.Connect(ctx, host, port)` 按 scheme 分发（`socks5Connect` / `socks4Connect` / `httpConnect` / `ssConnect`）；`dial` 统一 10s 超时、TCP keepalive 30s + NoDelay。`Manager.ConnectDefault` 按 `orderedProxies()` 顺序逐个尝试可用代理，失败 `RecordFailure` 后继续下一个。
+- **UDP**：默认走 `socks5UDPAssociate` —— 握手后发 `{0x05,0x03,0x00,0x01,0,0,0,0,0,0}`，读 bind 地址（`0.0.0.0` / `::` 时替换为代理 Host）后 `DialUDP`，返回 `UDPProxyConn{UDPConn, tcpConn}`。`Manager.UDPAssociate` / `UDPAssociateSelected` 先按规则选指定代理，否则在默认代理里找 UDP 支持者（`SupportsUDP()`：`socks5` / `socks5h` / `ss`）。
+
+### §3.1 内置 Shadowsocks（`ss://`）
+
+`internal/upstream/ss.go` 用 [sing-shadowsocks](https://github.com/sagernet/sing-shadowsocks)（sing-box 生态，仍维护中的纯 Go 库）直接以 shadowsocks 协议连接远程 SS 服务器，**不再依赖外部 `sslocal` 进程**（之前 Termux 上要先跑一个 sslocal 才能用 SS）。仅支持经典 AEAD 加密：`aes-128/192/256-gcm`、`chacha20-ietf-poly1305`、`xchacha20-ietf-poly1305`（`ss-2022` 的 key 语义不同，未纳入）。`NewProxy` 校验 method 名称（`shadowaead.New` 对未知方法不报错、会留 nil constructor，这里显式拦截拼写错误）。
+
+- **凭据解析**（`parseSSUserinfo`）：userinfo 优先按 shadowsocks URI 规范做 base64 解码（RawURL / URL / RawStd / Std 四种都试），失败则按明文 `method:password` 处理，第一个 `:` 之后整段为密码（含冒号也保留）。注意 `url.Parse` 会在第一个冒号处切分并把后续冒号 percent-encode，实现用 `Username()/Password()` 取回解码后的密码再重组。
+- **TCP**：`ssConnect` 走 `dial`（fwmark + keepalive）→ `ssMethod.DialConn(conn, dest)` 得到加密流，透明对接上层。
+- **UDP**：`ssUDPAssociate` 直接 `net.DialUDP` 到 SS 服务器端口，用 `ssMethod.DialPacketConn` 得到逐包携带目标地址的 packet conn（sing 的 `clientPacketConn` 每包自含 destination），因此**单条 UDP 连接即可服务任意目标**，与 SOCKS5 上游的复用模型一致。适配器 `ssUDPConn` 把上游一侧的 SOCKS5-UDP 帧（RSV|FRAG|ATYP|ADDR|PORT|payload）翻译成 SS UDP 包：`Write` 解析帧→`WritePacket`（预留 headroom + AEAD tag 容量，避免 sing `buf` panic）；`Read` 从 `ReadPacket` 拿到 payload + 来源地址→补 SOCKS5 响应头返回完整帧。`udp_addr` 对 `ss` 不适用（SS UDP 本来就是内置 relay，无需裸中继兜底）。
+
+UDP 复用池（§6）对 `ss` 同样生效：`ssUDPConn` 实现了 `ProbeTCP()`（无 TCP 控制信道，返回 nil 视为健康，靠 TTL 淘汰兜底），池的 `Acquire/Release/Discard` 已从 `*UDPProxyConn` 泛化为 `net.Conn` + 可选 `tcpProbeConn` 接口。
 
 ### UDP ASSOCIATE 被拒时的裸 UDP 兜底（`udp_addr`）
 

@@ -68,7 +68,7 @@ func TestUDPAssociatePool_AcquireFromEmptyPool(t *testing.T) {
 
 	acquired := false
 	conn, err := p.Acquire(ctx, "8.8.8.8", 53,
-		func(ctx context.Context, host string, port int) (*UDPProxyConn, error) {
+		func(ctx context.Context, host string, port int) (net.Conn, error) {
 			acquired = true
 			if host != "8.8.8.8" || port != 53 {
 				t.Errorf("expected host=8.8.8.8 port=53, got host=%s port=%d", host, port)
@@ -94,7 +94,7 @@ func TestUDPAssociatePool_ReleaseAndReuse(t *testing.T) {
 	ctx := context.Background()
 
 	createCount := 0
-	provider := func(ctx context.Context, host string, port int) (*UDPProxyConn, error) {
+	provider := func(ctx context.Context, host string, port int) (net.Conn, error) {
 		createCount++
 		client, _ := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 19999})
 		tcpA, _ := net.Pipe()
@@ -122,7 +122,12 @@ func TestUDPAssociatePool_ReleaseAndReuse(t *testing.T) {
 		t.Errorf("expected 1 create total (reused), got %d", createCount)
 	}
 
-	if conn1.UDPConn != conn2.UDPConn {
+	up1, ok1 := conn1.(*UDPProxyConn)
+	up2, ok2 := conn2.(*UDPProxyConn)
+	if !ok1 || !ok2 {
+		t.Fatalf("expected *UDPProxyConn from pool, got %T and %T", conn1, conn2)
+	}
+	if up1.UDPConn != up2.UDPConn {
 		t.Error("Acquire did not reuse the released connection")
 	}
 
@@ -134,8 +139,8 @@ func TestUDPAssociatePool_RespectsMaxSize(t *testing.T) {
 	p := NewUDPAssociatePool(2)
 	ctx := context.Background()
 
-	var conns []*UDPProxyConn
-	provider := func(ctx context.Context, host string, port int) (*UDPProxyConn, error) {
+	var conns []net.Conn
+	provider := func(ctx context.Context, host string, port int) (net.Conn, error) {
 		client, _ := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 19999})
 		tcpA, _ := net.Pipe()
 		return &UDPProxyConn{UDPConn: client, tcpConn: tcpA}, nil
@@ -164,7 +169,7 @@ func TestUDPAssociatePool_Discard(t *testing.T) {
 	p := NewUDPAssociatePool(2)
 	ctx := context.Background()
 
-	provider := func(ctx context.Context, host string, port int) (*UDPProxyConn, error) {
+	provider := func(ctx context.Context, host string, port int) (net.Conn, error) {
 		client, _ := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 19999})
 		tcpA, _ := net.Pipe()
 		return &UDPProxyConn{UDPConn: client, tcpConn: tcpA}, nil
@@ -187,13 +192,13 @@ func TestUDPAssociatePool_CloseDrainsAll(t *testing.T) {
 	p := NewUDPAssociatePool(4)
 	ctx := context.Background()
 
-	provider := func(ctx context.Context, host string, port int) (*UDPProxyConn, error) {
+	provider := func(ctx context.Context, host string, port int) (net.Conn, error) {
 		client, _ := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 19999})
 		tcpA, _ := net.Pipe()
 		return &UDPProxyConn{UDPConn: client, tcpConn: tcpA}, nil
 	}
 
-	var conns []*UDPProxyConn
+	var conns []net.Conn
 	for i := 0; i < 4; i++ {
 		conn, err := p.Acquire(ctx, "8.8.8.8", 53, provider)
 		if err != nil {
@@ -221,7 +226,7 @@ func TestUDPAssociatePool_ProviderError(t *testing.T) {
 	ctx := context.Background()
 
 	expectedErr := &net.OpError{Op: "dial", Net: "udp", Err: net.UnknownNetworkError("test error")}
-	provider := func(ctx context.Context, host string, port int) (*UDPProxyConn, error) {
+	provider := func(ctx context.Context, host string, port int) (net.Conn, error) {
 		return nil, expectedErr
 	}
 
@@ -266,7 +271,7 @@ func TestUDPAssociatePool_DeadlinesClearedOnRelease(t *testing.T) {
 	}
 
 	reused, err := p.Acquire(ctx, "8.8.8.8", 53,
-		func(ctx context.Context, host string, port int) (*UDPProxyConn, error) {
+		func(ctx context.Context, host string, port int) (net.Conn, error) {
 			t.Fatal("provider should not be called")
 			return nil, nil
 		})
@@ -275,11 +280,15 @@ func TestUDPAssociatePool_DeadlinesClearedOnRelease(t *testing.T) {
 	}
 	defer reused.Close()
 
-	if err := reused.UDPConn.SetDeadline(time.Now().Add(time.Minute)); err != nil {
+	reusedUDP, ok := reused.(*UDPProxyConn)
+	if !ok {
+		t.Fatalf("expected *UDPProxyConn from pool, got %T", reused)
+	}
+	if err := reusedUDP.UDPConn.SetDeadline(time.Now().Add(time.Minute)); err != nil {
 		t.Errorf("SetDeadline failed after acquire from pool: %v", err)
 	}
 
-	reused.UDPConn.SetDeadline(time.Time{})
+	reusedUDP.UDPConn.SetDeadline(time.Time{})
 
 	p.Close()
 }
@@ -290,7 +299,7 @@ func TestUDPAssociatePool_ConcurrentAccess(t *testing.T) {
 
 	var mu sync.Mutex
 	createCount := 0
-	provider := func(ctx context.Context, host string, port int) (*UDPProxyConn, error) {
+	provider := func(ctx context.Context, host string, port int) (net.Conn, error) {
 
 		time.Sleep(time.Millisecond)
 		client, _ := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 19999})
@@ -351,7 +360,7 @@ func TestUDPAssociatePool_AcquireProviderNotHoldingLock(t *testing.T) {
 	p := NewUDPAssociatePool(2)
 	ctx := context.Background()
 
-	provider := func(ctx context.Context, host string, port int) (*UDPProxyConn, error) {
+	provider := func(ctx context.Context, host string, port int) (net.Conn, error) {
 
 		if l := p.Len(); l != 0 {
 			t.Errorf("expected pool empty during provider, got %d", l)

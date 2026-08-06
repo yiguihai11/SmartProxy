@@ -9,8 +9,14 @@ import (
 )
 
 type poolEntry struct {
-	conn      *UDPProxyConn
+	conn      net.Conn
 	createdAt time.Time
+}
+
+// tcpProbeConn 是池里可选实现的活性探测接口。SOCKS5 UDP ASSOCIATE 连接用它探测
+// TCP 控制信道;ss UDP / 裸 UDP 没有控制信道,直接视为健康(TTL 淘汰兜底)。
+type tcpProbeConn interface {
+	ProbeTCP() error
 }
 
 type UDPAssociatePool struct {
@@ -31,8 +37,8 @@ func NewUDPAssociatePool(maxSize int) *UDPAssociatePool {
 func (p *UDPAssociatePool) Acquire(
 	ctx context.Context,
 	host string, port int,
-	provider func(context.Context, string, int) (*UDPProxyConn, error),
-) (*UDPProxyConn, error) {
+	provider func(context.Context, string, int) (net.Conn, error),
+) (net.Conn, error) {
 
 	for i := 0; i < 10; i++ {
 		p.mu.Lock()
@@ -49,28 +55,22 @@ func (p *UDPAssociatePool) Acquire(
 				continue
 			}
 
-			// Quick TCP control-connection probe (5ms): verify the proxy is still alive
-			entry.conn.tcpConn.SetReadDeadline(time.Now().Add(5 * time.Millisecond))
-			_, probeErr := entry.conn.tcpConn.Read(make([]byte, 1))
-			if probeErr != nil {
-				if netErr, ok := probeErr.(net.Error); ok && netErr.Timeout() {
-					// Timeout = TCP connection is healthy (no data on the control channel is expected)
-					entry.conn.UDPConn.SetDeadline(time.Time{})
-					entry.conn.tcpConn.SetDeadline(time.Time{})
-					slog.Debug("udp pool: acquired from pool",
-						"createdAt", entry.createdAt.Format(time.RFC3339))
-					return entry.conn, nil
+			// Liveness probe (SOCKS5: 5ms TCP control-channel probe; others: no-op)
+			alive := true
+			if probe, ok := entry.conn.(tcpProbeConn); ok {
+				if err := probe.ProbeTCP(); err != nil {
+					alive = false
+					slog.Debug("udp pool: probe failed, discarding",
+						"error", err)
+					entry.conn.Close()
+					continue
 				}
-				// Any other error = the connection is dead
-				slog.Debug("udp pool: TCP probe failed, discarding",
-					"error", probeErr)
-				entry.conn.Close()
-				continue
 			}
-			// The control channel should not carry data; if it does, something is wrong
-			slog.Debug("udp pool: unexpected data on control channel, discarding")
-			entry.conn.Close()
-			continue
+			if alive {
+				slog.Debug("udp pool: acquired from pool",
+					"createdAt", entry.createdAt.Format(time.RFC3339))
+				return entry.conn, nil
+			}
 		}
 		p.mu.Unlock()
 
@@ -86,13 +86,10 @@ func (p *UDPAssociatePool) Acquire(
 	return provider(ctx, host, port)
 }
 
-func (p *UDPAssociatePool) Release(conn *UDPProxyConn) {
+func (p *UDPAssociatePool) Release(conn net.Conn) {
 	if conn == nil {
 		return
 	}
-
-	conn.UDPConn.SetDeadline(time.Time{})
-	conn.tcpConn.SetDeadline(time.Time{})
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -109,7 +106,7 @@ func (p *UDPAssociatePool) Release(conn *UDPProxyConn) {
 	}
 }
 
-func (p *UDPAssociatePool) Discard(conn *UDPProxyConn) {
+func (p *UDPAssociatePool) Discard(conn net.Conn) {
 	if conn == nil {
 		return
 	}

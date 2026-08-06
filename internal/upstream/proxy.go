@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sagernet/sing-shadowsocks"
 	"smartproxy/internal/fwmark"
 )
 
@@ -29,6 +30,10 @@ const (
 	SchemeSOCKS4  ProxyScheme = "socks4"
 	SchemeHTTP    ProxyScheme = "http"
 	SchemeHTTPS   ProxyScheme = "https"
+	// SchemeSS 直接以 shadowsocks 协议连接远程 SS 服务器(经典 AEAD 加密,
+	// 见 internal/upstream/ss.go)。URL 形如 ss://base64(method:password)@host:port,
+	// 也兼容明文 ss://method:password@host:port。
+	SchemeSS ProxyScheme = "ss"
 )
 
 type Proxy struct {
@@ -45,6 +50,19 @@ type Proxy struct {
 	//   "host:port" -> 强制裸 UDP,直接用该地址(host 可为空,如 ":1080" 表示 Host:1080)
 	UDPAddr string
 	health  ProxyHealth
+
+	// ssMethod 是 ss:// scheme 的加密实现(经典 AEAD),由 NewProxy 在解析
+	// method:password 时构建一次;Method 不可变,可安全并发使用。
+	ssMethod shadowsocks.Method
+}
+
+// SupportsUDP 报告该上游是否支持 UDP(通过 UDPProxyConn 或 ss UDP relay)。
+func (p *Proxy) SupportsUDP() bool {
+	switch p.Scheme {
+	case SchemeSOCKS5, SchemeSOCKS5H, SchemeSS:
+		return true
+	}
+	return false
 }
 
 func (p *Proxy) IsAvailable() bool {
@@ -71,9 +89,21 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 		Host:   u.Hostname(),
 		Port:   port,
 	}
-	if u.User != nil {
+	if u.User != nil && scheme != SchemeSS {
 		p.Username = u.User.Username()
 		p.Password, _ = u.User.Password()
+	}
+	if scheme == SchemeSS {
+		method, password, err := parseSSUserinfo(u.User)
+		if err != nil {
+			return nil, err
+		}
+		ssMethod, err := shadowaeadNew(method, password)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ss:// credentials for %q: %w", proxyURL, err)
+		}
+		p.ssMethod = ssMethod
+		p.Username, p.Password = method, password
 	}
 	slog.Info("upstream proxy loaded", "url", proxyURL)
 	return p, nil
@@ -113,16 +143,22 @@ func (p *Proxy) Connect(ctx context.Context, targetHost string, targetPort int) 
 		return p.httpConnect(ctx, targetHost, targetPort)
 	case SchemeSOCKS4:
 		return p.socks4Connect(ctx, targetHost, targetPort)
+	case SchemeSS:
+		return p.ssConnect(ctx, targetHost, targetPort)
 	default:
 		return nil, fmt.Errorf("unsupported proxy scheme: %s", p.Scheme)
 	}
 }
 
-func (p *Proxy) UDPAssociate(ctx context.Context, targetHost string, targetPort int) (*UDPProxyConn, error) {
-	if p.Scheme != SchemeSOCKS5 && p.Scheme != SchemeSOCKS5H {
-		return nil, fmt.Errorf("UDP ASSOCIATE not supported for %s", p.Scheme)
+func (p *Proxy) UDPAssociate(ctx context.Context, targetHost string, targetPort int) (net.Conn, error) {
+	switch p.Scheme {
+	case SchemeSOCKS5, SchemeSOCKS5H:
+		return p.socks5UDPAssociate(ctx, targetHost, targetPort)
+	case SchemeSS:
+		return p.ssUDPAssociate(ctx, targetHost, targetPort)
+	default:
+		return nil, fmt.Errorf("UDP not supported for %s", p.Scheme)
 	}
-	return p.socks5UDPAssociate(ctx, targetHost, targetPort)
 }
 
 func (p *Proxy) socks5Connect(ctx context.Context, targetHost string, targetPort int) (net.Conn, error) {
@@ -135,7 +171,7 @@ func (p *Proxy) socks5Connect(ctx context.Context, targetHost string, targetPort
 		return nil, err
 	}
 
-	addr := p.encodeSOCKS5Addr(targetHost, targetPort)
+	addr := encodeSocks5Addr(targetHost, targetPort)
 	req := make([]byte, 3, 3+len(addr))
 	req[0] = 0x05
 	req[1] = 0x01
@@ -310,7 +346,7 @@ func (p *Proxy) socks5Handshake(rw io.ReadWriter) error {
 	return nil
 }
 
-func (p *Proxy) encodeSOCKS5Addr(host string, port int) []byte {
+func encodeSocks5Addr(host string, port int) []byte {
 	ip := net.ParseIP(host)
 	if ip == nil {
 		domain := []byte(host)
@@ -529,4 +565,24 @@ func (u *UDPProxyConn) Close() error {
 		u.tcpConn.Close()
 	}
 	return u.UDPConn.Close()
+}
+
+// ProbeTCP 供 UDP 复用池验证连接是否仍可用。SOCKS5 UDP ASSOCIATE 的 TCP 控制信道
+// 做 5ms 快速探测:读超时 = 连接正常(控制信道本不该有数据);读到数据或出错 = 已损坏。
+// 裸 UDP / ss UDP 无控制信道(tcpConn 为 nil),直接视为健康。
+func (u *UDPProxyConn) ProbeTCP() error {
+	if u.tcpConn == nil {
+		return nil
+	}
+	u.tcpConn.SetReadDeadline(time.Now().Add(5 * time.Millisecond))
+	_, probeErr := u.tcpConn.Read(make([]byte, 1))
+	if probeErr != nil {
+		if netErr, ok := probeErr.(net.Error); ok && netErr.Timeout() {
+			u.UDPConn.SetDeadline(time.Time{})
+			u.tcpConn.SetDeadline(time.Time{})
+			return nil
+		}
+		return probeErr
+	}
+	return errors.New("unexpected data on UDP ASSOCIATE control channel")
 }

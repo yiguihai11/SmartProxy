@@ -8,6 +8,7 @@
 ## 🚀 核心特性
 
 - **双入口**：系统级 TUN 透明代理（gvisor 栈）+ SOCKS5 服务端，ACL 统一放行/阻断/分流
+- **多上游**：SOCKS5/SOCKS5H/SOCKS4/HTTP(S) 与**内置 Shadowsocks（`ss://`，TCP+UDP）** 上游，健康检查熔断 + failover / round_robin / random / latency 选路
 - **智能分流**：基于 chnroute Trie 的国内外分流；80/443「先直连、失败回退代理」；直连失败自动加入动态黑名单
 - **DNS 反污染**：污染检测、IP 优选（ping/tcp 探测）、缓存 + singleflight 并发合并
 - **规则引擎（ACL）**：`allow`/`block`/`proxy` × `port`/`ip`/`cidr`/`domain`（含 `*.` 通配），Copy-on-Write 无锁快照
