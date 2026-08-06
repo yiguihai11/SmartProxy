@@ -38,7 +38,13 @@ type Proxy struct {
 	Port     int
 	Username string
 	Password string
-	health   ProxyHealth
+	// UDPAddr 可选:裸 UDP relay 地址(用于 shadowsocks-android 这类 "SOCKS5 只做 TCP、
+	// UDP 由同/异端口的独立 udp_only 实例服务" 的上游)。语义:
+	//   空          -> 默认走标准 UDP ASSOCIATE;被 rep=0x07(CommandNotSupported)拒绝时自动兜底到 Host:Port
+	//   "1080"      -> 强制裸 UDP,地址用 Host:1080
+	//   "host:port" -> 强制裸 UDP,直接用该地址(host 可为空,如 ":1080" 表示 Host:1080)
+	UDPAddr string
+	health  ProxyHealth
 }
 
 func (p *Proxy) IsAvailable() bool {
@@ -77,6 +83,26 @@ func parsePort(s string) int {
 	var port int
 	fmt.Sscanf(s, "%d", &port)
 	return port
+}
+
+// SetUDPAddr 校验并设置裸 UDP relay 地址。格式:纯端口("1080")或 host:port("127.0.0.1:1080"、":1080")。
+func (p *Proxy) SetUDPAddr(s string) error {
+	if s == "" {
+		p.UDPAddr = ""
+		return nil
+	}
+	if _, port, err := net.SplitHostPort(s); err == nil {
+		if pnum, perr := strconv.Atoi(port); perr != nil || pnum <= 0 || pnum > 65535 {
+			return fmt.Errorf("invalid udp_addr %q: invalid port %q", s, port)
+		}
+		p.UDPAddr = s
+		return nil
+	}
+	if port, err := strconv.Atoi(s); err == nil && port > 0 && port <= 65535 {
+		p.UDPAddr = s
+		return nil
+	}
+	return fmt.Errorf("invalid udp_addr %q: expected a port or host:port", s)
 }
 
 func (p *Proxy) Connect(ctx context.Context, targetHost string, targetPort int) (net.Conn, error) {
@@ -137,7 +163,47 @@ func (p *Proxy) socks5Connect(ctx context.Context, targetHost string, targetPort
 	return conn, nil
 }
 
+// rawUDPAssociate 跳过 SOCKS5 握手,把上游直接当裸 UDP relay 使用。
+// 依赖上游的 UDP 端口上有一个 "不校验来源、不要求 ASSOCIATE" 的 UDP relay
+// (如 shadowsocks-android 的 udp_only 兜底实例),它读到带 SOCKS5 UDP 头的帧就会转发。
+func (p *Proxy) rawUDPAssociate(raddr *net.UDPAddr) (*UDPProxyConn, error) {
+	udpConn, err := net.DialUDP("udp", nil, raddr)
+	if err != nil {
+		return nil, err
+	}
+	slog.Debug("raw UDP relay established", "proxy", p.Host, "remoteAddr", raddr)
+	return &UDPProxyConn{UDPConn: udpConn}, nil
+}
+
+// resolveUDPAddr 把 udp_addr 解析成具体地址:纯端口 -> 上游 Host + 端口;host:port -> 直接使用。
+// 仅在 udp_addr 非空时调用。
+func (p *Proxy) resolveUDPAddr() (*net.UDPAddr, error) {
+	if p.UDPAddr == "" {
+		return nil, nil
+	}
+	if host, port, err := net.SplitHostPort(p.UDPAddr); err == nil {
+		if host == "" {
+			host = p.Host
+		}
+		return net.ResolveUDPAddr("udp", net.JoinHostPort(host, port))
+	}
+	if port, err := strconv.Atoi(p.UDPAddr); err == nil && port > 0 && port <= 65535 {
+		return net.ResolveUDPAddr("udp", net.JoinHostPort(p.Host, strconv.Itoa(port)))
+	}
+	// SetUDPAddr 已做格式校验,这里兜底防御
+	return nil, fmt.Errorf("invalid udp_addr %q", p.UDPAddr)
+}
+
 func (p *Proxy) socks5UDPAssociate(ctx context.Context, targetHost string, targetPort int) (*UDPProxyConn, error) {
+	// 显式配置 udp_addr -> 强制裸 UDP,跳过握手
+	if p.UDPAddr != "" {
+		raddr, err := p.resolveUDPAddr()
+		if err != nil {
+			return nil, err
+		}
+		return p.rawUDPAssociate(raddr)
+	}
+
 	conn, err := p.dial(ctx)
 	if err != nil {
 		return nil, err
@@ -160,6 +226,18 @@ func (p *Proxy) socks5UDPAssociate(ctx context.Context, targetHost string, targe
 	}
 	if resp[1] != 0x00 {
 		conn.Close()
+		// rep=0x07 (CommandNotSupported):上游明确不做 SOCKS5 UDP,但同端口很可能有
+		// 配套的裸 UDP relay(如 shadowsocks-android tcp_only 主实例 + udp_only 兜底实例)。
+		// 自动兜底为裸 UDP,并打警告日志便于排查(裸 UDP 是 fire-and-forget,目标无监听会静默丢包)。
+		if resp[1] == 0x07 {
+			slog.Warn("UDP ASSOCIATE rejected (rep=0x07), falling back to raw UDP relay",
+				"proxy", p.Host, "udpAddr", net.JoinHostPort(p.Host, strconv.Itoa(p.Port)))
+			raddr, rerr := net.ResolveUDPAddr("udp", net.JoinHostPort(p.Host, strconv.Itoa(p.Port)))
+			if rerr != nil {
+				return nil, rerr
+			}
+			return p.rawUDPAssociate(raddr)
+		}
 		return nil, fmt.Errorf("UDP ASSOCIATE failed: rep=%d", resp[1])
 	}
 	bndAddr, bndPort, err := readSOCKS5BindAddr(conn, resp[3])

@@ -77,8 +77,9 @@ type HealthCheckConf struct {
 }
 
 type ProxyEntry struct {
-	Alias string `json:"alias"`
-	URL   string `json:"url"`
+	Alias   string `json:"alias"`
+	URL     string `json:"url"`
+	UDPAddr string `json:"udp_addr"`
 }
 
 type RoutingConf struct {

@@ -82,6 +82,10 @@ func (m *Manager) rebuildFromConfig(cfg UpstreamConfig) {
 			slog.Warn("failed to create proxy", "url", entry.URL, "error", err)
 			continue
 		}
+		if err := proxy.SetUDPAddr(entry.UDPAddr); err != nil {
+			slog.Warn("failed to set udp_addr, skipping proxy", "url", entry.URL, "udp_addr", entry.UDPAddr, "error", err)
+			continue
+		}
 		aliasMap[alias] = proxy
 		defaultProxies = append(defaultProxies, proxy)
 	}
@@ -97,8 +101,9 @@ type UpstreamConfig struct {
 }
 
 type ProxyEntry struct {
-	Alias string
-	URL   string
+	Alias   string
+	URL     string
+	UDPAddr string
 }
 
 func (m *Manager) SelectProxy(targetIP string, targetPort int, domain string, engine *rules.Engine) (string, *Proxy) {

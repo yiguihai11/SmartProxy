@@ -45,6 +45,8 @@ make build-all        # 交叉编译所有支持平台
 
 完整字段见 [docs/config.md](./docs/config.md)，示例见 [config.json](./config.json)。
 
+> 上游为仅 TCP 的 SOCKS5（如 shadowsocks-android 插件模式，UDP ASSOCIATE 会被回 rep=0x07）时，可用 `proxies[].udp_addr` 让 UDP 走裸 UDP relay，如 `"udp_addr": "1080"` 或 `"udp_addr": "127.0.0.1:1080"`；缺省时被 rep=0x07 拒绝也会自动兜底裸 UDP。详见 [docs/upstream.md](./docs/upstream.md) §3。
+
 ## 📖 ACL 规则速览
 
 每行一条：`<action> <type> <value> [alias]`，`#` 注释，大小写不敏感。

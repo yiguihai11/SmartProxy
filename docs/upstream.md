@@ -26,7 +26,21 @@ UDP ASSOCIATE 仅 `socks5` / `socks5h` 支持。
 ## §3 连接建立
 
 - **TCP**：`Proxy.Connect(ctx, host, port)` 按 scheme 分发（`socks5Connect` / `socks4Connect` / `httpConnect`）；`dial` 统一 10s 超时、TCP keepalive 30s + NoDelay。`Manager.ConnectDefault` 按 `orderedProxies()` 顺序逐个尝试可用代理，失败 `RecordFailure` 后继续下一个。
-- **UDP**：`socks5UDPAssociate` 握手后发 `{0x05,0x03,0x00,0x01,0,0,0,0,0,0}`，读 bind 地址（`0.0.0.0` / `::` 时替换为代理 Host）后 `DialUDP`，返回 `UDPProxyConn{UDPConn, tcpConn}`。`Manager.UDPAssociate` / `UDPAssociateSelected` 先按规则选指定代理，否则在默认代理里找 SOCKS5 支持者。
+- **UDP**：默认走 `socks5UDPAssociate` —— 握手后发 `{0x05,0x03,0x00,0x01,0,0,0,0,0,0}`，读 bind 地址（`0.0.0.0` / `::` 时替换为代理 Host）后 `DialUDP`，返回 `UDPProxyConn{UDPConn, tcpConn}`。`Manager.UDPAssociate` / `UDPAssociateSelected` 先按规则选指定代理，否则在默认代理里找 SOCKS5 支持者。
+
+### UDP ASSOCIATE 被拒时的裸 UDP 兜底（`udp_addr`）
+
+某些上游（如 shadowsocks-android 插件模式）主实例只启 `tcp_only`：它的 SOCKS5 服务对 UDP ASSOCIATE 回 **rep=0x07**（CommandNotSupported），但同端口的 UDP 上却常有配套的裸 UDP relay（udp_only 兜底实例，不要求 ASSOCIATE、读到带 SOCKS5 UDP 头的帧就转发）。为支持这类上游，`Proxy` 增加 `udp_addr`（配置键 `upstream.proxies[i].udp_addr`，由 `SetUDPAddr` 校验）：
+
+- **`udp_addr` 为空**（默认）：标准 SOCKS5 UDP ASSOCIATE；若上游回 rep=0x07，自动兜底为**裸 UDP** 直连 `Host:socks-port`（打 WARN 日志，便于排查）。
+- **纯端口 `"1080"`**：强制裸 UDP，直连 `Host:1080`（跳过握手）。
+- **`host:port` / `":port"`**：强制裸 UDP，直连该精确地址（host 为空用代理 Host），如 `127.0.0.1:1080`、`[::1]:1080`。
+
+实现：`rawUDPAssociate(raddr)` 直接 `net.DialUDP` 返回 `UDPProxyConn{UDPConn}`（`tcpConn` 为 nil，`Close` 已做空指针保护）；`resolveUDPAddr` 把 `udp_addr` 解析为 `*net.UDPAddr`（纯端口→Host+端口，host:port→原样）。注意两点：① `DialUDP` 恒成功，目标无监听时包会静默丢弃（黑洞），故 rep=0x07 兜底路径打 WARN；② 兜底只在**本代理**的 ASSOCIATE 被拒时发生，不改变 `Manager.UDPAssociate` 多代理 failover 语义。DNS 代理查询（`Manager.AcquireDNSUDP`）同走此路径，一处修改同时覆盖 DNS UDP。
+
+**已端到端实测验证**：用官方 shadowsocks-rust v1.23.4 二进制搭出与 Android 兜底实例同形态的环境——`ssserver`（`"mode": "tcp_and_udp"`）+ `sslocal`（`"mode": "udp_only"`，本地 UDP 监听）——`Proxy{UDPAddr: "127.0.0.1:<udp端口>"}` 裸中继发出带 SOCKS5 UDP 头的 DNS 查询帧，收到真实 DNS 响应（TXID 匹配）。实测 trace 确认链路：sslocal 收到裸帧即 `created udp association for <peer>`（按源地址现场建关联、免 ASSOCIATE）→ `udp relay <peer> -> <target> (proxied)` → `connected udp remote <ssserver>` → ssserver `udp relay ... -> <target>` → 响应原路返回。回归测试见 `internal/upstream/rawrelay_e2e_test.go`（`go test -tags e2e`，需 `SS_SERVER_BIN`/`SS_LOCAL_BIN` 环境变量指向真实二进制）。
+
+> 两个实测中发现的配置坑，供复现时参考：① shadowsocks-rust 官方 release 的 CLI 把端口并入 `-s`/`-b` 地址参数（无 `-p`/`-l`），用 JSON 配置最稳；② `ssserver` 默认 `mode: TcpOnly` **不开 UDP**，必须显式 `"mode": "tcp_and_udp"`，否则 UDP 载荷在服务端被静默丢弃。
 
 ## §4 健康检查熔断状态机
 

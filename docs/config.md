@@ -47,9 +47,15 @@
 | --- | --- | --- | --- |
 | `Default` | `default` | `"failover"` | 默认代理选择策略 |
 | `HealthCheck` | `health_check` | 见下 | 健康检查配置 |
-| `Proxies` | `proxies` | `[]` | 代理列表，每项 `{alias, url}` |
+| `Proxies` | `proxies` | `[]` | 代理列表，每项 `{alias, url, udp_addr}` |
 
-`proxies` 每项 `ProxyEntry` 只有 `alias`（缺省自动命名 `proxy<N>`）与 `url`（协议 URL，如 SS / VMess）；**没有 type 字段**。`health_check` 子字段：
+`proxies` 每项 `ProxyEntry` 字段：`alias`（缺省自动命名 `proxy<N>`）、`url`（协议 URL，如 SS / VMess）、`udp_addr`（可选，见下）；**没有 type 字段**。`health_check` 子字段：
+
+| 字段 | JSON 键 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `Alias` | `alias` | `proxy<N>` | 代理别名（规则引擎引用） |
+| `URL` | `url` | — | 协议 URL，如 `ss://`、`vmess://` |
+| `UDPAddr` | `udp_addr` | `""` | 上游裸 UDP relay 地址（仅 `socks5`/`socks5h`）。`""` 走标准 SOCKS5 UDP ASSOCIATE，被上游以 rep=0x07 拒绝时自动兜底为裸 UDP 到 `host:port`；纯端口 `"1080"` 强制裸 UDP 到 `host:1080`；`"127.0.0.1:1080"` / `":1080"` 强制裸 UDP 到该地址（空 host 用代理 host） |
 
 | Go 字段 | JSON 键 | 默认值 | 说明 |
 | --- | --- | --- | --- |

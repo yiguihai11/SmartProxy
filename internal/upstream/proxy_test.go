@@ -1,11 +1,13 @@
 package upstream
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1103,5 +1105,263 @@ func TestHTTPConnect_IPv6Target(t *testing.T) {
 	conn.Close()
 	if err := <-errCh; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// ---- udp_addr: SetUDPAddr / resolveUDPAddr / raw UDP relay ----
+
+func TestSetUDPAddr(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+		ok   bool
+	}{
+		{"", "", true},
+		{"1080", "1080", true},
+		{"1", "1", true},
+		{"65535", "65535", true},
+		{"127.0.0.1:1080", "127.0.0.1:1080", true},
+		{":1080", ":1080", true},
+		{"[::1]:1080", "[::1]:1080", true},
+		{"0", "", false},
+		{"-1", "", false},
+		{"65536", "", false},
+		{"abc", "", false},
+		{"host:notaport", "", false},
+		{"1.2.3.4", "", false}, // bare IP, no port
+	}
+	for _, tt := range tests {
+		p := &Proxy{}
+		err := p.SetUDPAddr(tt.in)
+		if tt.ok && err != nil {
+			t.Errorf("SetUDPAddr(%q): unexpected error %v", tt.in, err)
+			continue
+		}
+		if !tt.ok && err == nil {
+			t.Errorf("SetUDPAddr(%q): expected error, got none", tt.in)
+			continue
+		}
+		if tt.ok && p.UDPAddr != tt.want {
+			t.Errorf("SetUDPAddr(%q): got %q, want %q", tt.in, p.UDPAddr, tt.want)
+		}
+	}
+}
+
+func TestResolveUDPAddr(t *testing.T) {
+	p := &Proxy{Host: "10.0.0.1", Port: 1080}
+
+	raddr, err := p.resolveUDPAddr()
+	if err != nil || raddr != nil {
+		t.Fatalf("empty udp_addr: got %v, %v; want nil, nil", raddr, err)
+	}
+
+	cases := []struct {
+		udpAddr  string
+		wantHost string
+		wantPort int
+	}{
+		{"4000", "10.0.0.1", 4000},  // port-only -> upstream host
+		{":9999", "10.0.0.1", 9999}, // empty host -> upstream host
+		{"127.0.0.1:9999", "127.0.0.1", 9999},
+		{"[::1]:9999", "::1", 9999},
+	}
+	for _, c := range cases {
+		p.UDPAddr = c.udpAddr
+		raddr, err := p.resolveUDPAddr()
+		if err != nil {
+			t.Errorf("resolveUDPAddr(%q): unexpected error %v", c.udpAddr, err)
+			continue
+		}
+		if raddr == nil {
+			t.Errorf("resolveUDPAddr(%q): got nil", c.udpAddr)
+			continue
+		}
+		if raddr.IP.String() != c.wantHost || raddr.Port != c.wantPort {
+			t.Errorf("resolveUDPAddr(%q): got %s:%d, want %s:%d",
+				c.udpAddr, raddr.IP, raddr.Port, c.wantHost, c.wantPort)
+		}
+	}
+}
+
+// makeSOCKS5UDPFrame builds a SOCKS5 UDP datagram (RSV|FRAG|ATYP|DST.ADDR|DST.PORT|data).
+func makeSOCKS5UDPFrame(host string, port int, payload []byte) []byte {
+	ip := net.ParseIP(host).To4()
+	if ip == nil {
+		f := []byte{0x00, 0x00, 0x00, 0x03, byte(len(host))}
+		f = append(f, host...)
+		f = append(f, byte(port>>8), byte(port))
+		return append(f, payload...)
+	}
+	f := []byte{0x00, 0x00, 0x00, 0x01}
+	f = append(f, ip...)
+	f = append(f, byte(port>>8), byte(port))
+	return append(f, payload...)
+}
+
+// startUDPEcho binds a UDP socket on 127.0.0.1 that echoes every received datagram.
+func startUDPEcho(t *testing.T) (*net.UDPConn, int) {
+	t.Helper()
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, addr, err := pc.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			pc.WriteToUDP(buf[:n], addr)
+		}
+	}()
+	return pc, pc.LocalAddr().(*net.UDPAddr).Port
+}
+
+// closedTCPPort returns a port that (most likely) has no TCP listener.
+func closedTCPPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	return port
+}
+
+// TestUDPAssociate_ForcedRawUDP verifies that a non-empty udp_addr forces raw
+// UDP relay to the configured address: the standard SOCKS5 ASSOCIATE path
+// (which would need a reachable TCP listener) is never attempted.
+func TestUDPAssociate_ForcedRawUDP(t *testing.T) {
+	echo, port := startUDPEcho(t)
+	defer echo.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	tests := []struct {
+		name    string
+		udpAddr string
+	}{
+		{"host:port", fmt.Sprintf("127.0.0.1:%d", port)},
+		{"port-only", strconv.Itoa(port)},
+	}
+	for _, tt := range tests {
+		// No TCP listener on the proxy port: only the forced raw path can work.
+		p := &Proxy{
+			Scheme:  SchemeSOCKS5,
+			Host:    "127.0.0.1",
+			Port:    closedTCPPort(t),
+			UDPAddr: tt.udpAddr,
+		}
+		conn, err := p.UDPAssociate(ctx, "example.com", 53)
+		if err != nil {
+			t.Errorf("%s: UDPAssociate error: %v", tt.name, err)
+			continue
+		}
+		payload := []byte("ping-" + tt.name)
+		frame := makeSOCKS5UDPFrame("8.8.8.8", 53, payload)
+		if _, err := conn.Write(frame); err != nil {
+			t.Errorf("%s: write error: %v", tt.name, err)
+			conn.Close()
+			continue
+		}
+		conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		buf := make([]byte, 2048)
+		n, err := conn.Read(buf)
+		if err != nil {
+			t.Errorf("%s: read error: %v", tt.name, err)
+			conn.Close()
+			continue
+		}
+		if !bytes.Contains(buf[:n], payload) {
+			t.Errorf("%s: echo mismatch: got %x, want contains %x", tt.name, buf[:n], payload)
+		}
+		conn.Close()
+	}
+}
+
+// TestUDPAssociate_Rep7Fallback verifies the auto-fallback: when the upstream
+// rejects SOCKS5 UDP ASSOCIATE with rep=0x07, a raw UDP relay to Host:Port is
+// established and frames flow end-to-end.
+func TestUDPAssociate_Rep7Fallback(t *testing.T) {
+	// A UDP echo and a rep=0x07 SOCKS5 server bound to the SAME port.
+	echo, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	port := echo.LocalAddr().(*net.UDPAddr).Port
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, addr, err := echo.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			echo.WriteToUDP(buf[:n], addr)
+		}
+	}()
+
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				// SOCKS5 handshake: no auth
+				buf := make([]byte, 258)
+				if _, err := io.ReadFull(c, buf[:2]); err != nil || buf[0] != 0x05 {
+					return
+				}
+				nmethods := int(buf[1])
+				if _, err := io.ReadFull(c, buf[:nmethods]); err != nil {
+					return
+				}
+				if _, err := c.Write([]byte{0x05, 0x00}); err != nil {
+					return
+				}
+				// ASSOCIATE request (exactly 10 bytes: 0.0.0.0:0)
+				req := make([]byte, 10)
+				if _, err := io.ReadFull(c, req); err != nil {
+					return
+				}
+				// reply rep=0x07 CommandNotSupported
+				c.Write([]byte{0x05, 0x07, 0x00, 0x01})
+			}(conn)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: port}
+	conn, err := p.UDPAssociate(ctx, "example.com", 53)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	payload := []byte("fallback-hello")
+	frame := makeSOCKS5UDPFrame("8.8.8.8", 53, payload)
+	if _, err := conn.Write(frame); err != nil {
+		t.Fatal(err)
+	}
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, 2048)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(buf[:n], payload) {
+		t.Fatalf("echo mismatch: got %x, want contains %x", buf[:n], payload)
 	}
 }

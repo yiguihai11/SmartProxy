@@ -23,12 +23,12 @@ import (
 	"smartproxy/internal/dns"
 	"smartproxy/internal/logbuf"
 	"smartproxy/internal/relay"
-	"smartproxy/internal/version"
 	"smartproxy/internal/route"
 	"smartproxy/internal/rules"
 	"smartproxy/internal/safego"
 	"smartproxy/internal/udp"
 	"smartproxy/internal/upstream"
+	"smartproxy/internal/version"
 )
 
 type Server struct {
