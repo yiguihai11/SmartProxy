@@ -43,6 +43,11 @@ type Proxy struct {
 	Port     int
 	Username string
 	Password string
+	// Plugin 是 ss:// URL 的 ?plugin= 参数(SIP003,ss-android 导出格式
+	// id;key=val;key=val)。仅解析保留、不执行插件进程:SmartProxy 不内置
+	// obfs-local / v2ray-plugin 这类外部二进制,带插件的上游无法建连,
+	// 连接时会返回明确错误提示去掉该参数。
+	Plugin string
 	// UDPAddr 可选:裸 UDP relay 地址(用于 shadowsocks-android 这类 "SOCKS5 只做 TCP、
 	// UDP 由同/异端口的独立 udp_only 实例服务" 的上游)。语义:
 	//   空          -> 默认走标准 UDP ASSOCIATE;被 rep=0x07(CommandNotSupported)拒绝时自动兜底到 Host:Port
@@ -51,8 +56,8 @@ type Proxy struct {
 	UDPAddr string
 	health  ProxyHealth
 
-	// ssMethod 是 ss:// scheme 的加密实现(经典 AEAD),由 NewProxy 在解析
-	// method:password 时构建一次;Method 不可变,可安全并发使用。
+	// ssMethod 是 ss:// scheme 的加密实现(经典 AEAD 或 none/plain),由 NewProxy
+	// 在解析 method:password 时构建一次;Method 不可变,可安全并发使用。
 	ssMethod shadowsocks.Method
 }
 
@@ -98,12 +103,16 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 		if err != nil {
 			return nil, err
 		}
-		ssMethod, err := shadowaeadNew(method, password)
+		ssMethod, err := newSSMethod(method, password)
 		if err != nil {
 			return nil, fmt.Errorf("invalid ss:// credentials for %q: %w", proxyURL, err)
 		}
 		p.ssMethod = ssMethod
 		p.Username, p.Password = method, password
+		// SIP003 插件参数:只解析保留,不执行。
+		if plugin := u.Query().Get("plugin"); plugin != "" {
+			p.Plugin = plugin
+		}
 	}
 	slog.Info("upstream proxy loaded", "url", proxyURL)
 	return p, nil

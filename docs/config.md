@@ -54,7 +54,7 @@
 | 字段 | JSON 键 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `Alias` | `alias` | `proxy<N>` | 代理别名（规则引擎引用） |
-| `URL` | `url` | — | 协议 URL：`socks5://` / `socks5h://`（可带 user:pass）、`socks4://`、`http(s)://`（CONNECT）、`ss://`（内置 shadowsocks，见 `docs/upstream.md` §3.1）。`ss://` 支持 `ss://base64(method:password)@host:port` 或明文 `ss://method:password@host:port` |
+| `URL` | `url` | — | 协议 URL：`socks5://` / `socks5h://`（可带 user:pass）、`socks4://`、`http(s)://`（CONNECT）、`ss://`（内置 shadowsocks，见 `docs/upstream.md` §3.1）。`ss://` 支持 `ss://base64(method:password)@host:port`、明文 `ss://method:password@host:port`，或不加密方法的免密码形式 `ss://none@host:port`。方法可为经典 AEAD、AEAD-2022（密码框填 base64 PSK，多 PSK 用 `:` 连接）、或 `none`/`plain`。可带 `?plugin=...`（SIP003，只解析不执行，连接会被拒绝） |
 | `UDPAddr` | `udp_addr` | `""` | 上游裸 UDP relay 地址（仅 `socks5`/`socks5h`）。`""` 走标准 SOCKS5 UDP ASSOCIATE，被上游以 rep=0x07 拒绝时自动兜底为裸 UDP 到 `host:port`；纯端口 `"1080"` 强制裸 UDP 到 `host:1080`；`"127.0.0.1:1080"` / `":1080"` 强制裸 UDP 到该地址（空 host 用代理 host） |
 
 | Go 字段 | JSON 键 | 默认值 | 说明 |

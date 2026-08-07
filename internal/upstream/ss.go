@@ -15,6 +15,7 @@ import (
 
 	"github.com/sagernet/sing-shadowsocks"
 	"github.com/sagernet/sing-shadowsocks/shadowaead"
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
 	"github.com/sagernet/sing/common/buf"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -25,25 +26,72 @@ import (
 // 用 sing-shadowsocks 逐包携带目标地址的模型,把上游一侧收发的 SOCKS5-UDP 帧
 // 转换成 SS UDP 包。
 //
-// 仅支持经典 AEAD 加密(ss-2022 的 key 语义不同,未纳入)。
+// 支持经典 AEAD(密码派生 key)、AEAD-2022(base64 key)与不加密的 none/plain。
 
-// ssSupportedMethods 列出支持的经典 AEAD 加密方式。sing-shadowsocks 的
-// shadowaead.New 对未知方法不报错(会留下 nil constructor),这里显式校验,
-// 避免拼写错误直到连接时才 panic。
+// ssSupportedMethods 列出支持的经典 AEAD + AEAD-2022 加密方式。sing-shadowsocks
+// 的 shadowaead.New / shadowaead_2022.New 对未知方法不报错(会留下 nil constructor),
+// 这里显式校验,避免拼写错误直到连接时才 panic。
 var ssSupportedMethods = map[string]bool{
+	// 经典 AEAD(SIP004,密码派生 key)
 	"aes-128-gcm":             true,
 	"aes-192-gcm":             true,
 	"aes-256-gcm":             true,
 	"chacha20-ietf-poly1305":  true,
 	"xchacha20-ietf-poly1305": true,
+	// AEAD-2022(SIP022,key 是 base64 编码的二进制 PSK,可多 PSK 用 : 连接)
+	"2022-blake3-aes-128-gcm":       true,
+	"2022-blake3-aes-256-gcm":       true,
+	"2022-blake3-chacha20-poly1305": true,
 }
 
-// shadowaeadNew 构建经典 AEAD 的 Method(密码派生 key)。
-func shadowaeadNew(method, password string) (shadowsocks.Method, error) {
+// newSSMethod 构建 SS 加密实现:经典 AEAD(密码派生 key)、AEAD-2022(base64 key)
+// 或不加密的 none/plain。none/plain 是同一个方法(shadowsocks-rust 的
+// CipherKind::NONE 别名),wire 为明文地址头 + payload,不需要密码。
+func newSSMethod(method, password string) (shadowsocks.Method, error) {
+	switch method {
+	case "none", "plain":
+		return shadowsocks.NewNone(), nil
+	}
 	if !ssSupportedMethods[method] {
-		return nil, fmt.Errorf("unsupported shadowsocks method %q (supported: aes-128/192/256-gcm, chacha20-ietf-poly1305, xchacha20-ietf-poly1305)", method)
+		return nil, fmt.Errorf("unsupported shadowsocks method %q (supported: none/plain, aes-128/192/256-gcm, chacha20-ietf-poly1305, xchacha20-ietf-poly1305, 2022-blake3-aes-128/256-gcm, 2022-blake3-chacha20-poly1305)", method)
+	}
+	if strings.HasPrefix(method, "2022-") {
+		return newSSMethod2022(method, password)
 	}
 	return shadowaead.New(method, nil, password)
+}
+
+// newSSMethod2022 构建 AEAD-2022 的 Method。2022 的 key 语义与经典 AEAD 不同:
+// 不是密码派生,而是 base64 编码的二进制 PSK(长度 16/32 字节),多用户时多个
+// PSK 用 : 连接。sing 的 shadowaead_2022.NewWithPassword 只认带 padding 的
+// StdEncoding,这里额外兼容不带 padding 的变体(ss-android 导出可能不带 =)。
+func newSSMethod2022(method, password string) (shadowsocks.Method, error) {
+	if password == "" {
+		return nil, fmt.Errorf("shadowsocks-2022 method %q requires a base64 key", method)
+	}
+	parts := strings.Split(password, ":")
+	pskList := make([][]byte, 0, len(parts))
+	for _, part := range parts {
+		kb, err := decodeBase64Key(part)
+		if err != nil {
+			return nil, fmt.Errorf("shadowsocks-2022 key %q: %w", part, err)
+		}
+		pskList = append(pskList, kb)
+	}
+	return shadowaead_2022.New(method, pskList, nil)
+}
+
+// decodeBase64Key 依次尝试 Std / URL(带 padding)与 Raw 变体解码 base64 key。
+func decodeBase64Key(s string) ([]byte, error) {
+	for _, enc := range []*base64.Encoding{
+		base64.StdEncoding, base64.URLEncoding,
+		base64.RawStdEncoding, base64.RawURLEncoding,
+	} {
+		if kb, err := enc.DecodeString(s); err == nil {
+			return kb, nil
+		}
+	}
+	return nil, errors.New("invalid base64 key")
 }
 
 // parseSSUserinfo 解析 ss:// URL 的 userinfo(method:password)。
@@ -62,18 +110,24 @@ func parseSSUserinfo(user *url.Userinfo) (method, password string, err error) {
 	}
 	// shadowsocks URI 规范:userinfo 为 base64 编码(通常无 padding)。纯 base64 不含
 	// 冒号,hasPw 为 false,raw 即编码串;含冒号则视为明文 method:password。
+	// 注意:解码结果必须含 ':'(即 method:password 结构)才算有效编码 —— 否则像
+	// "none" 这种恰好是合法 base64 的明文方法名会被解码成乱码字节。
 	for _, enc := range []*base64.Encoding{
 		base64.RawURLEncoding, base64.URLEncoding,
 		base64.RawStdEncoding, base64.StdEncoding,
 	} {
 		if decoded, derr := enc.DecodeString(raw); derr == nil {
-			raw = string(decoded)
+			if strings.IndexByte(string(decoded), ':') >= 0 {
+				raw = string(decoded)
+			}
 			break
 		}
 	}
 	i := strings.IndexByte(raw, ':')
 	if i < 0 {
-		return "", "", fmt.Errorf("ss:// credentials must be method:password, got %q", raw)
+		// 无冒号:方法名本身(如 "none"),不需要密码。AEAD 方法缺密码时由
+		// newSSMethod / shadowaead.New 报错。
+		return raw, "", nil
 	}
 	method = raw[:i]
 	password = raw[i+1:]
@@ -83,8 +137,20 @@ func parseSSUserinfo(user *url.Userinfo) (method, password string, err error) {
 	return method, password, nil
 }
 
+// ssPluginBlocked 报告该 ss 上游是否配置了 SIP003 插件。SmartProxy 只解析插件
+// 参数、不执行插件进程,带插件的上游无法正常建连。
+func (p *Proxy) ssPluginBlocked() error {
+	if p.Plugin == "" {
+		return nil
+	}
+	return fmt.Errorf("ss proxy %q uses SIP003 plugin %q which SmartProxy does not execute (parse-only support); strip ?plugin=... from the URL to connect without the plugin", p.URL, p.Plugin)
+}
+
 // ssConnect 建立到目标 host:port 的 SS 加密隧道(TCP)。
 func (p *Proxy) ssConnect(ctx context.Context, targetHost string, targetPort int) (net.Conn, error) {
+	if err := p.ssPluginBlocked(); err != nil {
+		return nil, err
+	}
 	if p.ssMethod == nil {
 		return nil, fmt.Errorf("ss proxy %q has no method", p.URL)
 	}
@@ -104,6 +170,9 @@ func (p *Proxy) ssConnect(ctx context.Context, targetHost string, targetPort int
 // ssUDPAssociate 建一条到 SS 服务器的 UDP relay 会话,返回一个满足 SmartProxy
 // 上游 UDP 契约(net.Conn + 收发完整 SOCKS5-UDP 帧)的连接。
 func (p *Proxy) ssUDPAssociate(ctx context.Context, targetHost string, targetPort int) (net.Conn, error) {
+	if err := p.ssPluginBlocked(); err != nil {
+		return nil, err
+	}
 	if p.ssMethod == nil {
 		return nil, fmt.Errorf("ss proxy %q has no method", p.URL)
 	}
@@ -137,11 +206,18 @@ func (c *ssUDPConn) Write(b []byte) (int, error) {
 		return 0, err
 	}
 	dest := M.ParseSocksaddrHostPort(host, uint16(port))
-	// 预留 SS 加密头 headroom(salt + addr)+ AEAD 标签长度。WritePacket 会
-	// ExtendHeader 写头、Seal 原地追加密文标签,容量不足会 panic。
-	headroom := M.MaxSocksaddrLength + 64
-	buff := buf.NewSize(headroom + len(payload) + shadowaead.Overhead)
-	buff.Resize(headroom, 0)
+	// 按具体 packet conn 声明的 headroom 预留加密头与尾部标签:经典 AEAD 是
+	// salt+addr 头 + 16B tag;2022 额外含 session/padding 头(可到 ~900B)。容量
+	// 不足时 WritePacket 内部 ExtendHeader/Seal 会 panic。
+	front := N.CalculateFrontHeadroom(c.NetPacketConn)
+	if _, ok := c.NetPacketConn.(N.FrontHeadroom); !ok {
+		// nonePacketConn 只实现废弃的 Headroom(),不实现 FrontHeadroom,Calculate 返回 0;
+		// 它 WritePacket 时还会 ExtendHeader 一个地址头,补 MaxSocksaddrLength 保底。
+		front = M.MaxSocksaddrLength
+	}
+	rear := N.CalculateRearHeadroom(c.NetPacketConn)
+	buff := buf.NewSize(front + len(payload) + rear)
+	buff.Resize(front, 0)
 	if _, err := buff.Write(payload); err != nil {
 		buff.Release()
 		return 0, err

@@ -505,6 +505,9 @@ function setProxyScheme(v){
   if(urow)urow.style.display=(v==='ss')?'none':'';
   var ur=document.getElementById('proxy-udpaddr-row');
   if(ur)ur.style.display=(v==='ss')?'none':'';
+  // 插件行:仅 ss 且已解析出 ?plugin= 时显示(只读,不执行)
+  var pr=document.getElementById('proxy-plugin-row');
+  if(pr)pr.style.display=(v==='ss'&&document.getElementById('proxy-plugin').value)?'':'none';
   updateProxyPreview();
 }
 function setSSMethod(m){
@@ -541,18 +544,28 @@ function openProxyDialog(i){
   document.getElementById('proxy-pass').value='';
   document.getElementById('proxy-server').value='';
   document.getElementById('proxy-udpaddr').value=p?(p.udp_addr||''):'';
+  document.getElementById('proxy-plugin').value='';
   var scheme='socks5';
   if(p){
     var u=null;
     try{u=new URL(p.url)}catch(e){}
     if(u&&u.protocol){scheme=u.protocol.slice(0,-1);document.getElementById('proxy-server').value=u.host;
       if(scheme==='ss'){
-        // ss://method:password@host:port 或 ss://base64(method:password)@host:port,
-        // 解码出 method 填进下拉、password 填密码框。
+        // ss://method:password@host:port、ss://base64(method:password)@host:port
+        // 或 ss://none@host:port(无密码的明文方法)。解码出 method 填进下拉、password 填密码框。
         var sm='',sp='';
-        if(u.username&&u.password){sm=decodeURIComponent(u.username);sp=decodeURIComponent(u.password)}
-        else if(u.username){var dec=b64urlDecode(u.username);var ci=dec.indexOf(':');if(ci>0){sm=dec.slice(0,ci);sp=dec.slice(ci+1)}}
+        if(u.username){
+          if(u.password){sm=decodeURIComponent(u.username);sp=decodeURIComponent(u.password)}
+          else{
+            var dec=b64urlDecode(u.username);
+            var ci=dec.indexOf(':');
+            if(ci>0){sm=dec.slice(0,ci);sp=dec.slice(ci+1)}
+            else{sm=decodeURIComponent(u.username)} // 无密码方法名(如 none)
+          }
+        }
         if(sm){setSSMethod(sm);document.getElementById('proxy-pass').value=sp}
+        // SIP003 插件参数:只解析展示(只读),保存时原样保留
+        document.getElementById('proxy-plugin').value=u.searchParams.get('plugin')||'';
       }else{
         if(u.username)document.getElementById('proxy-user').value=decodeURIComponent(u.username);
         if(u.password)document.getElementById('proxy-pass').value=decodeURIComponent(u.password);
@@ -577,11 +590,14 @@ function updateProxyPreview(){
   var url=scheme+'://';
   if(scheme==='ss'){
     var m=document.getElementById('proxy-ss-method').value;
-    if(m)url+=encodeURIComponent(m)+':'+encodeURIComponent(pass)+'@';
+    // none/plain 无需密码:密码为空时不带冒号,生成 ss://none@host
+    if(m)url+=encodeURIComponent(m)+(pass?':'+encodeURIComponent(pass):'')+'@';
   }else if(user){
     url+=encodeURIComponent(user)+':'+encodeURIComponent(pass)+'@';
   }
   url+=server;
+  var plugin=document.getElementById('proxy-plugin').value.trim();
+  if(plugin)url+='?plugin='+encodeURIComponent(plugin);
   el.style.display='block';
   el.innerHTML=url.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
@@ -605,10 +621,13 @@ async function saveProxy(){
   if(scheme==='ss'){
     var m=document.getElementById('proxy-ss-method').value;
     if(!m){alert('Encryption method is required for SS');return}
-    url=scheme+'://'+encodeURIComponent(m)+':'+encodeURIComponent(pass)+'@'+server;
+    // none/plain 无需密码:密码为空时不带冒号,生成 ss://none@server
+    url=scheme+'://'+encodeURIComponent(m)+(pass?':'+encodeURIComponent(pass):'')+'@'+server;
   }else if(user){
     url=scheme+'://'+encodeURIComponent(user)+':'+encodeURIComponent(pass)+'@'+server;
   }
+  var plugin=document.getElementById('proxy-plugin').value.trim();
+  if(plugin)url+='?plugin='+encodeURIComponent(plugin);
   try{var chk=new URL(url);if(!chk.hostname)throw new Error('bad host')}catch(e){alert('Invalid server address: '+server);return}
   var editing=document.getElementById('proxy-dialog').dataset.alias||'';
   var udpaddr=document.getElementById('proxy-udpaddr').value.trim();
@@ -1539,6 +1558,10 @@ es.onmessage=function(e){
         <option value="aes-256-gcm">aes-256-gcm</option>
         <option value="chacha20-ietf-poly1305">chacha20-ietf-poly1305</option>
         <option value="xchacha20-ietf-poly1305">xchacha20-ietf-poly1305</option>
+        <option value="2022-blake3-aes-128-gcm">2022-blake3-aes-128-gcm</option>
+        <option value="2022-blake3-aes-256-gcm">2022-blake3-aes-256-gcm</option>
+        <option value="2022-blake3-chacha20-poly1305">2022-blake3-chacha20-poly1305</option>
+        <option value="none">none — 明文不加密 ⚠</option>
       </select>
     </div>
     <div id="proxy-user-row">
@@ -1550,6 +1573,10 @@ es.onmessage=function(e){
     <div id="proxy-udpaddr-row">
       <div class="dialog-label">UDP Relay <span style="text-transform:none;font-weight:400">(udp_addr, optional)</span></div>
       <input class="dialog-input" id="proxy-udpaddr" placeholder="blank = SOCKS5 UDP ASSOCIATE | 1080 | host:port" autocomplete="off">
+    </div>
+    <div id="proxy-plugin-row" style="display:none">
+      <div class="dialog-label">SIP003 Plugin <span style="text-transform:none;font-weight:400">(只解析,不执行)</span></div>
+      <input class="dialog-input" id="proxy-plugin" readonly title="SmartProxy 只解析 ?plugin= 参数,不执行插件进程;带插件的代理连接会被拒绝">
     </div>
     <div class="dialog-desc" id="proxy-preview" style="display:none;font-family:var(--mono);font-size:.8rem"></div>
     <div class="dialog-actions">
