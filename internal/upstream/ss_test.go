@@ -19,8 +19,8 @@ import (
 	N "github.com/sagernet/sing/common/network"
 )
 
-// 2022 测试用的 base64 PSK:16 字节(aes-128)与 32 字节(aes-256 / chacha20)。
-// 太短的 key 会被 shadowaead_2022.New 直接拒绝,所以必须用精确长度。
+// base64 PSKs for the 2022 tests: 16 bytes (aes-128) and 32 bytes (aes-256 / chacha20).
+// Keys that are too short are rejected outright by shadowaead_2022.New, so exact lengths are required.
 var (
 	key2022b64  = base64.StdEncoding.EncodeToString([]byte("0123456789abcdef"))
 	key2022b64b = base64.StdEncoding.EncodeToString([]byte("0123456789abcdefghijklmnopqrstuv"))
@@ -164,29 +164,29 @@ func TestNewProxySS2022(t *testing.T) {
 		}
 	}
 
-	// 无 padding 的 key(ss-android 导出可能不带 ==)也必须能解码。
+	// Unpadded keys (ss-android exports may drop the trailing ==) must also decode.
 	unpadded := strings.TrimRight(key2022b64, "=")
 	u := fmt.Sprintf("ss://%s@proxy.example.com:8388", b64url("2022-blake3-aes-128-gcm:"+unpadded))
 	if _, err := NewProxy(u); err != nil {
 		t.Fatalf("unpadded key NewProxy failed: %v", err)
 	}
 
-	// 无效 key:空、非 base64、长度不足。
+	// Invalid keys: empty, non-base64, or too short.
 	if _, err := NewProxy("ss://2022-blake3-aes-128-gcm:@proxy.example.com:8388"); err == nil {
 		t.Error("expected error for empty 2022 key")
 	}
 	if _, err := NewProxy("ss://2022-blake3-aes-128-gcm:key..key@proxy.example.com:8388"); err == nil {
 		t.Error("expected error for non-base64 2022 key")
 	}
-	short := base64.StdEncoding.EncodeToString([]byte("abcdefgh")) // 8 字节 < 16
+	short := base64.StdEncoding.EncodeToString([]byte("abcdefgh")) // 8 bytes < 16
 	if _, err := NewProxy("ss://2022-blake3-aes-128-gcm:" + short + "@proxy.example.com:8388"); err == nil {
 		t.Error("expected error for too-short 2022 key")
 	}
 }
 
 func TestNewProxySSPlugin(t *testing.T) {
-	// ss-android 导出的带插件链接:userinfo 仍是 base64(method:password),
-	// 插件放在 ?plugin=,值为 id;key=val;key=val(需 URL 转义)。
+	// ss-android exported link with a plugin: userinfo is still base64(method:password),
+	// and the plugin is placed in ?plugin= as id;key=val;key=val (URL-escaped).
 	pluginSpec := "obfs-local;obfs=http;obfs-host=www.bing.com"
 	u := fmt.Sprintf("ss://%s@proxy.example.com:8388?plugin=%s", b64url("aes-128-gcm:secret"), url.QueryEscape(pluginSpec))
 	p, err := NewProxy(u)
@@ -197,7 +197,7 @@ func TestNewProxySSPlugin(t *testing.T) {
 		t.Errorf("plugin = %q, want %q", p.Plugin, pluginSpec)
 	}
 
-	// obfs-local 已内置:解析出 obfs 配置(http,obfs-host,默认 GET /)。
+	// obfs-local is built in: parse out the obfs config (http, obfs-host, default GET /).
 	cfg, err := p.ssPlugin()
 	if err != nil {
 		t.Fatalf("ssPlugin: %v", err)
@@ -206,7 +206,7 @@ func TestNewProxySSPlugin(t *testing.T) {
 		t.Errorf("obfs config = %+v", cfg)
 	}
 
-	// UDP 不经插件:obfs-local 的 UDPAssociate 直接直连服务器端口,不再因插件报错。
+	// UDP bypasses the plugin: obfs-local's UDPAssociate connects directly to the server port and no longer errors on the plugin.
 	local, err := NewProxy("ss://" + b64url("aes-128-gcm:secret") + "@127.0.0.1:8388?plugin=" + url.QueryEscape(pluginSpec))
 	if err != nil {
 		t.Fatalf("NewProxy local failed: %v", err)
@@ -221,8 +221,8 @@ func TestNewProxySSPlugin(t *testing.T) {
 }
 
 func TestNewProxySSUnsupportedPlugin(t *testing.T) {
-	// 其它插件二进制(v2ray-plugin 等)不内置:连接时报明确错误。
-	u := fmt.Sprintf("ss://%s@proxy.example.com:8388?plugin=%s", b64url("aes-128-gcm:secret"), url.QueryEscape("v2ray-plugin;mode=websocket"))
+	// Unknown plugin binaries (v2ray-plugin is now built in; use another name to test) are not recognized: Connect reports a clear error.
+	u := fmt.Sprintf("ss://%s@proxy.example.com:8388?plugin=%s", b64url("aes-128-gcm:secret"), url.QueryEscape("unknown-plugin;foo=bar"))
 	p, err := NewProxy(u)
 	if err != nil {
 		t.Fatalf("NewProxy failed: %v", err)
@@ -319,9 +319,9 @@ func TestEncodeSocks5UDPHeader(t *testing.T) {
 // the server bounces the exact datagram back, and client Read decrypts it back
 // into a full SOCKS5 UDP response frame.
 //
-// The echo works because each SS UDP packet is self-contained: AEAD 包自带 salt +
-// AEAD(addr|payload)(固定 zero nonce),none 包为明文 addr|payload —— 两种情况把
-// 原始数据报弹回后,客户端都能解出自己的包。
+// The echo works because each SS UDP packet is self-contained: an AEAD packet carries
+// its own salt + AEAD(addr|payload) (fixed zero nonce), a none packet is plaintext
+// addr|payload — in both cases bouncing the raw datagram back lets the client decrypt its own packet.
 func TestSSUDPConnRoundTrip(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -409,9 +409,9 @@ func TestSSUDPConnRoundTrip(t *testing.T) {
 	}
 }
 
-// echoSSUDPHandler 把收到的每个 UDP 包原样回显给客户端。与 raw-bounce 不同,
-// 它走真实的 NAT packet conn:ReadPacket 给出 payload + 目标地址,WritePacket 由
-// serverPacketWriter 用服务器侧会话重新封包再发给客户端(会话式,不能弹回原包)。
+// echoSSUDPHandler echoes each received UDP packet back to the client unchanged. Unlike
+// raw-bounce, it goes through a real NAT packet conn: ReadPacket gives payload + target
+// address, and WritePacket re-encapsulates via serverPacketWriter using the server-side session before sending to the client (session-based, so the original packet cannot be bounced back).
 type echoSSUDPHandler struct{}
 
 func (echoSSUDPHandler) NewConnection(ctx context.Context, conn net.Conn, metadata M.Metadata) error {
@@ -420,8 +420,8 @@ func (echoSSUDPHandler) NewConnection(ctx context.Context, conn net.Conn, metada
 
 func (echoSSUDPHandler) NewPacketConnection(ctx context.Context, conn N.PacketConn, metadata M.Metadata) error {
 	for {
-		// serverPacketWriter 回包时要在 payload 前 ExtendHeader(会话头 + 最多
-		// ~900B padding),必须预留 headroom,否则 buffer 起始位置为 0 时 panic。
+		// serverPacketWriter ExtendHeaders a session header + up to ~900B padding in front of
+		// the payload when replying; headroom must be reserved or the buffer panics when it starts at offset 0.
 		front := N.CalculateFrontHeadroom(conn)
 		rear := N.CalculateRearHeadroom(conn)
 		buff := buf.NewSize(front + 65535 + rear)
@@ -441,9 +441,9 @@ func (echoSSUDPHandler) NewPacketConnection(ctx context.Context, conn N.PacketCo
 func (echoSSUDPHandler) NewError(ctx context.Context, err error) {
 }
 
-// testSSUDPServerConn 把 *net.UDPConn 适配成 sing 的 N.PacketConn,作为 2022
-// 服务端 NewPacket 的底层连接:ReadPacket 读入数据报,WritePacket 把已封好的
-// 数据报发往指定目标(即客户端地址)。
+// testSSUDPServerConn adapts *net.UDPConn to sing's N.PacketConn, used as the
+// underlying connection for the 2022 server-side NewPacket: ReadPacket reads a
+// datagram, and WritePacket sends the already-encapsulated datagram to the given destination (the client address).
 type testSSUDPServerConn struct {
 	udp *net.UDPConn
 }
@@ -473,9 +473,9 @@ func (c *testSSUDPServerConn) SetWriteDeadline(t time.Time) error {
 }
 
 // TestSSUDPConnRoundTrip2022 validates ssUDPConn against a real AEAD-2022
-// service over a real UDP socket. 2022 UDP 是会话式(客户端/服务端各持独立会话),
-// 服务端必须用 shadowaead_2022.Service 解包后再回写,不能像经典 AEAD/none 那样
-// 把原始数据报弹回。完整走 NewProxy → ssUDPAssociate → ssUDPConn 的客户端路径。
+// service over a real UDP socket. 2022 UDP is session-based (client/server hold
+// independent sessions), so the server must decrypt via shadowaead_2022.Service and
+// re-encrypt before replying — it cannot bounce the raw datagram like classic AEAD/none. Full client path: NewProxy → ssUDPAssociate → ssUDPConn.
 func TestSSUDPConnRoundTrip2022(t *testing.T) {
 	serverUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {

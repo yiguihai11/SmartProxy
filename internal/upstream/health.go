@@ -189,6 +189,12 @@ func (hc *HealthChecker) checkLoop(p *Proxy) {
 }
 
 func (hc *HealthChecker) checkProxy(p *Proxy) {
+	// udp_only upstreams have no TCP listener: the TCP HTTP probe would always fail and
+	// open the circuit, killing their UDP relay. Skip them entirely; UDP liveness is
+	// handled at relay time by UDPAssociate and the pool's probe.
+	if p.UDPOnly {
+		return
+	}
 	cfg := hc.cfg.Load()
 
 	p.health.mu.RLock()

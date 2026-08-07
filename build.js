@@ -1,9 +1,9 @@
 const fs = require('fs');
 
-// 检查 dashboard.html 的 js 语法
+// check dashboard.html's js syntax
 const html = fs.readFileSync('internal/admin/dashboard.html', 'utf8');
 
-// 找到主 script 块
+// locate the main script block
 const start = html.indexOf('<script>\n');
 const end = html.indexOf('</script>', start + 1);
 if (start === -1 || end === -1) {

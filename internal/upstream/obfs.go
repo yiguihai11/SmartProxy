@@ -1,17 +1,17 @@
 package upstream
 
-// 内置 simple-obfs(SIP003)客户端:obfs-http / obfs-tls。协议逐字节移植自
-// shadowsocks/simple-obfs(https://github.com/shadowsocks/simple-obfs)的
-// obfs_http.c / obfs_tls.c(客户端侧 obfs_request / deobfs_response)。
+// Built-in simple-obfs (SIP003) client: obfs-http / obfs-tls. The protocol is ported
+// byte-for-byte from shadowsocks/simple-obfs (https://github.com/shadowsocks/simple-obfs),
+// from obfs_http.c / obfs_tls.c (client-side obfs_request / deobfs_response).
 //
-// 工作原理(与 obfs-local 相同,但无需外部二进制):
-//   - 首写:obfs-http 在第一个 SS 包前拼一个 HTTP GET 头;obfs-tls 把第一个 SS 包
-//     藏进 TLS ClientHello 的 session_ticket 扩展里。
-//   - 后续写:obfs-http 明文直通;obfs-tls 每包加 5 字节 0x17 帧头。
-//   - 读侧:首读剥掉服务端的 obfs 响应头(obfs-http 找 \r\n\r\n;obfs-tls 解析
-//     ServerHello + CCS + EncryptedHandshake 头),obfs-tls 后续解 0x17 帧。
+// How it works (same as obfs-local, but no external binary needed):
+//   - First write: obfs-http prepends an HTTP GET header before the first SS packet;
+//     obfs-tls hides the first SS packet inside the session_ticket extension of a TLS ClientHello.
+//   - Subsequent writes: obfs-http passes plaintext straight through; obfs-tls adds a 5-byte 0x17 frame header per packet.
+//   - Read side: the first read strips the server's obfs response header (obfs-http looks
+//     for \r\n\r\n; obfs-tls parses the ServerHello + CCS + EncryptedHandshake header), and obfs-tls then decodes 0x17 frames.
 //
-// 该插件只混淆 TCP;SS UDP 不经插件,直接发到服务器端口(见 ssUDPAssociate)。
+// This plugin only obfuscates TCP; SS UDP bypasses the plugin and is sent directly to the server port (see ssUDPAssociate).
 
 import (
 	"bytes"
@@ -26,23 +26,23 @@ import (
 	"time"
 )
 
-// obfsConfig 是一次 SIP003 插件解析结果。仅支持 simple-obfs 的 http/tls 两种混淆;
-// 其它插件二进制(v2ray-plugin 等)SmartProxy 不内置,连接时报错。
+// obfsConfig is the result of one SIP003 plugin parse. Only the http/tls obfuscations
+// of simple-obfs are supported; other plugin binaries (v2ray-plugin, etc.) are not built into SmartProxy and error at connect time.
 type obfsConfig struct {
-	id     string // 插件二进制名,如 "obfs-local"
+	id     string // plugin binary name, e.g. "obfs-local"
 	obfs   string // "http" | "tls"
-	host   string // obfs-host(HTTP Host / TLS SNI)
-	port   int    // SS 服务器端口,HTTP Host 头在非 80 时带上(与 obfs-local 一致)
-	method string // http-method,默认 "GET"(仅 http)
-	uri    string // obfs-uri,默认 "/"(仅 http)
+	host   string // obfs-host (HTTP Host / TLS SNI)
+	port   int    // SS server port; the HTTP Host header carries it when not 80 (matching obfs-local)
+	method string // http-method, default "GET" (http only)
+	uri    string // obfs-uri, default "/" (http only)
 }
 
-// parsePluginOptions 解析 SIP003 的 ?plugin= 参数值,格式:
+// parsePluginOptions parses the SIP003 ?plugin= parameter value, in the format:
 //
 //	<binary>;key=value;key=value...
 //
-// 值里的 \ ; = 反斜杠转义(ss-android PluginOptions 导出格式)。未知 key 忽略,
-// 兼容 fast-open / mptcp 这类 TCP 层选项。
+// In the values, \ ; = are backslash-escaped (ss-android PluginOptions export format).
+// Unknown keys are ignored to tolerate TCP-level options like fast-open / mptcp.
 func parsePluginOptions(s string) (*obfsConfig, error) {
 	if s == "" {
 		return nil, errors.New("empty plugin options")
@@ -67,7 +67,7 @@ func parsePluginOptions(s string) (*obfsConfig, error) {
 		case "obfs-uri":
 			cfg.uri = v
 		case "fast-open", "mptcp":
-			// TCP 层选项,忽略
+			// TCP-level option, ignored
 		}
 	}
 	if cfg.id != "obfs-local" {
@@ -79,7 +79,7 @@ func parsePluginOptions(s string) (*obfsConfig, error) {
 	return cfg, nil
 }
 
-// splitPluginOptions 按未转义的 ';' 分段,处理反斜杠转义。
+// splitPluginOptions splits on unescaped ';' and handles backslash escapes.
 func splitPluginOptions(s string) ([]string, error) {
 	var parts []string
 	var cur strings.Builder
@@ -100,8 +100,8 @@ func splitPluginOptions(s string) ([]string, error) {
 	return parts, nil
 }
 
-// wrapObfs 把已连上远端 SS 服务器的 TCP 连接包上 obfs 传输层,返回满足 net.Conn
-// 的混淆连接。obfs-http 的首包/后续包为明文拼装;obfs-tls 首包藏进 ClientHello。
+// wrapObfs wraps a TCP connection already established to the remote SS server with the
+// obfs transport layer and returns an obfuscated net.Conn. obfs-http builds its first/subsequent packets in plaintext; obfs-tls hides the first packet inside ClientHello.
 func wrapObfs(conn net.Conn, cfg *obfsConfig) (net.Conn, error) {
 	switch cfg.obfs {
 	case "http":
@@ -114,7 +114,7 @@ func wrapObfs(conn net.Conn, cfg *obfsConfig) (net.Conn, error) {
 	}
 }
 
-// writeAll 循环写满整个 buf(处理 TCP 短写)。
+// writeAll loops until the whole buf is written (handles short TCP writes).
 func writeAll(w io.Writer, buf []byte) error {
 	for len(buf) > 0 {
 		n, err := w.Write(buf)
@@ -135,22 +135,22 @@ var crlfcrlf = []byte("\r\n\r\n")
 // obfs-http
 // ---------------------------------------------------------------------------
 
-// httpObfsConn 实现 obfs-http 客户端传输层:
-//   - Write:首写前置 HTTP GET 请求头(Content-Length=首包长,服务端实际只按 \r\n\r\n
-//     剥离、不按 Content-Length 读边界),后续明文直通;
-//   - Read:首读缓存到 \r\n\r\n,剥掉服务端 101 响应头后返回剩余数据,后续直通。
+// httpObfsConn implements the obfs-http client transport:
+//   - Write: the first write prepends an HTTP GET request header (Content-Length = first packet size; the server only strips at \r\n\r\n,
+//     not at the Content-Length boundary), then passes plaintext straight through;
+//   - Read: the first read buffers up to \r\n\r\n, strips the server's 101 response header, and returns the rest; subsequent reads pass through.
 type httpObfsConn struct {
 	net.Conn
 
 	host   string
-	port   int // 远程 SS 端口;==80 时 Host 不带端口
+	port   int // remote SS port; the Host header omits the port when ==80
 	method string
 	uri    string
 
 	sentHeader bool
-	needStrip  bool   // 尚未剥掉服务端响应头
-	buf        []byte // 未找到 \r\n\r\n 前的缓存
-	leftover   []byte // 剥掉响应头后剩下的数据
+	needStrip  bool   // server response header not yet stripped
+	buf        []byte // cache of bytes before \r\n\r\n is found
+	leftover   []byte // data remaining after stripping the response header
 }
 
 const maxObfsHTTPHeader = 64 * 1024
@@ -168,7 +168,7 @@ func (c *httpObfsConn) buildRequest(contentLength int) []byte {
 	} else {
 		b.WriteString("Host: " + c.host + "\r\n")
 	}
-	// User-Agent: curl/7.<major>.<minor>,major/minor 随机(与 simple-obfs 一致)
+	// User-Agent: curl/7.<major>.<minor>, major/minor randomized (matching simple-obfs)
 	b.WriteString("User-Agent: curl/7." + fmt.Sprint(randIntN(51)) + "." + fmt.Sprint(randIntN(2)) + "\r\n")
 	b.WriteString("Upgrade: websocket\r\n")
 	b.WriteString("Connection: Upgrade\r\n")
@@ -254,36 +254,36 @@ func (c *httpObfsConn) Read(p []byte) (int, error) {
 // obfs-tls
 // ---------------------------------------------------------------------------
 
-// tlsObfsConn 实现 obfs-tls 客户端传输层:
-//   - Write:首写构造 TLS ClientHello(首包藏进 session_ticket 扩展),后续每包
-//     前置 5 字节 0x17 0x03 0x03 + uint16 len 帧头;
-//   - Read:首读解析固定结构的 ServerHello(96B)+ CCS(6B)+ EncryptedHandshake 头
-//     (5B,len 即首块数据长),之后按 0x17 帧解帧。
+// tlsObfsConn implements the obfs-tls client transport:
+//   - Write: the first write builds a TLS ClientHello (first packet hidden in the session_ticket
+//     extension); subsequent packets are prefixed with a 5-byte 0x17 0x03 0x03 + uint16 len frame header;
+//   - Read: the first read parses the fixed ServerHello (96B) + CCS (6B) + EncryptedHandshake
+//     header (5B, len = first chunk size), then decodes 0x17 frames.
 type tlsObfsConn struct {
 	net.Conn
 	host string
 
 	sentHello bool
 
-	// 读侧状态机
+	// read-side state machine
 	state    tlsReadState
-	hdr      []byte // 攒当前待读的定长头
-	msgLen   int    // 首块数据长度(EncryptedHandshake.len)
-	frameLen int    // 当前 0x17 帧 payload 长度
-	out      []byte // 已解帧、待交付给上层的数据
+	hdr      []byte // accumulates the fixed-length header currently being read
+	msgLen   int    // length of the first data chunk (EncryptedHandshake.len)
+	frameLen int    // payload length of the current 0x17 frame
+	out      []byte // decoded frames pending delivery to the upper layer
 }
 
 type tlsReadState int
 
 const (
-	tlsStateHello     tlsReadState = iota // 96B ServerHello
-	tlsStateCCS                           // 6B ChangeCipherSpec
-	tlsStateEncHeader                     // 5B EncryptedHandshake 头
-	tlsStateFirstChunk                    // msgLen 字节首块数据(明文直通)
-	tlsStateFrame                         // 0x17 帧
+	tlsStateHello      tlsReadState = iota // 96B ServerHello
+	tlsStateCCS                            // 6B ChangeCipherSpec
+	tlsStateEncHeader                      // 5B EncryptedHandshake header
+	tlsStateFirstChunk                     // msgLen-byte first chunk (plaintext passthrough)
+	tlsStateFrame                          // 0x17 frame
 )
 
-// simple-obfs 的模板字节(从 C 源码逐字节提取,见 obfs_tls.c)。
+// simple-obfs template bytes (extracted byte-by-byte from the C source, see obfs_tls.c).
 var tlsCipherSuites = []byte{
 	0xc0, 0x2c, 0xc0, 0x30, 0x00, 0x9f, 0xcc, 0xa9, 0xcc, 0xa8, 0xcc, 0xaa, 0xc0, 0x2b, 0xc0, 0x2f,
 	0x00, 0x9e, 0xc0, 0x24, 0xc0, 0x28, 0x00, 0x6b, 0xc0, 0x23, 0xc0, 0x27, 0x00, 0x67, 0xc0, 0x0a,
@@ -292,7 +292,7 @@ var tlsCipherSuites = []byte{
 }
 
 // tlsOthersExt = ec_point_formats + elliptic_curves + sig_algos + etm + ems,
-// 共 66 字节,顺序与 simple-obfs 的 tls_ext_others_template 一致。
+// 66 bytes total, in the same order as simple-obfs' tls_ext_others_template.
 var tlsOthersExt = []byte{
 	0x00, 0x0b, 0x00, 0x04, 0x03, 0x01, 0x00, 0x02,
 	0x00, 0x0a, 0x00, 0x0a, 0x00, 0x08, 0x00, 0x1d, 0x00, 0x17, 0x00, 0x19, 0x00, 0x18,
@@ -314,8 +314,8 @@ const (
 	tlsMaxFrame    = 16384
 )
 
-// clientHello 构造 obfs-tls 的 TLS ClientHello(与 simple-obfs obfs_tls_request
-// 逐字节一致):首包 firstChunk 藏进 session_ticket 扩展,SNI 放 host。
+// clientHello builds the obfs-tls TLS ClientHello (byte-identical to simple-obfs'
+// obfs_tls_request): the first packet firstChunk is hidden in the session_ticket extension, and SNI carries host.
 func (c *tlsObfsConn) clientHello(firstChunk []byte) []byte {
 	host := c.host
 	if host == "" {
@@ -328,35 +328,35 @@ func (c *tlsObfsConn) clientHello(firstChunk []byte) []byte {
 	b := make([]byte, tlsLen)
 	pos := 0
 
-	// 记录头:content_type 0x16, version 0x0301, len = tlsLen-5
+	// record header: content_type 0x16, version 0x0301, len = tlsLen-5
 	b[pos] = 0x16
 	b[pos+1] = 0x03
 	b[pos+2] = 0x01
 	binary.BigEndian.PutUint16(b[pos+3:], uint16(tlsLen-5))
 	pos += 5
-	// 握手头:type 0x01, 3 字节长 = tlsLen-9
+	// handshake header: type 0x01, 3-byte length = tlsLen-9
 	b[pos] = 0x01
 	binary.BigEndian.PutUint16(b[pos+2:], uint16(tlsLen-9))
 	pos += 4
-	// 握手版本 0x0303
+	// handshake version 0x0303
 	b[pos], b[pos+1] = 0x03, 0x03
 	pos += 2
-	// random:unix 时间 + 28 随机字节
+	// random: unix time + 28 random bytes
 	binary.BigEndian.PutUint32(b[pos:], uint32(time.Now().Unix()))
 	pos += 4
 	_, _ = rand.Read(b[pos : pos+28])
 	pos += 28
-	// session_id:32 随机字节
+	// session_id: 32 random bytes
 	b[pos] = 32
 	pos += 1
 	_, _ = rand.Read(b[pos : pos+32])
 	pos += 32
-	// cipher_suites:56 固定字节
+	// cipher_suites: 56 fixed bytes
 	binary.BigEndian.PutUint16(b[pos:], uint16(len(tlsCipherSuites)))
 	pos += 2
 	copy(b[pos:], tlsCipherSuites)
 	pos += len(tlsCipherSuites)
-	// comp_methods:1 字节 0x00
+	// comp_methods: 1 byte 0x00
 	b[pos] = 1
 	pos += 1
 	b[pos] = 0x00
@@ -366,7 +366,7 @@ func (c *tlsObfsConn) clientHello(firstChunk []byte) []byte {
 	binary.BigEndian.PutUint16(b[pos:], uint16(extLen))
 	pos += 2
 
-	// session_ticket 扩展:type 0x0023, len=bufLen, 数据=首包
+	// session_ticket extension: type 0x0023, len=bufLen, data = first packet
 	binary.BigEndian.PutUint16(b[pos:], 0x0023)
 	pos += 2
 	binary.BigEndian.PutUint16(b[pos:], uint16(bufLen))
@@ -374,7 +374,7 @@ func (c *tlsObfsConn) clientHello(firstChunk []byte) []byte {
 	copy(b[pos:], firstChunk)
 	pos += bufLen
 
-	// SNI 扩展:type 0x0000, ext_len=hostLen+5, list_len=hostLen+3, type 0, name_len=hostLen
+	// SNI extension: type 0x0000, ext_len=hostLen+5, list_len=hostLen+3, type 0, name_len=hostLen
 	binary.BigEndian.PutUint16(b[pos:], 0x0000)
 	pos += 2
 	binary.BigEndian.PutUint16(b[pos:], uint16(hostLen+3+2))
@@ -388,7 +388,7 @@ func (c *tlsObfsConn) clientHello(firstChunk []byte) []byte {
 	copy(b[pos:], host)
 	pos += hostLen
 
-	// 其余扩展(固定 66 字节)
+	// remaining extensions (fixed 66 bytes)
 	copy(b[pos:], tlsOthersExt)
 	return b
 }
@@ -401,7 +401,7 @@ func (c *tlsObfsConn) Write(p []byte) (int, error) {
 		}
 		return len(p), nil
 	}
-	// 后续数据分 ≤16384 字节的 0x17 帧(与 simple-obfs obfs_app_data 一致)
+	// subsequent data is split into 0x17 frames of ≤16384 bytes (matching simple-obfs' obfs_app_data)
 	orig := len(p)
 	for len(p) > 0 {
 		chunk := len(p)
@@ -420,7 +420,7 @@ func (c *tlsObfsConn) Write(p []byte) (int, error) {
 	return orig, nil
 }
 
-// Read 把服务端 obfs 响应解帧后返回 SS 明文数据。
+// Read decodes the server's obfs response into frames and returns SS plaintext data.
 func (c *tlsObfsConn) Read(p []byte) (int, error) {
 	for {
 		if len(c.out) > 0 {
@@ -446,7 +446,7 @@ func (c *tlsObfsConn) Read(p []byte) (int, error) {
 	}
 }
 
-// feed 把原始字节喂进读侧状态机,产出解帧后的数据追加到 c.out。
+// feed feeds raw bytes into the read-side state machine and appends the decoded data to c.out.
 func (c *tlsObfsConn) feed(b []byte) error {
 	i := 0
 	for i < len(b) {
@@ -521,7 +521,7 @@ func (c *tlsObfsConn) feed(b []byte) error {
 	return nil
 }
 
-// randIntN 返回 [0,n) 的随机数(仅用于伪造 User-Agent 版本号,不需要加密随机)。
+// randIntN returns a random number in [0,n) (only used to fake the User-Agent version, no cryptographic randomness needed).
 func randIntN(n int) int {
 	var b [8]byte
 	_, _ = rand.Read(b[:])

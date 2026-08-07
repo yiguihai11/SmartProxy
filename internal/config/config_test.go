@@ -79,7 +79,9 @@ func TestLoad_FullConfig(t *testing.T) {
     "proxies": [
       {
         "alias": "proxy1",
-        "url": "socks5://user:pass@10.0.0.1:1080"
+        "url": "socks5://user:pass@10.0.0.1:1080",
+        "udp_addr": "1080",
+        "udp_only": true
       },
       {
         "alias": "proxy2",
@@ -151,6 +153,15 @@ func TestLoad_FullConfig(t *testing.T) {
 	}
 	if len(cfg.Upstream.Proxies) != 2 {
 		t.Errorf("expected 2 proxies, got %d", len(cfg.Upstream.Proxies))
+	}
+	if cfg.Upstream.Proxies[0].UDPAddr != "1080" {
+		t.Errorf("Proxies[0].UDPAddr: got %q, want 1080", cfg.Upstream.Proxies[0].UDPAddr)
+	}
+	if !cfg.Upstream.Proxies[0].UDPOnly {
+		t.Error("Proxies[0].UDPOnly: expected true (udp_only parsed)")
+	}
+	if cfg.Upstream.Proxies[1].UDPOnly {
+		t.Error("Proxies[1].UDPOnly: expected false (udp_only defaults off)")
 	}
 	if cfg.Routing.ChnrouteFile != "/data/chnroute.txt" {
 		t.Errorf("ChnrouteFile: got %s", cfg.Routing.ChnrouteFile)

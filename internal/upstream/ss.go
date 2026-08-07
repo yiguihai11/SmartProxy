@@ -21,32 +21,32 @@ import (
 	N "github.com/sagernet/sing/common/network"
 )
 
-// ss:// 上游:SmartProxy 直接以 shadowsocks 协议连接远程 SS 服务器,不依赖外部
-// sslocal 进程。TCP 走 Method.DialConn 得到加密隧道;UDP 走 Method.DialPacketConn,
-// 用 sing-shadowsocks 逐包携带目标地址的模型,把上游一侧收发的 SOCKS5-UDP 帧
-// 转换成 SS UDP 包。
+// ss:// upstream: SmartProxy connects to the remote SS server directly with the
+// shadowsocks protocol, no external sslocal process. TCP goes through Method.DialConn
+// for an encrypted tunnel; UDP goes through Method.DialPacketConn, using
+// sing-shadowsocks' per-packet destination model to convert the upstream SOCKS5-UDP frames into SS UDP packets.
 //
-// 支持经典 AEAD(密码派生 key)、AEAD-2022(base64 key)与不加密的 none/plain。
+// Supports classic AEAD (password-derived key), AEAD-2022 (base64 key), and the unencrypted none/plain.
 
-// ssSupportedMethods 列出支持的经典 AEAD + AEAD-2022 加密方式。sing-shadowsocks
-// 的 shadowaead.New / shadowaead_2022.New 对未知方法不报错(会留下 nil constructor),
-// 这里显式校验,避免拼写错误直到连接时才 panic。
+// ssSupportedMethods lists the supported classic AEAD + AEAD-2022 ciphers.
+// shadowaead.New / shadowaead_2022.New from sing-shadowsocks do not error on unknown
+// methods (leaving a nil constructor); we validate here so typos don't panic at connect.
 var ssSupportedMethods = map[string]bool{
-	// 经典 AEAD(SIP004,密码派生 key)
+	// Classic AEAD (SIP004, password-derived key)
 	"aes-128-gcm":             true,
 	"aes-192-gcm":             true,
 	"aes-256-gcm":             true,
 	"chacha20-ietf-poly1305":  true,
 	"xchacha20-ietf-poly1305": true,
-	// AEAD-2022(SIP022,key 是 base64 编码的二进制 PSK,可多 PSK 用 : 连接)
+	// AEAD-2022 (SIP022, key is a base64-encoded binary PSK; multiple PSKs joined with :)
 	"2022-blake3-aes-128-gcm":       true,
 	"2022-blake3-aes-256-gcm":       true,
 	"2022-blake3-chacha20-poly1305": true,
 }
 
-// newSSMethod 构建 SS 加密实现:经典 AEAD(密码派生 key)、AEAD-2022(base64 key)
-// 或不加密的 none/plain。none/plain 是同一个方法(shadowsocks-rust 的
-// CipherKind::NONE 别名),wire 为明文地址头 + payload,不需要密码。
+// newSSMethod builds the SS encryption implementation: classic AEAD (password-derived key),
+// AEAD-2022 (base64 key) or unencrypted none/plain. none/plain is a single method
+// (shadowsocks-rust's CipherKind::NONE alias); the wire format is a plaintext address header + payload, no password needed.
 func newSSMethod(method, password string) (shadowsocks.Method, error) {
 	switch method {
 	case "none", "plain":
@@ -61,10 +61,10 @@ func newSSMethod(method, password string) (shadowsocks.Method, error) {
 	return shadowaead.New(method, nil, password)
 }
 
-// newSSMethod2022 构建 AEAD-2022 的 Method。2022 的 key 语义与经典 AEAD 不同:
-// 不是密码派生,而是 base64 编码的二进制 PSK(长度 16/32 字节),多用户时多个
-// PSK 用 : 连接。sing 的 shadowaead_2022.NewWithPassword 只认带 padding 的
-// StdEncoding,这里额外兼容不带 padding 的变体(ss-android 导出可能不带 =)。
+// newSSMethod2022 builds the AEAD-2022 Method. 2022 key semantics differ from classic
+// AEAD: the key is not password-derived but a base64-encoded binary PSK (16/32 bytes),
+// with multiple PSKs joined by ':'. sing's shadowaead_2022.NewWithPassword only accepts
+// padded StdEncoding; we also accept the unpadded variant (ss-android exports may drop '=').
 func newSSMethod2022(method, password string) (shadowsocks.Method, error) {
 	if password == "" {
 		return nil, fmt.Errorf("shadowsocks-2022 method %q requires a base64 key", method)
@@ -81,7 +81,7 @@ func newSSMethod2022(method, password string) (shadowsocks.Method, error) {
 	return shadowaead_2022.New(method, pskList, nil)
 }
 
-// decodeBase64Key 依次尝试 Std / URL(带 padding)与 Raw 变体解码 base64 key。
+// decodeBase64Key tries Std / URL (padded) and Raw variants in order to decode a base64 key.
 func decodeBase64Key(s string) ([]byte, error) {
 	for _, enc := range []*base64.Encoding{
 		base64.StdEncoding, base64.URLEncoding,
@@ -94,24 +94,24 @@ func decodeBase64Key(s string) ([]byte, error) {
 	return nil, errors.New("invalid base64 key")
 }
 
-// parseSSUserinfo 解析 ss:// URL 的 userinfo(method:password)。
-// 标准格式是 base64(无 padding,URL-safe)编码;也兼容明文 method:password。
+// parseSSUserinfo parses the userinfo (method:password) of an ss:// URL.
+// The standard form is base64 (unpadded, URL-safe); plaintext method:password is also accepted.
 func parseSSUserinfo(user *url.Userinfo) (method, password string, err error) {
 	if user == nil {
 		return "", "", errors.New("ss:// URL is missing method:password credentials")
 	}
-	// url.Parse 会把 userinfo 在第一个冒号处切成 username/password,后续冒号
-	// 会被 percent-encode。用 Username()/Password() 取回(密码已解码,冒号保留)。
+	// url.Parse splits userinfo at the first colon into username/password; any further
+	// colons get percent-encoded. Username()/Password() recover them (password decoded, colon preserved).
 	username := user.Username()
 	pw, hasPw := user.Password()
 	raw := username
 	if hasPw {
 		raw = username + ":" + pw
 	}
-	// shadowsocks URI 规范:userinfo 为 base64 编码(通常无 padding)。纯 base64 不含
-	// 冒号,hasPw 为 false,raw 即编码串;含冒号则视为明文 method:password。
-	// 注意:解码结果必须含 ':'(即 method:password 结构)才算有效编码 —— 否则像
-	// "none" 这种恰好是合法 base64 的明文方法名会被解码成乱码字节。
+	// shadowsocks URI spec: userinfo is base64-encoded (usually unpadded), so pure base64
+	// has no colon and hasPw is false (raw is the encoded string); a colon means plaintext
+	// method:password. Note: the decoded result must contain ':' (the method:password
+	// structure) to be valid — otherwise a plaintext method name like "none" decodes to garbage.
 	for _, enc := range []*base64.Encoding{
 		base64.RawURLEncoding, base64.URLEncoding,
 		base64.RawStdEncoding, base64.StdEncoding,
@@ -125,8 +125,8 @@ func parseSSUserinfo(user *url.Userinfo) (method, password string, err error) {
 	}
 	i := strings.IndexByte(raw, ':')
 	if i < 0 {
-		// 无冒号:方法名本身(如 "none"),不需要密码。AEAD 方法缺密码时由
-		// newSSMethod / shadowaead.New 报错。
+		// No colon: it's the method name itself (e.g. "none"), no password needed. AEAD
+		// methods missing a password error out in newSSMethod / shadowaead.New.
 		return raw, "", nil
 	}
 	method = raw[:i]
@@ -137,8 +137,35 @@ func parseSSUserinfo(user *url.Userinfo) (method, password string, err error) {
 	return method, password, nil
 }
 
-// ssPlugin 解析该 ss 上游的 SIP003 插件参数。未配置返回 (nil, nil);配置了内置
-// 支持的 obfs-local(http/tls)返回配置;其它插件二进制(v2ray-plugin 等)返回错误。
+// ssPluginKind reports the SIP003 plugin binary name configured for this ss upstream:
+//
+//	""            - no plugin configured
+//	"obfs-local"  - built-in simple-obfs (http/tls, see obfs.go)
+//	"v2ray-plugin" / "xray-plugin" - built-in v2ray transport (websocket/grpc/quic, see v2ray.go)
+//
+// Unknown plugin binaries return a clear error so a plugin the user expects is not silently ignored.
+func (p *Proxy) ssPluginKind() (string, error) {
+	if p.Plugin == "" {
+		return "", nil
+	}
+	parts, err := splitPluginOptions(p.Plugin)
+	if err != nil {
+		return "", fmt.Errorf("ss proxy %q: %w", p.URL, err)
+	}
+	if len(parts) == 0 || parts[0] == "" {
+		return "", fmt.Errorf("ss proxy %q: empty plugin options", p.URL)
+	}
+	switch parts[0] {
+	case "obfs-local":
+		return "obfs-local", nil
+	case "v2ray-plugin", "xray-plugin":
+		return parts[0], nil
+	default:
+		return "", fmt.Errorf("ss proxy %q: unsupported SIP003 plugin %q (SmartProxy ships obfs-local http/tls and v2ray-plugin/xray-plugin websocket/grpc/quic)", p.URL, parts[0])
+	}
+}
+
+// ssPlugin parses the obfs-local plugin options of this ss upstream. Returns (nil, nil) when unconfigured or not an obfs plugin.
 func (p *Proxy) ssPlugin() (*obfsConfig, error) {
 	if p.Plugin == "" {
 		return nil, nil
@@ -148,30 +175,50 @@ func (p *Proxy) ssPlugin() (*obfsConfig, error) {
 		return nil, fmt.Errorf("ss proxy %q: %w", p.URL, err)
 	}
 	if cfg.host == "" {
-		cfg.host = p.Host // 缺省 obfs-host 用 SS 服务器主机
+		cfg.host = p.Host // default obfs-host to the SS server host
 	}
-	cfg.port = p.Port // HTTP Host 头在非 80 时带 SS 端口(与 obfs-local 一致)
+	cfg.port = p.Port // HTTP Host header carries the SS port when not 80 (matching obfs-local)
 	return cfg, nil
 }
 
-// ssConnect 建立到目标 host:port 的 SS 加密隧道(TCP)。
+// ssConnect establishes an SS encrypted tunnel (TCP) to the target host:port.
 func (p *Proxy) ssConnect(ctx context.Context, targetHost string, targetPort int) (net.Conn, error) {
-	obfs, err := p.ssPlugin()
+	kind, err := p.ssPluginKind()
 	if err != nil {
 		return nil, err
 	}
 	if p.ssMethod == nil {
 		return nil, fmt.Errorf("ss proxy %q has no method", p.URL)
 	}
-	conn, err := p.dial(ctx) // TCP 连 SS 服务器(fwmark + keepalive)
-	if err != nil {
-		return nil, err
-	}
-	if obfs != nil {
-		// 内置 obfs-http/tls:在 SS 加密层之下、TCP 之上再套一层混淆传输层。
-		conn, err = wrapObfs(conn, obfs)
+	var conn net.Conn
+	switch kind {
+	case "obfs-local":
+		obfs, err := p.ssPlugin()
 		if err != nil {
-			return nil, err // wrapObfs 失败时已关闭 conn
+			return nil, err
+		}
+		conn, err = p.dial(ctx) // TCP connect to the SS server (fwmark + keepalive)
+		if err != nil {
+			return nil, err
+		}
+		// Built-in obfs-http/tls: wrap an obfuscation transport between TCP and the SS encryption layer.
+		if conn, err = wrapObfs(conn, obfs); err != nil {
+			return nil, err // conn is already closed when wrapObfs fails
+		}
+	case "v2ray-plugin", "xray-plugin":
+		vp, err := p.v2rayPlugin()
+		if err != nil {
+			return nil, err
+		}
+		// Connect to the SS server through the v2ray-core transport layer: websocket+mux
+		// goes over a mux session stream; grpc/quic/websocket without mux use the raw transport connection.
+		if conn, err = p.dialV2ray(ctx, vp); err != nil {
+			return nil, err
+		}
+	default:
+		conn, err = p.dial(ctx)
+		if err != nil {
+			return nil, err
 		}
 	}
 	dest := M.ParseSocksaddrHostPort(targetHost, uint16(targetPort))
@@ -183,12 +230,12 @@ func (p *Proxy) ssConnect(ctx context.Context, targetHost string, targetPort int
 	return ssConn, nil
 }
 
-// ssUDPAssociate 建一条到 SS 服务器的 UDP relay 会话,返回一个满足 SmartProxy
-// 上游 UDP 契约(net.Conn + 收发完整 SOCKS5-UDP 帧)的连接。
+// ssUDPAssociate creates a UDP relay session to the SS server and returns a connection
+// satisfying SmartProxy's upstream UDP contract (net.Conn + full SOCKS5-UDP frames).
 func (p *Proxy) ssUDPAssociate(ctx context.Context, targetHost string, targetPort int) (net.Conn, error) {
-	// obfs 插件只混淆 TCP(SIP003 语义);SS UDP 不经插件,直连服务器 UDP 端口。
-	// 未配置插件或配置了内置 obfs-local 都放行;不支持的插件二进制在此报错。
-	if _, err := p.ssPlugin(); err != nil {
+	// The plugin only obfuscates TCP (SIP003 semantics); SS UDP bypasses the plugin and
+	// connects directly to the server's UDP port. We still validate the plugin kind to avoid silently ignoring a mistyped plugin name.
+	if _, err := p.ssPluginKind(); err != nil {
 		return nil, err
 	}
 	if p.ssMethod == nil {
@@ -206,31 +253,34 @@ func (p *Proxy) ssUDPAssociate(ctx context.Context, targetHost string, targetPor
 	return &ssUDPConn{NetPacketConn: p.ssMethod.DialPacketConn(udpConn)}, nil
 }
 
-// ssUDPConn 把 sing-shadowsocks 的 UDP packet conn 适配成 SmartProxy 上游 UDP 契约:
-//   - Write 收完整 SOCKS5-UDP 帧(RSV|FRAG|ATYP|DST.ADDR|DST.PORT|payload),解析出
-//     目标地址后经 WritePacket 发送(SS 协议每包自带目标地址);
-//   - Read 从 ReadPacket 拿到 payload + 来源目标,补上 SOCKS5 UDP 响应头后返回完整帧。
+// ssUDPConn adapts sing-shadowsocks' UDP packet conn to SmartProxy's upstream UDP contract:
+//   - Write takes a full SOCKS5-UDP frame (RSV|FRAG|ATYP|DST.ADDR|DST.PORT|payload),
+//     parses the destination, and sends via WritePacket (each SS packet carries its own
+//     destination address);
+//   - Read gets payload + source destination from ReadPacket, prepends the SOCKS5 UDP
+//     response header, and returns the full frame.
 //
-// 由于 sing 的 clientPacketConn 逐包携带 destination,单条 UDP 连接即可服务任意目标
-// (与 SOCKS5 上游一个 UDP socket 服务多目标一致),因此可安全放进 UDP 复用池。
+// Since sing's clientPacketConn carries the destination per packet, a single UDP connection
+// can serve any destination (matching a SOCKS5 upstream serving many targets on one UDP
+// socket), so it can safely go into the UDP reuse pool.
 type ssUDPConn struct {
 	N.NetPacketConn
 }
 
-// Write 入参是完整 SOCKS5-UDP 帧;返回 len(b) 表示整帧已处理。
+// Write input is a full SOCKS5-UDP frame; returning len(b) means the whole frame was handled.
 func (c *ssUDPConn) Write(b []byte) (int, error) {
 	host, port, payload, err := parseSOCKS5UDPFrame(b)
 	if err != nil {
 		return 0, err
 	}
 	dest := M.ParseSocksaddrHostPort(host, uint16(port))
-	// 按具体 packet conn 声明的 headroom 预留加密头与尾部标签:经典 AEAD 是
-	// salt+addr 头 + 16B tag;2022 额外含 session/padding 头(可到 ~900B)。容量
-	// 不足时 WritePacket 内部 ExtendHeader/Seal 会 panic。
+	// Reserve headroom for the encryption header and trailing tag as declared by the
+	// specific packet conn: classic AEAD has a salt+addr header + 16B tag; 2022 adds a
+	// session/padding header (up to ~900B). WritePacket panics if capacity is insufficient.
 	front := N.CalculateFrontHeadroom(c.NetPacketConn)
 	if _, ok := c.NetPacketConn.(N.FrontHeadroom); !ok {
-		// nonePacketConn 只实现废弃的 Headroom(),不实现 FrontHeadroom,Calculate 返回 0;
-		// 它 WritePacket 时还会 ExtendHeader 一个地址头,补 MaxSocksaddrLength 保底。
+		// nonePacketConn only implements the deprecated Headroom(), not FrontHeadroom, so
+		// Calculate returns 0; its WritePacket also ExtendHeaders an address header, so add MaxSocksaddrLength as a floor.
 		front = M.MaxSocksaddrLength
 	}
 	rear := N.CalculateRearHeadroom(c.NetPacketConn)
@@ -246,7 +296,7 @@ func (c *ssUDPConn) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-// Read 返回完整 SOCKS5-UDP 帧(SOCKS5 响应头 + 原始 payload)。
+// Read returns a full SOCKS5-UDP frame (SOCKS5 response header + raw payload).
 func (c *ssUDPConn) Read(b []byte) (int, error) {
 	buff := buf.NewSize(65535)
 	dest, err := c.ReadPacket(buff)
@@ -270,17 +320,17 @@ func (c *ssUDPConn) Read(b []byte) (int, error) {
 	return len(hdr) + n, nil
 }
 
-// RemoteAddr 上游侧没有可用的远程地址信息,返回 SS 服务器地址。
+// RemoteAddr has no usable remote address on the upstream side, so it returns the SS server address.
 func (c *ssUDPConn) RemoteAddr() net.Addr {
 	return c.LocalAddr()
 }
 
-// ProbeTCP ss UDP 无 TCP 控制信道,视为始终健康(TTL 淘汰兜底)。
+// ProbeTCP: ss UDP has no TCP control channel, so it is always considered healthy (TTL eviction as fallback).
 func (c *ssUDPConn) ProbeTCP() error {
 	return nil
 }
 
-// parseSOCKS5UDPFrame 解析 SOCKS5 UDP 帧,返回目标 host、port 与 payload。
+// parseSOCKS5UDPFrame parses a SOCKS5 UDP frame and returns the target host, port and payload.
 func parseSOCKS5UDPFrame(frame []byte) (host string, port int, payload []byte, err error) {
 	if len(frame) < 4 {
 		return "", 0, nil, errors.New("SOCKS5 UDP frame too short")
@@ -320,7 +370,7 @@ func parseSOCKS5UDPFrame(frame []byte) (host string, port int, payload []byte, e
 	return host, port, frame[headerLen+2:], nil
 }
 
-// encodeSocks5UDPHeader 用 SS 返回的目标地址构造 SOCKS5 UDP 响应头(RSV|FRAG|ATYP|ADDR|PORT)。
+// encodeSocks5UDPHeader builds a SOCKS5 UDP response header (RSV|FRAG|ATYP|ADDR|PORT) from the destination address returned by SS.
 func encodeSocks5UDPHeader(dest M.Socksaddr) ([]byte, error) {
 	host := dest.Fqdn
 	if host == "" {

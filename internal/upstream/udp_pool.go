@@ -13,8 +13,10 @@ type poolEntry struct {
 	createdAt time.Time
 }
 
-// tcpProbeConn 是池里可选实现的活性探测接口。SOCKS5 UDP ASSOCIATE 连接用它探测
-// TCP 控制信道;ss UDP / 裸 UDP 没有控制信道,直接视为健康(TTL 淘汰兜底)。
+// tcpProbeConn is an optional liveness-probe interface that pooled connections may
+// implement. SOCKS5 UDP ASSOCIATE connections use it to probe the TCP control channel;
+// ss UDP / raw UDP have no control channel, so they are treated as healthy (TTL
+// eviction as a fallback).
 type tcpProbeConn interface {
 	ProbeTCP() error
 }

@@ -438,7 +438,7 @@ function lhealth(d){
   healthD=d;
   document.getElementById('proxy-cards').innerHTML=d.health.proxies.map(function(p,i){
     var a=p.health.available,lat=p.health.latency>0?(p.health.latency/1e6).toFixed(1)+'ms':'--';
-    return '<div class="proxy-card"><div class="top"><div><div class="alias">'+p.alias+'</div><div class="url">'+p.url+'</div></div><span class="status '+(a?'up':'down')+'">'+(a?'Connected':'Disconnected')+'</span></div>'+
+    return '<div class="proxy-card"><div class="top"><div><div class="alias">'+p.alias+'</div><div class="url">'+p.url+(p.udp_only?' · UDP only':'')+'</div></div><span class="status '+(a?'up':'down')+'">'+(a?'Connected':'Disconnected')+'</span></div>'+
       '<div class="stats"><span>state: '+p.health.state+'</span><span>latency: '+lat+'</span><span>failures: '+p.health.consecutive_failures+'</span></div>'+
       '<div class="actions">'+
       '<button class="btn btn-sm primary" onclick="openProxyDialog('+i+')">Edit</button>'+
@@ -498,32 +498,64 @@ function setProxyScheme(v){
   if(!g)return;
   var b=g.querySelectorAll('.seg-btn');
   for(var i=0;i<b.length;i++)b[i].classList.toggle('active',b[i].getAttribute('data-val')===v);
-  // ss: 用加密方法下拉代替 Username;udp_addr 不适用(内置 SS UDP relay)
+  // ss: use the encryption-method dropdown instead of Username; udp_addr is n/a (built-in SS UDP relay)
   var sm=document.getElementById('proxy-ssmethod-row');
   if(sm)sm.style.display=(v==='ss')?'':'none';
   var urow=document.getElementById('proxy-user-row');
   if(urow)urow.style.display=(v==='ss')?'none':'';
   var ur=document.getElementById('proxy-udpaddr-row');
   if(ur)ur.style.display=(v==='ss')?'none':'';
-  // 插件行:仅 ss 显示(obfs-http/tls 已内置,无需外部二进制)
+  // plugin row: only for ss (obfs-http/tls and v2ray-plugin are built in, no external binary)
   var pr=document.getElementById('proxy-plugin-row');
   if(pr)pr.style.display=(v==='ss')?'':'none';
   syncObfsRows();
   updateProxyPreview();
 }
-// syncObfsRows 根据插件下拉显示/隐藏 obfs-host 与 http 专用字段
+// syncObfsRows shows/hides obfs and v2ray-plugin fields based on the plugin dropdown
 function syncObfsRows(){
   var v=document.getElementById('proxy-plugin').value;
+  var isObfs=(v==='obfs-http'||v==='obfs-tls');
+  var isV2ray=v.indexOf('v2ray-')===0;
   var hr=document.getElementById('proxy-obfs-host-row');
-  if(hr)hr.style.display=(v==='obfs-http'||v==='obfs-tls')?'':'none';
+  if(hr)hr.style.display=(isObfs||isV2ray)?'':'none';
   var or=document.getElementById('proxy-obfs-httpopts-row');
   if(or)or.style.display=(v==='obfs-http')?'':'none';
+  var vr=document.getElementById('proxy-v2ray-opts-row');
+  if(vr)vr.style.display=isV2ray?'':'none';
+  var wr=document.getElementById('proxy-v2ray-ws-row');
+  if(wr)wr.style.display=(v==='v2ray-ws'||v==='v2ray-ws-tls')?'':'none';
+  var gr=document.getElementById('proxy-v2ray-grpc-row');
+  if(gr)gr.style.display=(v==='v2ray-grpc'||v==='v2ray-grpc-tls')?'':'none';
+  var tr=document.getElementById('proxy-v2ray-tls-row');
+  if(tr)tr.style.display=(v==='v2ray-ws-tls'||v==='v2ray-grpc-tls'||v==='v2ray-quic')?'':'none';
 }
-// buildPlugin 把表单组装成 SIP003 插件参数(空 = 无插件)
+// buildPlugin assembles the form into a SIP003 plugin argument (empty = no plugin)
 function buildPlugin(){
   var v=document.getElementById('proxy-plugin').value;
   if(!v)return '';
   var host=document.getElementById('proxy-obfs-host').value.trim();
+  if(v.indexOf('v2ray-')===0){
+    // v2ray-plugin / xray-plugin:mode + tls + host + path/mux/serviceName/certRaw
+    var bin=document.getElementById('proxy-plugin-bin').value||'v2ray-plugin';
+    var mode=(v==='v2ray-ws'||v==='v2ray-ws-tls')?'websocket':(v==='v2ray-quic'?'quic':'grpc');
+    var tls=(v==='v2ray-ws-tls'||v==='v2ray-grpc-tls'||v==='v2ray-quic'); // quic implies tls
+    var parts=[bin,'mode='+mode];
+    if(tls)parts.push('tls');
+    if(host)parts.push('host='+host);
+    if(mode==='websocket'){ // path/mux only apply to websocket; grpc/quic ignore them
+      var path=document.getElementById('proxy-v2ray-path').value.trim();
+      if(path&&path!=='/')parts.push('path='+path);
+      var mux=document.getElementById('proxy-v2ray-mux').value.trim();
+      if(mux&&mux!=='1')parts.push('mux='+mux);
+    }
+    if(mode==='grpc'){
+      var sn=document.getElementById('proxy-v2ray-servicename').value.trim();
+      if(sn&&sn!=='GunService')parts.push('serviceName='+sn);
+    }
+    var cert=document.getElementById('proxy-v2ray-certraw').value.trim();
+    if(cert)parts.push('certRaw='+cert);
+    return parts.join(';');
+  }
   var parts=['obfs-local','obfs='+(v==='obfs-http'?'http':'tls')];
   if(host)parts.push('obfs-host='+host);
   if(v==='obfs-http'){
@@ -568,18 +600,25 @@ function openProxyDialog(i){
   document.getElementById('proxy-pass').value='';
   document.getElementById('proxy-server').value='';
   document.getElementById('proxy-udpaddr').value=p?(p.udp_addr||''):'';
+  document.getElementById('proxy-udponly').checked=!!(p&&p.udp_only);
   document.getElementById('proxy-plugin').value='';
+  document.getElementById('proxy-plugin-bin').value='v2ray-plugin';
   document.getElementById('proxy-obfs-host').value='';
   document.getElementById('proxy-obfs-method').value='GET';
   document.getElementById('proxy-obfs-uri').value='/';
+  document.getElementById('proxy-v2ray-path').value='/';
+  document.getElementById('proxy-v2ray-mux').value='1';
+  document.getElementById('proxy-v2ray-servicename').value='GunService';
+  document.getElementById('proxy-v2ray-certraw').value='';
   var scheme='socks5';
   if(p){
     var u=null;
     try{u=new URL(p.url)}catch(e){}
     if(u&&u.protocol){scheme=u.protocol.slice(0,-1);document.getElementById('proxy-server').value=u.host;
       if(scheme==='ss'){
-        // ss://method:password@host:port、ss://base64(method:password)@host:port
-        // 或 ss://none@host:port(无密码的明文方法)。解码出 method 填进下拉、password 填密码框。
+        // ss://method:password@host:port, ss://base64(method:password)@host:port,
+        // or ss://none@host:port (plain method without password). Decode method into
+        // the dropdown and password into the password field.
         var sm='',sp='';
         if(u.username){
           if(u.password){sm=decodeURIComponent(u.username);sp=decodeURIComponent(u.password)}
@@ -587,27 +626,44 @@ function openProxyDialog(i){
             var dec=b64urlDecode(u.username);
             var ci=dec.indexOf(':');
             if(ci>0){sm=dec.slice(0,ci);sp=dec.slice(ci+1)}
-            else{sm=decodeURIComponent(u.username)} // 无密码方法名(如 none)
+            else{sm=decodeURIComponent(u.username)} // passwordless method name (e.g. none)
           }
         }
         if(sm){setSSMethod(sm);document.getElementById('proxy-pass').value=sp}
-        // SIP003 插件参数:obfs-local;obfs=http|tls;obfs-host=... 拆分回填表单
+        // SIP003 plugin args: obfs-local or v2ray-plugin/xray-plugin, split back into the form
         var pv=u.searchParams.get('plugin')||'';
-        var obfs='',host='',method='',uri='';
+        var obfs='',host='',method='',uri='',vmode='',vtls=false,vpath='',vmux='',vsn='',vcert='';
         if(pv){
           var parts=pv.split(';');
+          var bin=parts.length?parts[0]:'';
           for(var i=1;i<parts.length;i++){
             var eq=parts[i].indexOf('=');
-            if(eq<0)continue;
-            var k=parts[i].slice(0,eq),vv=parts[i].slice(eq+1);
+            var k=eq<0?parts[i]:parts[i].slice(0,eq);
+            var vv=eq<0?'':parts[i].slice(eq+1);
             if(k==='obfs')obfs=vv;else if(k==='obfs-host')host=vv;
             else if(k==='http-method')method=vv;else if(k==='obfs-uri')uri=vv;
+            else if(k==='mode')vmode=vv;else if(k==='host')host=vv;
+            else if(k==='path')vpath=vv;else if(k==='mux')vmux=vv;
+            else if(k==='serviceName')vsn=vv;else if(k==='certRaw')vcert=vv;
+            else if(k==='tls')vtls=true;
+          }
+          if(bin==='v2ray-plugin'||bin==='xray-plugin'){
+            document.getElementById('proxy-plugin-bin').value=bin;
+            document.getElementById('proxy-plugin').value=
+              vmode==='quic'?'v2ray-quic':
+              vmode==='grpc'?(vtls?'v2ray-grpc-tls':'v2ray-grpc'):
+              (vtls?'v2ray-ws-tls':'v2ray-ws');
           }
         }
-        document.getElementById('proxy-plugin').value=obfs==='http'?'obfs-http':obfs==='tls'?'obfs-tls':'';
+        if(!document.getElementById('proxy-plugin').value)
+          document.getElementById('proxy-plugin').value=obfs==='http'?'obfs-http':obfs==='tls'?'obfs-tls':'';
         document.getElementById('proxy-obfs-host').value=host;
         document.getElementById('proxy-obfs-method').value=method||'GET';
         document.getElementById('proxy-obfs-uri').value=uri||'/';
+        document.getElementById('proxy-v2ray-path').value=vpath||'/';
+        document.getElementById('proxy-v2ray-mux').value=vmux||'1';
+        document.getElementById('proxy-v2ray-servicename').value=vsn||'GunService';
+        document.getElementById('proxy-v2ray-certraw').value=vcert||'';
       }else{
         if(u.username)document.getElementById('proxy-user').value=decodeURIComponent(u.username);
         if(u.password)document.getElementById('proxy-pass').value=decodeURIComponent(u.password);
@@ -632,7 +688,7 @@ function updateProxyPreview(){
   var url=scheme+'://';
   if(scheme==='ss'){
     var m=document.getElementById('proxy-ss-method').value;
-    // none/plain 无需密码:密码为空时不带冒号,生成 ss://none@host
+    // none/plain need no password: omit the colon when empty, producing ss://none@host
     if(m)url+=encodeURIComponent(m)+(pass?':'+encodeURIComponent(pass):'')+'@';
   }else if(user){
     url+=encodeURIComponent(user)+':'+encodeURIComponent(pass)+'@';
@@ -663,7 +719,7 @@ async function saveProxy(){
   if(scheme==='ss'){
     var m=document.getElementById('proxy-ss-method').value;
     if(!m){alert('Encryption method is required for SS');return}
-    // none/plain 无需密码:密码为空时不带冒号,生成 ss://none@server
+    // none/plain need no password: omit the colon when empty, producing ss://none@server
     url=scheme+'://'+encodeURIComponent(m)+(pass?':'+encodeURIComponent(pass):'')+'@'+server;
   }else if(user){
     url=scheme+'://'+encodeURIComponent(user)+':'+encodeURIComponent(pass)+'@'+server;
@@ -677,13 +733,14 @@ async function saveProxy(){
     alert('Invalid udp_addr: use a port ("1080") or "host:port" (e.g. 127.0.0.1:1080)');
     return;
   }
+  var udponly=document.getElementById('proxy-udponly').checked;
   try{
     await putProxyConfig(function(cfg){
       var ps=cfg.upstream.proxies;
-      function entry(){var e={alias:alias,url:url};if(udpaddr)e.udp_addr=udpaddr;return e}
+      function entry(){var e={alias:alias,url:url};if(udpaddr)e.udp_addr=udpaddr;if(udponly)e.udp_only=true;return e}
       if(editing){
         for(var i=0;i<ps.length;i++){
-          if(ps[i].alias===editing){ps[i].alias=alias;ps[i].url=url;if(udpaddr)ps[i].udp_addr=udpaddr;else delete ps[i].udp_addr;return}
+          if(ps[i].alias===editing){ps[i].alias=alias;ps[i].url=url;if(udpaddr)ps[i].udp_addr=udpaddr;else delete ps[i].udp_addr;if(udponly)ps[i].udp_only=true;else delete ps[i].udp_only;return}
           if(ps[i].alias===alias){alert('Alias "'+alias+'" already exists');throw new Error('dup')}
         }
         ps.push(entry());
@@ -1603,7 +1660,7 @@ es.onmessage=function(e){
         <option value="2022-blake3-aes-128-gcm">2022-blake3-aes-128-gcm</option>
         <option value="2022-blake3-aes-256-gcm">2022-blake3-aes-256-gcm</option>
         <option value="2022-blake3-chacha20-poly1305">2022-blake3-chacha20-poly1305</option>
-        <option value="none">none — 明文不加密 ⚠</option>
+        <option value="none">none — plaintext (unencrypted) ⚠</option>
       </select>
     </div>
     <div id="proxy-user-row">
@@ -1616,15 +1673,24 @@ es.onmessage=function(e){
       <div class="dialog-label">UDP Relay <span style="text-transform:none;font-weight:400">(udp_addr, optional)</span></div>
       <input class="dialog-input" id="proxy-udpaddr" placeholder="blank = SOCKS5 UDP ASSOCIATE | 1080 | host:port" autocomplete="off">
     </div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:.84rem;color:var(--text2);cursor:pointer;margin:4px 0 8px">
+      <input type="checkbox" id="proxy-udponly">
+      UDP only (no TCP listener — skip TCP routing / health check)
+    </label>
     <div id="proxy-plugin-row" style="display:none">
-      <div class="dialog-label">Obfs (SIP003 plugin) <span style="text-transform:none;font-weight:400">(内置,无需外部二进制)</span></div>
+      <div class="dialog-label">Plugin (SIP003) <span style="text-transform:none;font-weight:400">(obfs-local / v2ray-plugin built in, no external binary)</span></div>
       <select class="dialog-input" id="proxy-plugin" onchange="syncObfsRows();updateProxyPreview()">
-        <option value="">无 (none)</option>
-        <option value="obfs-http">obfs-http — 伪装 HTTP</option>
-        <option value="obfs-tls">obfs-tls — 伪装 TLS</option>
+        <option value="">None</option>
+        <option value="obfs-http">obfs-http — disguised HTTP</option>
+        <option value="obfs-tls">obfs-tls — disguised TLS</option>
+        <option value="v2ray-ws">v2ray-plugin — websocket (HTTP)</option>
+        <option value="v2ray-ws-tls">v2ray-plugin — websocket (TLS)</option>
+        <option value="v2ray-quic">v2ray-plugin — quic (TLS)</option>
+        <option value="v2ray-grpc">v2ray-plugin — grpc</option>
+        <option value="v2ray-grpc-tls">v2ray-plugin — grpc (TLS)</option>
       </select>
       <div id="proxy-obfs-host-row" style="display:none">
-        <div class="dialog-label">Obfs Host <span style="text-transform:none;font-weight:400">(obfs-host,缺省用服务器主机)</span></div>
+        <div class="dialog-label">Host <span style="text-transform:none;font-weight:400">(obfs-host / v2ray host, defaults to server host)</span></div>
         <input class="dialog-input" id="proxy-obfs-host" placeholder="www.bing.com" autocomplete="off" oninput="updateProxyPreview()">
       </div>
       <div id="proxy-obfs-httpopts-row" style="display:none">
@@ -1632,6 +1698,27 @@ es.onmessage=function(e){
         <input class="dialog-input" id="proxy-obfs-method" value="GET" autocomplete="off" oninput="updateProxyPreview()">
         <div class="dialog-label">URI <span style="text-transform:none;font-weight:400">(obfs-uri)</span></div>
         <input class="dialog-input" id="proxy-obfs-uri" value="/" autocomplete="off" oninput="updateProxyPreview()">
+      </div>
+      <div id="proxy-v2ray-opts-row" style="display:none">
+        <div class="dialog-label">Plugin Binary <span style="text-transform:none;font-weight:400">(bin)</span></div>
+        <select class="dialog-input" id="proxy-plugin-bin" onchange="updateProxyPreview()">
+          <option value="v2ray-plugin">v2ray-plugin</option>
+          <option value="xray-plugin">xray-plugin</option>
+        </select>
+      </div>
+      <div id="proxy-v2ray-ws-row" style="display:none">
+        <div class="dialog-label">Path <span style="text-transform:none;font-weight:400">(path, websocket only)</span></div>
+        <input class="dialog-input" id="proxy-v2ray-path" value="/" autocomplete="off" oninput="updateProxyPreview()">
+        <div class="dialog-label">Mux (Connection Reuse) <span style="text-transform:none;font-weight:400">(mux, websocket only)</span></div>
+        <input class="dialog-input" id="proxy-v2ray-mux" value="1" autocomplete="off" oninput="updateProxyPreview()">
+      </div>
+      <div id="proxy-v2ray-grpc-row" style="display:none">
+        <div class="dialog-label">gRPC Service Name <span style="text-transform:none;font-weight:400">(serviceName)</span></div>
+        <input class="dialog-input" id="proxy-v2ray-servicename" value="GunService" autocomplete="off" oninput="updateProxyPreview()">
+      </div>
+      <div id="proxy-v2ray-tls-row" style="display:none">
+        <div class="dialog-label">Certificate (certRaw) <span style="text-transform:none;font-weight:400">(PEM or base64, leave empty for system CA)</span></div>
+        <textarea class="dialog-input" id="proxy-v2ray-certraw" rows="2" placeholder="-----BEGIN CERTIFICATE-----&#10;..." autocomplete="off" oninput="updateProxyPreview()"></textarea>
       </div>
     </div>
     <div class="dialog-desc" id="proxy-preview" style="display:none;font-family:var(--mono);font-size:.8rem"></div>

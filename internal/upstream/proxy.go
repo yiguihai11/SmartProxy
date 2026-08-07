@@ -30,9 +30,9 @@ const (
 	SchemeSOCKS4  ProxyScheme = "socks4"
 	SchemeHTTP    ProxyScheme = "http"
 	SchemeHTTPS   ProxyScheme = "https"
-	// SchemeSS 直接以 shadowsocks 协议连接远程 SS 服务器(经典 AEAD 加密,
-	// 见 internal/upstream/ss.go)。URL 形如 ss://base64(method:password)@host:port,
-	// 也兼容明文 ss://method:password@host:port。
+	// SchemeSS connects to the remote SS server directly with the shadowsocks protocol
+	// (classic AEAD encryption, see internal/upstream/ss.go). The URL looks like
+	// ss://base64(method:password)@host:port, and plaintext ss://method:password@host:port is also accepted.
 	SchemeSS ProxyScheme = "ss"
 )
 
@@ -43,26 +43,34 @@ type Proxy struct {
 	Port     int
 	Username string
 	Password string
-	// Plugin 是 ss:// URL 的 ?plugin= 参数(SIP003,ss-android 导出格式
-	// id;key=val;key=val)。SmartProxy 内置 obfs-local(http/tls,见 obfs.go),
-	// TCP 建连时在 SS 加密层下套一层混淆;其它插件二进制(v2ray-plugin 等)
-	// 不内置,连接时返回明确错误。
+	// Plugin is the ?plugin= parameter of an ss:// URL (SIP003, ss-android export format
+	// id;key=val;key=val). SmartProxy ships built-in obfs-local (http/tls, see obfs.go)
+	// and v2ray-plugin/xray-plugin (all 5 Android modes of websocket/grpc/quic, see
+	// v2ray.go); on TCP connect it wraps the matching transport under the SS encryption layer, and unknown plugins return a clear error.
 	Plugin string
-	// UDPAddr 可选:裸 UDP relay 地址(用于 shadowsocks-android 这类 "SOCKS5 只做 TCP、
-	// UDP 由同/异端口的独立 udp_only 实例服务" 的上游)。语义:
-	//   空          -> 默认走标准 UDP ASSOCIATE;被 rep=0x07(CommandNotSupported)拒绝时自动兜底到 Host:Port
-	//   "1080"      -> 强制裸 UDP,地址用 Host:1080
-	//   "host:port" -> 强制裸 UDP,直接用该地址(host 可为空,如 ":1080" 表示 Host:1080)
+	// UDPAddr is optional: a raw UDP relay address (for upstreams like shadowsocks-android
+	// where "SOCKS5 only does TCP, UDP is served by a separate udp_only instance on the same
+	// or a different port"). Semantics:
+	//   empty        -> default: standard UDP ASSOCIATE; falls back to Host:Port when rejected with rep=0x07 (CommandNotSupported)
+	//   "1080"       -> force raw UDP, using Host:1080
+	//   "host:port"  -> force raw UDP, using that address directly (host may be empty, e.g. ":1080" means Host:1080)
 	UDPAddr string
+	// UDPOnly marks an upstream that only relays UDP (no TCP listener). TCP paths and the
+	// TCP health probe skip it, so TCP being down never disables its UDP relay.
+	UDPOnly bool
 	health  ProxyHealth
 
-	// ssMethod 是 ss:// scheme 的加密实现(经典 AEAD 或 none/plain),由 NewProxy
-	// 在解析 method:password 时构建一次;Method 不可变,可安全并发使用。
+	// ssMethod is the encryption implementation for the ss:// scheme (classic AEAD or
+	// none/plain), built once by NewProxy when parsing method:password; Method is immutable and safe for concurrent use.
 	ssMethod shadowsocks.Method
 }
 
-// SupportsUDP 报告该上游是否支持 UDP(通过 UDPProxyConn 或 ss UDP relay)。
+// SupportsUDP reports whether this upstream supports UDP (via UDPProxyConn or the ss UDP relay).
+// A udp_only upstream is UDP by definition, so it reports true regardless of scheme.
 func (p *Proxy) SupportsUDP() bool {
+	if p.UDPOnly {
+		return true
+	}
 	switch p.Scheme {
 	case SchemeSOCKS5, SchemeSOCKS5H, SchemeSS:
 		return true
@@ -109,7 +117,7 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 		}
 		p.ssMethod = ssMethod
 		p.Username, p.Password = method, password
-		// SIP003 插件参数:解析保留,ssConnect 时由 ssPlugin 决定执行(内置 obfs-local)或报错。
+		// SIP003 plugin options: parsed and kept; at ssConnect time ssPlugin decides whether to run (built-in obfs-local) or error out.
 		if plugin := u.Query().Get("plugin"); plugin != "" {
 			p.Plugin = plugin
 		}
@@ -124,7 +132,7 @@ func parsePort(s string) int {
 	return port
 }
 
-// SetUDPAddr 校验并设置裸 UDP relay 地址。格式:纯端口("1080")或 host:port("127.0.0.1:1080"、":1080")。
+// SetUDPAddr validates and sets the raw UDP relay address. Format: a bare port ("1080") or host:port ("127.0.0.1:1080", ":1080").
 func (p *Proxy) SetUDPAddr(s string) error {
 	if s == "" {
 		p.UDPAddr = ""
@@ -208,9 +216,9 @@ func (p *Proxy) socks5Connect(ctx context.Context, targetHost string, targetPort
 	return conn, nil
 }
 
-// rawUDPAssociate 跳过 SOCKS5 握手,把上游直接当裸 UDP relay 使用。
-// 依赖上游的 UDP 端口上有一个 "不校验来源、不要求 ASSOCIATE" 的 UDP relay
-// (如 shadowsocks-android 的 udp_only 兜底实例),它读到带 SOCKS5 UDP 头的帧就会转发。
+// rawUDPAssociate skips the SOCKS5 handshake and uses the upstream directly as a raw
+// UDP relay. It relies on a UDP relay on the upstream's UDP port that "does not check
+// the source and does not require ASSOCIATE" (e.g. shadowsocks-android's udp_only fallback instance), which forwards any frame carrying a SOCKS5 UDP header.
 func (p *Proxy) rawUDPAssociate(raddr *net.UDPAddr) (*UDPProxyConn, error) {
 	udpConn, err := net.DialUDP("udp", nil, raddr)
 	if err != nil {
@@ -220,8 +228,8 @@ func (p *Proxy) rawUDPAssociate(raddr *net.UDPAddr) (*UDPProxyConn, error) {
 	return &UDPProxyConn{UDPConn: udpConn}, nil
 }
 
-// resolveUDPAddr 把 udp_addr 解析成具体地址:纯端口 -> 上游 Host + 端口;host:port -> 直接使用。
-// 仅在 udp_addr 非空时调用。
+// resolveUDPAddr resolves udp_addr to a concrete address: bare port -> upstream Host + port; host:port -> used as-is.
+// Only called when udp_addr is non-empty.
 func (p *Proxy) resolveUDPAddr() (*net.UDPAddr, error) {
 	if p.UDPAddr == "" {
 		return nil, nil
@@ -235,12 +243,12 @@ func (p *Proxy) resolveUDPAddr() (*net.UDPAddr, error) {
 	if port, err := strconv.Atoi(p.UDPAddr); err == nil && port > 0 && port <= 65535 {
 		return net.ResolveUDPAddr("udp", net.JoinHostPort(p.Host, strconv.Itoa(port)))
 	}
-	// SetUDPAddr 已做格式校验,这里兜底防御
+	// SetUDPAddr already validated the format; this is a defensive fallback
 	return nil, fmt.Errorf("invalid udp_addr %q", p.UDPAddr)
 }
 
 func (p *Proxy) socks5UDPAssociate(ctx context.Context, targetHost string, targetPort int) (*UDPProxyConn, error) {
-	// 显式配置 udp_addr -> 强制裸 UDP,跳过握手
+	// Explicit udp_addr -> force raw UDP, skip the handshake
 	if p.UDPAddr != "" {
 		raddr, err := p.resolveUDPAddr()
 		if err != nil {
@@ -271,9 +279,9 @@ func (p *Proxy) socks5UDPAssociate(ctx context.Context, targetHost string, targe
 	}
 	if resp[1] != 0x00 {
 		conn.Close()
-		// rep=0x07 (CommandNotSupported):上游明确不做 SOCKS5 UDP,但同端口很可能有
-		// 配套的裸 UDP relay(如 shadowsocks-android tcp_only 主实例 + udp_only 兜底实例)。
-		// 自动兜底为裸 UDP,并打警告日志便于排查(裸 UDP 是 fire-and-forget,目标无监听会静默丢包)。
+		// rep=0x07 (CommandNotSupported): the upstream explicitly does not do SOCKS5 UDP, but
+		// the same port likely has a matching raw UDP relay (e.g. shadowsocks-android's tcp_only
+		// main instance + udp_only fallback instance). Auto-fallback to raw UDP and log a warning (raw UDP is fire-and-forget; packets drop silently if the target is not listening).
 		if resp[1] == 0x07 {
 			slog.Warn("UDP ASSOCIATE rejected (rep=0x07), falling back to raw UDP relay",
 				"proxy", p.Host, "udpAddr", net.JoinHostPort(p.Host, strconv.Itoa(p.Port)))
@@ -576,9 +584,9 @@ func (u *UDPProxyConn) Close() error {
 	return u.UDPConn.Close()
 }
 
-// ProbeTCP 供 UDP 复用池验证连接是否仍可用。SOCKS5 UDP ASSOCIATE 的 TCP 控制信道
-// 做 5ms 快速探测:读超时 = 连接正常(控制信道本不该有数据);读到数据或出错 = 已损坏。
-// 裸 UDP / ss UDP 无控制信道(tcpConn 为 nil),直接视为健康。
+// ProbeTCP lets the UDP reuse pool verify a connection is still usable. The SOCKS5 UDP
+// ASSOCIATE TCP control channel is probed with a 5ms quick read: read timeout = healthy
+// (the control channel should never carry data); data read or error = broken. Raw UDP / ss UDP have no control channel (tcpConn is nil), so they are always considered healthy.
 func (u *UDPProxyConn) ProbeTCP() error {
 	if u.tcpConn == nil {
 		return nil

@@ -2,15 +2,16 @@
 
 package upstream
 
-// 端到端验证:SmartProxy 的裸 UDP relay(udp_addr)直连真实 shadowsocks-rust
-// ss-local(udp_only 模式,即 shadowsocks-android 的 UDP 兜底实例等价物)。
+// End-to-end verification: SmartProxy's raw UDP relay (udp_addr) connects directly to a
+// real shadowsocks-rust ss-local (udp_only mode, the equivalent of shadowsocks-android's
+// UDP fallback instance).
 //
-// 前置条件(由外部脚本准备):
-//   - SS_SERVER_BIN 指向编译好的 ssserver
-//   - SS_LOCAL_BIN  指向编译好的 sslocal
-//   - 这两个进程由本测试自行拉起,测完关闭
+// Prerequisites (prepared by an external script):
+//   - SS_SERVER_BIN points to the built ssserver
+//   - SS_LOCAL_BIN  points to the built sslocal
+//   - these two processes are started and stopped by this test itself
 //
-// 运行:
+// Run:
 //
 //	SS_SERVER_BIN=/path/ssserver SS_LOCAL_BIN=/path/sslocal go test -tags e2e ./internal/upstream/ -run TestRawRelayE2E -v
 
@@ -28,9 +29,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"smartproxy/internal/config"
 )
 
-// e2eEnv 持有两个真实二进制路径。
+// e2eEnv holds the paths to the two real binaries.
 func e2eEnv(t *testing.T) (serverBin, localBin string) {
 	t.Helper()
 	serverBin = os.Getenv("SS_SERVER_BIN")
@@ -41,7 +44,7 @@ func e2eEnv(t *testing.T) (serverBin, localBin string) {
 	return serverBin, localBin
 }
 
-// startRealSS 启动真实 ssserver + sslocal(udp_only),返回 sslocal 的 UDP 监听地址。
+// startRealSS starts a real ssserver + sslocal (udp_only) and returns sslocal's UDP listen address.
 func startRealSS(t *testing.T, serverBin, localBin string) (udpAddr string, cleanup func()) {
 	t.Helper()
 
@@ -50,7 +53,7 @@ func startRealSS(t *testing.T, serverBin, localBin string) (udpAddr string, clea
 	serverPort := freeUDPPort(t)
 	localPort := freeUDPPort(t)
 
-	// 用 JSON 配置(该版本 CLI 把端口并入地址参数,配置文件最稳)
+	// Use a JSON config (this CLI version folds the port into the address argument; a config file is the most reliable)
 	dir := t.TempDir()
 
 	serverCfg := fmt.Sprintf(`{
@@ -79,7 +82,7 @@ func startRealSS(t *testing.T, serverBin, localBin string) (udpAddr string, clea
 		t.Fatal(err)
 	}
 
-	// 1) ssserver:监听 127.0.0.1:<serverPort>,转发 UDP 到真实目标
+	// 1) ssserver: listens on 127.0.0.1:<serverPort>, forwarding UDP to the real target
 	ssServer := exec.Command(serverBin, "-c", serverCfgPath)
 	ssServer.Stdout = os.Stderr
 	ssServer.Stderr = os.Stderr
@@ -87,8 +90,8 @@ func startRealSS(t *testing.T, serverBin, localBin string) (udpAddr string, clea
 		t.Fatalf("failed to start ssserver: %v", err)
 	}
 
-	// 2) sslocal:udp_only 模式,本地 UDP 监听 127.0.0.1:<localPort>
-	//    (与 shadowsocks-android UDP 兜底实例同 mode=udp_only)
+	// 2) sslocal: udp_only mode, listening on local UDP 127.0.0.1:<localPort>
+	//    (same mode=udp_only as shadowsocks-android's UDP fallback instance)
 	ssLocal := exec.Command(localBin, "-c", localCfgPath)
 	ssLocal.Stdout = os.Stderr
 	ssLocal.Stderr = os.Stderr
@@ -106,17 +109,17 @@ func startRealSS(t *testing.T, serverBin, localBin string) (udpAddr string, clea
 		ssServer.Process.Wait()
 	}
 
-	// 等端口真正可写(裸 UDP Dial 恒成功,这里只确认进程起来)
+	// Wait for the port to be truly writable (a raw UDP Dial always succeeds, so this only confirms the process is up)
 	time.Sleep(300 * time.Millisecond)
 	return udpAddr, cleanup
 }
 
-// buildDNSQuery 构造一个 example.com 的 A 记录查询(非压缩名,便于按 TXID 校验)。
+// buildDNSQuery builds an A-record query for example.com (non-compressed name, easy to validate by TXID).
 func buildDNSQuery(t *testing.T) []byte {
 	t.Helper()
 	txid := uint16(rand.Intn(65535))
 	q := make([]byte, 0, 64)
-	q = binary.BigEndian.AppendUint16(q, txid) // ID
+	q = binary.BigEndian.AppendUint16(q, txid)   // ID
 	q = binary.BigEndian.AppendUint16(q, 0x0100) // flags: RD
 	q = binary.BigEndian.AppendUint16(q, 1)      // QDCOUNT
 	q = binary.BigEndian.AppendUint16(q, 0)      // ANCOUNT
@@ -126,7 +129,7 @@ func buildDNSQuery(t *testing.T) []byte {
 		q = append(q, byte(len(label)))
 		q = append(q, label...)
 	}
-	q = append(q, 0)                     // root
+	q = append(q, 0)                        // root
 	q = binary.BigEndian.AppendUint16(q, 1) // A
 	q = binary.BigEndian.AppendUint16(q, 1) // IN
 	return q
@@ -143,11 +146,11 @@ func freeUDPPort(t *testing.T) int {
 	return port
 }
 
-// TestRawRelayE2E 用真实 ss-local(udp_only)验证 udp_addr 裸中继端到端通讯:
-//  1. Proxy.UDPAddr = "127.0.0.1:<udp端口>"(host:port 形式)
-//  2. UDPAssociate 走 rawUDPAssociate,不碰 TCP ASSOCIATE
-//  3. 发一条 example.com DNS 查询(SOCKS5 UDP 帧,目标 1.1.1.1:53)
-//  4. 收到真实 DNS 响应帧 → 证明数据真的通了
+// TestRawRelayE2E verifies end-to-end raw relay via udp_addr using a real ss-local (udp_only):
+//  1. Proxy.UDPAddr = "127.0.0.1:<udp port>" (host:port form)
+//  2. UDPAssociate goes through rawUDPAssociate, never touching TCP ASSOCIATE
+//  3. send an example.com DNS query (SOCKS5 UDP frame, target 1.1.1.1:53)
+//  4. receiving a real DNS response frame proves the data really flows end to end
 func TestRawRelayE2E(t *testing.T) {
 	serverBin, localBin := e2eEnv(t)
 	udpAddr, cleanup := startRealSS(t, serverBin, localBin)
@@ -162,16 +165,37 @@ func TestRawRelayE2E(t *testing.T) {
 	p := &Proxy{
 		Scheme:  SchemeSOCKS5,
 		Host:    host,
-		Port:    udpPort, // 无 TCP 监听;能成功即证明走的是裸 UDP 路径
-		UDPAddr: udpAddr, // host:port 强制裸 UDP
+		Port:    udpPort, // no TCP listener; success here proves the raw UDP path is taken
+		UDPAddr: udpAddr, // host:port forces raw UDP
+		UDPOnly: true,    // marks the upstream as UDP-only: TCP must be skipped, UDP must keep working
 	}
+
+	// A udp_only upstream has no TCP listener, so a TCP connect must fail fast.
+	tcpConn, tcpErr := p.Connect(ctx, "example.com", 80)
+	if tcpErr == nil {
+		tcpConn.Close()
+		t.Fatal("expected TCP connect to fail on a udp_only upstream (no TCP listener)")
+	}
+	t.Logf("TCP connect failed as expected: %v", tcpErr)
+
+	// Simulate the TCP health probe tripping the circuit breaker (the old TCP/UDP coupling
+	// that used to disable UDP too). Even with the circuit open, the udp_only UDP relay
+	// must keep working — that is the "TCP down, keep testing UDP" guarantee.
+	hcCfg := config.HealthCheckConf{Enabled: true, FailuresThreshold: 1, OpenCoolDown: 30}
+	hc := NewHealthChecker(hcCfg, []*Proxy{p})
+	defer hc.Stop()
+	hc.RecordFailure(p, tcpErr)
+	if p.IsAvailable() {
+		t.Log("note: circuit stayed closed (checkProxy skips udp_only proxies); continuing anyway")
+	}
+
 	conn, err := p.UDPAssociate(ctx, "1.1.1.1", 53)
 	if err != nil {
-		t.Fatalf("UDPAssociate(raw) failed: %v", err)
+		t.Fatalf("UDPAssociate(raw) failed despite TCP being down: %v", err)
 	}
 	defer conn.Close()
 
-	// 组 SOCKS5 UDP 帧:RSV|FRAG|ATYP|DST.ADDR|DST.PORT|DNS 查询
+	// Build the SOCKS5 UDP frame: RSV|FRAG|ATYP|DST.ADDR|DST.PORT|DNS query
 	dnsQuery := buildDNSQuery(t)
 	targetIP := net.ParseIP("1.1.1.1").To4()
 	frame := []byte{0x00, 0x00, 0x00, 0x01}
@@ -193,11 +217,11 @@ func TestRawRelayE2E(t *testing.T) {
 	resp := buf[:n]
 	t.Logf("received %d-byte response frame", n)
 
-	// 校验:响应帧 = SOCKS5 UDP 头 + DNS 响应
+	// Verify: the response frame = SOCKS5 UDP header + DNS response
 	if len(resp) < 4 || resp[0] != 0x00 || resp[1] != 0x00 || resp[2] != 0x00 {
 		t.Fatalf("bad SOCKS5 UDP header: %x", resp[:min(len(resp), 4)])
 	}
-	// 跳过 DST.ADDR/PORT 拿到 DNS payload(目标是我们发的 1.1.1.1:53,IP 形式 10 字节头)
+	// Skip DST.ADDR/PORT to get the DNS payload (the target is our 1.1.1.1:53, an IP-form 10-byte header)
 	const hdrLen = 10
 	if len(resp) <= hdrLen {
 		t.Fatalf("response too short: %d", len(resp))

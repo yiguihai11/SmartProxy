@@ -86,6 +86,7 @@ func (m *Manager) rebuildFromConfig(cfg UpstreamConfig) {
 			slog.Warn("failed to set udp_addr, skipping proxy", "url", entry.URL, "udp_addr", entry.UDPAddr, "error", err)
 			continue
 		}
+		proxy.UDPOnly = entry.UDPOnly
 		aliasMap[alias] = proxy
 		defaultProxies = append(defaultProxies, proxy)
 	}
@@ -104,6 +105,9 @@ type ProxyEntry struct {
 	Alias   string
 	URL     string
 	UDPAddr string
+	// UDPOnly marks an upstream that only relays UDP (no TCP listener). It is skipped by
+	// TCP routing and by the TCP health probe, so TCP unavailability never disables its UDP.
+	UDPOnly bool
 }
 
 func (m *Manager) SelectProxy(targetIP string, targetPort int, domain string, engine *rules.Engine) (string, *Proxy) {
@@ -129,6 +133,10 @@ func (m *Manager) SelectProxy(targetIP string, targetPort int, domain string, en
 
 func (m *Manager) ConnectDefault(ctx context.Context, host string, port int) (net.Conn, error) {
 	for _, proxy := range m.orderedProxies() {
+		if proxy.UDPOnly {
+			slog.Debug("skipping udp_only proxy for TCP", "url", proxy.URL)
+			continue
+		}
 		if !proxy.IsAvailable() {
 			slog.Debug("skipping unhealthy proxy", "url", proxy.URL)
 			continue
@@ -211,6 +219,10 @@ func (m *Manager) Connect(ctx context.Context, host string, port int, domain str
 		return conn, "proxy"
 	}
 	if selected == nil {
+		return nil, "failed"
+	}
+	if selected.UDPOnly {
+		slog.Warn("rule selected a udp_only proxy for TCP, connection failed", "url", selected.URL)
 		return nil, "failed"
 	}
 	if !selected.IsAvailable() {
@@ -340,6 +352,7 @@ type ProxyInfo struct {
 	Port    int                 `json:"port"`
 	Scheme  string              `json:"scheme"`
 	UDPAddr string              `json:"udp_addr,omitempty"`
+	UDPOnly bool                `json:"udp_only,omitempty"`
 	Health  ProxyHealthSnapshot `json:"health"`
 }
 
@@ -364,6 +377,7 @@ func (m *Manager) Proxies() []ProxyInfo {
 			Port:    proxy.Port,
 			Scheme:  string(proxy.Scheme),
 			UDPAddr: proxy.UDPAddr,
+			UDPOnly: proxy.UDPOnly,
 			Health:  proxy.health.Snapshot(),
 		})
 	}

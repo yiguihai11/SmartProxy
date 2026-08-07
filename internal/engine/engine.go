@@ -76,6 +76,7 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 			Alias:   p.Alias,
 			URL:     p.URL,
 			UDPAddr: p.UDPAddr,
+			UDPOnly: p.UDPOnly,
 		})
 	}
 	upstreamMgr, err := upstream.NewManager(upstreamCfg)

@@ -579,3 +579,47 @@ func TestSetProxyHealth_DirectAlias(t *testing.T) {
 		t.Fatal("expected error for direct alias (nil proxy)")
 	}
 }
+
+func TestNewManager_UDPOnly(t *testing.T) {
+	m, err := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{
+			{Alias: "udp-fallback", URL: "socks5://127.0.0.1:1234", UDPAddr: "1234", UDPOnly: true},
+			{Alias: "normal", URL: "socks5://127.0.0.1:1080"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.dnsUDPPool.Close()
+
+	up := m.aliasMap["udp-fallback"]
+	if up == nil {
+		t.Fatal("udp-fallback proxy should exist")
+	}
+	if !up.UDPOnly {
+		t.Error("udp-fallback proxy should have UDPOnly=true")
+	}
+	if !up.SupportsUDP() {
+		t.Error("udp-only proxy should report SupportsUDP()=true")
+	}
+	if up.UDPAddr != "1234" {
+		t.Errorf("udp-fallback UDPAddr: got %q, want 1234", up.UDPAddr)
+	}
+	if m.aliasMap["normal"].UDPOnly {
+		t.Error("normal proxy should not be udp_only")
+	}
+
+	// Proxies() info must surface the flag for the dashboard badge.
+	var found bool
+	for _, info := range m.Proxies() {
+		if info.Alias == "udp-fallback" {
+			found = true
+			if !info.UDPOnly {
+				t.Error("ProxyInfo should expose udp_only=true for the udp-only proxy")
+			}
+		}
+	}
+	if !found {
+		t.Error("udp-fallback should appear in Proxies()")
+	}
+}

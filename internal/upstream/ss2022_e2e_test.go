@@ -2,18 +2,19 @@
 
 package upstream
 
-// 端到端验证:SmartProxy 内置 shadowsocks 客户端(ss:// scheme,即"我们就是 sslocal")
-// 直连真实 shadowsocks-rust ssserver,验证 AEAD-2022(SIP022)互通。
+// End-to-end verification: SmartProxy's built-in shadowsocks client (ss:// scheme, i.e.
+// "we are the sslocal") connects directly to a real shadowsocks-rust ssserver, verifying
+// AEAD-2022 (SIP022) interoperability.
 //
-// 注意与 rawrelay_e2e_test.go(裸 UDP relay,Case A)的区别:
-//   - rawrelay:代理协议是 socks5,SS 服务器回 rep=0x07 后 SmartProxy 裸 UDP 直发
-//     到 sslocal 的监听端口(等价于"发到 sslocal");
-//   - 本测试:代理协议是 ss,SmartProxy 直接以 shadowsocks 协议与 ssserver 通讯
-//     (等价于"我们就是 sslocal"),不经任何 sslocal / SOCKS5。
+// Note the difference from rawrelay_e2e_test.go (raw UDP relay, Case A):
+//   - rawrelay: the proxy protocol is socks5; after the SS server replies rep=0x07,
+//     SmartProxy raw-UDP-sends directly to sslocal's listen port (equivalent to "send to sslocal");
+//   - this test: the proxy protocol is ss; SmartProxy talks to ssserver directly using
+//     the shadowsocks protocol (equivalent to "we are the sslocal"), with no sslocal / SOCKS5 in between.
 //
-// 前置条件:SS_SERVER_BIN 指向编译好的 ssserver(需支持 AEAD-2022,>=v1.15)。
+// Prerequisite: SS_SERVER_BIN points to the built ssserver (must support AEAD-2022, >=v1.15).
 //
-// 运行:
+// Run:
 //
 //	SS_SERVER_BIN=/path/ssserver go test -tags e2e ./internal/upstream/ -run TestSS2022E2E -v
 
@@ -31,11 +32,13 @@ import (
 	"time"
 )
 
-// TestSS2022E2E 用真实 ssserver 验证 sing 2022 客户端 ↔ rust 2022 服务端互通:
-//  1. ssserver 以 2022-blake3-aes-128-gcm 启动(mode=tcp_and_udp,base64 key)
-//  2. SmartProxy 用 ss:// URL(NewProxy 完整解析路径)直接连它
-//  3. TCP:连本地回环 echo,明文往返一致 -> 2022 TCP 握手(含 timestamp 校验)互通
-//  4. UDP:本地回环 echo,经 2022 会话式 UDP(首包 sessionId+packetId)往返一致
+// TestSS2022E2E verifies sing-2022 client <-> rust-2022 server interop using a real ssserver:
+//  1. ssserver starts with 2022-blake3-aes-128-gcm (mode=tcp_and_udp, base64 key)
+//  2. SmartProxy connects to it directly via an ss:// URL (NewProxy's full parsing path)
+//  3. TCP: connect to a local loopback echo, plaintext round-trip matches -> the 2022 TCP
+//     handshake (including timestamp validation) interoperates
+//  4. UDP: local loopback echo, via 2022 session-based UDP (first packet carries
+//     sessionId+packetId) round-trips correctly
 func TestSS2022E2E(t *testing.T) {
 	serverBin := os.Getenv("SS_SERVER_BIN")
 	if serverBin == "" {
@@ -44,7 +47,7 @@ func TestSS2022E2E(t *testing.T) {
 
 	const (
 		method = "2022-blake3-aes-128-gcm"
-		key    = "MDEyMzQ1Njc4OWFiY2RlZg==" // base64(16B) "0123456789abcdef",aes-128 用 16 字节 key
+		key    = "MDEyMzQ1Njc4OWFiY2RlZg==" // base64(16B) "0123456789abcdef", aes-128 uses a 16-byte key
 	)
 	serverPort := freeUDPPort(t)
 
@@ -73,14 +76,14 @@ func TestSS2022E2E(t *testing.T) {
 	})
 	time.Sleep(300 * time.Millisecond)
 
-	// 本地回环目标(TCP/UDP echo),全链路不依赖外网
+	// Local loopback target (TCP/UDP echo); the whole path does not depend on the external network
 	tcpTarget, udpTarget := startLocalEchoServers(t)
 	_, tcpPortStr, _ := net.SplitHostPort(tcpTarget)
 	tcpPort, _ := strconv.Atoi(tcpPortStr)
 	_, udpPortStr, _ := net.SplitHostPort(udpTarget)
 	udpPort, _ := strconv.Atoi(udpPortStr)
 
-	// ss:// URL 走完整解析:base64url(method:key) userinfo -> newSSMethod2022
+	// The ss:// URL goes through full parsing: base64url(method:key) userinfo -> newSSMethod2022
 	u := fmt.Sprintf("ss://%s@127.0.0.1:%d", b64url(method+":"+key), serverPort)
 	p, err := NewProxy(u)
 	if err != nil {
@@ -90,7 +93,7 @@ func TestSS2022E2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	// --- TCP 往返 ---
+	// --- TCP round-trip ---
 	tcpPayload := []byte("hello over ss 2022 tcp e2e")
 	tcpConn, err := p.Connect(ctx, "127.0.0.1", tcpPort)
 	if err != nil {
@@ -110,7 +113,7 @@ func TestSS2022E2E(t *testing.T) {
 	}
 	t.Logf("TCP round-trip OK (%d bytes) via real ssserver 2022", len(tcpPayload))
 
-	// --- UDP 往返 ---
+	// --- UDP round-trip ---
 	udpConn, err := p.UDPAssociate(ctx, "127.0.0.1", udpPort)
 	if err != nil {
 		t.Fatalf("UDPAssociate via 2022 failed: %v", err)
@@ -133,7 +136,7 @@ func TestSS2022E2E(t *testing.T) {
 	if err != nil {
 		t.Fatalf("udp read echo: %v", err)
 	}
-	// 响应帧 = SOCKS5 UDP 头(10B,IPv4 目标)+ 原 payload
+	// Response frame = SOCKS5 UDP header (10B, IPv4 target) + original payload
 	const hdrLen = 10
 	if n <= hdrLen {
 		t.Fatalf("udp response too short: %d bytes", n)
@@ -144,7 +147,8 @@ func TestSS2022E2E(t *testing.T) {
 	t.Logf("UDP round-trip OK (%d bytes) via real ssserver 2022 session", len(udpPayload))
 }
 
-// startLocalEchoServers 启动本机 TCP + UDP 回环 echo,返回各自的 127.0.0.1 监听地址。
+// startLocalEchoServers starts local TCP + UDP loopback echo servers and returns their
+// 127.0.0.1 listen addresses.
 func startLocalEchoServers(t *testing.T) (tcpAddr, udpAddr string) {
 	t.Helper()
 
