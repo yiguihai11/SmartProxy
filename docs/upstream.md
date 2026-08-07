@@ -31,7 +31,7 @@ UDP 支持：`socks5` / `socks5h`（标准 UDP ASSOCIATE，或 `udp_addr` 裸中
 
 ### §3.1 内置 Shadowsocks（`ss://`）
 
-`internal/upstream/ss.go` 用 [sing-shadowsocks](https://github.com/sagernet/sing-shadowsocks)（sing-box 生态，仍维护中的纯 Go 库）直接以 shadowsocks 协议连接远程 SS 服务器，**不再依赖外部 `sslocal` 进程**（之前 Termux 上要先跑一个 sslocal 才能用 SS）。支持经典 AEAD 加密：`aes-128/192/256-gcm`、`chacha20-ietf-poly1305`、`xchacha20-ietf-poly1305`；AEAD-2022（SIP022）：`2022-blake3-aes-128/256-gcm`、`2022-blake3-chacha20-poly1305`；以及不加密的 **`none`**（`plain` 是同义词）。`newSSMethod` 显式校验 method 名称（`shadowaead.New` 对未知方法不报错、会留 nil constructor，这里显式拦截拼写错误）。SIP003 插件的 `?plugin=` 参数**只解析不执行**，见下小节。
+`internal/upstream/ss.go` 用 [sing-shadowsocks](https://github.com/sagernet/sing-shadowsocks)（sing-box 生态，仍维护中的纯 Go 库）直接以 shadowsocks 协议连接远程 SS 服务器，**不再依赖外部 `sslocal` 进程**（之前 Termux 上要先跑一个 sslocal 才能用 SS）。支持经典 AEAD 加密：`aes-128/192/256-gcm`、`chacha20-ietf-poly1305`、`xchacha20-ietf-poly1305`；AEAD-2022（SIP022）：`2022-blake3-aes-128/256-gcm`、`2022-blake3-chacha20-poly1305`；以及不加密的 **`none`**（`plain` 是同义词）。`newSSMethod` 显式校验 method 名称（`shadowaead.New` 对未知方法不报错、会留 nil constructor，这里显式拦截拼写错误）。SIP003 插件的 `?plugin=` 参数**内置执行**（obfs-http / obfs-tls，见下小节）。
 
 > `none`/`plain` 与 AEAD 的差异及 wire 格式，见下「`none`/`plain`（不加密）」小节。
 
@@ -50,9 +50,16 @@ UDP 复用池（§6）对 `ss` 同样生效：`ssUDPConn` 实现了 `ProbeTCP()`
 - 进程内测试覆盖 TCP/UDP 往返（`ss_test.go` 的 `TestSSConnectTCP`、`TestSSUDPConnRoundTrip2022`）。
 - **已用真实 shadowsocks-rust v1.23.4 `ssserver` 端到端验证**（`ss2022_e2e_test.go`，`go test -tags e2e`，需 `SS_SERVER_BIN` 指向真实 ssserver）：sing 2022 客户端直连 ssserver（不经 sslocal），TCP 明文往返（含 2022 握手 timestamp 校验）与 UDP 会话式往返均互通。注意这与 `rawrelay_e2e_test.go`（`socks5` 上游 + rep=0x07 兜底裸 UDP 到 sslocal 监听端口，Case A）是**两条不同链路**：本测试是 `ss://` scheme 下 SmartProxy 自身即 sslocal、直接与 ssserver 通讯（Case B）。
 
-#### SIP003 插件：`?plugin=`（只解析）
+#### SIP003 插件：内置 obfs-http / obfs-tls（`?plugin=`）
 
-ss-android 导出的链接可带 `?plugin=id;key=val;key=val`（SIP003 插件，如 `obfs-local`、`v2ray-plugin`）。SmartProxy **只解析保留该参数、不执行插件进程**（插件是外部二进制，需要本地跑 obfs-local 等）。`NewProxy` 把 `?plugin=` 解析进 `Proxy.Plugin`；配置了插件的上游在 `ssConnect`/`ssUDPAssociate` 时返回明确错误（提示去掉 `?plugin=`，或自行在服务端完成混淆）。dashboard 代理对话框把该参数显示为只读，保存时原样保留，避免误删。
+ss-android 导出的链接可带 `?plugin=id;key=val;key=val`（SIP003 插件）。SmartProxy **内置 simple-obfs 的 `obfs-local`（http/tls 两种混淆）客户端**，无需外部二进制：`internal/upstream/obfs.go` 逐字节移植 simple-obfs 的 `obfs_http.c` / `obfs_tls.c` 客户端侧，`ssConnect` 在 TCP 建连后、SS 加密层之下再套一层混淆。
+
+- **obfs-http**：首写前置 HTTP GET 请求头（`Content-Length`=首包长，`Host` 在端口非 80 时带 SS 服务器端口，`User-Agent: curl/7.<random>.<random>`、`Sec-WebSocket-Key` 随机——与 obfs-local 一致）；首读剥掉服务端 `HTTP/1.1 101` 响应头（按 `\r\n\r\n` 找边界）；后续读写明文直通。服务器端 `check_http_header` 只校验请求行含 `HTTP/1.1` 与 `Upgrade: websocket`，不校验 `Host`（`obfs-host` 缺省用 SS 服务器主机）。
+- **obfs-tls**：首包藏进 TLS ClientHello 的 **session_ticket 扩展**（138B 固定头 + ticket 扩展 + 数据 + SNI + 66B 其余扩展）；读侧状态机解服务端 `ServerHello`（96B，验证 `0x16`）+ `ChangeCipherSpec`（6B）+ `EncryptedHandshake` 头（5B，len 即首块长），后续按 `0x17` 帧解帧；后续写每包前置 `0x17 0x03 0x03` + len 帧头。
+- **UDP 不经插件**：obfs 只混淆 TCP（SIP003 语义，simple-obfs 两端均无 UDP 处理），`ssUDPAssociate` 直连服务器端口，与 `none`/AEAD 的 UDP relay 一致。
+- **只支持 `obfs-local`**：其它插件二进制（`v2ray-plugin` 等）不内置，`ssConnect`/`ssUDPAssociate` 时返回明确错误提示去掉该参数。
+- **dashboard**：代理对话框的 SS 区块提供「无 / obfs-http / obfs-tls」下拉，选混淆后显示 `obfs-host`（http 额外显示 `http-method`、`obfs-uri`），保存时组装成 `obfs-local;obfs=...;obfs-host=...`；编辑时按 `;key=val` 拆回表单。
+- **e2e 验证**（`obfs_e2e_test.go`，`go test -tags e2e`，需 `SS_SERVER_BIN` + `OBFS_SERVER_BIN`）：SmartProxy 带 `?plugin=` 直连真实 simple-obfs `obfs-server`（http/tls）→ 真实 ssserver，TCP 明文往返一致；UDP 直连 SS 服务器端口往返一致。
 
 #### `none`/`plain`（不加密）
 
