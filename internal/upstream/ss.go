@@ -137,18 +137,27 @@ func parseSSUserinfo(user *url.Userinfo) (method, password string, err error) {
 	return method, password, nil
 }
 
-// ssPluginBlocked 报告该 ss 上游是否配置了 SIP003 插件。SmartProxy 只解析插件
-// 参数、不执行插件进程,带插件的上游无法正常建连。
-func (p *Proxy) ssPluginBlocked() error {
+// ssPlugin 解析该 ss 上游的 SIP003 插件参数。未配置返回 (nil, nil);配置了内置
+// 支持的 obfs-local(http/tls)返回配置;其它插件二进制(v2ray-plugin 等)返回错误。
+func (p *Proxy) ssPlugin() (*obfsConfig, error) {
 	if p.Plugin == "" {
-		return nil
+		return nil, nil
 	}
-	return fmt.Errorf("ss proxy %q uses SIP003 plugin %q which SmartProxy does not execute (parse-only support); strip ?plugin=... from the URL to connect without the plugin", p.URL, p.Plugin)
+	cfg, err := parsePluginOptions(p.Plugin)
+	if err != nil {
+		return nil, fmt.Errorf("ss proxy %q: %w", p.URL, err)
+	}
+	if cfg.host == "" {
+		cfg.host = p.Host // 缺省 obfs-host 用 SS 服务器主机
+	}
+	cfg.port = p.Port // HTTP Host 头在非 80 时带 SS 端口(与 obfs-local 一致)
+	return cfg, nil
 }
 
 // ssConnect 建立到目标 host:port 的 SS 加密隧道(TCP)。
 func (p *Proxy) ssConnect(ctx context.Context, targetHost string, targetPort int) (net.Conn, error) {
-	if err := p.ssPluginBlocked(); err != nil {
+	obfs, err := p.ssPlugin()
+	if err != nil {
 		return nil, err
 	}
 	if p.ssMethod == nil {
@@ -157,6 +166,13 @@ func (p *Proxy) ssConnect(ctx context.Context, targetHost string, targetPort int
 	conn, err := p.dial(ctx) // TCP 连 SS 服务器(fwmark + keepalive)
 	if err != nil {
 		return nil, err
+	}
+	if obfs != nil {
+		// 内置 obfs-http/tls:在 SS 加密层之下、TCP 之上再套一层混淆传输层。
+		conn, err = wrapObfs(conn, obfs)
+		if err != nil {
+			return nil, err // wrapObfs 失败时已关闭 conn
+		}
 	}
 	dest := M.ParseSocksaddrHostPort(targetHost, uint16(targetPort))
 	ssConn, err := p.ssMethod.DialConn(conn, dest)
@@ -170,7 +186,9 @@ func (p *Proxy) ssConnect(ctx context.Context, targetHost string, targetPort int
 // ssUDPAssociate 建一条到 SS 服务器的 UDP relay 会话,返回一个满足 SmartProxy
 // 上游 UDP 契约(net.Conn + 收发完整 SOCKS5-UDP 帧)的连接。
 func (p *Proxy) ssUDPAssociate(ctx context.Context, targetHost string, targetPort int) (net.Conn, error) {
-	if err := p.ssPluginBlocked(); err != nil {
+	// obfs 插件只混淆 TCP(SIP003 语义);SS UDP 不经插件,直连服务器 UDP 端口。
+	// 未配置插件或配置了内置 obfs-local 都放行;不支持的插件二进制在此报错。
+	if _, err := p.ssPlugin(); err != nil {
 		return nil, err
 	}
 	if p.ssMethod == nil {

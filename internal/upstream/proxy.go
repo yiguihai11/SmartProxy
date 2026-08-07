@@ -44,9 +44,9 @@ type Proxy struct {
 	Username string
 	Password string
 	// Plugin 是 ss:// URL 的 ?plugin= 参数(SIP003,ss-android 导出格式
-	// id;key=val;key=val)。仅解析保留、不执行插件进程:SmartProxy 不内置
-	// obfs-local / v2ray-plugin 这类外部二进制,带插件的上游无法建连,
-	// 连接时会返回明确错误提示去掉该参数。
+	// id;key=val;key=val)。SmartProxy 内置 obfs-local(http/tls,见 obfs.go),
+	// TCP 建连时在 SS 加密层下套一层混淆;其它插件二进制(v2ray-plugin 等)
+	// 不内置,连接时返回明确错误。
 	Plugin string
 	// UDPAddr 可选:裸 UDP relay 地址(用于 shadowsocks-android 这类 "SOCKS5 只做 TCP、
 	// UDP 由同/异端口的独立 udp_only 实例服务" 的上游)。语义:
@@ -109,7 +109,7 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 		}
 		p.ssMethod = ssMethod
 		p.Username, p.Password = method, password
-		// SIP003 插件参数:只解析保留,不执行。
+		// SIP003 插件参数:解析保留,ssConnect 时由 ssPlugin 决定执行(内置 obfs-local)或报错。
 		if plugin := u.Query().Get("plugin"); plugin != "" {
 			p.Plugin = plugin
 		}

@@ -197,16 +197,45 @@ func TestNewProxySSPlugin(t *testing.T) {
 		t.Errorf("plugin = %q, want %q", p.Plugin, pluginSpec)
 	}
 
-	// 只解析、不执行:连接时报明确错误,且不发起任何网络请求。
+	// obfs-local 已内置:解析出 obfs 配置(http,obfs-host,默认 GET /)。
+	cfg, err := p.ssPlugin()
+	if err != nil {
+		t.Fatalf("ssPlugin: %v", err)
+	}
+	if cfg == nil || cfg.obfs != "http" || cfg.host != "www.bing.com" || cfg.method != "GET" || cfg.uri != "/" {
+		t.Errorf("obfs config = %+v", cfg)
+	}
+
+	// UDP 不经插件:obfs-local 的 UDPAssociate 直接直连服务器端口,不再因插件报错。
+	local, err := NewProxy("ss://" + b64url("aes-128-gcm:secret") + "@127.0.0.1:8388?plugin=" + url.QueryEscape(pluginSpec))
+	if err != nil {
+		t.Fatalf("NewProxy local failed: %v", err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if _, err := p.Connect(ctx, "example.com", 80); err == nil {
-		t.Error("expected plugin error from Connect")
-	} else if !strings.Contains(err.Error(), "SIP003 plugin") {
-		t.Errorf("unexpected Connect error: %v", err)
+	if conn, err := local.UDPAssociate(ctx, "example.com", 80); err != nil {
+		t.Errorf("UDPAssociate with obfs-local should be allowed, got: %v", err)
+	} else {
+		conn.Close()
 	}
-	if _, err := p.UDPAssociate(ctx, "example.com", 80); err == nil {
-		t.Error("expected plugin error from UDPAssociate")
+}
+
+func TestNewProxySSUnsupportedPlugin(t *testing.T) {
+	// 其它插件二进制(v2ray-plugin 等)不内置:连接时报明确错误。
+	u := fmt.Sprintf("ss://%s@proxy.example.com:8388?plugin=%s", b64url("aes-128-gcm:secret"), url.QueryEscape("v2ray-plugin;mode=websocket"))
+	p, err := NewProxy(u)
+	if err != nil {
+		t.Fatalf("NewProxy failed: %v", err)
+	}
+	if _, err := p.ssPlugin(); err == nil {
+		t.Error("expected error for unsupported plugin")
+	} else if !strings.Contains(err.Error(), "unsupported SIP003 plugin") {
+		t.Errorf("unexpected ssPlugin error: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := p.Connect(ctx, "example.com", 80); err == nil || !strings.Contains(err.Error(), "unsupported SIP003 plugin") {
+		t.Errorf("Connect: expected unsupported plugin error, got %v", err)
 	}
 }
 
