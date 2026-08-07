@@ -505,10 +505,34 @@ function setProxyScheme(v){
   if(urow)urow.style.display=(v==='ss')?'none':'';
   var ur=document.getElementById('proxy-udpaddr-row');
   if(ur)ur.style.display=(v==='ss')?'none':'';
-  // 插件行:仅 ss 且已解析出 ?plugin= 时显示(只读,不执行)
+  // 插件行:仅 ss 显示(obfs-http/tls 已内置,无需外部二进制)
   var pr=document.getElementById('proxy-plugin-row');
-  if(pr)pr.style.display=(v==='ss'&&document.getElementById('proxy-plugin').value)?'':'none';
+  if(pr)pr.style.display=(v==='ss')?'':'none';
+  syncObfsRows();
   updateProxyPreview();
+}
+// syncObfsRows 根据插件下拉显示/隐藏 obfs-host 与 http 专用字段
+function syncObfsRows(){
+  var v=document.getElementById('proxy-plugin').value;
+  var hr=document.getElementById('proxy-obfs-host-row');
+  if(hr)hr.style.display=(v==='obfs-http'||v==='obfs-tls')?'':'none';
+  var or=document.getElementById('proxy-obfs-httpopts-row');
+  if(or)or.style.display=(v==='obfs-http')?'':'none';
+}
+// buildPlugin 把表单组装成 SIP003 插件参数(空 = 无插件)
+function buildPlugin(){
+  var v=document.getElementById('proxy-plugin').value;
+  if(!v)return '';
+  var host=document.getElementById('proxy-obfs-host').value.trim();
+  var parts=['obfs-local','obfs='+(v==='obfs-http'?'http':'tls')];
+  if(host)parts.push('obfs-host='+host);
+  if(v==='obfs-http'){
+    var m=document.getElementById('proxy-obfs-method').value.trim();
+    var uri=document.getElementById('proxy-obfs-uri').value.trim();
+    if(m&&m!=='GET')parts.push('http-method='+m);
+    if(uri&&uri!=='/')parts.push('obfs-uri='+uri);
+  }
+  return parts.join(';');
 }
 function setSSMethod(m){
   var sel=document.getElementById('proxy-ss-method');
@@ -545,6 +569,9 @@ function openProxyDialog(i){
   document.getElementById('proxy-server').value='';
   document.getElementById('proxy-udpaddr').value=p?(p.udp_addr||''):'';
   document.getElementById('proxy-plugin').value='';
+  document.getElementById('proxy-obfs-host').value='';
+  document.getElementById('proxy-obfs-method').value='GET';
+  document.getElementById('proxy-obfs-uri').value='/';
   var scheme='socks5';
   if(p){
     var u=null;
@@ -564,8 +591,23 @@ function openProxyDialog(i){
           }
         }
         if(sm){setSSMethod(sm);document.getElementById('proxy-pass').value=sp}
-        // SIP003 插件参数:只解析展示(只读),保存时原样保留
-        document.getElementById('proxy-plugin').value=u.searchParams.get('plugin')||'';
+        // SIP003 插件参数:obfs-local;obfs=http|tls;obfs-host=... 拆分回填表单
+        var pv=u.searchParams.get('plugin')||'';
+        var obfs='',host='',method='',uri='';
+        if(pv){
+          var parts=pv.split(';');
+          for(var i=1;i<parts.length;i++){
+            var eq=parts[i].indexOf('=');
+            if(eq<0)continue;
+            var k=parts[i].slice(0,eq),vv=parts[i].slice(eq+1);
+            if(k==='obfs')obfs=vv;else if(k==='obfs-host')host=vv;
+            else if(k==='http-method')method=vv;else if(k==='obfs-uri')uri=vv;
+          }
+        }
+        document.getElementById('proxy-plugin').value=obfs==='http'?'obfs-http':obfs==='tls'?'obfs-tls':'';
+        document.getElementById('proxy-obfs-host').value=host;
+        document.getElementById('proxy-obfs-method').value=method||'GET';
+        document.getElementById('proxy-obfs-uri').value=uri||'/';
       }else{
         if(u.username)document.getElementById('proxy-user').value=decodeURIComponent(u.username);
         if(u.password)document.getElementById('proxy-pass').value=decodeURIComponent(u.password);
@@ -596,7 +638,7 @@ function updateProxyPreview(){
     url+=encodeURIComponent(user)+':'+encodeURIComponent(pass)+'@';
   }
   url+=server;
-  var plugin=document.getElementById('proxy-plugin').value.trim();
+  var plugin=buildPlugin();
   if(plugin)url+='?plugin='+encodeURIComponent(plugin);
   el.style.display='block';
   el.innerHTML=url.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -626,7 +668,7 @@ async function saveProxy(){
   }else if(user){
     url=scheme+'://'+encodeURIComponent(user)+':'+encodeURIComponent(pass)+'@'+server;
   }
-  var plugin=document.getElementById('proxy-plugin').value.trim();
+  var plugin=buildPlugin();
   if(plugin)url+='?plugin='+encodeURIComponent(plugin);
   try{var chk=new URL(url);if(!chk.hostname)throw new Error('bad host')}catch(e){alert('Invalid server address: '+server);return}
   var editing=document.getElementById('proxy-dialog').dataset.alias||'';
@@ -1575,8 +1617,22 @@ es.onmessage=function(e){
       <input class="dialog-input" id="proxy-udpaddr" placeholder="blank = SOCKS5 UDP ASSOCIATE | 1080 | host:port" autocomplete="off">
     </div>
     <div id="proxy-plugin-row" style="display:none">
-      <div class="dialog-label">SIP003 Plugin <span style="text-transform:none;font-weight:400">(只解析,不执行)</span></div>
-      <input class="dialog-input" id="proxy-plugin" readonly title="SmartProxy 只解析 ?plugin= 参数,不执行插件进程;带插件的代理连接会被拒绝">
+      <div class="dialog-label">Obfs (SIP003 plugin) <span style="text-transform:none;font-weight:400">(内置,无需外部二进制)</span></div>
+      <select class="dialog-input" id="proxy-plugin" onchange="syncObfsRows();updateProxyPreview()">
+        <option value="">无 (none)</option>
+        <option value="obfs-http">obfs-http — 伪装 HTTP</option>
+        <option value="obfs-tls">obfs-tls — 伪装 TLS</option>
+      </select>
+      <div id="proxy-obfs-host-row" style="display:none">
+        <div class="dialog-label">Obfs Host <span style="text-transform:none;font-weight:400">(obfs-host,缺省用服务器主机)</span></div>
+        <input class="dialog-input" id="proxy-obfs-host" placeholder="www.bing.com" autocomplete="off" oninput="updateProxyPreview()">
+      </div>
+      <div id="proxy-obfs-httpopts-row" style="display:none">
+        <div class="dialog-label">HTTP Method <span style="text-transform:none;font-weight:400">(http-method)</span></div>
+        <input class="dialog-input" id="proxy-obfs-method" value="GET" autocomplete="off" oninput="updateProxyPreview()">
+        <div class="dialog-label">URI <span style="text-transform:none;font-weight:400">(obfs-uri)</span></div>
+        <input class="dialog-input" id="proxy-obfs-uri" value="/" autocomplete="off" oninput="updateProxyPreview()">
+      </div>
     </div>
     <div class="dialog-desc" id="proxy-preview" style="display:none;font-family:var(--mono);font-size:.8rem"></div>
     <div class="dialog-actions">
