@@ -3,11 +3,12 @@ BINARY := smartproxy
 MAIN   := ./cmd/smartproxy/
 OUTDIR := build
 
-# Version follows git: nearest tag (leading "v" stripped), plus commit-count
-# suffix (e.g. "1.1.0-3-gabc1234") and "-dirty" when the tree is modified.
+# Version follows git: nearest "v*" version tag (leading "v" stripped), plus
+# commit-count suffix (e.g. "1.1.0-3-gabc1234") and "-dirty" when the tree is
+# modified. --match 'v*' ignores non-version tags (e.g. ad-hoc backup tags).
 # Outside a git repo it falls back to the last release; override explicitly
 # with: make build VERSION=x.y.z
-GIT_TAG    := $(shell git describe --tags --always --dirty 2>/dev/null)
+GIT_TAG    := $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null)
 VERSION    ?= $(if $(GIT_TAG),$(patsubst v%,%,$(GIT_TAG)),1.0.0)
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)

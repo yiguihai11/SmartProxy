@@ -498,12 +498,25 @@ function setProxyScheme(v){
   if(!g)return;
   var b=g.querySelectorAll('.seg-btn');
   for(var i=0;i<b.length;i++)b[i].classList.toggle('active',b[i].getAttribute('data-val')===v);
-  // ss: 用户字段是加密方式名, udp_addr 不适用(内置 SS UDP relay)
-  var ul=document.getElementById('proxy-user-label');
-  if(ul)ul.textContent=(v==='ss')?'Method (encryption)':'Username';
+  // ss: 用加密方法下拉代替 Username;udp_addr 不适用(内置 SS UDP relay)
+  var sm=document.getElementById('proxy-ssmethod-row');
+  if(sm)sm.style.display=(v==='ss')?'':'none';
+  var urow=document.getElementById('proxy-user-row');
+  if(urow)urow.style.display=(v==='ss')?'none':'';
   var ur=document.getElementById('proxy-udpaddr-row');
   if(ur)ur.style.display=(v==='ss')?'none':'';
   updateProxyPreview();
+}
+function setSSMethod(m){
+  var sel=document.getElementById('proxy-ss-method');
+  if(!sel)return;
+  for(var i=0;i<sel.options.length;i++){
+    if(sel.options[i].value===m){sel.selectedIndex=i;return}
+  }
+  var o=document.createElement('option');
+  o.value=m;o.textContent=m;
+  sel.appendChild(o);
+  sel.selectedIndex=sel.options.length-1;
 }
 function getProxyScheme(){
   var g=document.getElementById('proxy-scheme-group');
@@ -533,17 +546,16 @@ function openProxyDialog(i){
     var u=null;
     try{u=new URL(p.url)}catch(e){}
     if(u&&u.protocol){scheme=u.protocol.slice(0,-1);document.getElementById('proxy-server').value=u.host;
-      if(u.username)document.getElementById('proxy-user').value=decodeURIComponent(u.username);
-      if(u.password)document.getElementById('proxy-pass').value=decodeURIComponent(u.password);
-      // ss://base64(method:password)@host:port:URL 解析后 username 为整个编码串、password 为空。
-      // 解码回 method:password,让用户能直接编辑。
-      if(scheme==='ss'&&u.username&&!u.password){
-        var dec=b64urlDecode(u.username);
-        var ci=dec.indexOf(':');
-        if(ci>0){
-          document.getElementById('proxy-user').value=dec.slice(0,ci);
-          document.getElementById('proxy-pass').value=dec.slice(ci+1);
-        }
+      if(scheme==='ss'){
+        // ss://method:password@host:port 或 ss://base64(method:password)@host:port,
+        // 解码出 method 填进下拉、password 填密码框。
+        var sm='',sp='';
+        if(u.username&&u.password){sm=decodeURIComponent(u.username);sp=decodeURIComponent(u.password)}
+        else if(u.username){var dec=b64urlDecode(u.username);var ci=dec.indexOf(':');if(ci>0){sm=dec.slice(0,ci);sp=dec.slice(ci+1)}}
+        if(sm){setSSMethod(sm);document.getElementById('proxy-pass').value=sp}
+      }else{
+        if(u.username)document.getElementById('proxy-user').value=decodeURIComponent(u.username);
+        if(u.password)document.getElementById('proxy-pass').value=decodeURIComponent(u.password);
       }
     }else{document.getElementById('proxy-server').value=p.url}
   }
@@ -563,7 +575,12 @@ function updateProxyPreview(){
   var pass=document.getElementById('proxy-pass').value;
   if(!server){el.style.display='none';return}
   var url=scheme+'://';
-  if(user)url+=encodeURIComponent(user)+':'+encodeURIComponent(pass)+'@';
+  if(scheme==='ss'){
+    var m=document.getElementById('proxy-ss-method').value;
+    if(m)url+=encodeURIComponent(m)+':'+encodeURIComponent(pass)+'@';
+  }else if(user){
+    url+=encodeURIComponent(user)+':'+encodeURIComponent(pass)+'@';
+  }
   url+=server;
   el.style.display='block';
   el.innerHTML=url.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -585,7 +602,13 @@ async function saveProxy(){
   if(!alias){alert('Alias is required');return}
   if(!server){alert('Server (host:port) is required');return}
   var url=scheme+'://'+server;
-  if(user)url=scheme+'://'+encodeURIComponent(user)+':'+encodeURIComponent(pass)+'@'+server;
+  if(scheme==='ss'){
+    var m=document.getElementById('proxy-ss-method').value;
+    if(!m){alert('Encryption method is required for SS');return}
+    url=scheme+'://'+encodeURIComponent(m)+':'+encodeURIComponent(pass)+'@'+server;
+  }else if(user){
+    url=scheme+'://'+encodeURIComponent(user)+':'+encodeURIComponent(pass)+'@'+server;
+  }
   try{var chk=new URL(url);if(!chk.hostname)throw new Error('bad host')}catch(e){alert('Invalid server address: '+server);return}
   var editing=document.getElementById('proxy-dialog').dataset.alias||'';
   var udpaddr=document.getElementById('proxy-udpaddr').value.trim();
@@ -1446,7 +1469,7 @@ document.querySelectorAll('.nav-item:not(.section)').forEach(function(item){
 function loadVersion(){
   fetch('/version').then(function(r){return r.json()}).then(function(d){
     var el=document.getElementById('app-version');
-    if(el&&d.version)el.textContent='v'+d.version;
+    if(el&&d.version)el.textContent=d.version;
   }).catch(function(){});
 }
 loadDashboard();
@@ -1508,8 +1531,20 @@ es.onmessage=function(e){
     </div>
     <div class="dialog-label">Server (host:port)</div>
     <input class="dialog-input" id="proxy-server" placeholder="proxy.example.com:1080" autocomplete="off" oninput="updateProxyPreview()">
-    <div class="dialog-label"><span id="proxy-user-label">Username</span> <span style="text-transform:none;font-weight:400">(optional)</span></div>
-    <input class="dialog-input" id="proxy-user" placeholder="username" autocomplete="off" oninput="updateProxyPreview()">
+    <div id="proxy-ssmethod-row" style="display:none">
+      <div class="dialog-label">Encryption Method</div>
+      <select class="dialog-input" id="proxy-ss-method" onchange="updateProxyPreview()">
+        <option value="aes-128-gcm">aes-128-gcm</option>
+        <option value="aes-192-gcm">aes-192-gcm</option>
+        <option value="aes-256-gcm">aes-256-gcm</option>
+        <option value="chacha20-ietf-poly1305">chacha20-ietf-poly1305</option>
+        <option value="xchacha20-ietf-poly1305">xchacha20-ietf-poly1305</option>
+      </select>
+    </div>
+    <div id="proxy-user-row">
+      <div class="dialog-label">Username <span style="text-transform:none;font-weight:400">(optional)</span></div>
+      <input class="dialog-input" id="proxy-user" placeholder="username" autocomplete="off" oninput="updateProxyPreview()">
+    </div>
     <div class="dialog-label">Password <span style="text-transform:none;font-weight:400">(optional)</span></div>
     <input class="dialog-input" id="proxy-pass" type="password" placeholder="password" autocomplete="new-password" oninput="updateProxyPreview()">
     <div id="proxy-udpaddr-row">

@@ -29,9 +29,9 @@ func GoVersion() string { return runtime.Version() }
 
 // String returns a compact one-line banner, e.g.:
 //
-//	smartproxy v1.1.0 (commit abc1234, built 2026-08-05T12:00:00Z, go1.25.0)
+//	smartproxy 1.1.0 (commit abc1234, built 2026-08-05T12:00:00Z, go1.25.0)
 func String() string {
-	return fmt.Sprintf("smartproxy v%s (commit %s, built %s, %s)",
+	return fmt.Sprintf("smartproxy %s (commit %s, built %s, %s)",
 		Version, GitCommit, BuildTime, GoVersion())
 }
 
