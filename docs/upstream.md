@@ -48,6 +48,7 @@ UDP 复用池（§6）对 `ss` 同样生效：`ssUDPConn` 实现了 `ProbeTCP()`
 - **密码框填的就是 base64 key**（如 `MDEyMzQ1Njc4OWFiY2RlZg==`），不是明文密码；多 PSK 用 `:` 连接。
 - **UDP 是会话式**（客户端/服务端各持独立会话：首包携带 sessionId + packetId、滑动窗口去重、HeaderType 方向不对称、带最多 ~900B 的 padding），不是经典 AEAD 的自包含包，服务端必须用 `shadowaead_2022.Service` 解包。因此 `ssUDPConn.Write` 改用 `N.CalculateFrontHeadroom` 动态预留 2022 的会话/padding 头（对经典 AEAD 与 `none` 同样正确）。
 - 进程内测试覆盖 TCP/UDP 往返（`ss_test.go` 的 `TestSSConnectTCP`、`TestSSUDPConnRoundTrip2022`）。
+- **已用真实 shadowsocks-rust v1.23.4 `ssserver` 端到端验证**（`ss2022_e2e_test.go`，`go test -tags e2e`，需 `SS_SERVER_BIN` 指向真实 ssserver）：sing 2022 客户端直连 ssserver（不经 sslocal），TCP 明文往返（含 2022 握手 timestamp 校验）与 UDP 会话式往返均互通。注意这与 `rawrelay_e2e_test.go`（`socks5` 上游 + rep=0x07 兜底裸 UDP 到 sslocal 监听端口，Case A）是**两条不同链路**：本测试是 `ss://` scheme 下 SmartProxy 自身即 sslocal、直接与 ssserver 通讯（Case B）。
 
 #### SIP003 插件：`?plugin=`（只解析）
 
