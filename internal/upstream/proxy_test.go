@@ -1179,6 +1179,36 @@ func TestResolveUDPAddr(t *testing.T) {
 	}
 }
 
+func TestUDPRelayAddr(t *testing.T) {
+	p := &Proxy{Host: "10.0.0.1", Port: 1080}
+
+	// No udp_addr and not udp_only -> no relay address (standard SOCKS5 UDP ASSOCIATE).
+	raddr, err := p.udpRelayAddr()
+	if err != nil || raddr != nil {
+		t.Fatalf("plain proxy: got %v, %v; want nil, nil", raddr, err)
+	}
+
+	// udp_only with no udp_addr -> relays to host:port automatically (udp_addr redundant).
+	p.UDPOnly = true
+	raddr, err = p.udpRelayAddr()
+	if err != nil {
+		t.Fatalf("udp_only auto addr: unexpected error %v", err)
+	}
+	if raddr == nil || raddr.IP.String() != "10.0.0.1" || raddr.Port != 1080 {
+		t.Fatalf("udp_only auto addr: got %v, want 10.0.0.1:1080", raddr)
+	}
+
+	// An explicit udp_addr still wins over udp_only (UDP on a different port).
+	p.UDPAddr = "9999"
+	raddr, err = p.udpRelayAddr()
+	if err != nil {
+		t.Fatalf("explicit udp_addr: unexpected error %v", err)
+	}
+	if raddr == nil || raddr.IP.String() != "10.0.0.1" || raddr.Port != 9999 {
+		t.Fatalf("explicit udp_addr: got %v, want 10.0.0.1:9999", raddr)
+	}
+}
+
 // makeSOCKS5UDPFrame builds a SOCKS5 UDP datagram (RSV|FRAG|ATYP|DST.ADDR|DST.PORT|data).
 func makeSOCKS5UDPFrame(host string, port int, payload []byte) []byte {
 	ip := net.ParseIP(host).To4()
@@ -1275,6 +1305,44 @@ func TestUDPAssociate_ForcedRawUDP(t *testing.T) {
 			t.Errorf("%s: echo mismatch: got %x, want contains %x", tt.name, buf[:n], payload)
 		}
 		conn.Close()
+	}
+}
+
+// TestUDPAssociate_UDPOnlyAutoRaw verifies that a udp_only upstream needs no udp_addr:
+// it relays raw UDP straight to its own host:port, never touching the TCP-based SOCKS5
+// ASSOCIATE path (which could not work anyway — the node has no TCP listener).
+func TestUDPAssociate_UDPOnlyAutoRaw(t *testing.T) {
+	echo, port := startUDPEcho(t)
+	defer echo.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	p := &Proxy{
+		Scheme:  SchemeSOCKS5,
+		Host:    "127.0.0.1",
+		Port:    port, // UDP echo bound here; no TCP listener, so only the auto raw-UDP path can work
+		UDPOnly: true, // no udp_addr: the relay target is implicitly host:port
+	}
+	conn, err := p.UDPAssociate(ctx, "example.com", 53)
+	if err != nil {
+		t.Fatalf("UDPAssociate(udp_only, no udp_addr) error: %v", err)
+	}
+	defer conn.Close()
+
+	payload := []byte("ping-udp-only-auto")
+	frame := makeSOCKS5UDPFrame("8.8.8.8", 53, payload)
+	if _, err := conn.Write(frame); err != nil {
+		t.Fatalf("write error: %v", err)
+	}
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, 2048)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("read error: %v", err)
+	}
+	if !bytes.Contains(buf[:n], payload) {
+		t.Fatalf("echo mismatch: got %x, want contains %x", buf[:n], payload)
 	}
 }
 

@@ -247,10 +247,24 @@ func (p *Proxy) resolveUDPAddr() (*net.UDPAddr, error) {
 	return nil, fmt.Errorf("invalid udp_addr %q", p.UDPAddr)
 }
 
-func (p *Proxy) socks5UDPAssociate(ctx context.Context, targetHost string, targetPort int) (*UDPProxyConn, error) {
-	// Explicit udp_addr -> force raw UDP, skip the handshake
+// udpRelayAddr returns the upstream's UDP relay address. An explicit udp_addr wins when set;
+// otherwise a udp_only upstream (no TCP listener) relays straight to its own host:port, so
+// udp_addr is redundant there. Returns nil when neither applies.
+func (p *Proxy) udpRelayAddr() (*net.UDPAddr, error) {
 	if p.UDPAddr != "" {
-		raddr, err := p.resolveUDPAddr()
+		return p.resolveUDPAddr()
+	}
+	if p.UDPOnly {
+		return net.ResolveUDPAddr("udp", net.JoinHostPort(p.Host, strconv.Itoa(p.Port)))
+	}
+	return nil, nil
+}
+
+func (p *Proxy) socks5UDPAssociate(ctx context.Context, targetHost string, targetPort int) (*UDPProxyConn, error) {
+	// Explicit udp_addr, or a udp_only upstream (no TCP listener to handshake over) -> force
+	// raw UDP relay and skip the SOCKS5 handshake.
+	if p.UDPAddr != "" || p.UDPOnly {
+		raddr, err := p.udpRelayAddr()
 		if err != nil {
 			return nil, err
 		}

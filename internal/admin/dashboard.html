@@ -503,13 +503,20 @@ function setProxyScheme(v){
   if(sm)sm.style.display=(v==='ss')?'':'none';
   var urow=document.getElementById('proxy-user-row');
   if(urow)urow.style.display=(v==='ss')?'none':'';
-  var ur=document.getElementById('proxy-udpaddr-row');
-  if(ur)ur.style.display=(v==='ss')?'none':'';
   // plugin row: only for ss (obfs-http/tls and v2ray-plugin are built in, no external binary)
   var pr=document.getElementById('proxy-plugin-row');
   if(pr)pr.style.display=(v==='ss')?'':'none';
   syncObfsRows();
+  syncUDPRows();
   updateProxyPreview();
+}
+// syncUDPRows shows/hides the udp_addr field: hidden for ss (built-in SS UDP relay) and for
+// udp_only upstreams (they relay straight to their own host:port, so udp_addr is redundant).
+function syncUDPRows(){
+  var ur=document.getElementById('proxy-udpaddr-row');
+  if(!ur)return;
+  var c=document.getElementById('proxy-udponly');
+  ur.style.display=(getProxyScheme()==='ss'||(c&&c.checked))?'none':'';
 }
 // syncObfsRows shows/hides obfs and v2ray-plugin fields based on the plugin dropdown
 function syncObfsRows(){
@@ -728,12 +735,13 @@ async function saveProxy(){
   if(plugin)url+='?plugin='+encodeURIComponent(plugin);
   try{var chk=new URL(url);if(!chk.hostname)throw new Error('bad host')}catch(e){alert('Invalid server address: '+server);return}
   var editing=document.getElementById('proxy-dialog').dataset.alias||'';
-  var udpaddr=document.getElementById('proxy-udpaddr').value.trim();
+  var udponly=document.getElementById('proxy-udponly').checked;
+  // udp_only upstreams relay UDP to their own host:port, so udp_addr is redundant (and cleared).
+  var udpaddr=udponly?'':document.getElementById('proxy-udpaddr').value.trim();
   if(udpaddr && !/^\d+$/.test(udpaddr) && udpaddr.indexOf(':')<0){
     alert('Invalid udp_addr: use a port ("1080") or "host:port" (e.g. 127.0.0.1:1080)');
     return;
   }
-  var udponly=document.getElementById('proxy-udponly').checked;
   try{
     await putProxyConfig(function(cfg){
       var ps=cfg.upstream.proxies;
@@ -1674,8 +1682,8 @@ es.onmessage=function(e){
       <input class="dialog-input" id="proxy-udpaddr" placeholder="blank = SOCKS5 UDP ASSOCIATE | 1080 | host:port" autocomplete="off">
     </div>
     <label style="display:flex;align-items:center;gap:8px;font-size:.84rem;color:var(--text2);cursor:pointer;margin:4px 0 8px">
-      <input type="checkbox" id="proxy-udponly">
-      UDP only (no TCP listener — skip TCP routing / health check)
+      <input type="checkbox" id="proxy-udponly" onchange="syncUDPRows()">
+      UDP only (no TCP listener — skip TCP routing / health check; UDP relays to this server's address)
     </label>
     <div id="proxy-plugin-row" style="display:none">
       <div class="dialog-label">Plugin (SIP003) <span style="text-transform:none;font-weight:400">(obfs-local / v2ray-plugin built in, no external binary)</span></div>

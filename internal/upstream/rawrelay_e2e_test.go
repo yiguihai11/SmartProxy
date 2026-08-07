@@ -162,12 +162,13 @@ func TestRawRelayE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
+	// No udp_addr: a udp_only upstream auto-relays UDP straight to its own host:port
+	// (udp_addr is redundant for udp_only nodes), and there is no TCP listener either.
 	p := &Proxy{
 		Scheme:  SchemeSOCKS5,
 		Host:    host,
-		Port:    udpPort, // no TCP listener; success here proves the raw UDP path is taken
-		UDPAddr: udpAddr, // host:port forces raw UDP
-		UDPOnly: true,    // marks the upstream as UDP-only: TCP must be skipped, UDP must keep working
+		Port:    udpPort,
+		UDPOnly: true,
 	}
 
 	// A udp_only upstream has no TCP listener, so a TCP connect must fail fast.
