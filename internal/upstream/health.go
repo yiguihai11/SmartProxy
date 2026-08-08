@@ -196,11 +196,15 @@ func (hc *HealthChecker) checkLoop(p *Proxy) {
 // (tcp_and_udp, tcp_only) get the HTTP probe feeding health. udp_only has no TCP
 // listener, so it is only UDP-probed — a dead TCP path can never open a udp_only
 // node's UDP circuit, and a broken UDP relay never disables TCP routing.
+// Probing follows the configured base mode (ProbeSupportsUDP / IsConfiguredUDPOnly), not
+// the derived effective mode: a tcp_and_udp node whose UDP circuit is currently open still
+// gets UDP probes so it can detect UDP recovery, and one whose TCP circuit is open still
+// gets TCP probes to detect TCP recovery.
 func (hc *HealthChecker) checkProxy(p *Proxy) {
-	if p.SupportsUDP() {
+	if p.ProbeSupportsUDP() {
 		hc.checkProxyUDP(p)
 	}
-	if !p.IsUDPOnly() {
+	if !p.IsConfiguredUDPOnly() {
 		hc.checkProxyTCP(p)
 	}
 }

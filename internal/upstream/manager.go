@@ -342,14 +342,19 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 }
 
 type ProxyInfo struct {
-	Alias     string              `json:"alias"`
-	URL       string              `json:"url"`
-	Host      string              `json:"host"`
-	Port      int                 `json:"port"`
-	Scheme    string              `json:"scheme"`
-	Mode      string              `json:"mode,omitempty"`
-	Health    ProxyHealthSnapshot `json:"health"`
-	UDPHealth ProxyHealthSnapshot `json:"udp_health"`
+	Alias  string `json:"alias"`
+	URL    string `json:"url"`
+	Host   string `json:"host"`
+	Port   int    `json:"port"`
+	Scheme string `json:"scheme"`
+	// Mode is the effective mode derived from the configured base plus probe results
+	// (see Proxy.EffectiveMode) — the value routing actually uses, so it moves over time.
+	Mode string `json:"mode"`
+	// ConfiguredMode is the operator-set base from config, kept visible so the dashboard
+	// can show both what was configured and what probing discovered.
+	ConfiguredMode string              `json:"configured_mode,omitempty"`
+	Health         ProxyHealthSnapshot `json:"health"`
+	UDPHealth      ProxyHealthSnapshot `json:"udp_health"`
 }
 
 func (m *Manager) Proxies() []ProxyInfo {
@@ -367,14 +372,15 @@ func (m *Manager) Proxies() []ProxyInfo {
 	for _, proxy := range m.defaultProxies {
 		alias := reverseMap[proxy]
 		infos = append(infos, ProxyInfo{
-			Alias:     alias,
-			URL:       proxy.URL,
-			Host:      proxy.Host,
-			Port:      proxy.Port,
-			Scheme:    string(proxy.Scheme),
-			Mode:      proxy.ModeName(),
-			Health:    proxy.health.Snapshot(),
-			UDPHealth: proxy.udpHealth.Snapshot(),
+			Alias:          alias,
+			URL:            proxy.URL,
+			Host:           proxy.Host,
+			Port:           proxy.Port,
+			Scheme:         string(proxy.Scheme),
+			Mode:           proxy.EffectiveMode(),
+			ConfiguredMode: proxy.ModeName(),
+			Health:         proxy.health.Snapshot(),
+			UDPHealth:      proxy.udpHealth.Snapshot(),
 		})
 	}
 	return infos

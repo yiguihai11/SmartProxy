@@ -1308,3 +1308,59 @@ func TestUDPAssociate_TCPOnlyRejected(t *testing.T) {
 		t.Fatal("expected tcp_only proxy to reject UDPAssociate")
 	}
 }
+
+// TestEffectiveMode verifies mode is probe-derived: the configured base (default
+// tcp_and_udp) is refined by the independent TCP/UDP circuits, and explicit
+// tcp_only/udp_only config is never overridden.
+func TestEffectiveMode(t *testing.T) {
+	cases := []struct {
+		name      string
+		configure string
+		tcpUp     bool
+		udpUp     bool
+		want      string
+	}{
+		{name: "default, both up", tcpUp: true, udpUp: true, want: ModeTCPAndUDP},
+		{name: "default, tcp up udp down", tcpUp: true, udpUp: false, want: ModeTCPOnly},
+		{name: "default, tcp down udp up", tcpUp: false, udpUp: true, want: ModeUDPOnly},
+		{name: "default, both down", tcpUp: false, udpUp: false, want: ModeTCPAndUDP},
+		{name: "configured tcp_only, udp up", configure: ModeTCPOnly, tcpUp: true, udpUp: true, want: ModeTCPOnly},
+		{name: "configured udp_only, tcp up", configure: ModeUDPOnly, tcpUp: true, udpUp: true, want: ModeUDPOnly},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &Proxy{Scheme: SchemeSOCKS5, Mode: tc.configure}
+			p.health.SetManualState(tc.tcpUp)
+			p.udpHealth.SetManualState(tc.udpUp)
+			if got := p.EffectiveMode(); got != tc.want {
+				t.Fatalf("EffectiveMode: got %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	// Routing predicates must follow the effective mode, while probing still follows
+	// the configured base (so a degraded node keeps probing the down path for recovery).
+	p := &Proxy{Scheme: SchemeSOCKS5}
+	p.health.SetManualState(true)     // tcp up
+	p.udpHealth.SetManualState(false) // udp down -> effective tcp_only
+	if p.IsTCPOnly() != true {
+		t.Error("IsTCPOnly: want true for effective tcp_only")
+	}
+	if p.SupportsUDP() != false {
+		t.Error("SupportsUDP: want false for effective tcp_only")
+	}
+	if !p.ProbeSupportsUDP() {
+		t.Error("ProbeSupportsUDP: want true, probing still follows configured tcp_and_udp base")
+	}
+
+	// Configured tcp_only: neither routing nor probing uses UDP.
+	pt := &Proxy{Scheme: SchemeSOCKS5, Mode: ModeTCPOnly}
+	if pt.ProbeSupportsUDP() {
+		t.Error("ProbeSupportsUDP: configured tcp_only must not probe UDP")
+	}
+	// Configured udp_only: never probed for TCP.
+	pu := &Proxy{Scheme: SchemeSOCKS5, Mode: ModeUDPOnly}
+	if pu.IsConfiguredUDPOnly() != true {
+		t.Error("IsConfiguredUDPOnly: want true for configured udp_only")
+	}
+}

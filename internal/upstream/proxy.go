@@ -56,8 +56,12 @@ type Proxy struct {
 	// and v2ray-plugin/xray-plugin (all 5 Android modes of websocket/grpc/quic, see
 	// v2ray.go); on TCP connect it wraps the matching transport under the SS encryption layer, and unknown plugins return a clear error.
 	Plugin string
-	// Mode is a status marker for the upstream's capabilities, matching shadowsocks's
-	// mode: "tcp_and_udp" (default), "tcp_only", "udp_only".
+	// Mode is the operator-configured base status marker, matching shadowsocks's mode:
+	// "tcp_and_udp" (default), "tcp_only", "udp_only". It is immutable after load; what
+	// routing and reporting actually use is EffectiveMode, derived from this base plus the
+	// probe results in health/udpHealth (a tcp_and_udp whose UDP is down reads as tcp_only,
+	// whose TCP is down reads as udp_only). Probing, however, follows this base mode so a
+	// degraded node keeps probing both paths and can detect recovery.
 	//   tcp_and_udp: both TCP and UDP; UDP tries the standard SOCKS5 UDP ASSOCIATE and
 	//     falls back to a raw UDP relay on its own host:port if that fails.
 	//   tcp_only:    TCP only, never used for UDP.
@@ -74,7 +78,10 @@ type Proxy struct {
 	ssMethod shadowsocks.Method
 }
 
-// ModeName returns the effective mode, defaulting an empty Mode to tcp_and_udp.
+// ModeName returns the configured base mode, defaulting an empty Mode to tcp_and_udp.
+// Routing and reporting use EffectiveMode (derived from probing); ModeName drives what the
+// health checker probes, so a node keeps being probed on both paths regardless of the
+// current circuit states and can detect recovery.
 func (p *Proxy) ModeName() string {
 	if p.Mode == "" {
 		return ModeTCPAndUDP
@@ -82,16 +89,66 @@ func (p *Proxy) ModeName() string {
 	return p.Mode
 }
 
-// IsUDPOnly reports whether the upstream only relays UDP (no TCP listener).
-func (p *Proxy) IsUDPOnly() bool { return p.Mode == ModeUDPOnly }
+// IsConfiguredUDPOnly reports whether the operator configured the upstream as UDP-only
+// (no TCP listener). This gates the TCP health probe: a configured udp_only is never
+// TCP-probed, matching its config semantics. EffectiveMode may also be udp_only for a
+// tcp_and_udp node whose TCP path is currently down, but that node still gets TCP probes.
+func (p *Proxy) IsConfiguredUDPOnly() bool { return p.Mode == ModeUDPOnly }
 
-// IsTCPOnly reports whether the upstream only relays TCP (never UDP).
-func (p *Proxy) IsTCPOnly() bool { return p.Mode == ModeTCPOnly }
+// IsConfiguredTCPOnly reports whether the operator configured the upstream as TCP-only
+// (never UDP). This gates the UDP health probe.
+func (p *Proxy) IsConfiguredTCPOnly() bool { return p.Mode == ModeTCPOnly }
 
-// SupportsUDP reports whether this upstream can relay UDP (via UDPProxyConn or the ss UDP
-// relay). A tcp_only upstream does not; an empty mode means tcp_and_udp and does.
+// EffectiveMode returns the mode routing and reporting actually use. It starts from the
+// configured base (default tcp_and_udp) and is refined by the independent TCP/UDP health
+// circuits: a tcp_and_udp whose UDP path is confirmed down downgrades to tcp_only, one
+// whose TCP path is confirmed down becomes udp_only, and one where both are down stays
+// tcp_and_udp (neither downgrade is meaningful and both circuit snapshots already report
+// the outage). Explicit tcp_only / udp_only configuration is never overridden.
+func (p *Proxy) EffectiveMode() string {
+	base := p.ModeName()
+	if base != ModeTCPAndUDP {
+		return base
+	}
+	tcpUp := p.health.IsAvailable()
+	udpUp := p.udpHealth.IsAvailable()
+	switch {
+	case tcpUp && !udpUp:
+		return ModeTCPOnly
+	case !tcpUp && udpUp:
+		return ModeUDPOnly
+	default:
+		return ModeTCPAndUDP
+	}
+}
+
+// IsUDPOnly reports whether routing must treat the upstream as UDP-only (no TCP). This
+// reflects the effective mode, so a tcp_and_udp node whose TCP path is down is skipped by
+// TCP routing until its TCP circuit recovers.
+func (p *Proxy) IsUDPOnly() bool { return p.EffectiveMode() == ModeUDPOnly }
+
+// IsTCPOnly reports whether routing must treat the upstream as TCP-only (never UDP).
+func (p *Proxy) IsTCPOnly() bool { return p.EffectiveMode() == ModeTCPOnly }
+
+// SupportsUDP reports whether routing may use this upstream to relay UDP (via UDPProxyConn
+// or the ss UDP relay). Effective-mode based: a tcp_and_udp whose UDP circuit is open
+// downgrades to tcp_only and is skipped by UDP routing until UDP recovers.
 func (p *Proxy) SupportsUDP() bool {
 	if p.IsTCPOnly() {
+		return false
+	}
+	switch p.Scheme {
+	case SchemeSOCKS5, SchemeSOCKS5H, SchemeSS:
+		return true
+	}
+	return false
+}
+
+// ProbeSupportsUDP reports whether the health checker should exercise the UDP path. Unlike
+// SupportsUDP (routing), it is based on the configured base mode: a tcp_and_udp whose UDP
+// circuit is currently open still gets UDP probes so it can detect UDP recovery.
+func (p *Proxy) ProbeSupportsUDP() bool {
+	if p.IsConfiguredTCPOnly() {
 		return false
 	}
 	switch p.Scheme {
