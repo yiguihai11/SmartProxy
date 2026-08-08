@@ -58,6 +58,11 @@ const (
 	UDPCapNone     UDPCapability = "none"     // no working UDP relay (ASSOCIATE and raw both failed)
 )
 
+// rawRecheckInterval is how often a node detected as raw may re-attempt the standard
+// ASSOCIATE path, so it can upgrade raw → standard if the upstream later starts supporting
+// ASSOCIATE. The raw routing fast path keeps skipping the doomed handshake between rechecks.
+const rawRecheckInterval = 10 * time.Minute
+
 type Proxy struct {
 	URL      string
 	Scheme   ProxyScheme
@@ -75,7 +80,11 @@ type Proxy struct {
 	// It is written by successful relays (standard ASSOCIATE, raw fallback, ss) and read by
 	// the raw routing fast path in socks5UDPAssociate; guarded by capMu.
 	udpCapability UDPCapability
-	capMu         sync.RWMutex
+	// rawRecheckAfter is the earliest time a raw-detected node may re-attempt the standard
+	// ASSOCIATE path (raw → standard recovery). Zero means due immediately (safety net). It is
+	// bumped on first raw detection and after every recheck attempt; guarded by capMu.
+	rawRecheckAfter time.Time
+	capMu           sync.RWMutex
 	// udpHealth is an independent UDP circuit breaker. TCP health (health) and UDP health
 	// (udpHealth) never affect each other: a dead TCP path does not disable a working UDP
 	// relay (the udp_only use case) and a dead UDP path does not disable TCP routing.
@@ -170,7 +179,13 @@ func (p *Proxy) setUDPCapability(c UDPCapability) {
 		p.udpCapability = UDPCapStandard
 	case UDPCapRaw:
 		if p.udpCapability != UDPCapStandard {
+			firstRaw := p.udpCapability != UDPCapRaw
 			p.udpCapability = UDPCapRaw
+			if firstRaw {
+				// Fresh raw detection: defer the first ASSOCIATE recheck so the routing
+				// optimization is not immediately voided by one more doomed handshake.
+				p.rawRecheckAfter = time.Now().Add(rawRecheckInterval)
+			}
 		}
 	case UDPCapNone:
 		// "" is a zero-value fresh proxy (no NewProxy path), treated as unknown.
@@ -180,11 +195,43 @@ func (p *Proxy) setUDPCapability(c UDPCapability) {
 	}
 }
 
+// rawRecheckDue reports whether a known-raw node should re-attempt the standard ASSOCIATE
+// path. Without this, the raw routing fast path would skip ASSOCIATE forever and a node that
+// later supports ASSOCIATE could never upgrade raw → standard.
+func (p *Proxy) rawRecheckDue() bool {
+	p.capMu.RLock()
+	after := p.rawRecheckAfter
+	p.capMu.RUnlock()
+	return after.IsZero() || time.Now().After(after)
+}
+
+// scheduleRawRecheck defers the next ASSOCIATE recheck by rawRecheckInterval. It is called
+// right before a raw node re-attempts ASSOCIATE, so a failed recheck (which falls back to raw
+// relay) does not pay another doomed handshake on the very next association.
+func (p *Proxy) scheduleRawRecheck() {
+	p.capMu.Lock()
+	p.rawRecheckAfter = time.Now().Add(rawRecheckInterval)
+	p.capMu.Unlock()
+}
+
 // noteUDPCapabilityFailure records a failed UDP probe. It can only move an unknown/none
 // node to none; a node that already established standard/raw keeps its last-known-good
 // marker (the udpHealth circuit breaker reports the outage instead).
 func (p *Proxy) noteUDPCapabilityFailure() {
 	p.setUDPCapability(UDPCapNone)
+}
+
+// needsCapabilityClassify reports whether a real-traffic relay should be classified. It is
+// true while the marker is unknown (first detection) or raw (an ASSOCIATE recheck may have
+// just succeeded, upgrading raw → standard). A known standard node is never re-classified
+// (no downgrade), and a none node is left for the probe to recover. setUDPCapability still
+// enforces the sticky rules, so classifying an unchanged state is a no-op.
+func (p *Proxy) needsCapabilityClassify() bool {
+	switch p.UDPCapability() {
+	case UDPCapUnknown, UDPCapRaw:
+		return true
+	}
+	return false
 }
 
 // classifyUDPCapability records the capability from an established relay conn. The conn
@@ -373,12 +420,21 @@ func (p *Proxy) socks5UDPAssociate(ctx context.Context, targetHost string, targe
 	// straight to its own host:port as a raw UDP relay (the equivalent of shadowsocks-android's
 	// udp_only fallback instance). This is the raw routing optimization: known raw nodes never
 	// pay an ASSOCIATE attempt that is guaranteed to fail.
-	if p.IsUDPOnly() || p.UDPCapability() == UDPCapRaw {
+	//
+	// A raw node whose recheck is due (rawRecheckInterval elapsed) falls through to the standard
+	// ASSOCIATE path below instead, so it can upgrade raw → standard if the upstream later
+	// starts supporting ASSOCIATE.
+	if p.IsUDPOnly() || (p.UDPCapability() == UDPCapRaw && !p.rawRecheckDue()) {
 		raddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(p.Host, strconv.Itoa(p.Port)))
 		if err != nil {
 			return nil, err
 		}
 		return p.rawUDPAssociate(raddr)
+	}
+	// Known-raw node whose recheck is due: schedule the next recheck now, so a failed recheck
+	// (which falls back to the raw relay below) does not retry ASSOCIATE on every association.
+	if p.UDPCapability() == UDPCapRaw {
+		p.scheduleRawRecheck()
 	}
 
 	conn, err := p.dial(ctx)

@@ -103,6 +103,7 @@ shadowsocks-rust 中 `plain` 与 `none` 是**同一个** `CipherKind::NONE` 的�
 - **`raw`**：ASSOCIATE 失败后兜底裸 UDP relay 到 `Host:port` 成功（等价于 shadowsocks-android 的 UDP fallback 实例 / 插件模式的裸 relay —— 不要求 ASSOCIATE、读到带 SOCKS5 UDP 头的帧就转发）。判定按连接类型：`UDPProxyConn.tcpConn != nil` → standard，`tcpConn == nil`（走了 rawFallback）→ raw。
 - **`none`**：UDP 探测端到端失败（ASSOCIATE 与 raw 都失败）且当前标记为 `unknown`/`none` 时置入。**探测失败只在 fresh/unknown 节点上写 `none`**，已辨识为 standard/raw 的节点失败只熔断 `udpHealth`、不翻回标记（故障由熔断快照表达）。
 - **sticky 转移**：只允许 `unknown→standard`、`unknown→raw`、`unknown→none`、`raw→standard`（允许升级为 ASSOCIATE）；**禁止 `standard→raw` 降级**（避免瞬时失败导致永久降级）。
+- **raw 重检自愈**：raw 节点平时仍直连裸中继（路由优化），但每 `rawRecheckInterval`（10 分钟）允许重试一次标准 ASSOCIATE——成功即升级 `standard`，失败则回落裸中继、标记保持 raw 并重置计时（不抖动、不再逐个连接重复失败握手）。该重检同时服务健康探测与真实流量，故健康检查关闭（单代理 auto-disable）时也能靠真实流量完成升级。
 
 能力写入点：① 健康探测的 `checkProxyUDP` 成功（真实 DNS 查询端到端往返）后按连接类型 `classifyUDPCapability` 写入，失败时 `noteUDPCapabilityFailure`（仅 unknown/none 置 none）；② 真实流量在标记仍为 `unknown` 时的首次成功（`UDPAssociate` 成功路径），作为探测未开启时的补充。`ss` 无 raw 概念，恒 `standard`。
 

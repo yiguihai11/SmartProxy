@@ -1625,6 +1625,154 @@ func TestUDPCapability_UpgradeRawToStandard(t *testing.T) {
 	}
 }
 
+// startAssociateTCP serves a SOCKS5 TCP listener whose UDP ASSOCIATE follows policy:
+//   - "standard": replies rep=0x00 with bind 127.0.0.1:udpPort (the UDP echo relay), then
+//     keeps the control channel open;
+//   - "reject": replies rep=0x07 CommandNotSupported.
+//
+// It returns the TCP port and a counter of accepted TCP connections (to assert when the raw
+// fast path is skipped).
+func startAssociateTCP(t *testing.T, policy string, udpPort int) (tcpPort int, attempts *int32) {
+	t.Helper()
+	var n int32
+	attempts = &n
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	tcpPort = ln.Addr().(*net.TCPAddr).Port
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			atomic.AddInt32(&n, 1)
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 258)
+				if _, err := io.ReadFull(c, buf[:2]); err != nil || buf[0] != 0x05 {
+					return
+				}
+				if _, err := io.ReadFull(c, buf[:int(buf[1])]); err != nil {
+					return
+				}
+				if _, err := c.Write([]byte{0x05, 0x00}); err != nil {
+					return
+				}
+				if _, err := io.ReadFull(c, buf[:10]); err != nil { // ASSOCIATE request
+					return
+				}
+				if policy == "standard" {
+					reply := []byte{0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, byte(udpPort >> 8), byte(udpPort & 0xff)}
+					if _, err := c.Write(reply); err != nil {
+						return
+					}
+					io.Copy(io.Discard, c) // keep the control channel open
+				} else {
+					c.Write([]byte{0x05, 0x07, 0x00, 0x01}) // rep=0x07 CommandNotSupported
+				}
+			}(conn)
+		}
+	}()
+	return tcpPort, attempts
+}
+
+// TestUDPCapability_RawRecheckUpgrade verifies the raw → standard recovery path: a known-raw
+// node keeps using the raw fast path (no ASSOCIATE handshake) until its recheck is due, then
+// re-attempts the standard ASSOCIATE path once. If the upstream now supports ASSOCIATE, the
+// relay comes up standard and the marker upgrades.
+func TestUDPCapability_RawRecheckUpgrade(t *testing.T) {
+	// The node has a UDP echo relay and a SOCKS5 TCP listener that now ANSWERS ASSOCIATE.
+	fdns, dnsPort := startFrameDNSServer(t)
+	defer fdns.Close()
+	tcpPort, attempts := startAssociateTCP(t, "standard", dnsPort)
+
+	p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: tcpPort}
+	p.setUDPCapability(UDPCapRaw) // first raw detection schedules the recheck in the future
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// 1) Recheck not due → raw fast path: no TCP/ASSOCIATE attempt, raw relay conn.
+	conn1, err := p.UDPAssociate(ctx, "example.com", 53)
+	if err != nil {
+		t.Fatalf("UDPAssociate (fast path): %v", err)
+	}
+	if upc, ok := conn1.(*UDPProxyConn); !ok || upc.tcpConn != nil {
+		t.Fatal("expected a raw relay conn (tcpConn == nil) before the recheck is due")
+	}
+	conn1.Close()
+	if got := atomic.LoadInt32(attempts); got != 0 {
+		t.Fatalf("raw fast path must not attempt ASSOCIATE before recheck is due, got %d TCP attempts", got)
+	}
+
+	// 2) Force the recheck due → the node re-attempts standard ASSOCIATE.
+	p.rawRecheckAfter = time.Now().Add(-time.Minute)
+	conn2, err := p.UDPAssociate(ctx, "example.com", 53)
+	if err != nil {
+		t.Fatalf("UDPAssociate (recheck): %v", err)
+	}
+	upc, ok := conn2.(*UDPProxyConn)
+	if !ok || upc.tcpConn == nil {
+		t.Fatal("expected a standard ASSOCIATE conn (tcpConn != nil) after the recheck")
+	}
+	if got := atomic.LoadInt32(attempts); got != 1 {
+		t.Fatalf("recheck must attempt exactly one ASSOCIATE, got %d TCP attempts", got)
+	}
+
+	// 3) Classifying that standard relay upgrades the marker raw → standard.
+	p.classifyUDPCapability(conn2)
+	conn2.Close()
+	if got := p.UDPCapability(); got != UDPCapStandard {
+		t.Fatalf("raw→standard upgrade after successful recheck: got %q, want %q", got, UDPCapStandard)
+	}
+}
+
+// TestUDPCapability_RawRecheckNoFlap verifies a failed recheck does not flip the marker and
+// does not retry ASSOCIATE on every subsequent association: the failed ASSOCIATE falls back to
+// the raw relay (marker stays raw) and the next recheck is scheduled a full interval away.
+func TestUDPCapability_RawRecheckNoFlap(t *testing.T) {
+	// The node has a UDP echo relay but its SOCKS5 still rejects ASSOCIATE (rep=0x07).
+	fdns, dnsPort := startFrameDNSServer(t)
+	defer fdns.Close()
+	tcpPort, attempts := startAssociateTCP(t, "reject", dnsPort)
+
+	p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: tcpPort}
+	p.setUDPCapability(UDPCapRaw)
+	p.rawRecheckAfter = time.Now().Add(-time.Minute) // recheck due
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	conn, err := p.UDPAssociate(ctx, "example.com", 53)
+	if err != nil {
+		t.Fatalf("UDPAssociate (failed recheck, raw fallback): %v", err)
+	}
+	if upc, ok := conn.(*UDPProxyConn); !ok || upc.tcpConn != nil {
+		t.Fatal("failed recheck must fall back to a raw relay conn (tcpConn == nil)")
+	}
+	conn.Close()
+	if got := atomic.LoadInt32(attempts); got != 1 {
+		t.Fatalf("recheck must attempt exactly one ASSOCIATE, got %d TCP attempts", got)
+	}
+	if got := p.UDPCapability(); got != UDPCapRaw {
+		t.Fatalf("failed recheck must not flip the marker, got %q, want %q", got, UDPCapRaw)
+	}
+
+	// Immediately after the failed recheck, the raw fast path is active again (next recheck is
+	// a full interval away) — no second doomed ASSOCIATE attempt.
+	conn2, err := p.UDPAssociate(ctx, "example.com", 53)
+	if err != nil {
+		t.Fatalf("UDPAssociate (post-recheck fast path): %v", err)
+	}
+	conn2.Close()
+	if got := atomic.LoadInt32(attempts); got != 1 {
+		t.Fatalf("no flapping: raw fast path must not retry ASSOCIATE, got %d TCP attempts", got)
+	}
+}
+
 // TestProxyInfo_UDPCapability verifies the capability marker and auto-derived mode are
 // surfaced through Proxies() for the dashboard.
 func TestProxyInfo_UDPCapability(t *testing.T) {

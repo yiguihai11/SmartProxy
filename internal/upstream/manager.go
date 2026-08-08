@@ -257,9 +257,10 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 			"proxy", selected.URL, "target", fmt.Sprintf("%s:%d", host, port))
 		conn, err := selected.UDPAssociate(ctx, host, port)
 		// First-detection capability record from real traffic: a raw-only node is learned
-		// even before the health probe runs, enabling the raw routing fast path. Only while
-		// the marker is still unknown — a probe finding (standard/raw/none) is never overridden.
-		if err == nil && selected.UDPCapability() == UDPCapUnknown {
+		// even before the health probe runs, enabling the raw routing fast path. Re-classifies
+		// a raw node whose ASSOCIATE recheck just succeeded (raw → standard). A probe finding
+		// (standard/raw/none) is never overridden.
+		if err == nil && selected.needsCapabilityClassify() {
 			selected.classifyUDPCapability(conn)
 		}
 		if m.healthChecker != nil {
@@ -288,7 +289,7 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 				}
 			}
 			if err == nil {
-				if proxy.UDPCapability() == UDPCapUnknown {
+				if proxy.needsCapabilityClassify() {
 					proxy.classifyUDPCapability(conn)
 				}
 				slog.Debug("UDPAssociate: proxy succeeded", "proxy", proxy.URL)
@@ -308,7 +309,7 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 		slog.Debug("UDPAssociateSelected: using pre-selected proxy",
 			"proxy", selected.URL, "target", fmt.Sprintf("%s:%d", host, port))
 		conn, err := selected.UDPAssociate(ctx, host, port)
-		if err == nil && selected.UDPCapability() == UDPCapUnknown {
+		if err == nil && selected.needsCapabilityClassify() {
 			selected.classifyUDPCapability(conn)
 		}
 		if m.healthChecker != nil {
@@ -338,7 +339,7 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 				}
 			}
 			if err == nil {
-				if proxy.UDPCapability() == UDPCapUnknown {
+				if proxy.needsCapabilityClassify() {
 					proxy.classifyUDPCapability(conn)
 				}
 				slog.Debug("UDPAssociateSelected: proxy succeeded", "proxy", proxy.URL)

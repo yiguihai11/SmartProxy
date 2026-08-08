@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -327,6 +328,42 @@ func TestUDPAssociate_NoSOCKS5Proxy(t *testing.T) {
 	_, err := m.UDPAssociate(context.Background(), "example.com", 80, "", nil)
 	if err == nil {
 		t.Error("expected error when no SOCKS5 proxy available")
+	}
+}
+
+// TestUDPAssociate_RawUpgradeByTraffic verifies the raw → standard recovery works through real
+// traffic when the health checker is disabled (single-proxy auto-disable): a known-raw node
+// whose ASSOCIATE recheck is due is classified from the successful standard relay it just made,
+// upgrading the marker without any active probe.
+func TestUDPAssociate_RawUpgradeByTraffic(t *testing.T) {
+	fdns, dnsPort := startFrameDNSServer(t)
+	defer fdns.Close()
+	tcpPort, _ := startAssociateTCP(t, "standard", dnsPort)
+
+	m, err := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{{Alias: "p1", URL: fmt.Sprintf("socks5://127.0.0.1:%d", tcpPort)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.dnsUDPPool.Close()
+	// Health checking is effectively off: HealthCheck.Enabled defaults false and Start() returns
+	// early, so no probe loop can detect the upgrade — only real traffic can.
+
+	p := m.aliasMap["p1"]
+	p.setUDPCapability(UDPCapRaw)
+	p.rawRecheckAfter = time.Now().Add(-time.Minute) // recheck due
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, err := m.UDPAssociate(ctx, "1.1.1.1", 53, "", nil)
+	if err != nil {
+		t.Fatalf("UDPAssociate: %v", err)
+	}
+	conn.Close()
+
+	if got := p.UDPCapability(); got != UDPCapStandard {
+		t.Fatalf("real-traffic recheck must upgrade raw→standard, got %q", got)
 	}
 }
 
