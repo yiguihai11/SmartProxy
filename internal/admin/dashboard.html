@@ -438,7 +438,7 @@ function lhealth(d){
   healthD=d;
   document.getElementById('proxy-cards').innerHTML=d.health.proxies.map(function(p,i){
     var a=p.health.available,lat=p.health.latency>0?(p.health.latency/1e6).toFixed(1)+'ms':'--';
-    return '<div class="proxy-card"><div class="top"><div><div class="alias">'+p.alias+'</div><div class="url">'+p.url+(p.udp_only?' · UDP only':'')+'</div></div><span class="status '+(a?'up':'down')+'">'+(a?'Connected':'Disconnected')+'</span></div>'+
+    return '<div class="proxy-card"><div class="top"><div><div class="alias">'+p.alias+'</div><div class="url">'+p.url+(p.mode==='udp_only'?' · UDP only':(p.mode==='tcp_only'?' · TCP only':''))+'</div></div><span class="status '+(a?'up':'down')+'">'+(a?'Connected':'Disconnected')+'</span></div>'+
       '<div class="stats"><span>state: '+p.health.state+'</span><span>latency: '+lat+'</span><span>failures: '+p.health.consecutive_failures+'</span></div>'+
       '<div class="actions">'+
       '<button class="btn btn-sm primary" onclick="openProxyDialog('+i+')">Edit</button>'+
@@ -498,7 +498,7 @@ function setProxyScheme(v){
   if(!g)return;
   var b=g.querySelectorAll('.seg-btn');
   for(var i=0;i<b.length;i++)b[i].classList.toggle('active',b[i].getAttribute('data-val')===v);
-  // ss: use the encryption-method dropdown instead of Username; udp_addr is n/a (built-in SS UDP relay)
+  // ss: use the encryption-method dropdown instead of Username
   var sm=document.getElementById('proxy-ssmethod-row');
   if(sm)sm.style.display=(v==='ss')?'':'none';
   var urow=document.getElementById('proxy-user-row');
@@ -507,16 +507,7 @@ function setProxyScheme(v){
   var pr=document.getElementById('proxy-plugin-row');
   if(pr)pr.style.display=(v==='ss')?'':'none';
   syncObfsRows();
-  syncUDPRows();
   updateProxyPreview();
-}
-// syncUDPRows shows/hides the udp_addr field: hidden for ss (built-in SS UDP relay) and for
-// udp_only upstreams (they relay straight to their own host:port, so udp_addr is redundant).
-function syncUDPRows(){
-  var ur=document.getElementById('proxy-udpaddr-row');
-  if(!ur)return;
-  var c=document.getElementById('proxy-udponly');
-  ur.style.display=(getProxyScheme()==='ss'||(c&&c.checked))?'none':'';
 }
 // syncObfsRows shows/hides obfs and v2ray-plugin fields based on the plugin dropdown
 function syncObfsRows(){
@@ -606,8 +597,7 @@ function openProxyDialog(i){
   document.getElementById('proxy-user').value='';
   document.getElementById('proxy-pass').value='';
   document.getElementById('proxy-server').value='';
-  document.getElementById('proxy-udpaddr').value=p?(p.udp_addr||''):'';
-  document.getElementById('proxy-udponly').checked=!!(p&&p.udp_only);
+  document.getElementById('proxy-mode').value=p&&p.mode?p.mode:'tcp_and_udp';
   document.getElementById('proxy-plugin').value='';
   document.getElementById('proxy-plugin-bin').value='v2ray-plugin';
   document.getElementById('proxy-obfs-host').value='';
@@ -735,20 +725,14 @@ async function saveProxy(){
   if(plugin)url+='?plugin='+encodeURIComponent(plugin);
   try{var chk=new URL(url);if(!chk.hostname)throw new Error('bad host')}catch(e){alert('Invalid server address: '+server);return}
   var editing=document.getElementById('proxy-dialog').dataset.alias||'';
-  var udponly=document.getElementById('proxy-udponly').checked;
-  // udp_only upstreams relay UDP to their own host:port, so udp_addr is redundant (and cleared).
-  var udpaddr=udponly?'':document.getElementById('proxy-udpaddr').value.trim();
-  if(udpaddr && !/^\d+$/.test(udpaddr) && udpaddr.indexOf(':')<0){
-    alert('Invalid udp_addr: use a port ("1080") or "host:port" (e.g. 127.0.0.1:1080)');
-    return;
-  }
+  var mode=document.getElementById('proxy-mode').value||'tcp_and_udp';
   try{
     await putProxyConfig(function(cfg){
       var ps=cfg.upstream.proxies;
-      function entry(){var e={alias:alias,url:url};if(udpaddr)e.udp_addr=udpaddr;if(udponly)e.udp_only=true;return e}
+      function entry(){var e={alias:alias,url:url};if(mode&&mode!=='tcp_and_udp')e.mode=mode;return e}
       if(editing){
         for(var i=0;i<ps.length;i++){
-          if(ps[i].alias===editing){ps[i].alias=alias;ps[i].url=url;if(udpaddr)ps[i].udp_addr=udpaddr;else delete ps[i].udp_addr;if(udponly)ps[i].udp_only=true;else delete ps[i].udp_only;return}
+          if(ps[i].alias===editing){ps[i].alias=alias;ps[i].url=url;if(mode&&mode!=='tcp_and_udp')ps[i].mode=mode;else delete ps[i].mode;return}
           if(ps[i].alias===alias){alert('Alias "'+alias+'" already exists');throw new Error('dup')}
         }
         ps.push(entry());
@@ -1677,14 +1661,12 @@ es.onmessage=function(e){
     </div>
     <div class="dialog-label">Password <span style="text-transform:none;font-weight:400">(optional)</span></div>
     <input class="dialog-input" id="proxy-pass" type="password" placeholder="password" autocomplete="new-password" oninput="updateProxyPreview()">
-    <div id="proxy-udpaddr-row">
-      <div class="dialog-label">UDP Relay <span style="text-transform:none;font-weight:400">(udp_addr, optional)</span></div>
-      <input class="dialog-input" id="proxy-udpaddr" placeholder="blank = SOCKS5 UDP ASSOCIATE | 1080 | host:port" autocomplete="off">
-    </div>
-    <label style="display:flex;align-items:center;gap:8px;font-size:.84rem;color:var(--text2);cursor:pointer;margin:4px 0 8px">
-      <input type="checkbox" id="proxy-udponly" onchange="syncUDPRows()">
-      UDP only (no TCP listener — skip TCP routing / health check; UDP relays to this server's address)
-    </label>
+    <div class="dialog-label">Mode <span style="text-transform:none;font-weight:400">(status marker, like ss)</span></div>
+    <select class="dialog-input" id="proxy-mode" onchange="updateProxyPreview()">
+      <option value="tcp_and_udp">tcp_and_udp — TCP + UDP (default)</option>
+      <option value="tcp_only">tcp_only — TCP only (skip UDP)</option>
+      <option value="udp_only">udp_only — UDP only (no TCP listener; UDP relays to this server's address)</option>
+    </select>
     <div id="proxy-plugin-row" style="display:none">
       <div class="dialog-label">Plugin (SIP003) <span style="text-transform:none;font-weight:400">(obfs-local / v2ray-plugin built in, no external binary)</span></div>
       <select class="dialog-input" id="proxy-plugin" onchange="syncObfsRows();updateProxyPreview()">

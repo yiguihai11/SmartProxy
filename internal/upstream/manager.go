@@ -82,11 +82,7 @@ func (m *Manager) rebuildFromConfig(cfg UpstreamConfig) {
 			slog.Warn("failed to create proxy", "url", entry.URL, "error", err)
 			continue
 		}
-		if err := proxy.SetUDPAddr(entry.UDPAddr); err != nil {
-			slog.Warn("failed to set udp_addr, skipping proxy", "url", entry.URL, "udp_addr", entry.UDPAddr, "error", err)
-			continue
-		}
-		proxy.UDPOnly = entry.UDPOnly
+		proxy.Mode = entry.Mode
 		aliasMap[alias] = proxy
 		defaultProxies = append(defaultProxies, proxy)
 	}
@@ -102,12 +98,12 @@ type UpstreamConfig struct {
 }
 
 type ProxyEntry struct {
-	Alias   string
-	URL     string
-	UDPAddr string
-	// UDPOnly marks an upstream that only relays UDP (no TCP listener). It is skipped by
-	// TCP routing and by the TCP health probe, so TCP unavailability never disables its UDP.
-	UDPOnly bool
+	Alias string
+	URL   string
+	// Mode is the upstream's status marker: "tcp_and_udp" (default), "tcp_only" or "udp_only".
+	// tcp_only is skipped by UDP, udp_only is skipped by TCP routing and by the TCP health
+	// probe, so TCP unavailability never disables a udp_only upstream's UDP.
+	Mode string
 }
 
 func (m *Manager) SelectProxy(targetIP string, targetPort int, domain string, engine *rules.Engine) (string, *Proxy) {
@@ -133,7 +129,7 @@ func (m *Manager) SelectProxy(targetIP string, targetPort int, domain string, en
 
 func (m *Manager) ConnectDefault(ctx context.Context, host string, port int) (net.Conn, error) {
 	for _, proxy := range m.orderedProxies() {
-		if proxy.UDPOnly {
+		if proxy.IsUDPOnly() {
 			slog.Debug("skipping udp_only proxy for TCP", "url", proxy.URL)
 			continue
 		}
@@ -221,7 +217,7 @@ func (m *Manager) Connect(ctx context.Context, host string, port int, domain str
 	if selected == nil {
 		return nil, "failed"
 	}
-	if selected.UDPOnly {
+	if selected.IsUDPOnly() {
 		slog.Warn("rule selected a udp_only proxy for TCP, connection failed", "url", selected.URL)
 		return nil, "failed"
 	}
@@ -346,14 +342,13 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 }
 
 type ProxyInfo struct {
-	Alias   string              `json:"alias"`
-	URL     string              `json:"url"`
-	Host    string              `json:"host"`
-	Port    int                 `json:"port"`
-	Scheme  string              `json:"scheme"`
-	UDPAddr string              `json:"udp_addr,omitempty"`
-	UDPOnly bool                `json:"udp_only,omitempty"`
-	Health  ProxyHealthSnapshot `json:"health"`
+	Alias  string              `json:"alias"`
+	URL    string              `json:"url"`
+	Host   string              `json:"host"`
+	Port   int                 `json:"port"`
+	Scheme string              `json:"scheme"`
+	Mode   string              `json:"mode,omitempty"`
+	Health ProxyHealthSnapshot `json:"health"`
 }
 
 func (m *Manager) Proxies() []ProxyInfo {
@@ -371,14 +366,13 @@ func (m *Manager) Proxies() []ProxyInfo {
 	for _, proxy := range m.defaultProxies {
 		alias := reverseMap[proxy]
 		infos = append(infos, ProxyInfo{
-			Alias:   alias,
-			URL:     proxy.URL,
-			Host:    proxy.Host,
-			Port:    proxy.Port,
-			Scheme:  string(proxy.Scheme),
-			UDPAddr: proxy.UDPAddr,
-			UDPOnly: proxy.UDPOnly,
-			Health:  proxy.health.Snapshot(),
+			Alias:  alias,
+			URL:    proxy.URL,
+			Host:   proxy.Host,
+			Port:   proxy.Port,
+			Scheme: string(proxy.Scheme),
+			Mode:   proxy.ModeName(),
+			Health: proxy.health.Snapshot(),
 		})
 	}
 	return infos

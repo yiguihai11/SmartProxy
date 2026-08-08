@@ -2,8 +2,8 @@
 
 package upstream
 
-// End-to-end verification: SmartProxy's raw UDP relay (udp_addr) connects directly to a
-// real shadowsocks-rust ss-local (udp_only mode, the equivalent of shadowsocks-android's
+// End-to-end verification: SmartProxy's raw UDP relay connects directly to a real
+// shadowsocks-rust ss-local (mode=udp_only, the equivalent of shadowsocks-android's
 // UDP fallback instance).
 //
 // Prerequisites (prepared by an external script):
@@ -146,8 +146,8 @@ func freeUDPPort(t *testing.T) int {
 	return port
 }
 
-// TestRawRelayE2E verifies end-to-end raw relay via udp_addr using a real ss-local (udp_only):
-//  1. Proxy.UDPAddr = "127.0.0.1:<udp port>" (host:port form)
+// TestRawRelayE2E verifies end-to-end raw relay using a real ss-local (mode=udp_only):
+//  1. Proxy.Mode = udp_only, listening on host:udpPort
 //  2. UDPAssociate goes through rawUDPAssociate, never touching TCP ASSOCIATE
 //  3. send an example.com DNS query (SOCKS5 UDP frame, target 1.1.1.1:53)
 //  4. receiving a real DNS response frame proves the data really flows end to end
@@ -162,13 +162,13 @@ func TestRawRelayE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// No udp_addr: a udp_only upstream auto-relays UDP straight to its own host:port
-	// (udp_addr is redundant for udp_only nodes), and there is no TCP listener either.
+	// A udp_only upstream (mode=udp_only) auto-relays UDP straight to its own host:port,
+	// and has no TCP listener either.
 	p := &Proxy{
-		Scheme:  SchemeSOCKS5,
-		Host:    host,
-		Port:    udpPort,
-		UDPOnly: true,
+		Scheme: SchemeSOCKS5,
+		Host:   host,
+		Port:   udpPort,
+		Mode:   ModeUDPOnly,
 	}
 
 	// A udp_only upstream has no TCP listener, so a TCP connect must fail fast.

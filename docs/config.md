@@ -47,15 +47,15 @@
 | --- | --- | --- | --- |
 | `Default` | `default` | `"failover"` | 默认代理选择策略 |
 | `HealthCheck` | `health_check` | 见下 | 健康检查配置 |
-| `Proxies` | `proxies` | `[]` | 代理列表，每项 `{alias, url, udp_addr}` |
+| `Proxies` | `proxies` | `[]` | 代理列表，每项 `{alias, url, mode}` |
 
-`proxies` 每项 `ProxyEntry` 字段：`alias`（缺省自动命名 `proxy<N>`）、`url`（协议 URL，如 SS / VMess）、`udp_addr`（可选，见下）；**没有 type 字段**。`health_check` 子字段：
+`proxies` 每项 `ProxyEntry` 字段：`alias`（缺省自动命名 `proxy<N>`）、`url`（协议 URL，如 SS / VMess）、`mode`（可选状态标记，见下）；**没有 type 字段**。`health_check` 子字段：
 
 | 字段 | JSON 键 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `Alias` | `alias` | `proxy<N>` | 代理别名（规则引擎引用） |
 | `URL` | `url` | — | 协议 URL：`socks5://` / `socks5h://`（可带 user:pass）、`socks4://`、`http(s)://`（CONNECT）、`ss://`（内置 shadowsocks，见 `docs/upstream.md` §3.1）。`ss://` 支持 `ss://base64(method:password)@host:port`、明文 `ss://method:password@host:port`，或不加密方法的免密码形式 `ss://none@host:port`。方法可为经典 AEAD、AEAD-2022（密码框填 base64 PSK，多 PSK 用 `:` 连接）、或 `none`/`plain`。可带 `?plugin=obfs-local;obfs=http|tls;obfs-host=...`（内置 simple-obfs 混淆，仅 TCP；其它插件不内置会拒绝） |
-| `UDPAddr` | `udp_addr` | `""` | 上游裸 UDP relay 地址（仅 `socks5`/`socks5h`）。`""` 走标准 SOCKS5 UDP ASSOCIATE，被上游以 rep=0x07 拒绝时自动兜底为裸 UDP 到 `host:port`；纯端口 `"1080"` 强制裸 UDP 到 `host:1080`；`"127.0.0.1:1080"` / `":1080"` 强制裸 UDP 到该地址（空 host 用代理 host） |
+| `Mode` | `mode` | `"tcp_and_udp"` | 上游能力状态标记（同 shadowsocks `mode`）：`tcp_and_udp`（默认，TCP+UDP）／`tcp_only`（仅 TCP，UDP 直接报错）／`udp_only`（无 TCP 监听器，跳过 TCP 路由与 TCP 健康探测；UDP 裸中继到自身 `host:port`）。`socks5`/`socks5h` 的 UDP 先走标准 UDP ASSOCIATE，**任意失败**（含 rep=0x07）自动兜底裸 UDP 到 `host:port`，兜底再失败即判定该节点 UDP 有问题。见 `docs/upstream.md` §3.2 |
 
 | Go 字段 | JSON 键 | 默认值 | 说明 |
 | --- | --- | --- | --- |

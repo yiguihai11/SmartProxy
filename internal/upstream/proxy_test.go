@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1104,110 +1103,7 @@ func TestHTTPConnect_IPv6Target(t *testing.T) {
 	}
 }
 
-// ---- udp_addr: SetUDPAddr / resolveUDPAddr / raw UDP relay ----
-
-func TestSetUDPAddr(t *testing.T) {
-	tests := []struct {
-		in   string
-		want string
-		ok   bool
-	}{
-		{"", "", true},
-		{"1080", "1080", true},
-		{"1", "1", true},
-		{"65535", "65535", true},
-		{"127.0.0.1:1080", "127.0.0.1:1080", true},
-		{":1080", ":1080", true},
-		{"[::1]:1080", "[::1]:1080", true},
-		{"0", "", false},
-		{"-1", "", false},
-		{"65536", "", false},
-		{"abc", "", false},
-		{"host:notaport", "", false},
-		{"1.2.3.4", "", false}, // bare IP, no port
-	}
-	for _, tt := range tests {
-		p := &Proxy{}
-		err := p.SetUDPAddr(tt.in)
-		if tt.ok && err != nil {
-			t.Errorf("SetUDPAddr(%q): unexpected error %v", tt.in, err)
-			continue
-		}
-		if !tt.ok && err == nil {
-			t.Errorf("SetUDPAddr(%q): expected error, got none", tt.in)
-			continue
-		}
-		if tt.ok && p.UDPAddr != tt.want {
-			t.Errorf("SetUDPAddr(%q): got %q, want %q", tt.in, p.UDPAddr, tt.want)
-		}
-	}
-}
-
-func TestResolveUDPAddr(t *testing.T) {
-	p := &Proxy{Host: "10.0.0.1", Port: 1080}
-
-	raddr, err := p.resolveUDPAddr()
-	if err != nil || raddr != nil {
-		t.Fatalf("empty udp_addr: got %v, %v; want nil, nil", raddr, err)
-	}
-
-	cases := []struct {
-		udpAddr  string
-		wantHost string
-		wantPort int
-	}{
-		{"4000", "10.0.0.1", 4000},  // port-only -> upstream host
-		{":9999", "10.0.0.1", 9999}, // empty host -> upstream host
-		{"127.0.0.1:9999", "127.0.0.1", 9999},
-		{"[::1]:9999", "::1", 9999},
-	}
-	for _, c := range cases {
-		p.UDPAddr = c.udpAddr
-		raddr, err := p.resolveUDPAddr()
-		if err != nil {
-			t.Errorf("resolveUDPAddr(%q): unexpected error %v", c.udpAddr, err)
-			continue
-		}
-		if raddr == nil {
-			t.Errorf("resolveUDPAddr(%q): got nil", c.udpAddr)
-			continue
-		}
-		if raddr.IP.String() != c.wantHost || raddr.Port != c.wantPort {
-			t.Errorf("resolveUDPAddr(%q): got %s:%d, want %s:%d",
-				c.udpAddr, raddr.IP, raddr.Port, c.wantHost, c.wantPort)
-		}
-	}
-}
-
-func TestUDPRelayAddr(t *testing.T) {
-	p := &Proxy{Host: "10.0.0.1", Port: 1080}
-
-	// No udp_addr and not udp_only -> no relay address (standard SOCKS5 UDP ASSOCIATE).
-	raddr, err := p.udpRelayAddr()
-	if err != nil || raddr != nil {
-		t.Fatalf("plain proxy: got %v, %v; want nil, nil", raddr, err)
-	}
-
-	// udp_only with no udp_addr -> relays to host:port automatically (udp_addr redundant).
-	p.UDPOnly = true
-	raddr, err = p.udpRelayAddr()
-	if err != nil {
-		t.Fatalf("udp_only auto addr: unexpected error %v", err)
-	}
-	if raddr == nil || raddr.IP.String() != "10.0.0.1" || raddr.Port != 1080 {
-		t.Fatalf("udp_only auto addr: got %v, want 10.0.0.1:1080", raddr)
-	}
-
-	// An explicit udp_addr still wins over udp_only (UDP on a different port).
-	p.UDPAddr = "9999"
-	raddr, err = p.udpRelayAddr()
-	if err != nil {
-		t.Fatalf("explicit udp_addr: unexpected error %v", err)
-	}
-	if raddr == nil || raddr.IP.String() != "10.0.0.1" || raddr.Port != 9999 {
-		t.Fatalf("explicit udp_addr: got %v, want 10.0.0.1:9999", raddr)
-	}
-}
+// ---- raw UDP relay: udp_only auto-raw, ASSOCIATE-failure fallback ----
 
 // makeSOCKS5UDPFrame builds a SOCKS5 UDP datagram (RSV|FRAG|ATYP|DST.ADDR|DST.PORT|data).
 func makeSOCKS5UDPFrame(host string, port int, payload []byte) []byte {
@@ -1244,73 +1140,9 @@ func startUDPEcho(t *testing.T) (*net.UDPConn, int) {
 	return pc, pc.LocalAddr().(*net.UDPAddr).Port
 }
 
-// closedTCPPort returns a port that (most likely) has no TCP listener.
-func closedTCPPort(t *testing.T) int {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
-	return port
-}
-
-// TestUDPAssociate_ForcedRawUDP verifies that a non-empty udp_addr forces raw
-// UDP relay to the configured address: the standard SOCKS5 ASSOCIATE path
-// (which would need a reachable TCP listener) is never attempted.
-func TestUDPAssociate_ForcedRawUDP(t *testing.T) {
-	echo, port := startUDPEcho(t)
-	defer echo.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	tests := []struct {
-		name    string
-		udpAddr string
-	}{
-		{"host:port", fmt.Sprintf("127.0.0.1:%d", port)},
-		{"port-only", strconv.Itoa(port)},
-	}
-	for _, tt := range tests {
-		// No TCP listener on the proxy port: only the forced raw path can work.
-		p := &Proxy{
-			Scheme:  SchemeSOCKS5,
-			Host:    "127.0.0.1",
-			Port:    closedTCPPort(t),
-			UDPAddr: tt.udpAddr,
-		}
-		conn, err := p.UDPAssociate(ctx, "example.com", 53)
-		if err != nil {
-			t.Errorf("%s: UDPAssociate error: %v", tt.name, err)
-			continue
-		}
-		payload := []byte("ping-" + tt.name)
-		frame := makeSOCKS5UDPFrame("8.8.8.8", 53, payload)
-		if _, err := conn.Write(frame); err != nil {
-			t.Errorf("%s: write error: %v", tt.name, err)
-			conn.Close()
-			continue
-		}
-		conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-		buf := make([]byte, 2048)
-		n, err := conn.Read(buf)
-		if err != nil {
-			t.Errorf("%s: read error: %v", tt.name, err)
-			conn.Close()
-			continue
-		}
-		if !bytes.Contains(buf[:n], payload) {
-			t.Errorf("%s: echo mismatch: got %x, want contains %x", tt.name, buf[:n], payload)
-		}
-		conn.Close()
-	}
-}
-
-// TestUDPAssociate_UDPOnlyAutoRaw verifies that a udp_only upstream needs no udp_addr:
-// it relays raw UDP straight to its own host:port, never touching the TCP-based SOCKS5
-// ASSOCIATE path (which could not work anyway — the node has no TCP listener).
+// TestUDPAssociate_UDPOnlyAutoRaw verifies that a udp_only upstream relays raw UDP
+// straight to its own host:port, never touching the TCP-based SOCKS5 ASSOCIATE path
+// (which could not work anyway — the node has no TCP listener).
 func TestUDPAssociate_UDPOnlyAutoRaw(t *testing.T) {
 	echo, port := startUDPEcho(t)
 	defer echo.Close()
@@ -1319,14 +1151,14 @@ func TestUDPAssociate_UDPOnlyAutoRaw(t *testing.T) {
 	defer cancel()
 
 	p := &Proxy{
-		Scheme:  SchemeSOCKS5,
-		Host:    "127.0.0.1",
-		Port:    port, // UDP echo bound here; no TCP listener, so only the auto raw-UDP path can work
-		UDPOnly: true, // no udp_addr: the relay target is implicitly host:port
+		Scheme: SchemeSOCKS5,
+		Host:   "127.0.0.1",
+		Port:   port, // UDP echo bound here; no TCP listener, so only the auto raw-UDP path can work
+		Mode:   ModeUDPOnly,
 	}
 	conn, err := p.UDPAssociate(ctx, "example.com", 53)
 	if err != nil {
-		t.Fatalf("UDPAssociate(udp_only, no udp_addr) error: %v", err)
+		t.Fatalf("UDPAssociate(udp_only) error: %v", err)
 	}
 	defer conn.Close()
 
@@ -1427,5 +1259,52 @@ func TestUDPAssociate_Rep7Fallback(t *testing.T) {
 	}
 	if !bytes.Contains(buf[:n], payload) {
 		t.Fatalf("echo mismatch: got %x, want contains %x", buf[:n], payload)
+	}
+}
+
+// TestUDPAssociate_RawFallbackOnDialFailure verifies that the raw UDP relay is the
+// fallback for ANY socks5UDPAssociate failure — here the TCP dial itself fails (no
+// TCP listener) but a raw UDP relay on the same host:port still answers, so the
+// UDP path must succeed ("TCP is down, keep testing UDP").
+func TestUDPAssociate_RawFallbackOnDialFailure(t *testing.T) {
+	echo, port := startUDPEcho(t)
+	defer echo.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Default mode (tcp_and_udp), no TCP listener on the proxy port: the standard
+	// ASSOCIATE dial fails, and the raw UDP relay on host:port is the fallback.
+	p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: port}
+	conn, err := p.UDPAssociate(ctx, "example.com", 53)
+	if err != nil {
+		t.Fatalf("UDPAssociate with TCP down: %v (want raw UDP fallback)", err)
+	}
+	defer conn.Close()
+
+	payload := []byte("dial-fallback-hello")
+	frame := makeSOCKS5UDPFrame("8.8.8.8", 53, payload)
+	if _, err := conn.Write(frame); err != nil {
+		t.Fatal(err)
+	}
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, 2048)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(buf[:n], payload) {
+		t.Fatalf("echo mismatch: got %x, want contains %x", buf[:n], payload)
+	}
+}
+
+// TestUDPAssociate_TCPOnlyRejected verifies a tcp_only upstream never serves UDP.
+func TestUDPAssociate_TCPOnlyRejected(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: 1080, Mode: ModeTCPOnly}
+	if _, err := p.UDPAssociate(ctx, "example.com", 53); err == nil {
+		t.Fatal("expected tcp_only proxy to reject UDPAssociate")
 	}
 }

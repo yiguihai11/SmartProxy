@@ -157,10 +157,9 @@ func main() {
 		}
 		for _, p := range newCfg.Upstream.Proxies {
 			upstreamCfg.Proxies = append(upstreamCfg.Proxies, upstream.ProxyEntry{
-				Alias:   p.Alias,
-				URL:     p.URL,
-				UDPAddr: p.UDPAddr,
-				UDPOnly: p.UDPOnly,
+				Alias: p.Alias,
+				URL:   p.URL,
+				Mode:  p.Mode,
 			})
 		}
 

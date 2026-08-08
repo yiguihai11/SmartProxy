@@ -89,7 +89,7 @@ func TestCheckProxy_SkipsUDPOnly(t *testing.T) {
 		Timeout:           1,
 		FailuresThreshold: 1,
 	}
-	p := &Proxy{URL: "socks5://127.0.0.1:1234", UDPOnly: true}
+	p := &Proxy{URL: "socks5://127.0.0.1:1234", Mode: ModeUDPOnly}
 	hc := NewHealthChecker(cfg, []*Proxy{p})
 	defer hc.Stop()
 

@@ -583,7 +583,8 @@ func TestSetProxyHealth_DirectAlias(t *testing.T) {
 func TestNewManager_UDPOnly(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
 		Proxies: []ProxyEntry{
-			{Alias: "udp-fallback", URL: "socks5://127.0.0.1:1234", UDPAddr: "1234", UDPOnly: true},
+			{Alias: "udp-only", URL: "socks5://127.0.0.1:1234", Mode: ModeUDPOnly},
+			{Alias: "tcp-only", URL: "socks5://127.0.0.1:1081", Mode: ModeTCPOnly},
 			{Alias: "normal", URL: "socks5://127.0.0.1:1080"},
 		},
 	})
@@ -592,34 +593,47 @@ func TestNewManager_UDPOnly(t *testing.T) {
 	}
 	defer m.dnsUDPPool.Close()
 
-	up := m.aliasMap["udp-fallback"]
+	up := m.aliasMap["udp-only"]
 	if up == nil {
-		t.Fatal("udp-fallback proxy should exist")
+		t.Fatal("udp-only proxy should exist")
 	}
-	if !up.UDPOnly {
-		t.Error("udp-fallback proxy should have UDPOnly=true")
+	if !up.IsUDPOnly() {
+		t.Error("udp-only proxy should have mode=udp_only")
 	}
 	if !up.SupportsUDP() {
 		t.Error("udp-only proxy should report SupportsUDP()=true")
 	}
-	if up.UDPAddr != "1234" {
-		t.Errorf("udp-fallback UDPAddr: got %q, want 1234", up.UDPAddr)
-	}
-	if m.aliasMap["normal"].UDPOnly {
-		t.Error("normal proxy should not be udp_only")
+	if up.ModeName() != ModeUDPOnly {
+		t.Errorf("udp-only ModeName: got %q", up.ModeName())
 	}
 
-	// Proxies() info must surface the flag for the dashboard badge.
+	only := m.aliasMap["tcp-only"]
+	if !only.IsTCPOnly() {
+		t.Error("tcp-only proxy should have mode=tcp_only")
+	}
+	if only.SupportsUDP() {
+		t.Error("tcp-only proxy should report SupportsUDP()=false")
+	}
+
+	normal := m.aliasMap["normal"]
+	if normal.IsUDPOnly() || normal.IsTCPOnly() {
+		t.Error("normal proxy should default to tcp_and_udp")
+	}
+	if normal.ModeName() != ModeTCPAndUDP {
+		t.Errorf("normal ModeName: got %q, want tcp_and_udp", normal.ModeName())
+	}
+
+	// Proxies() info must surface the mode for the dashboard badge.
 	var found bool
 	for _, info := range m.Proxies() {
-		if info.Alias == "udp-fallback" {
+		if info.Alias == "udp-only" {
 			found = true
-			if !info.UDPOnly {
-				t.Error("ProxyInfo should expose udp_only=true for the udp-only proxy")
+			if info.Mode != ModeUDPOnly {
+				t.Errorf("ProxyInfo should expose mode=%s for the udp-only proxy, got %q", ModeUDPOnly, info.Mode)
 			}
 		}
 	}
 	if !found {
-		t.Error("udp-fallback should appear in Proxies()")
+		t.Error("udp-only should appear in Proxies()")
 	}
 }

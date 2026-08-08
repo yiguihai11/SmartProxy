@@ -96,7 +96,7 @@ func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 		conn, err := dialTCP(ctx, host, port, 10*time.Second)
 		return conn, false, err
 	case result != "fallback":
-		if selected.UDPOnly {
+		if selected.IsUDPOnly() {
 			slog.Warn("rule selected a udp_only proxy for TCP", "url", selected.URL, "host", host, "port", port)
 			return nil, false, errors.New("proxy is udp_only, cannot serve TCP")
 		}
@@ -180,7 +180,7 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 		}
 		return conn, nil, false, nil
 	case result != "fallback":
-		if selected.UDPOnly {
+		if selected.IsUDPOnly() {
 			slog.Warn("rule selected a udp_only proxy for TCP", "url", selected.URL, "host", host, "port", port)
 			return nil, nil, false, errors.New("proxy is udp_only, cannot serve TCP")
 		}

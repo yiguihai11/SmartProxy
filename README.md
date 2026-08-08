@@ -46,7 +46,7 @@ make build-all        # 交叉编译所有支持平台
 
 完整字段见 [docs/config.md](./docs/config.md)，示例见 [config.json](./config.json)。
 
-> 上游为仅 TCP 的 SOCKS5（如 shadowsocks-android 插件模式，UDP ASSOCIATE 会被回 rep=0x07）时，可用 `proxies[].udp_addr` 让 UDP 走裸 UDP relay，如 `"udp_addr": "1080"` 或 `"udp_addr": "127.0.0.1:1080"`；缺省时被 rep=0x07 拒绝也会自动兜底裸 UDP。详见 [docs/upstream.md](./docs/upstream.md) §3。
+> 每个上游可用 `proxies[].mode` 标记能力：`tcp_and_udp`（默认）/ `tcp_only` / `udp_only`，与 shadowsocks 一致。`socks5`/`socks5h` 的 UDP 先走标准 UDP ASSOCIATE，**任意失败**（含 rep=0x07）自动兜底裸 UDP relay 到 `host:port`；`udp_only` 节点（无 TCP 监听器，如 shadowsocks 的 UDP fallback 实例）UDP 直接裸中继到自身地址。详见 [docs/upstream.md](./docs/upstream.md) §3.2。
 
 ## 📖 ACL 规则速览
 

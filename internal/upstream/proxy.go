@@ -36,6 +36,14 @@ const (
 	SchemeSS ProxyScheme = "ss"
 )
 
+// Mode values for Proxy.Mode, the same three-state status marker shadowsocks uses for
+// its sslocal mode. An empty Mode means ModeTCPAndUDP (the default).
+const (
+	ModeTCPAndUDP = "tcp_and_udp"
+	ModeTCPOnly   = "tcp_only"
+	ModeUDPOnly   = "udp_only"
+)
+
 type Proxy struct {
 	URL      string
 	Scheme   ProxyScheme
@@ -48,28 +56,39 @@ type Proxy struct {
 	// and v2ray-plugin/xray-plugin (all 5 Android modes of websocket/grpc/quic, see
 	// v2ray.go); on TCP connect it wraps the matching transport under the SS encryption layer, and unknown plugins return a clear error.
 	Plugin string
-	// UDPAddr is optional: a raw UDP relay address (for upstreams like shadowsocks-android
-	// where "SOCKS5 only does TCP, UDP is served by a separate udp_only instance on the same
-	// or a different port"). Semantics:
-	//   empty        -> default: standard UDP ASSOCIATE; falls back to Host:Port when rejected with rep=0x07 (CommandNotSupported)
-	//   "1080"       -> force raw UDP, using Host:1080
-	//   "host:port"  -> force raw UDP, using that address directly (host may be empty, e.g. ":1080" means Host:1080)
-	UDPAddr string
-	// UDPOnly marks an upstream that only relays UDP (no TCP listener). TCP paths and the
-	// TCP health probe skip it, so TCP being down never disables its UDP relay.
-	UDPOnly bool
-	health  ProxyHealth
+	// Mode is a status marker for the upstream's capabilities, matching shadowsocks's
+	// mode: "tcp_and_udp" (default), "tcp_only", "udp_only".
+	//   tcp_and_udp: both TCP and UDP; UDP tries the standard SOCKS5 UDP ASSOCIATE and
+	//     falls back to a raw UDP relay on its own host:port if that fails.
+	//   tcp_only:    TCP only, never used for UDP.
+	//   udp_only:    no TCP listener; UDP goes straight to a raw UDP relay on host:port.
+	Mode   string
+	health ProxyHealth
 
 	// ssMethod is the encryption implementation for the ss:// scheme (classic AEAD or
 	// none/plain), built once by NewProxy when parsing method:password; Method is immutable and safe for concurrent use.
 	ssMethod shadowsocks.Method
 }
 
-// SupportsUDP reports whether this upstream supports UDP (via UDPProxyConn or the ss UDP relay).
-// A udp_only upstream is UDP by definition, so it reports true regardless of scheme.
+// ModeName returns the effective mode, defaulting an empty Mode to tcp_and_udp.
+func (p *Proxy) ModeName() string {
+	if p.Mode == "" {
+		return ModeTCPAndUDP
+	}
+	return p.Mode
+}
+
+// IsUDPOnly reports whether the upstream only relays UDP (no TCP listener).
+func (p *Proxy) IsUDPOnly() bool { return p.Mode == ModeUDPOnly }
+
+// IsTCPOnly reports whether the upstream only relays TCP (never UDP).
+func (p *Proxy) IsTCPOnly() bool { return p.Mode == ModeTCPOnly }
+
+// SupportsUDP reports whether this upstream can relay UDP (via UDPProxyConn or the ss UDP
+// relay). A tcp_only upstream does not; an empty mode means tcp_and_udp and does.
 func (p *Proxy) SupportsUDP() bool {
-	if p.UDPOnly {
-		return true
+	if p.IsTCPOnly() {
+		return false
 	}
 	switch p.Scheme {
 	case SchemeSOCKS5, SchemeSOCKS5H, SchemeSS:
@@ -132,26 +151,6 @@ func parsePort(s string) int {
 	return port
 }
 
-// SetUDPAddr validates and sets the raw UDP relay address. Format: a bare port ("1080") or host:port ("127.0.0.1:1080", ":1080").
-func (p *Proxy) SetUDPAddr(s string) error {
-	if s == "" {
-		p.UDPAddr = ""
-		return nil
-	}
-	if _, port, err := net.SplitHostPort(s); err == nil {
-		if pnum, perr := strconv.Atoi(port); perr != nil || pnum <= 0 || pnum > 65535 {
-			return fmt.Errorf("invalid udp_addr %q: invalid port %q", s, port)
-		}
-		p.UDPAddr = s
-		return nil
-	}
-	if port, err := strconv.Atoi(s); err == nil && port > 0 && port <= 65535 {
-		p.UDPAddr = s
-		return nil
-	}
-	return fmt.Errorf("invalid udp_addr %q: expected a port or host:port", s)
-}
-
 func (p *Proxy) Connect(ctx context.Context, targetHost string, targetPort int) (net.Conn, error) {
 	switch p.Scheme {
 	case SchemeSOCKS5, SchemeSOCKS5H:
@@ -168,6 +167,9 @@ func (p *Proxy) Connect(ctx context.Context, targetHost string, targetPort int) 
 }
 
 func (p *Proxy) UDPAssociate(ctx context.Context, targetHost string, targetPort int) (net.Conn, error) {
+	if p.IsTCPOnly() {
+		return nil, fmt.Errorf("proxy %s is tcp_only, cannot relay UDP", p.Host)
+	}
 	switch p.Scheme {
 	case SchemeSOCKS5, SchemeSOCKS5H:
 		return p.socks5UDPAssociate(ctx, targetHost, targetPort)
@@ -228,43 +230,30 @@ func (p *Proxy) rawUDPAssociate(raddr *net.UDPAddr) (*UDPProxyConn, error) {
 	return &UDPProxyConn{UDPConn: udpConn}, nil
 }
 
-// resolveUDPAddr resolves udp_addr to a concrete address: bare port -> upstream Host + port; host:port -> used as-is.
-// Only called when udp_addr is non-empty.
-func (p *Proxy) resolveUDPAddr() (*net.UDPAddr, error) {
-	if p.UDPAddr == "" {
-		return nil, nil
+// rawFallback tries a raw UDP relay at the upstream's own host:port after the standard
+// SOCKS5 UDP ASSOCIATE flow failed (dial, handshake, request, any non-zero rep including
+// 0x07 CommandNotSupported, or a bad bind reply). Raw UDP is fire-and-forget — packets drop
+// silently if no relay listens there — so a failure here means the node has no working UDP
+// relay at all.
+func (p *Proxy) rawFallback(cause error) (*UDPProxyConn, error) {
+	raddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(p.Host, strconv.Itoa(p.Port)))
+	if err != nil {
+		return nil, fmt.Errorf("UDP ASSOCIATE failed (%v) and raw UDP relay unreachable: %w", cause, err)
 	}
-	if host, port, err := net.SplitHostPort(p.UDPAddr); err == nil {
-		if host == "" {
-			host = p.Host
-		}
-		return net.ResolveUDPAddr("udp", net.JoinHostPort(host, port))
+	slog.Warn("UDP ASSOCIATE failed, falling back to raw UDP relay",
+		"proxy", p.Host, "udpAddr", raddr, "cause", cause)
+	conn, err := p.rawUDPAssociate(raddr)
+	if err != nil {
+		return nil, fmt.Errorf("UDP ASSOCIATE failed (%v) and raw UDP relay failed: %w", cause, err)
 	}
-	if port, err := strconv.Atoi(p.UDPAddr); err == nil && port > 0 && port <= 65535 {
-		return net.ResolveUDPAddr("udp", net.JoinHostPort(p.Host, strconv.Itoa(port)))
-	}
-	// SetUDPAddr already validated the format; this is a defensive fallback
-	return nil, fmt.Errorf("invalid udp_addr %q", p.UDPAddr)
-}
-
-// udpRelayAddr returns the upstream's UDP relay address. An explicit udp_addr wins when set;
-// otherwise a udp_only upstream (no TCP listener) relays straight to its own host:port, so
-// udp_addr is redundant there. Returns nil when neither applies.
-func (p *Proxy) udpRelayAddr() (*net.UDPAddr, error) {
-	if p.UDPAddr != "" {
-		return p.resolveUDPAddr()
-	}
-	if p.UDPOnly {
-		return net.ResolveUDPAddr("udp", net.JoinHostPort(p.Host, strconv.Itoa(p.Port)))
-	}
-	return nil, nil
+	return conn, nil
 }
 
 func (p *Proxy) socks5UDPAssociate(ctx context.Context, targetHost string, targetPort int) (*UDPProxyConn, error) {
-	// Explicit udp_addr, or a udp_only upstream (no TCP listener to handshake over) -> force
-	// raw UDP relay and skip the SOCKS5 handshake.
-	if p.UDPAddr != "" || p.UDPOnly {
-		raddr, err := p.udpRelayAddr()
+	// A udp_only upstream has no TCP listener to handshake over — relay straight to its own
+	// host:port as a raw UDP relay (the equivalent of shadowsocks-android's udp_only fallback instance).
+	if p.IsUDPOnly() {
+		raddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(p.Host, strconv.Itoa(p.Port)))
 		if err != nil {
 			return nil, err
 		}
@@ -273,44 +262,34 @@ func (p *Proxy) socks5UDPAssociate(ctx context.Context, targetHost string, targe
 
 	conn, err := p.dial(ctx)
 	if err != nil {
-		return nil, err
+		return p.rawFallback(err)
 	}
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
 
 	if err := p.socks5Handshake(conn); err != nil {
 		conn.Close()
-		return nil, err
+		return p.rawFallback(err)
 	}
 	req := []byte{0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0}
 	if _, err := conn.Write(req); err != nil {
 		conn.Close()
-		return nil, err
+		return p.rawFallback(err)
 	}
 	resp := make([]byte, 4)
 	if _, err := io.ReadFull(conn, resp); err != nil {
 		conn.Close()
-		return nil, err
+		return p.rawFallback(err)
 	}
 	if resp[1] != 0x00 {
 		conn.Close()
-		// rep=0x07 (CommandNotSupported): the upstream explicitly does not do SOCKS5 UDP, but
-		// the same port likely has a matching raw UDP relay (e.g. shadowsocks-android's tcp_only
-		// main instance + udp_only fallback instance). Auto-fallback to raw UDP and log a warning (raw UDP is fire-and-forget; packets drop silently if the target is not listening).
-		if resp[1] == 0x07 {
-			slog.Warn("UDP ASSOCIATE rejected (rep=0x07), falling back to raw UDP relay",
-				"proxy", p.Host, "udpAddr", net.JoinHostPort(p.Host, strconv.Itoa(p.Port)))
-			raddr, rerr := net.ResolveUDPAddr("udp", net.JoinHostPort(p.Host, strconv.Itoa(p.Port)))
-			if rerr != nil {
-				return nil, rerr
-			}
-			return p.rawUDPAssociate(raddr)
-		}
-		return nil, fmt.Errorf("UDP ASSOCIATE failed: rep=%d", resp[1])
+		// Any rep, including 0x07 (CommandNotSupported): the upstream's SOCKS5 may serve TCP
+		// only, but the same host:port usually hosts a matching raw UDP relay — fall back to it.
+		return p.rawFallback(fmt.Errorf("UDP ASSOCIATE rejected: rep=%d", resp[1]))
 	}
 	bndAddr, bndPort, err := readSOCKS5BindAddr(conn, resp[3])
 	if err != nil {
 		conn.Close()
-		return nil, err
+		return p.rawFallback(err)
 	}
 	conn.SetDeadline(time.Time{})
 
@@ -325,13 +304,13 @@ func (p *Proxy) socks5UDPAssociate(ctx context.Context, targetHost string, targe
 	raddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(bndAddr, fmt.Sprintf("%d", bndPort)))
 	if err != nil {
 		conn.Close()
-		return nil, err
+		return p.rawFallback(err)
 	}
 	udpConn, err := net.DialUDP("udp", nil, raddr)
 	if err != nil {
 		slog.Error("UDP ASSOCIATE dial failed", "proxy", p.Host, "bindAddr", raddr, "error", err)
 		conn.Close()
-		return nil, err
+		return p.rawFallback(err)
 	}
 	slog.Debug("UDP ASSOCIATE established",
 		"proxy", p.Host, "localAddr", udpConn.LocalAddr(), "remoteAddr", raddr)
