@@ -1891,8 +1891,6 @@ es.onmessage=function(e){
       <button type="button" class="seg-btn" data-val="socks4" onclick="setProxyScheme('socks4')">SOCKS4</button>
       <button type="button" class="seg-btn" data-val="ss" onclick="setProxyScheme('ss')">SS</button>
     </div>
-    <div class="dialog-label">Server (host:port)</div>
-    <input class="dialog-input" id="proxy-server" placeholder="proxy.example.com:1080" autocomplete="off" oninput="updateProxyPreview()">
     <div id="proxy-sslink-row" style="display:none">
       <div class="dialog-label">Import ss:// Link <span style="text-transform:none;font-weight:400">(paste, then Parse — auto-fills server/method/password/plugin)</span></div>
       <div style="display:flex;gap:8px">
@@ -1901,6 +1899,8 @@ es.onmessage=function(e){
         <button type="button" class="btn btn-sm" onclick="openQRScanner()" title="Scan an ss:// QR code (camera when the browser allows it; image upload/paste always works)">Scan QR</button>
       </div>
     </div>
+    <div class="dialog-label">Server (host:port)</div>
+    <input class="dialog-input" id="proxy-server" placeholder="proxy.example.com:1080" autocomplete="off" oninput="updateProxyPreview()">
     <div id="proxy-ssmethod-row" style="display:none">
       <div class="dialog-label">Encryption Method</div>
       <select class="dialog-input" id="proxy-ss-method" onchange="updateProxyPreview()">
