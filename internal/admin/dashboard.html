@@ -752,15 +752,17 @@ function openQRScanner(){
   var camWrap=document.getElementById('qr-cam-wrap');
   var imgWrap=document.getElementById('qr-img-wrap');
   var status=document.getElementById('qr-status');
-  if(window.isSecureContext===false||!navigator.mediaDevices){
-    camWrap.style.display='none';
-    imgWrap.style.display='';
-    status.textContent='Camera needs HTTPS or localhost — upload or paste a QR image instead.';
-  }else{
+  // Camera is always attempted when the API exists; the image/paste channel is always
+  // shown as a fallback. The browser (not us) decides whether getUserMedia is permitted:
+  // HTTPS/localhost/flagged browsers allow it, plain HTTP LAN access refuses it.
+  imgWrap.style.display='';
+  if(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia){
     camWrap.style.display='';
-    imgWrap.style.display='none';
     status.textContent='Requesting camera…';
     startQRCamera();
+  }else{
+    camWrap.style.display='none';
+    status.textContent='Camera is not available in this browser — use image upload or Ctrl+V paste below.';
   }
   ov.classList.add('show');
 }
@@ -778,9 +780,8 @@ function startQRCamera(){
     })
     .catch(function(err){
       var st=document.getElementById('qr-status');
-      st.textContent='Camera error ('+err.name+') — upload or paste a QR image instead.';
+      st.textContent='Camera unavailable ('+err.name+') — use image upload or Ctrl+V paste below.';
       document.getElementById('qr-cam-wrap').style.display='none';
-      document.getElementById('qr-img-wrap').style.display='';
     });
 }
 function scanQRFrame(t){
@@ -1888,7 +1889,7 @@ es.onmessage=function(e){
       <div style="display:flex;gap:8px">
         <input class="dialog-input" id="proxy-sslink" placeholder="ss://base64(method:password)@host:port?plugin=..." autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter'){event.preventDefault();parseSSLinkBtn()}">
         <button type="button" class="btn btn-sm" onclick="parseSSLinkBtn()">Parse</button>
-        <button type="button" class="btn btn-sm" onclick="openQRScanner()" title="Scan an ss:// QR code (camera needs HTTPS or localhost; image upload/paste works anywhere)">Scan QR</button>
+        <button type="button" class="btn btn-sm" onclick="openQRScanner()" title="Scan an ss:// QR code (camera when the browser allows it; image upload/paste always works)">Scan QR</button>
       </div>
     </div>
     <div id="proxy-ssmethod-row" style="display:none">
@@ -1967,7 +1968,7 @@ es.onmessage=function(e){
       <video id="qr-video" autoplay playsinline muted style="width:100%;max-height:260px;border-radius:8px;background:#000"></video>
       <canvas id="qr-canvas" style="display:none"></canvas>
     </div>
-    <div id="qr-img-wrap" style="display:none">
+    <div id="qr-img-wrap">
       <div class="dialog-label">Upload a QR image</div>
       <input type="file" id="qr-file" accept="image/*" class="dialog-input" onchange="decodeImageFile(this.files&&this.files[0])">
       <div class="dialog-desc" style="margin-top:8px">…or press <b>Ctrl+V</b> anywhere to paste a screenshot.</div>
