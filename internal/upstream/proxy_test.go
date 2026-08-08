@@ -9,8 +9,11 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"smartproxy/internal/config"
 )
 
 func TestNewProxy_SOCKS5(t *testing.T) {
@@ -1140,9 +1143,10 @@ func startUDPEcho(t *testing.T) (*net.UDPConn, int) {
 	return pc, pc.LocalAddr().(*net.UDPAddr).Port
 }
 
-// TestUDPAssociate_UDPOnlyAutoRaw verifies that a udp_only upstream relays raw UDP
-// straight to its own host:port, never touching the TCP-based SOCKS5 ASSOCIATE path
-// (which could not work anyway — the node has no TCP listener).
+// TestUDPAssociate_UDPOnlyAutoRaw verifies that a node whose TCP circuit is down
+// (auto-derived udp_only — no TCP listener here) relays raw UDP straight to its own
+// host:port, never touching the TCP-based SOCKS5 ASSOCIATE path (which could not work
+// anyway — the node has no TCP listener).
 func TestUDPAssociate_UDPOnlyAutoRaw(t *testing.T) {
 	echo, port := startUDPEcho(t)
 	defer echo.Close()
@@ -1154,8 +1158,10 @@ func TestUDPAssociate_UDPOnlyAutoRaw(t *testing.T) {
 		Scheme: SchemeSOCKS5,
 		Host:   "127.0.0.1",
 		Port:   port, // UDP echo bound here; no TCP listener, so only the auto raw-UDP path can work
-		Mode:   ModeUDPOnly,
 	}
+	// TCP circuit down + UDP circuit up → effective udp_only → raw fast path.
+	p.health.SetManualState(false)
+	p.udpHealth.SetManualState(true)
 	conn, err := p.UDPAssociate(ctx, "example.com", 53)
 	if err != nil {
 		t.Fatalf("UDPAssociate(udp_only) error: %v", err)
@@ -1298,38 +1304,48 @@ func TestUDPAssociate_RawFallbackOnDialFailure(t *testing.T) {
 	}
 }
 
-// TestUDPAssociate_TCPOnlyRejected verifies a tcp_only upstream never serves UDP.
-func TestUDPAssociate_TCPOnlyRejected(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: 1080, Mode: ModeTCPOnly}
-	if _, err := p.UDPAssociate(ctx, "example.com", 53); err == nil {
-		t.Fatal("expected tcp_only proxy to reject UDPAssociate")
+// TestTCPOnlyNeverServesUDP verifies a tcp_only-effective upstream (UDP circuit open) is
+// skipped by UDP routing via SupportsUDP. The relay layer itself no longer rejects
+// UDPAssociate (routing decides; the health probe must be able to attempt UDP through a
+// degraded node to detect recovery), so this asserts the routing predicate.
+func TestTCPOnlyNeverServesUDP(t *testing.T) {
+	p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: 1}
+	p.health.SetManualState(true)
+	p.udpHealth.SetManualState(false) // udp down -> effective tcp_only
+	if p.SupportsUDP() {
+		t.Fatal("expected effective tcp_only to be skipped by UDP routing")
+	}
+	if p.EffectiveMode() != ModeTCPOnly {
+		t.Fatalf("EffectiveMode: got %q, want %q", p.EffectiveMode(), ModeTCPOnly)
 	}
 }
 
-// TestEffectiveMode verifies mode is probe-derived: the configured base (default
-// tcp_and_udp) is refined by the independent TCP/UDP circuits, and explicit
-// tcp_only/udp_only config is never overridden.
+// TestEffectiveMode verifies mode is auto-derived: UDP-capable schemes refine the
+// three-state mode by the independent TCP/UDP circuits, and non-UDP schemes are always
+// tcp_only no matter the circuits. There is no configured base anymore.
 func TestEffectiveMode(t *testing.T) {
 	cases := []struct {
-		name      string
-		configure string
-		tcpUp     bool
-		udpUp     bool
-		want      string
+		name   string
+		scheme ProxyScheme
+		tcpUp  bool
+		udpUp  bool
+		want   string
 	}{
-		{name: "default, both up", tcpUp: true, udpUp: true, want: ModeTCPAndUDP},
-		{name: "default, tcp up udp down", tcpUp: true, udpUp: false, want: ModeTCPOnly},
-		{name: "default, tcp down udp up", tcpUp: false, udpUp: true, want: ModeUDPOnly},
-		{name: "default, both down", tcpUp: false, udpUp: false, want: ModeTCPAndUDP},
-		{name: "configured tcp_only, udp up", configure: ModeTCPOnly, tcpUp: true, udpUp: true, want: ModeTCPOnly},
-		{name: "configured udp_only, tcp up", configure: ModeUDPOnly, tcpUp: true, udpUp: true, want: ModeUDPOnly},
+		{name: "socks5, both up", scheme: SchemeSOCKS5, tcpUp: true, udpUp: true, want: ModeTCPAndUDP},
+		{name: "socks5, tcp up udp down", scheme: SchemeSOCKS5, tcpUp: true, udpUp: false, want: ModeTCPOnly},
+		{name: "socks5, tcp down udp up", scheme: SchemeSOCKS5, tcpUp: false, udpUp: true, want: ModeUDPOnly},
+		{name: "socks5, both down", scheme: SchemeSOCKS5, tcpUp: false, udpUp: false, want: ModeTCPAndUDP},
+		{name: "socks5h", scheme: SchemeSOCKS5H, tcpUp: true, udpUp: true, want: ModeTCPAndUDP},
+		{name: "ss, tcp up udp down", scheme: SchemeSS, tcpUp: true, udpUp: false, want: ModeTCPOnly},
+		// Non-UDP schemes are always tcp_only regardless of circuits.
+		{name: "http, both up", scheme: SchemeHTTP, tcpUp: true, udpUp: true, want: ModeTCPOnly},
+		{name: "http, tcp down udp up", scheme: SchemeHTTP, tcpUp: false, udpUp: true, want: ModeTCPOnly},
+		{name: "https, both down", scheme: SchemeHTTPS, tcpUp: false, udpUp: false, want: ModeTCPOnly},
+		{name: "socks4, both up", scheme: SchemeSOCKS4, tcpUp: true, udpUp: true, want: ModeTCPOnly},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p := &Proxy{Scheme: SchemeSOCKS5, Mode: tc.configure}
+			p := &Proxy{Scheme: tc.scheme}
 			p.health.SetManualState(tc.tcpUp)
 			p.udpHealth.SetManualState(tc.udpUp)
 			if got := p.EffectiveMode(); got != tc.want {
@@ -1338,8 +1354,8 @@ func TestEffectiveMode(t *testing.T) {
 		})
 	}
 
-	// Routing predicates must follow the effective mode, while probing still follows
-	// the configured base (so a degraded node keeps probing the down path for recovery).
+	// Routing predicates follow the effective mode, while the probe direction is
+	// scheme-based (a degraded UDP-capable node is still UDP-probed for recovery).
 	p := &Proxy{Scheme: SchemeSOCKS5}
 	p.health.SetManualState(true)     // tcp up
 	p.udpHealth.SetManualState(false) // udp down -> effective tcp_only
@@ -1349,18 +1365,286 @@ func TestEffectiveMode(t *testing.T) {
 	if p.SupportsUDP() != false {
 		t.Error("SupportsUDP: want false for effective tcp_only")
 	}
-	if !p.ProbeSupportsUDP() {
-		t.Error("ProbeSupportsUDP: want true, probing still follows configured tcp_and_udp base")
+	if !p.SchemeSupportsUDP() {
+		t.Error("SchemeSupportsUDP: socks5 must still be UDP-probed for recovery")
 	}
 
-	// Configured tcp_only: neither routing nor probing uses UDP.
-	pt := &Proxy{Scheme: SchemeSOCKS5, Mode: ModeTCPOnly}
-	if pt.ProbeSupportsUDP() {
-		t.Error("ProbeSupportsUDP: configured tcp_only must not probe UDP")
+	// Non-UDP schemes: never UDP-probed and never serve UDP, even with healthy circuits.
+	ph := &Proxy{Scheme: SchemeHTTP}
+	ph.health.SetManualState(true)
+	ph.udpHealth.SetManualState(true)
+	if ph.SchemeSupportsUDP() {
+		t.Error("SchemeSupportsUDP: http must not be UDP-probed")
 	}
-	// Configured udp_only: never probed for TCP.
-	pu := &Proxy{Scheme: SchemeSOCKS5, Mode: ModeUDPOnly}
-	if pu.IsConfiguredUDPOnly() != true {
-		t.Error("IsConfiguredUDPOnly: want true for configured udp_only")
+	if ph.SupportsUDP() {
+		t.Error("SupportsUDP: http must never serve UDP")
+	}
+	if ph.IsTCPOnly() != true {
+		t.Error("IsTCPOnly: http must always be effective tcp_only")
+	}
+}
+
+func TestSchemeSupportsUDP(t *testing.T) {
+	cases := []struct {
+		scheme ProxyScheme
+		want   bool
+	}{
+		{SchemeSOCKS5, true},
+		{SchemeSOCKS5H, true},
+		{SchemeSS, true},
+		{SchemeHTTP, false},
+		{SchemeHTTPS, false},
+		{SchemeSOCKS4, false},
+	}
+	for _, tc := range cases {
+		if got := (&Proxy{Scheme: tc.scheme}).SchemeSupportsUDP(); got != tc.want {
+			t.Errorf("SchemeSupportsUDP(%s): got %v, want %v", tc.scheme, got, tc.want)
+		}
+	}
+}
+
+// TestUDPCapability_Detection verifies the capability marker is learned from the health
+// probe's end-to-end relay result: a raw-only node (ASSOCIATE rejected, raw relay answers)
+// is marked raw; a standard ASSOCIATE node is marked standard.
+func TestUDPCapability_Detection(t *testing.T) {
+	t.Run("raw-only node", func(t *testing.T) {
+		// A frame DNS server (answers raw UDP frames with a valid DNS response) and a SOCKS5
+		// TCP server that rejects ASSOCIATE with rep=0x07, both on the SAME port.
+		fdns, dnsPort := startFrameDNSServer(t)
+		defer fdns.Close()
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", dnsPort))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+		go func() {
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				go func(c net.Conn) {
+					defer c.Close()
+					buf := make([]byte, 258)
+					if _, err := io.ReadFull(c, buf[:2]); err != nil || buf[0] != 0x05 {
+						return
+					}
+					if _, err := io.ReadFull(c, buf[:int(buf[1])]); err != nil {
+						return
+					}
+					if _, err := c.Write([]byte{0x05, 0x00}); err != nil {
+						return
+					}
+					if _, err := io.ReadFull(c, buf[:10]); err != nil { // ASSOCIATE request
+						return
+					}
+					c.Write([]byte{0x05, 0x07, 0x00, 0x01}) // rep=0x07 CommandNotSupported
+				}(conn)
+			}
+		}()
+
+		p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: dnsPort}
+		cfg := config.HealthCheckConf{Enabled: true, Timeout: 2, FailuresThreshold: 1, SuccessesThreshold: 1}
+		hc := NewHealthChecker(cfg, []*Proxy{p})
+		defer hc.Stop()
+		hc.checkProxyUDP(p)
+		if got := p.UDPCapability(); got != UDPCapRaw {
+			t.Fatalf("raw-only node: UDPCapability got %q, want %q", got, UDPCapRaw)
+		}
+	})
+
+	t.Run("standard associate node", func(t *testing.T) {
+		// A UDP relay (frame DNS server) plus a SOCKS5 TCP server that ANSWERS the ASSOCIATE
+		// with a bind address pointing at that UDP relay.
+		fdns, dnsPort := startFrameDNSServer(t)
+		defer fdns.Close()
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+		tcpPort := ln.Addr().(*net.TCPAddr).Port
+		go func() {
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				go func(c net.Conn) {
+					defer c.Close()
+					buf := make([]byte, 258)
+					if _, err := io.ReadFull(c, buf[:2]); err != nil || buf[0] != 0x05 {
+						return
+					}
+					if _, err := io.ReadFull(c, buf[:int(buf[1])]); err != nil {
+						return
+					}
+					if _, err := c.Write([]byte{0x05, 0x00}); err != nil {
+						return
+					}
+					if _, err := io.ReadFull(c, buf[:10]); err != nil { // ASSOCIATE request
+						return
+					}
+					// rep=0x00, ATYP=IPv4, bind 127.0.0.1:dnsPort
+					reply := []byte{0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, byte(dnsPort >> 8), byte(dnsPort & 0xff)}
+					c.Write(reply)
+					io.Copy(io.Discard, c) // keep the control channel open
+				}(conn)
+			}
+		}()
+
+		p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: tcpPort}
+		cfg := config.HealthCheckConf{Enabled: true, Timeout: 2, FailuresThreshold: 1, SuccessesThreshold: 1}
+		hc := NewHealthChecker(cfg, []*Proxy{p})
+		defer hc.Stop()
+		hc.checkProxyUDP(p)
+		if got := p.UDPCapability(); got != UDPCapStandard {
+			t.Fatalf("standard associate node: UDPCapability got %q, want %q", got, UDPCapStandard)
+		}
+	})
+}
+
+// TestUDPCapability_RawRoutingOptimization verifies a known-raw node skips the doomed
+// ASSOCIATE handshake entirely: UDP frames flow over the raw relay and no TCP connection is
+// ever attempted.
+func TestUDPCapability_RawRoutingOptimization(t *testing.T) {
+	echo, port := startUDPEcho(t)
+	defer echo.Close()
+
+	var tcpAttempts int32
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			atomic.AddInt32(&tcpAttempts, 1)
+			conn.Close()
+		}
+	}()
+
+	p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: port}
+	p.setUDPCapability(UDPCapRaw) // known raw from a prior detection
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, err := p.UDPAssociate(ctx, "example.com", 53)
+	if err != nil {
+		t.Fatalf("UDPAssociate on known-raw node: %v", err)
+	}
+	defer conn.Close()
+
+	payload := []byte("raw-optimized")
+	frame := makeSOCKS5UDPFrame("8.8.8.8", 53, payload)
+	if _, err := conn.Write(frame); err != nil {
+		t.Fatal(err)
+	}
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, 2048)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(buf[:n], payload) {
+		t.Fatalf("echo mismatch: got %x, want contains %x", buf[:n], payload)
+	}
+	if got := atomic.LoadInt32(&tcpAttempts); got != 0 {
+		t.Fatalf("raw fast path must not attempt any TCP/ASSOCIATE connection, got %d attempts", got)
+	}
+}
+
+// TestUDPCapability_StickyOnFailure verifies a node already detected raw keeps its
+// last-known-good marker through a later end-to-end failure — the udpHealth circuit reports
+// the outage, not the marker.
+func TestUDPCapability_StickyOnFailure(t *testing.T) {
+	p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: deadUDPPort(t)}
+	p.setUDPCapability(UDPCapRaw)
+	cfg := config.HealthCheckConf{Enabled: true, Timeout: 1, FailuresThreshold: 1, SuccessesThreshold: 1}
+	hc := NewHealthChecker(cfg, []*Proxy{p})
+	defer hc.Stop()
+	hc.checkProxyUDP(p) // probe fails end to end (dead port)
+	if p.IsUDPAvailable() {
+		t.Error("expected UDP circuit open after the failing probe")
+	}
+	if got := p.UDPCapability(); got != UDPCapRaw {
+		t.Fatalf("known-raw marker must stick through a failure, got %q", got)
+	}
+}
+
+// TestUDPCapability_NoneFromUnknown verifies a fresh (unknown) node whose UDP probe fails
+// end to end is marked none — the "否则不支持udp" case.
+func TestUDPCapability_NoneFromUnknown(t *testing.T) {
+	p := &Proxy{Scheme: SchemeSOCKS5}
+	if got := p.UDPCapability(); got != UDPCapUnknown {
+		t.Fatalf("fresh proxy: UDPCapability got %q, want %q", got, UDPCapUnknown)
+	}
+	p.noteUDPCapabilityFailure()
+	if got := p.UDPCapability(); got != UDPCapNone {
+		t.Fatalf("fresh node failure: UDPCapability got %q, want %q", got, UDPCapNone)
+	}
+}
+
+// TestUDPCapability_UpgradeRawToStandard verifies raw → standard upgrade is allowed (a node
+// later supports ASSOCIATE) and standard → raw downgrade is forbidden (transient failures
+// never permanently degrade a known standard node).
+func TestUDPCapability_UpgradeRawToStandard(t *testing.T) {
+	echo, port := startUDPEcho(t)
+	defer echo.Close()
+
+	u1, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer u1.Close()
+	pipeA, pipeB := net.Pipe()
+	defer pipeA.Close()
+	defer pipeB.Close()
+
+	raw := &Proxy{Scheme: SchemeSOCKS5}
+	raw.setUDPCapability(UDPCapRaw)
+	raw.classifyUDPCapability(&UDPProxyConn{UDPConn: u1, tcpConn: pipeA})
+	if got := raw.UDPCapability(); got != UDPCapStandard {
+		t.Fatalf("raw→standard upgrade: got %q, want %q", got, UDPCapStandard)
+	}
+
+	u2, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer u2.Close()
+	std := &Proxy{Scheme: SchemeSOCKS5}
+	std.setUDPCapability(UDPCapStandard)
+	std.classifyUDPCapability(&UDPProxyConn{UDPConn: u2}) // tcpConn nil → raw type
+	if got := std.UDPCapability(); got != UDPCapStandard {
+		t.Fatalf("known standard must not downgrade to raw, got %q", got)
+	}
+}
+
+// TestProxyInfo_UDPCapability verifies the capability marker and auto-derived mode are
+// surfaced through Proxies() for the dashboard.
+func TestProxyInfo_UDPCapability(t *testing.T) {
+	m, err := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{{Alias: "p1", URL: "socks5://127.0.0.1:1080"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.dnsUDPPool.Close()
+	m.aliasMap["p1"].setUDPCapability(UDPCapRaw)
+
+	infos := m.Proxies()
+	if len(infos) != 1 {
+		t.Fatalf("expected 1 proxy info, got %d", len(infos))
+	}
+	if infos[0].UDPCapability != string(UDPCapRaw) {
+		t.Errorf("ProxyInfo.udp_capability: got %q, want %q", infos[0].UDPCapability, UDPCapRaw)
+	}
+	if infos[0].Mode != ModeTCPAndUDP {
+		t.Errorf("ProxyInfo.mode: got %q, want %q (fresh circuits)", infos[0].Mode, ModeTCPAndUDP)
 	}
 }

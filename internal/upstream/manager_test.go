@@ -580,11 +580,14 @@ func TestSetProxyHealth_DirectAlias(t *testing.T) {
 	}
 }
 
-func TestNewManager_UDPOnly(t *testing.T) {
+// TestNewManager_AutoMode verifies the effective mode is auto-derived from the circuits:
+// TCP circuit down + UDP up → udp_only; UDP circuit down + TCP up → tcp_only; both up →
+// tcp_and_udp. There is no configured mode anymore — the health probe drives it.
+func TestNewManager_AutoMode(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
 		Proxies: []ProxyEntry{
-			{Alias: "udp-only", URL: "socks5://127.0.0.1:1234", Mode: ModeUDPOnly},
-			{Alias: "tcp-only", URL: "socks5://127.0.0.1:1081", Mode: ModeTCPOnly},
+			{Alias: "udp-only", URL: "socks5://127.0.0.1:1234"},
+			{Alias: "tcp-only", URL: "socks5://127.0.0.1:1081"},
 			{Alias: "normal", URL: "socks5://127.0.0.1:1080"},
 		},
 	})
@@ -597,39 +600,42 @@ func TestNewManager_UDPOnly(t *testing.T) {
 	if up == nil {
 		t.Fatal("udp-only proxy should exist")
 	}
+	// TCP circuit down → effective udp_only (the "no TCP listener" case).
+	up.health.SetManualState(false)
+	up.udpHealth.SetManualState(true)
 	if !up.IsUDPOnly() {
-		t.Error("udp-only proxy should have mode=udp_only")
+		t.Error("proxy with TCP down should have effective mode=udp_only")
 	}
 	if !up.SupportsUDP() {
-		t.Error("udp-only proxy should report SupportsUDP()=true")
-	}
-	if up.ModeName() != ModeUDPOnly {
-		t.Errorf("udp-only ModeName: got %q", up.ModeName())
+		t.Error("udp_only proxy should report SupportsUDP()=true")
 	}
 
 	only := m.aliasMap["tcp-only"]
+	only.health.SetManualState(true)
+	only.udpHealth.SetManualState(false) // UDP circuit down → effective tcp_only
 	if !only.IsTCPOnly() {
-		t.Error("tcp-only proxy should have mode=tcp_only")
+		t.Error("proxy with UDP down should have effective mode=tcp_only")
 	}
 	if only.SupportsUDP() {
-		t.Error("tcp-only proxy should report SupportsUDP()=false")
+		t.Error("tcp_only proxy should report SupportsUDP()=false")
 	}
 
 	normal := m.aliasMap["normal"]
 	if normal.IsUDPOnly() || normal.IsTCPOnly() {
-		t.Error("normal proxy should default to tcp_and_udp")
-	}
-	if normal.ModeName() != ModeTCPAndUDP {
-		t.Errorf("normal ModeName: got %q, want tcp_and_udp", normal.ModeName())
+		t.Error("fresh proxy with both circuits closed should be tcp_and_udp")
 	}
 
-	// Proxies() info must surface the mode for the dashboard badge.
+	// Proxies() info must surface the mode for the dashboard badge, plus the capability
+	// marker (unknown before any successful relay).
 	var found bool
 	for _, info := range m.Proxies() {
 		if info.Alias == "udp-only" {
 			found = true
 			if info.Mode != ModeUDPOnly {
-				t.Errorf("ProxyInfo should expose mode=%s for the udp-only proxy, got %q", ModeUDPOnly, info.Mode)
+				t.Errorf("ProxyInfo should expose mode=%s for the TCP-down proxy, got %q", ModeUDPOnly, info.Mode)
+			}
+			if info.UDPCapability != string(UDPCapUnknown) {
+				t.Errorf("ProxyInfo.udp_capability should be %q before any relay, got %q", UDPCapUnknown, info.UDPCapability)
 			}
 			if !info.UDPHealth.Available {
 				t.Error("ProxyInfo should expose an available udp_health for a fresh proxy")

@@ -22,7 +22,7 @@
 | `https` | HTTP CONNECT over TLS（`tls.Client` + `HandshakeContext`） |
 | `ss` | Shadowsocks（经典 AEAD，内置实现，无需外部 `sslocal`）。URL 形如 `ss://base64(method:password)@host:port`，也兼容明文 `ss://method:password@host:port`。TCP + UDP 均支持，见 §3.1 |
 
-UDP 支持：`socks5` / `socks5h`（标准 UDP ASSOCIATE，失败自动兜底裸 UDP，见 §3.2）与 `ss`（内置 SS UDP relay，见 §3.1）。每个上游可用 `mode` 标记能力：`tcp_and_udp`（默认）/ `tcp_only` / `udp_only`，见 §3.2。
+UDP 支持：`socks5` / `socks5h`（标准 UDP ASSOCIATE，失败自动兜底裸 UDP，见 §3.2）与 `ss`（内置 SS UDP relay，见 §3.1）。**每个上游的 TCP/UDP 能力自动辨识、无需配置**：生效 mode（`tcp_and_udp` / `tcp_only` / `udp_only`）由 scheme + 双熔断动态推出，UDP 能力标记（`standard` / `raw` / `none`）由探测与真实流量推导，见 §3.2。
 
 ## §3 连接建立
 
@@ -37,7 +37,7 @@ UDP 支持：`socks5` / `socks5h`（标准 UDP ASSOCIATE，失败自动兜底裸
 
 - **凭据解析**（`parseSSUserinfo`）：userinfo 优先按 shadowsocks URI 规范做 base64 解码（RawURL / URL / RawStd / Std 四种都试），失败则按明文 `method:password` 处理，第一个 `:` 之后整段为密码（含冒号也保留）。注意 `url.Parse` 会在第一个冒号处切分并把后续冒号 percent-encode，实现用 `Username()/Password()` 取回解码后的密码再重组。`none`/`plain` 不需要密码，可写免密码形式 `ss://none@host:port`（无冒号）；解码仅在结果含 `:`（即 `method:password` 结构）时接受，避免 `none` 这种恰好是合法 base64 的明文方法名被误解码。
 - **TCP**：`ssConnect` 走 `dial`（fwmark + keepalive）→ `ssMethod.DialConn(conn, dest)` 得到加密流，透明对接上层。
-- **UDP**：`ssUDPAssociate` 直接 `net.DialUDP` 到 SS 服务器端口，用 `ssMethod.DialPacketConn` 得到逐包携带目标地址的 packet conn（sing 的 `clientPacketConn` 每包自含 destination），因此**单条 UDP 连接即可服务任意目标**，与 SOCKS5 上游的复用模型一致。适配器 `ssUDPConn` 把上游一侧的 SOCKS5-UDP 帧（RSV|FRAG|ATYP|ADDR|PORT|payload）翻译成 SS UDP 包：`Write` 解析帧→`WritePacket`（预留 headroom + AEAD tag 容量，避免 sing `buf` panic）；`Read` 从 `ReadPacket` 拿到 payload + 来源地址→补 SOCKS5 响应头返回完整帧。`mode` 对 `ss` 同样适用（内置 SS UDP relay 无需裸中继兜底，但 `tcp_only` / `udp_only` 仍按 §3.2 语义跳过 TCP 或 UDP）。
+- **UDP**：`ssUDPAssociate` 直接 `net.DialUDP` 到 SS 服务器端口，用 `ssMethod.DialPacketConn` 得到逐包携带目标地址的 packet conn（sing 的 `clientPacketConn` 每包自含 destination），因此**单条 UDP 连接即可服务任意目标**，与 SOCKS5 上游的复用模型一致。适配器 `ssUDPConn` 把上游一侧的 SOCKS5-UDP 帧（RSV|FRAG|ATYP|ADDR|PORT|payload）翻译成 SS UDP 包：`Write` 解析帧→`WritePacket`（预留 headroom + AEAD tag 容量，避免 sing `buf` panic）；`Read` 从 `ReadPacket` 拿到 payload + 来源地址→补 SOCKS5 响应头返回完整帧。`ss` 的 UDP 恒为标准能力（内置 relay 无需裸中继兜底，无 `raw` 概念），生效 mode 仍由双熔断按 §3.2 自动推出。
 
 UDP 复用池（§6）对 `ss` 同样生效：`ssUDPConn` 实现了 `ProbeTCP()`（无 TCP 控制信道，返回 nil 视为健康，靠 TTL 淘汰兜底），池的 `Acquire/Release/Discard` 已从 `*UDPProxyConn` 泛化为 `net.Conn` + 可选 `tcpProbeConn` 接口。
 
@@ -75,19 +75,44 @@ shadowsocks-rust 中 `plain` 与 `none` 是**同一个** `CipherKind::NONE` 的�
 - **互通性**：sing-shadowsocks 的 `shadowsocks.NewNone()` 产出与 rust 端完全相同的 wire 格式，客户端直接互通；`ssUDPConn` 适配器逐包携带目标地址的模型对 `none` 同样适用（无 tag，`WritePacket` 只明文序列化地址）。TCP/UDP 均有进程内测试覆盖。
 - **用途与风险**：零保密性、零完整性，中间人可读改全部流量。只用于调试、测试，或隧道本身已被 TLS/SSH 加密、不想叠加加密开销的场景；不要单独用于生产。smartproxy 与官方 shadowsocks-android 一样把 `none` 放进下拉（官方 App 的 `arrays.xml` 第一个就是 `NONE`），并标注「明文不加密 ⚠」。
 
-### 上游 `mode` 状态标记与裸 UDP 兜底
+### 上游能力自动辨识与裸 UDP 兜底
 
-`upstream.proxies[i].mode` 是上游的能力状态标记，取值与 shadowsocks 的 `mode` 相同：`tcp_and_udp`（默认）/ `tcp_only` / `udp_only`。
+`mode` **不再是配置字段**（`ProxyEntry` 已删除）。每个上游的 TCP/UDP 能力由两部分自动推导：**生效 mode**（反映当前可用性，随探测变动）+ **UDP 能力标记**（反映协议层能力，sticky last-known-good）。
 
-- **`tcp_and_udp`**（默认，缺省即此）：TCP + UDP 均可。UDP 先走标准 SOCKS5 UDP ASSOCIATE；**任意失败**（拨号/握手/请求失败、回任何非 0x00 的 rep（含 0x07 CommandNotSupported）、bind 地址解析或拨号失败）都会自动兜底为**裸 UDP** 直连 `Host:socks-port`（打 WARN 日志）。兜底再失败（目标无监听时包会静默丢弃）即表示该节点 UDP 有问题。某些上游（如 shadowsocks-android 插件模式）主实例只启 TCP、SOCKS5 对 UDP ASSOCIATE 回 0x07，但同端口的 UDP 上常有配套的裸 UDP relay（不要求 ASSOCIATE、读到带 SOCKS5 UDP 头的帧就转发），此路径正是为它服务。
-- **`tcp_only`**：只走 TCP。`SupportsUDP()` 为 false，UDP 请求直接报错。
-- **`udp_only`**：没有 TCP 监听器。TCP 路由与 TCP 健康探测都跳过它（所以 TCP 挂了不会熔断掉它的 UDP）；UDP 直接裸中继到自身 `Host:port`，从不尝试 TCP 握手（等价于 shadowsocks-android 的 UDP fallback 实例）。开启健康检查时会被**主动 UDP 探测**（DNS 查询经裸中继往返，喂独立的 `udpHealth` 电路，见 §4），探测失败只会熔断它的 UDP 路由，不影响任何 TCP。
+#### 生效 mode：scheme + 双熔断
+
+`EffectiveMode()` 由 scheme 静态基态与 TCP/UDP 双熔断动态推出：
+
+- **`http` / `https` / `socks4`**：确定不支持 UDP，恒为 `tcp_only`，从不探测 UDP。
+- **`socks5` / `socks5h` / `ss`**（`SchemeSupportsUDP()`）：
+
+  | TCP 熔断 | UDP 熔断 | 生效 mode |
+  |---|---|---|
+  | up | up | `tcp_and_udp` |
+  | up | down | `tcp_only` |
+  | down | up | `udp_only`（自动推出：无 TCP 监听器或 TCP 挂了但 UDP 正常） |
+  | down | down | `tcp_and_udp`（双挂，熔断快照表达故障） |
+
+路由用 `IsTCPOnly()` / `IsUDPOnly()` 读此派生值：`udp_only` 时 UDP 直连裸中继、跳过 TCP 路由与 TCP 健康探测，TCP 挂了也不会熔断它的 UDP。
+
+#### UDP 能力标记（`udpCapability`）
+
+每个 UDP-capable 代理维护一个 `UDPCapability`：`unknown` / `standard` / `raw` / `none`，由**探测端到端成功**推导并 sticky：
+
+- **`standard`**：标准 SOCKS5 UDP ASSOCIATE 控制通道建立成功。
+- **`raw`**：ASSOCIATE 失败后兜底裸 UDP relay 到 `Host:port` 成功（等价于 shadowsocks-android 的 UDP fallback 实例 / 插件模式的裸 relay —— 不要求 ASSOCIATE、读到带 SOCKS5 UDP 头的帧就转发）。判定按连接类型：`UDPProxyConn.tcpConn != nil` → standard，`tcpConn == nil`（走了 rawFallback）→ raw。
+- **`none`**：UDP 探测端到端失败（ASSOCIATE 与 raw 都失败）且当前标记为 `unknown`/`none` 时置入。**探测失败只在 fresh/unknown 节点上写 `none`**，已辨识为 standard/raw 的节点失败只熔断 `udpHealth`、不翻回标记（故障由熔断快照表达）。
+- **sticky 转移**：只允许 `unknown→standard`、`unknown→raw`、`unknown→none`、`raw→standard`（允许升级为 ASSOCIATE）；**禁止 `standard→raw` 降级**（避免瞬时失败导致永久降级）。
+
+能力写入点：① 健康探测的 `checkProxyUDP` 成功（真实 DNS 查询端到端往返）后按连接类型 `classifyUDPCapability` 写入，失败时 `noteUDPCapabilityFailure`（仅 unknown/none 置 none）；② 真实流量在标记仍为 `unknown` 时的首次成功（`UDPAssociate` 成功路径），作为探测未开启时的补充。`ss` 无 raw 概念，恒 `standard`。
+
+**路由优化**：已知 `raw` 的节点后续 UDP 直连裸中继，**跳过注定失败的 ASSOCIATE 握手**（`socks5UDPAssociate` 顶部 `if p.IsUDPOnly() || p.UDPCapability() == UDPCapRaw { rawUDPAssociate }`）。其余节点先走标准 ASSOCIATE，**任意失败**（拨号/握手/请求失败、回任何非 0x00 的 rep（含 0x07 CommandNotSupported）、bind 地址解析或拨号失败）自动兜底裸 UDP。
 
 实现：`rawUDPAssociate(raddr)` 直接 `net.DialUDP` 返回 `UDPProxyConn{UDPConn}`（`tcpConn` 为 nil，`Close` 已做空指针保护）；`rawFallback(cause)` 在 ASSOCIATE 任一步失败后解析 `Host:port` 兜底。注意两点：① `DialUDP` 恒成功，目标无监听时包会静默丢弃（黑洞），故兜底路径打 WARN；② 兜底只在**本代理**的 ASSOCIATE 失败时发生，不改变 `Manager.UDPAssociate` 多代理 failover 语义。DNS 代理查询（`Manager.AcquireDNSUDP`）同走此路径，一处修改同时覆盖 DNS UDP。
 
-**已端到端实测验证**：用官方 shadowsocks-rust v1.23.4 二进制搭出与 Android 兜底实例同形态的环境——`ssserver`（`"mode": "tcp_and_udp"`）+ `sslocal`（`"mode": "udp_only"`，本地 UDP 监听）——`Proxy{Mode: "udp_only"}` 裸中继发出带 SOCKS5 UDP 头的 DNS 查询帧，收到真实 DNS 响应（TXID 匹配）。实测 trace 确认链路：sslocal 收到裸帧即 `created udp association for <peer>`（按源地址现场建关联、免 ASSOCIATE）→ `udp relay <peer> -> <target> (proxied)` → `connected udp remote <ssserver>` → ssserver `udp relay ... -> <target>` → 响应原路返回。回归测试见 `internal/upstream/rawrelay_e2e_test.go`（`go test -tags e2e`，需 `SS_SERVER_BIN`/`SS_LOCAL_BIN` 环境变量指向真实二进制）。
+**已端到端实测验证**：用官方 shadowsocks-rust v1.23.4 二进制搭出与 Android 兜底实例同形态的环境——`ssserver`（`"mode": "tcp_and_udp"`）+ `sslocal`（`"mode": "udp_only"`，本地 UDP 监听）——该节点无 TCP 监听器，TCP 探测失败即把 TCP 熔断打 open，生效 mode 自动推出 `udp_only`，`UDPAssociate` 经 raw 快路径裸中继发出带 SOCKS5 UDP 头的 DNS 查询帧，收到真实 DNS 响应（TXID 匹配）。实测 trace 确认链路：sslocal 收到裸帧即 `created udp association for <peer>`（按源地址现场建关联、免 ASSOCIATE）→ `udp relay <peer> -> <target> (proxied)` → `connected udp remote <ssserver>` → ssserver `udp relay ... -> <target>` → 响应原路返回。回归测试见 `internal/upstream/rawrelay_e2e_test.go`（`go test -tags e2e`，需 `SS_SERVER_BIN`/`SS_LOCAL_BIN` 环境变量指向真实二进制）。
 
-> 两个实测中发现的配置坑，供复现时参考：① shadowsocks-rust 官方 release 的 CLI 把端口并入 `-s`/`-b` 地址参数（无 `-p`/`-l`），用 JSON 配置最稳；② `ssserver` 默认 `mode: TcpOnly` **不开 UDP**，必须显式 `"mode": "tcp_and_udp"`，否则 UDP 载荷在服务端被静默丢弃。
+> 两个实测中发现的配置坑，供复现时参考：① shadowsocks-rust 官方 release 的 CLI 把端口并入 `-s`/`-b` 地址参数（无 `-p`/`-l`），用 JSON 配置最稳；② `ssserver` 默认 `mode: TcpOnly` **不开 UDP**，必须显式 `"mode": "tcp_and_udp"`，否则 UDP 载荷在服务端被静默丢弃（这是 shadowsocks-rust 自身的配置，与 SmartProxy 的自动辨识无关）。
 
 ## §4 健康检查熔断状态机
 
@@ -104,8 +129,9 @@ StateClosed ──失败 ≥ FailuresThreshold──► StateOpen
 - **TCP 与 UDP 是两个独立熔断器**：每个 `Proxy` 持有 `health`（TCP）与 `udpHealth`（UDP）两个 `ProxyHealth`。TCP 探活只喂 `health`，DNS UDP 探测只喂 `udpHealth`，开合互不影响——TCP 挂了不会熔断 UDP（`udp_only` 场景），UDP 挂了也不会熔断 TCP。对应地，TCP 路由按 `IsAvailable()`（`health`）过滤，UDP 路由按 `IsUDPAvailable()`（`udpHealth`）过滤。
 - `IsAvailable()` / `IsUDPAvailable()`：Closed / HalfOpen 为可用，Open 不可用。
 - `checkLoop` 每代理一个 goroutine（启动时随机错峰 0–2s），按 `cfg.Interval`（默认 60s）：
-  - **TCP 探活**：`SupportsUDP` 之外（`tcp_and_udp` / `tcp_only`）HTTP GET `cfg.URL` 探活（2xx–3xx 算成功），喂 `health`。
-  - **UDP 探活**：`SupportsUDP`（`tcp_and_udp` / `udp_only`）经 `probeUDP` 发真实 DNS 查询——`p.UDPAssociate(dnsServer, 53)` → 写带 SOCKS5 UDP 头的 DNS A 查询帧 → 收响应帧并校验 TXID + QR 位，延迟做 EMA 平滑，喂 `udpHealth`。DNS 服务器与查询域名可配（`health_check.udp_probe_dns`，默认 `1.1.1.1:53`；`udp_probe_domain`，默认 `dns.google`）。探测复用正常 relay 路径（标准 ASSOCIATE + 裸兜底 / udp_only 裸中继 / ss UDP），所以测的就是真实 UDP 流量走的链路。
+  - **探测方向由 scheme 决定**（`SchemeSupportsUDP()`）：`socks5` / `socks5h` / `ss` 两种都探；`http` / `https` / `socks4` 只探 TCP、恒 `tcp_only`。
+  - **TCP 探活**：HTTP GET `cfg.URL` 探活（2xx–3xx 算成功），喂 `health`。**所有节点都跑**，无 `udp_only` 豁免（`udp_only` 由「TCP 熔断 open + UDP 正常」自动推出，TCP 探测失败正是其来源）。
+  - **UDP 探活**：经 `probeUDP` 发真实 DNS 查询——`p.UDPAssociate(dnsServer, 53)` → 写带 SOCKS5 UDP 头的 DNS A 查询帧 → 收响应帧并校验 TXID + QR 位，延迟做 EMA 平滑，喂 `udpHealth`。DNS 服务器与查询域名可配（`health_check.udp_probe_dns`，默认 `1.1.1.1:53`；`udp_probe_domain`，默认 `dns.google`）。探测复用正常 relay 路径（标准 ASSOCIATE + 裸兜底 / udp_only 裸中继 / ss UDP），所以测的就是真实 UDP 流量走的链路；成功时按连接类型分类并写入 UDP 能力标记，失败时 fresh 节点置 `none`（见 §3.2）。
 - `AutoDisableSingle`：仅一个代理时自动关闭健康检查。
 - 手动 disable/enable：admin `/health/proxy` → `Manager.SetProxyHealth(alias, available)` → `SetManualState`（同时设置两个电路，等价于整节点下线/上线）。
 

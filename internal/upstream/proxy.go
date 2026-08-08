@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sagernet/sing-shadowsocks"
@@ -36,12 +37,25 @@ const (
 	SchemeSS ProxyScheme = "ss"
 )
 
-// Mode values for Proxy.Mode, the same three-state status marker shadowsocks uses for
-// its sslocal mode. An empty Mode means ModeTCPAndUDP (the default).
+// Mode values for Proxy.EffectiveMode — the same three-state status marker shadowsocks uses
+// for its sslocal mode. The effective mode is derived automatically from probing (scheme
+// capability + independent TCP/UDP circuit breakers); it is never configured manually.
 const (
 	ModeTCPAndUDP = "tcp_and_udp"
 	ModeTCPOnly   = "tcp_only"
 	ModeUDPOnly   = "udp_only"
+)
+
+// UDPCapability describes how a node's UDP relay works, auto-detected from probing and real
+// traffic. It is sticky (last-known-good): only success writes standard/raw, and a known
+// standard node is never downgraded to raw by a transient failure (see setUDPCapability).
+type UDPCapability string
+
+const (
+	UDPCapUnknown  UDPCapability = "unknown"  // not yet detected
+	UDPCapStandard UDPCapability = "standard" // SOCKS5 UDP ASSOCIATE control channel established
+	UDPCapRaw      UDPCapability = "raw"      // raw UDP relay at host:port, no control channel
+	UDPCapNone     UDPCapability = "none"     // no working UDP relay (ASSOCIATE and raw both failed)
 )
 
 type Proxy struct {
@@ -56,18 +70,12 @@ type Proxy struct {
 	// and v2ray-plugin/xray-plugin (all 5 Android modes of websocket/grpc/quic, see
 	// v2ray.go); on TCP connect it wraps the matching transport under the SS encryption layer, and unknown plugins return a clear error.
 	Plugin string
-	// Mode is the operator-configured base status marker, matching shadowsocks's mode:
-	// "tcp_and_udp" (default), "tcp_only", "udp_only". It is immutable after load; what
-	// routing and reporting actually use is EffectiveMode, derived from this base plus the
-	// probe results in health/udpHealth (a tcp_and_udp whose UDP is down reads as tcp_only,
-	// whose TCP is down reads as udp_only). Probing, however, follows this base mode so a
-	// degraded node keeps probing both paths and can detect recovery.
-	//   tcp_and_udp: both TCP and UDP; UDP tries the standard SOCKS5 UDP ASSOCIATE and
-	//     falls back to a raw UDP relay on its own host:port if that fails.
-	//   tcp_only:    TCP only, never used for UDP.
-	//   udp_only:    no TCP listener; UDP goes straight to a raw UDP relay on host:port.
-	Mode   string
 	health ProxyHealth
+	// udpCapability is how this node's UDP relay works, auto-detected (see UDPCapability).
+	// It is written by successful relays (standard ASSOCIATE, raw fallback, ss) and read by
+	// the raw routing fast path in socks5UDPAssociate; guarded by capMu.
+	udpCapability UDPCapability
+	capMu         sync.RWMutex
 	// udpHealth is an independent UDP circuit breaker. TCP health (health) and UDP health
 	// (udpHealth) never affect each other: a dead TCP path does not disable a working UDP
 	// relay (the udp_only use case) and a dead UDP path does not disable TCP routing.
@@ -78,37 +86,32 @@ type Proxy struct {
 	ssMethod shadowsocks.Method
 }
 
-// ModeName returns the configured base mode, defaulting an empty Mode to tcp_and_udp.
-// Routing and reporting use EffectiveMode (derived from probing); ModeName drives what the
-// health checker probes, so a node keeps being probed on both paths regardless of the
-// current circuit states and can detect recovery.
-func (p *Proxy) ModeName() string {
-	if p.Mode == "" {
-		return ModeTCPAndUDP
+// SchemeSupportsUDP reports whether the upstream's protocol can carry UDP at all. This is a
+// static property of the scheme and never changes: only SOCKS5 / SOCKS5h / SS have a UDP
+// relay concept; http/https/socks4 are TCP-only and are never UDP-probed.
+func (p *Proxy) SchemeSupportsUDP() bool {
+	switch p.Scheme {
+	case SchemeSOCKS5, SchemeSOCKS5H, SchemeSS:
+		return true
 	}
-	return p.Mode
+	return false
 }
 
-// IsConfiguredUDPOnly reports whether the operator configured the upstream as UDP-only
-// (no TCP listener). This gates the TCP health probe: a configured udp_only is never
-// TCP-probed, matching its config semantics. EffectiveMode may also be udp_only for a
-// tcp_and_udp node whose TCP path is currently down, but that node still gets TCP probes.
-func (p *Proxy) IsConfiguredUDPOnly() bool { return p.Mode == ModeUDPOnly }
-
-// IsConfiguredTCPOnly reports whether the operator configured the upstream as TCP-only
-// (never UDP). This gates the UDP health probe.
-func (p *Proxy) IsConfiguredTCPOnly() bool { return p.Mode == ModeTCPOnly }
-
-// EffectiveMode returns the mode routing and reporting actually use. It starts from the
-// configured base (default tcp_and_udp) and is refined by the independent TCP/UDP health
-// circuits: a tcp_and_udp whose UDP path is confirmed down downgrades to tcp_only, one
-// whose TCP path is confirmed down becomes udp_only, and one where both are down stays
-// tcp_and_udp (neither downgrade is meaningful and both circuit snapshots already report
-// the outage). Explicit tcp_only / udp_only configuration is never overridden.
+// EffectiveMode returns the mode routing and reporting actually use, derived purely from the
+// scheme and the independent TCP/UDP health circuits:
+//   - non-UDP schemes (http/https/socks4) are always tcp_only;
+//   - a UDP-capable scheme whose TCP and UDP circuits are both closed is tcp_and_udp;
+//   - UDP circuit open (but TCP healthy) → tcp_only;
+//   - TCP circuit open (but UDP healthy) → udp_only — auto-derived, never configured;
+//   - both open → tcp_and_udp (neither single downgrade is meaningful; both circuit
+//     snapshots already report the outage).
+//
+// There is no configured base: probing and routing read the same circuits, so a degraded
+// node keeps getting probed on both paths (probeUDP/checkProxyTCP run regardless of the
+// current states) and can detect recovery.
 func (p *Proxy) EffectiveMode() string {
-	base := p.ModeName()
-	if base != ModeTCPAndUDP {
-		return base
+	if !p.SchemeSupportsUDP() {
+		return ModeTCPOnly
 	}
 	tcpUp := p.health.IsAvailable()
 	udpUp := p.udpHealth.IsAvailable()
@@ -123,7 +126,7 @@ func (p *Proxy) EffectiveMode() string {
 }
 
 // IsUDPOnly reports whether routing must treat the upstream as UDP-only (no TCP). This
-// reflects the effective mode, so a tcp_and_udp node whose TCP path is down is skipped by
+// reflects the effective mode, so a UDP-capable node whose TCP path is down is skipped by
 // TCP routing until its TCP circuit recovers.
 func (p *Proxy) IsUDPOnly() bool { return p.EffectiveMode() == ModeUDPOnly }
 
@@ -131,31 +134,74 @@ func (p *Proxy) IsUDPOnly() bool { return p.EffectiveMode() == ModeUDPOnly }
 func (p *Proxy) IsTCPOnly() bool { return p.EffectiveMode() == ModeTCPOnly }
 
 // SupportsUDP reports whether routing may use this upstream to relay UDP (via UDPProxyConn
-// or the ss UDP relay). Effective-mode based: a tcp_and_udp whose UDP circuit is open
+// or the ss UDP relay). Effective-mode based: a UDP-capable node whose UDP circuit is open
 // downgrades to tcp_only and is skipped by UDP routing until UDP recovers.
 func (p *Proxy) SupportsUDP() bool {
 	if p.IsTCPOnly() {
 		return false
 	}
-	switch p.Scheme {
-	case SchemeSOCKS5, SchemeSOCKS5H, SchemeSS:
-		return true
-	}
-	return false
+	return p.SchemeSupportsUDP()
 }
 
-// ProbeSupportsUDP reports whether the health checker should exercise the UDP path. Unlike
-// SupportsUDP (routing), it is based on the configured base mode: a tcp_and_udp whose UDP
-// circuit is currently open still gets UDP probes so it can detect UDP recovery.
-func (p *Proxy) ProbeSupportsUDP() bool {
-	if p.IsConfiguredTCPOnly() {
-		return false
+// UDPCapability returns the last-known-good UDP capability marker (unknown before any
+// successful relay; standard/raw after a working path is found; none only when a fresh
+// node's UDP failed end to end). A zero value is normalized to unknown.
+func (p *Proxy) UDPCapability() UDPCapability {
+	p.capMu.RLock()
+	defer p.capMu.RUnlock()
+	if p.udpCapability == "" {
+		return UDPCapUnknown
 	}
-	switch p.Scheme {
-	case SchemeSOCKS5, SchemeSOCKS5H, SchemeSS:
-		return true
+	return p.udpCapability
+}
+
+// setUDPCapability records a UDP capability with sticky last-known-good semantics:
+//   - standard is always an upgrade (unknown/raw/none → standard) and idempotent;
+//   - raw is written only when the node is not already known standard — a known standard
+//     node is never downgraded to raw by a transient ASSOCIATE failure;
+//   - none is written only while the node is still unknown/none — a working standard/raw
+//     path sticks even through later end-to-end failures (the udpHealth circuit carries
+//     the outage, not this marker).
+func (p *Proxy) setUDPCapability(c UDPCapability) {
+	p.capMu.Lock()
+	defer p.capMu.Unlock()
+	switch c {
+	case UDPCapStandard:
+		p.udpCapability = UDPCapStandard
+	case UDPCapRaw:
+		if p.udpCapability != UDPCapStandard {
+			p.udpCapability = UDPCapRaw
+		}
+	case UDPCapNone:
+		// "" is a zero-value fresh proxy (no NewProxy path), treated as unknown.
+		if p.udpCapability == "" || p.udpCapability == UDPCapUnknown || p.udpCapability == UDPCapNone {
+			p.udpCapability = UDPCapNone
+		}
 	}
-	return false
+}
+
+// noteUDPCapabilityFailure records a failed UDP probe. It can only move an unknown/none
+// node to none; a node that already established standard/raw keeps its last-known-good
+// marker (the udpHealth circuit breaker reports the outage instead).
+func (p *Proxy) noteUDPCapabilityFailure() {
+	p.setUDPCapability(UDPCapNone)
+}
+
+// classifyUDPCapability records the capability from an established relay conn. The conn
+// type tells the story: a standard SOCKS5 UDP ASSOCIATE carries a TCP control channel
+// (tcpConn != nil); a raw relay (rawFallback or the udp_only/raw fast path) has none; any
+// other UDP conn (ss) is a standard relay. setUDPCapability enforces the sticky rules.
+func (p *Proxy) classifyUDPCapability(conn net.Conn) {
+	switch c := conn.(type) {
+	case *UDPProxyConn:
+		if c.tcpConn != nil {
+			p.setUDPCapability(UDPCapStandard)
+		} else {
+			p.setUDPCapability(UDPCapRaw)
+		}
+	default:
+		p.setUDPCapability(UDPCapStandard)
+	}
 }
 
 func (p *Proxy) IsAvailable() bool {
@@ -184,10 +230,11 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 	}
 
 	p := &Proxy{
-		URL:    proxyURL,
-		Scheme: scheme,
-		Host:   u.Hostname(),
-		Port:   port,
+		URL:           proxyURL,
+		Scheme:        scheme,
+		Host:          u.Hostname(),
+		Port:          port,
+		udpCapability: UDPCapUnknown,
 	}
 	if u.User != nil && scheme != SchemeSS {
 		p.Username = u.User.Username()
@@ -235,9 +282,9 @@ func (p *Proxy) Connect(ctx context.Context, targetHost string, targetPort int) 
 }
 
 func (p *Proxy) UDPAssociate(ctx context.Context, targetHost string, targetPort int) (net.Conn, error) {
-	if p.IsTCPOnly() {
-		return nil, fmt.Errorf("proxy %s is tcp_only, cannot relay UDP", p.Host)
-	}
+	// No effective-mode gate here: routing decides whether to call UDPAssociate
+	// (SupportsUDP), while the health probe calls it regardless of the current circuits so a
+	// degraded node can detect UDP recovery. Non-UDP schemes fail in the switch below.
 	switch p.Scheme {
 	case SchemeSOCKS5, SchemeSOCKS5H:
 		return p.socks5UDPAssociate(ctx, targetHost, targetPort)
@@ -314,13 +361,19 @@ func (p *Proxy) rawFallback(cause error) (*UDPProxyConn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("UDP ASSOCIATE failed (%v) and raw UDP relay failed: %w", cause, err)
 	}
+	// No capability write here: a dialed raw socket is not proof the raw relay works end to
+	// end (UDP is fire-and-forget). The marker is written only by an end-to-end success —
+	// the health probe's classifyUDPCapability, or Manager on a real-traffic relay.
 	return conn, nil
 }
 
 func (p *Proxy) socks5UDPAssociate(ctx context.Context, targetHost string, targetPort int) (*UDPProxyConn, error) {
-	// A udp_only upstream has no TCP listener to handshake over — relay straight to its own
-	// host:port as a raw UDP relay (the equivalent of shadowsocks-android's udp_only fallback instance).
-	if p.IsUDPOnly() {
+	// Fast path: a udp_only upstream has no TCP listener to handshake over, and a node already
+	// detected as raw-only (UDPCapability == raw) skips the doomed ASSOCIATE handshake — relay
+	// straight to its own host:port as a raw UDP relay (the equivalent of shadowsocks-android's
+	// udp_only fallback instance). This is the raw routing optimization: known raw nodes never
+	// pay an ASSOCIATE attempt that is guaranteed to fail.
+	if p.IsUDPOnly() || p.UDPCapability() == UDPCapRaw {
 		raddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(p.Host, strconv.Itoa(p.Port)))
 		if err != nil {
 			return nil, err

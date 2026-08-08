@@ -47,15 +47,14 @@
 | --- | --- | --- | --- |
 | `Default` | `default` | `"failover"` | 默认代理选择策略 |
 | `HealthCheck` | `health_check` | 见下 | 健康检查配置 |
-| `Proxies` | `proxies` | `[]` | 代理列表，每项 `{alias, url, mode}` |
+| `Proxies` | `proxies` | `[]` | 代理列表，每项 `{alias, url}` |
 
-`proxies` 每项 `ProxyEntry` 字段：`alias`（缺省自动命名 `proxy<N>`）、`url`（协议 URL，如 SS / VMess）、`mode`（可选状态标记，见下）；**没有 type 字段**。`health_check` 子字段：
+`proxies` 每项 `ProxyEntry` 字段：`alias`（缺省自动命名 `proxy<N>`）、`url`（协议 URL，如 SS / VMess）；**没有 type 字段，也没有 mode 字段** —— 每个上游的 TCP/UDP 能力由 scheme + 双熔断**自动辨识**（见 `docs/upstream.md` §3.2）。`health_check` 子字段：
 
 | 字段 | JSON 键 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `Alias` | `alias` | `proxy<N>` | 代理别名（规则引擎引用） |
 | `URL` | `url` | — | 协议 URL：`socks5://` / `socks5h://`（可带 user:pass）、`socks4://`、`http(s)://`（CONNECT）、`ss://`（内置 shadowsocks，见 `docs/upstream.md` §3.1）。`ss://` 支持 `ss://base64(method:password)@host:port`、明文 `ss://method:password@host:port`，或不加密方法的免密码形式 `ss://none@host:port`。方法可为经典 AEAD、AEAD-2022（密码框填 base64 PSK，多 PSK 用 `:` 连接）、或 `none`/`plain`。可带 `?plugin=obfs-local;obfs=http|tls;obfs-host=...`（内置 simple-obfs 混淆，仅 TCP；其它插件不内置会拒绝） |
-| `Mode` | `mode` | `"tcp_and_udp"` | 上游能力状态标记（同 shadowsocks `mode`）：`tcp_and_udp`（默认，TCP+UDP）／`tcp_only`（仅 TCP，UDP 直接报错）／`udp_only`（无 TCP 监听器，跳过 TCP 路由与 TCP 健康探测；UDP 裸中继到自身 `host:port`）。`socks5`/`socks5h` 的 UDP 先走标准 UDP ASSOCIATE，**任意失败**（含 rep=0x07）自动兜底裸 UDP 到 `host:port`，兜底再失败即判定该节点 UDP 有问题。见 `docs/upstream.md` §3.2 |
 
 | Go 字段 | JSON 键 | 默认值 | 说明 |
 | --- | --- | --- | --- |
@@ -70,7 +69,7 @@
 | `UDPProbeDNS` | `udp_probe_dns` | `"1.1.1.1:53"` | 主动 UDP 健康探测的 DNS 服务器：对支持 UDP 的上游，把真实 DNS 查询经其 UDP relay 发到该地址，收到合法响应即判定 UDP 可用 |
 | `UDPProbeDomain` | `udp_probe_domain` | `"dns.google"` | UDP 健康探测查询的域名（A 记录） |
 
-> TCP 与 UDP 健康是**两个独立熔断器**：TCP 探活喂 TCP 电路（`/health` 的 `health`），DNS UDP 探测喂 UDP 电路（`/health` 的 `udp_health`），互不影响。`udp_only` 节点只做 UDP 探测、从不做 TCP 探测；`tcp_and_udp` 两者都做；`tcp_only` 只做 TCP。UDP 路由（`UDPAssociate` failover）按 `udp_health` 熔断，TCP 路由按 `health` 熔断。详见 `docs/upstream.md` §3.2 / §4。
+> TCP 与 UDP 健康是**两个独立熔断器**：TCP 探活喂 TCP 电路（`/health` 的 `health`），DNS UDP 探测喂 UDP 电路（`/health` 的 `udp_health`），互不影响。探测方向由 scheme 决定：`socks5`/`socks5h`/`ss` 两种都探，其余协议（`http`/`https`/`socks4`）只探 TCP。每个代理的**生效 mode 由这两个熔断自动推出**（`tcp_and_udp`/`tcp_only`/`udp_only`，后者即「TCP 挂了但 UDP 正常」），无需配置。UDP 路由（`UDPAssociate` failover）按 `udp_health` 熔断，TCP 路由按 `health` 熔断。详见 `docs/upstream.md` §3.2 / §4。
 
 ### `routing`
 

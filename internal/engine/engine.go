@@ -75,7 +75,6 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 		upstreamCfg.Proxies = append(upstreamCfg.Proxies, upstream.ProxyEntry{
 			Alias: p.Alias,
 			URL:   p.URL,
-			Mode:  p.Mode,
 		})
 	}
 	upstreamMgr, err := upstream.NewManager(upstreamCfg)

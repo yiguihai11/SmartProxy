@@ -85,11 +85,6 @@ type HealthCheckConf struct {
 type ProxyEntry struct {
 	Alias string `json:"alias"`
 	URL   string `json:"url"`
-	// Mode is the upstream's status marker: "tcp_and_udp" (default), "tcp_only" or "udp_only".
-	// tcp_only skips UDP, udp_only (no TCP listener, e.g. shadowsocks's udp_only fallback
-	// instance) is skipped by every TCP path and by the TCP-based health probe, so its UDP
-	// relay stays usable even though TCP is down.
-	Mode string `json:"mode,omitempty"`
 }
 
 type RoutingConf struct {

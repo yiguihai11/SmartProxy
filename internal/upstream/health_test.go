@@ -73,4 +73,3 @@ func TestSetManualState_Multiple(t *testing.T) {
 	ph.SetManualState(false)
 	_ = ph.Latency() // just ensure no panic
 }
-

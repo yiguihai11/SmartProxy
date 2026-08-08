@@ -46,7 +46,7 @@ make build-all        # 交叉编译所有支持平台
 
 完整字段见 [docs/config.md](./docs/config.md)，示例见 [config.json](./config.json)。
 
-> 每个上游可用 `proxies[].mode` 标记能力：`tcp_and_udp`（默认）/ `tcp_only` / `udp_only`，与 shadowsocks 一致。`socks5`/`socks5h` 的 UDP 先走标准 UDP ASSOCIATE，**任意失败**（含 rep=0x07）自动兜底裸 UDP relay 到 `host:port`；`udp_only` 节点（无 TCP 监听器，如 shadowsocks 的 UDP fallback 实例）UDP 直接裸中继到自身地址。详见 [docs/upstream.md](./docs/upstream.md) §3.2。
+> 每个上游的 TCP/UDP 能力**自动辨识，无需配置**：`socks5`/`socks5h`/`ss` 才可能支持 UDP，`http`/`https`/`socks4` 恒为 `tcp_only`。对 UDP-capable 节点，探测与真实流量共同推导出三态 mode（`tcp_and_udp`/`tcp_only`/`udp_only`，由 TCP/UDP 双熔断自动推出，`udp_only` 即「TCP 挂了但 UDP 正常」）与 UDP 能力标记（`standard`=标准 ASSOCIATE / `raw`=裸中继 / `none`=无 UDP）。`socks5`/`socks5h` 的 UDP 先走标准 UDP ASSOCIATE，**任意失败**（含 rep=0x07）自动兜底裸 UDP relay 到 `host:port`；已辨识为 raw 的节点后续直连裸中继、跳过注定失败的 ASSOCIATE。详见 [docs/upstream.md](./docs/upstream.md) §3.2。
 
 ## 📖 ACL 规则速览
 

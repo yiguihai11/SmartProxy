@@ -189,57 +189,70 @@ func tunnelSOCKS5Conn(c net.Conn) error {
 	return nil
 }
 
-// TestCheckProxy_UDPOnly replaces the old "udp_only is skipped" test: a udp_only node now
-// gets an active UDP DNS probe feeding udpHealth, while the TCP circuit is never touched.
-func TestCheckProxy_UDPOnly(t *testing.T) {
-	t.Run("probe success", func(t *testing.T) {
-		dn, dnsPort := startFrameDNSServer(t)
-		defer dn.Close()
-		p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: dnsPort, Mode: ModeUDPOnly}
-		cfg := config.HealthCheckConf{
-			Enabled:            true,
-			URL:                "http://127.0.0.1:1/", // unreachable; must NOT be TCP-probed for udp_only
-			Interval:           1,
-			Timeout:            2,
-			FailuresThreshold:  1,
-			SuccessesThreshold: 1,
-		}
-		hc := NewHealthChecker(cfg, []*Proxy{p})
-		defer hc.Stop()
-		hc.checkProxy(p)
+// TestCheckProxy_AutoUDPOnly verifies a node with a working UDP relay but no TCP listener:
+// the TCP probe fails, the UDP probe succeeds, and the effective mode auto-derives to
+// udp_only. The successful end-to-end UDP probe (via the raw fast path, since TCP is down)
+// also records the raw capability.
+func TestCheckProxy_AutoUDPOnly(t *testing.T) {
+	dn, dnsPort := startFrameDNSServer(t)
+	defer dn.Close()
+	p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: dnsPort}
+	cfg := config.HealthCheckConf{
+		Enabled:            true,
+		URL:                "http://127.0.0.1:1/", // unreachable: no TCP listener at dnsPort
+		Interval:           1,
+		Timeout:            2,
+		FailuresThreshold:  1,
+		SuccessesThreshold: 1,
+	}
+	hc := NewHealthChecker(cfg, []*Proxy{p})
+	defer hc.Stop()
+	hc.checkProxy(p)
 
-		if !p.IsUDPAvailable() {
-			t.Fatal("expected UDP circuit closed: the DNS probe succeeded")
-		}
-		if lat := p.udpHealth.Snapshot().Latency; lat <= 0 {
-			t.Errorf("expected UDP probe latency, got %v", lat)
-		}
-		if !p.IsAvailable() {
-			t.Error("TCP circuit must stay closed: checkProxy must not TCP-probe a udp_only node")
-		}
-	})
+	if !p.IsUDPAvailable() {
+		t.Fatal("expected UDP circuit closed: the DNS probe succeeded")
+	}
+	if lat := p.udpHealth.Snapshot().Latency; lat <= 0 {
+		t.Errorf("expected UDP probe latency, got %v", lat)
+	}
+	if p.IsAvailable() {
+		t.Error("expected TCP circuit open: the HTTP probe failed (no TCP listener)")
+	}
+	if got := p.EffectiveMode(); got != ModeUDPOnly {
+		t.Errorf("expected auto-derived udp_only, got %q", got)
+	}
+	if got := p.UDPCapability(); got != UDPCapRaw {
+		t.Errorf("expected UDPCapability=raw (raw relay proven by the probe), got %q", got)
+	}
+}
 
-	t.Run("probe failure opens only UDP", func(t *testing.T) {
-		p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: deadUDPPort(t), Mode: ModeUDPOnly}
-		cfg := config.HealthCheckConf{
-			Enabled:            true,
-			URL:                "http://127.0.0.1:1/",
-			Interval:           1,
-			Timeout:            1,
-			FailuresThreshold:  1,
-			SuccessesThreshold: 1,
-		}
-		hc := NewHealthChecker(cfg, []*Proxy{p})
-		defer hc.Stop()
-		hc.checkProxy(p)
+// TestCheckProxy_DeadUDPMarksNone verifies a fresh node whose UDP fails end to end (no
+// ASSOCIATE, no answering raw relay) is marked UDPCapNone — the "否则不支持udp" case. Its TCP
+// circuit also opens (no TCP listener), so the effective mode stays tcp_and_udp with both
+// circuit snapshots reporting the outage.
+func TestCheckProxy_DeadUDPMarksNone(t *testing.T) {
+	p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: deadUDPPort(t)}
+	cfg := config.HealthCheckConf{
+		Enabled:            true,
+		URL:                "http://127.0.0.1:1/",
+		Interval:           1,
+		Timeout:            1,
+		FailuresThreshold:  1,
+		SuccessesThreshold: 1,
+	}
+	hc := NewHealthChecker(cfg, []*Proxy{p})
+	defer hc.Stop()
+	hc.checkProxy(p)
 
-		if p.IsUDPAvailable() {
-			t.Error("expected UDP circuit open: no relay answers at the dead port")
-		}
-		if !p.IsAvailable() {
-			t.Error("TCP circuit must stay closed: a broken UDP relay never disables TCP")
-		}
-	})
+	if p.IsUDPAvailable() {
+		t.Error("expected UDP circuit open: no relay answers at the dead port")
+	}
+	if got := p.UDPCapability(); got != UDPCapNone {
+		t.Errorf("expected UDPCapability=none for a fresh node whose UDP failed end to end, got %q", got)
+	}
+	if got := p.EffectiveMode(); got != ModeTCPAndUDP {
+		t.Errorf("both circuits down -> expected tcp_and_udp (snapshots report the outage), got %q", got)
+	}
 }
 
 // TestCheckProxy_ProbesTCPAndUDP proves the two circuits are independent on one node: the
@@ -266,7 +279,7 @@ func TestCheckProxy_ProbesTCPAndUDP(t *testing.T) {
 		UDPProbeDNS:        "127.0.0.1:1", // the frame target; nothing answers the raw relay
 		UDPProbeDomain:     "dns.google",
 	}
-	p := &Proxy{Scheme: SchemeSOCKS5, Host: host, Port: parsePort(portStr), Mode: ModeTCPAndUDP}
+	p := &Proxy{Scheme: SchemeSOCKS5, Host: host, Port: parsePort(portStr)}
 	hc := NewHealthChecker(cfg, []*Proxy{p})
 	defer hc.Stop()
 
@@ -290,7 +303,7 @@ func TestUDPHealth_IndependentCircuit(t *testing.T) {
 		OpenCoolDown:       60,
 	}
 
-	pu := &Proxy{URL: "socks5://127.0.0.1:1", Mode: ModeTCPAndUDP}
+	pu := &Proxy{URL: "socks5://127.0.0.1:1"}
 	hcu := NewHealthChecker(cfg, []*Proxy{pu})
 	defer hcu.Stop()
 	hcu.RecordUDPFailure(pu, errors.New("udp relay down"))
@@ -301,7 +314,7 @@ func TestUDPHealth_IndependentCircuit(t *testing.T) {
 		t.Error("TCP circuit must stay closed when only UDP fails")
 	}
 
-	pt := &Proxy{URL: "socks5://127.0.0.1:1", Mode: ModeTCPAndUDP}
+	pt := &Proxy{URL: "socks5://127.0.0.1:1"}
 	hct := NewHealthChecker(cfg, []*Proxy{pt})
 	defer hct.Stop()
 	hct.RecordFailure(pt, errors.New("tcp connect failed"))
@@ -324,8 +337,8 @@ func TestProbeUDP_ValidatesResponse(t *testing.T) {
 	t.Run("echoed query is not a response", func(t *testing.T) {
 		echo, echoPort := startUDPEcho(t)
 		defer echo.Close()
-		p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: echoPort, Mode: ModeUDPOnly}
-		_, err := hc.probeUDP(p, ctx)
+		p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: echoPort}
+		_, _, err := hc.probeUDP(p, ctx)
 		if err == nil {
 			t.Fatal("expected error when the relay echoes the query (QR=0)")
 		}
@@ -337,8 +350,8 @@ func TestProbeUDP_ValidatesResponse(t *testing.T) {
 	t.Run("garbage reply", func(t *testing.T) {
 		garbage, garbagePort := startGarbageUDPServer(t)
 		defer garbage.Close()
-		p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: garbagePort, Mode: ModeUDPOnly}
-		if _, err := hc.probeUDP(p, ctx); err == nil {
+		p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: garbagePort}
+		if _, _, err := hc.probeUDP(p, ctx); err == nil {
 			t.Fatal("expected error on garbage relay reply")
 		}
 	})
@@ -347,7 +360,10 @@ func TestProbeUDP_ValidatesResponse(t *testing.T) {
 // TestUDPFrameRoundTrip guards the build/parse framing against off-by-one drift.
 func TestUDPFrameRoundTrip(t *testing.T) {
 	payload := []byte("hello-dns")
-	for _, target := range []struct{ host string; port int }{
+	for _, target := range []struct {
+		host string
+		port int
+	}{
 		{"1.1.1.1", 53},
 		{"dns.example.com", 5353},
 		{"2001:db8::1", 53},

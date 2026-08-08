@@ -82,7 +82,6 @@ func (m *Manager) rebuildFromConfig(cfg UpstreamConfig) {
 			slog.Warn("failed to create proxy", "url", entry.URL, "error", err)
 			continue
 		}
-		proxy.Mode = entry.Mode
 		aliasMap[alias] = proxy
 		defaultProxies = append(defaultProxies, proxy)
 	}
@@ -100,10 +99,6 @@ type UpstreamConfig struct {
 type ProxyEntry struct {
 	Alias string
 	URL   string
-	// Mode is the upstream's status marker: "tcp_and_udp" (default), "tcp_only" or "udp_only".
-	// tcp_only is skipped by UDP, udp_only is skipped by TCP routing and by the TCP health
-	// probe, so TCP unavailability never disables a udp_only upstream's UDP.
-	Mode string
 }
 
 func (m *Manager) SelectProxy(targetIP string, targetPort int, domain string, engine *rules.Engine) (string, *Proxy) {
@@ -261,6 +256,12 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 		slog.Debug("UDPAssociate: using selected proxy by rule",
 			"proxy", selected.URL, "target", fmt.Sprintf("%s:%d", host, port))
 		conn, err := selected.UDPAssociate(ctx, host, port)
+		// First-detection capability record from real traffic: a raw-only node is learned
+		// even before the health probe runs, enabling the raw routing fast path. Only while
+		// the marker is still unknown — a probe finding (standard/raw/none) is never overridden.
+		if err == nil && selected.UDPCapability() == UDPCapUnknown {
+			selected.classifyUDPCapability(conn)
+		}
 		if m.healthChecker != nil {
 			if err != nil {
 				m.healthChecker.RecordUDPFailure(selected, err)
@@ -287,6 +288,9 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 				}
 			}
 			if err == nil {
+				if proxy.UDPCapability() == UDPCapUnknown {
+					proxy.classifyUDPCapability(conn)
+				}
 				slog.Debug("UDPAssociate: proxy succeeded", "proxy", proxy.URL)
 				return conn, nil
 			}
@@ -304,6 +308,9 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 		slog.Debug("UDPAssociateSelected: using pre-selected proxy",
 			"proxy", selected.URL, "target", fmt.Sprintf("%s:%d", host, port))
 		conn, err := selected.UDPAssociate(ctx, host, port)
+		if err == nil && selected.UDPCapability() == UDPCapUnknown {
+			selected.classifyUDPCapability(conn)
+		}
 		if m.healthChecker != nil {
 			if err != nil {
 				m.healthChecker.RecordUDPFailure(selected, err)
@@ -331,6 +338,9 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 				}
 			}
 			if err == nil {
+				if proxy.UDPCapability() == UDPCapUnknown {
+					proxy.classifyUDPCapability(conn)
+				}
 				slog.Debug("UDPAssociateSelected: proxy succeeded", "proxy", proxy.URL)
 				return conn, nil
 			}
@@ -347,14 +357,15 @@ type ProxyInfo struct {
 	Host   string `json:"host"`
 	Port   int    `json:"port"`
 	Scheme string `json:"scheme"`
-	// Mode is the effective mode derived from the configured base plus probe results
+	// Mode is the effective mode derived purely from scheme capability plus probe results
 	// (see Proxy.EffectiveMode) — the value routing actually uses, so it moves over time.
 	Mode string `json:"mode"`
-	// ConfiguredMode is the operator-set base from config, kept visible so the dashboard
-	// can show both what was configured and what probing discovered.
-	ConfiguredMode string              `json:"configured_mode,omitempty"`
-	Health         ProxyHealthSnapshot `json:"health"`
-	UDPHealth      ProxyHealthSnapshot `json:"udp_health"`
+	// UDPCapability is how this node's UDP relay works, auto-detected from probing and real
+	// traffic (unknown/standard/raw/none, see Proxy.UDPCapability). unknown means not yet
+	// detected — e.g. health check disabled or a non-UDP scheme that is never probed.
+	UDPCapability string              `json:"udp_capability"`
+	Health        ProxyHealthSnapshot `json:"health"`
+	UDPHealth     ProxyHealthSnapshot `json:"udp_health"`
 }
 
 func (m *Manager) Proxies() []ProxyInfo {
@@ -372,15 +383,15 @@ func (m *Manager) Proxies() []ProxyInfo {
 	for _, proxy := range m.defaultProxies {
 		alias := reverseMap[proxy]
 		infos = append(infos, ProxyInfo{
-			Alias:          alias,
-			URL:            proxy.URL,
-			Host:           proxy.Host,
-			Port:           proxy.Port,
-			Scheme:         string(proxy.Scheme),
-			Mode:           proxy.EffectiveMode(),
-			ConfiguredMode: proxy.ModeName(),
-			Health:         proxy.health.Snapshot(),
-			UDPHealth:      proxy.udpHealth.Snapshot(),
+			Alias:         alias,
+			URL:           proxy.URL,
+			Host:          proxy.Host,
+			Port:          proxy.Port,
+			Scheme:        string(proxy.Scheme),
+			Mode:          proxy.EffectiveMode(),
+			UDPCapability: string(proxy.UDPCapability()),
+			Health:        proxy.health.Snapshot(),
+			UDPHealth:     proxy.udpHealth.Snapshot(),
 		})
 	}
 	return infos

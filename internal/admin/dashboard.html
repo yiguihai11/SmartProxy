@@ -438,7 +438,7 @@ function lhealth(d){
   healthD=d;
   document.getElementById('proxy-cards').innerHTML=d.health.proxies.map(function(p,i){
     var a=p.health.available,lat=p.health.latency>0?(p.health.latency/1e6).toFixed(1)+'ms':'--';
-    return '<div class="proxy-card"><div class="top"><div><div class="alias">'+p.alias+'</div><div class="url">'+p.url+(p.mode==='udp_only'?' · UDP only':(p.mode==='tcp_only'?' · TCP only':''))+'</div></div><span class="status '+(a?'up':'down')+'">'+(a?'Connected':'Disconnected')+'</span></div>'+
+    return '<div class="proxy-card"><div class="top"><div><div class="alias">'+p.alias+'</div><div class="url">'+p.url+' · '+p.mode+(p.udp_capability&&p.udp_capability!=='unknown'?' · '+p.udp_capability:'')+'</div></div><span class="status '+(a?'up':'down')+'">'+(a?'Connected':'Disconnected')+'</span></div>'+
       '<div class="stats"><span>state: '+p.health.state+'</span><span>udp: '+(p.udp_health?(p.udp_health.available?'up':'down'):'n/a')+'</span><span>latency: '+lat+'</span><span>failures: '+p.health.consecutive_failures+'</span></div>'+
       '<div class="actions">'+
       '<button class="btn btn-sm primary" onclick="openProxyDialog('+i+')">Edit</button>'+
@@ -597,7 +597,6 @@ function openProxyDialog(i){
   document.getElementById('proxy-user').value='';
   document.getElementById('proxy-pass').value='';
   document.getElementById('proxy-server').value='';
-  document.getElementById('proxy-mode').value=p&&p.mode?p.mode:'tcp_and_udp';
   document.getElementById('proxy-plugin').value='';
   document.getElementById('proxy-plugin-bin').value='v2ray-plugin';
   document.getElementById('proxy-obfs-host').value='';
@@ -725,14 +724,13 @@ async function saveProxy(){
   if(plugin)url+='?plugin='+encodeURIComponent(plugin);
   try{var chk=new URL(url);if(!chk.hostname)throw new Error('bad host')}catch(e){alert('Invalid server address: '+server);return}
   var editing=document.getElementById('proxy-dialog').dataset.alias||'';
-  var mode=document.getElementById('proxy-mode').value||'tcp_and_udp';
   try{
     await putProxyConfig(function(cfg){
       var ps=cfg.upstream.proxies;
-      function entry(){var e={alias:alias,url:url};if(mode&&mode!=='tcp_and_udp')e.mode=mode;return e}
+      function entry(){return {alias:alias,url:url}}
       if(editing){
         for(var i=0;i<ps.length;i++){
-          if(ps[i].alias===editing){ps[i].alias=alias;ps[i].url=url;if(mode&&mode!=='tcp_and_udp')ps[i].mode=mode;else delete ps[i].mode;return}
+          if(ps[i].alias===editing){ps[i].alias=alias;ps[i].url=url;return}
           if(ps[i].alias===alias){alert('Alias "'+alias+'" already exists');throw new Error('dup')}
         }
         ps.push(entry());
@@ -1661,12 +1659,6 @@ es.onmessage=function(e){
     </div>
     <div class="dialog-label">Password <span style="text-transform:none;font-weight:400">(optional)</span></div>
     <input class="dialog-input" id="proxy-pass" type="password" placeholder="password" autocomplete="new-password" oninput="updateProxyPreview()">
-    <div class="dialog-label">Mode <span style="text-transform:none;font-weight:400">(status marker, like ss)</span></div>
-    <select class="dialog-input" id="proxy-mode" onchange="updateProxyPreview()">
-      <option value="tcp_and_udp">tcp_and_udp — TCP + UDP (default)</option>
-      <option value="tcp_only">tcp_only — TCP only (skip UDP)</option>
-      <option value="udp_only">udp_only — UDP only (no TCP listener; UDP relays to this server's address)</option>
-    </select>
     <div id="proxy-plugin-row" style="display:none">
       <div class="dialog-label">Plugin (SIP003) <span style="text-transform:none;font-weight:400">(obfs-local / v2ray-plugin built in, no external binary)</span></div>
       <select class="dialog-input" id="proxy-plugin" onchange="syncObfsRows();updateProxyPreview()">

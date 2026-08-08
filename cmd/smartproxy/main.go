@@ -159,7 +159,6 @@ func main() {
 			upstreamCfg.Proxies = append(upstreamCfg.Proxies, upstream.ProxyEntry{
 				Alias: p.Alias,
 				URL:   p.URL,
-				Mode:  p.Mode,
 			})
 		}
 

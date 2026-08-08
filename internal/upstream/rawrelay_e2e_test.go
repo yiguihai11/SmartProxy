@@ -147,8 +147,9 @@ func freeUDPPort(t *testing.T) int {
 }
 
 // TestRawRelayE2E verifies end-to-end raw relay using a real ss-local (mode=udp_only):
-//  1. Proxy.Mode = udp_only, listening on host:udpPort
-//  2. UDPAssociate goes through rawUDPAssociate, never touching TCP ASSOCIATE
+//  1. the TCP circuit trips open (no TCP listener at host:udpPort) → effective mode
+//     auto-derives to udp_only
+//  2. UDPAssociate goes through the udp_only raw fast path, never touching TCP ASSOCIATE
 //  3. send an example.com DNS query (SOCKS5 UDP frame, target 1.1.1.1:53)
 //  4. receiving a real DNS response frame proves the data really flows end to end
 func TestRawRelayE2E(t *testing.T) {
@@ -162,32 +163,30 @@ func TestRawRelayE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// A udp_only upstream (mode=udp_only) auto-relays UDP straight to its own host:port,
-	// and has no TCP listener either.
+	// This node has no TCP listener (udp_only ss-local), so its UDP is a raw relay on host:port.
 	p := &Proxy{
 		Scheme: SchemeSOCKS5,
 		Host:   host,
 		Port:   udpPort,
-		Mode:   ModeUDPOnly,
 	}
 
-	// A udp_only upstream has no TCP listener, so a TCP connect must fail fast.
+	// A node with no TCP listener: a TCP connect must fail fast.
 	tcpConn, tcpErr := p.Connect(ctx, "example.com", 80)
 	if tcpErr == nil {
 		tcpConn.Close()
-		t.Fatal("expected TCP connect to fail on a udp_only upstream (no TCP listener)")
+		t.Fatal("expected TCP connect to fail on a node with no TCP listener")
 	}
 	t.Logf("TCP connect failed as expected: %v", tcpErr)
 
-	// Simulate the TCP health probe tripping the circuit breaker (the old TCP/UDP coupling
-	// that used to disable UDP too). Even with the circuit open, the udp_only UDP relay
-	// must keep working — that is the "TCP down, keep testing UDP" guarantee.
+	// Trip the TCP circuit breaker (TCP down, UDP still fresh) — the effective mode
+	// auto-derives to udp_only. Even with the TCP circuit open, the UDP relay must keep
+	// working; that is the "TCP down, keep testing UDP" guarantee.
 	hcCfg := config.HealthCheckConf{Enabled: true, FailuresThreshold: 1, OpenCoolDown: 30}
 	hc := NewHealthChecker(hcCfg, []*Proxy{p})
 	defer hc.Stop()
 	hc.RecordFailure(p, tcpErr)
-	if p.IsAvailable() {
-		t.Log("note: circuit stayed closed (checkProxy skips udp_only proxies); continuing anyway")
+	if !p.IsUDPOnly() {
+		t.Fatalf("expected auto-derived udp_only (TCP circuit open, UDP fresh), got effective %q", p.EffectiveMode())
 	}
 
 	conn, err := p.UDPAssociate(ctx, "1.1.1.1", 53)

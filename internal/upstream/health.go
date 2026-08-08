@@ -191,22 +191,16 @@ func (hc *HealthChecker) checkLoop(p *Proxy) {
 	}
 }
 
-// checkProxy probes a proxy. TCP and UDP use independent circuits: UDP-capable nodes
-// (tcp_and_udp, udp_only) get a DNS UDP probe feeding udpHealth; TCP-capable nodes
-// (tcp_and_udp, tcp_only) get the HTTP probe feeding health. udp_only has no TCP
-// listener, so it is only UDP-probed — a dead TCP path can never open a udp_only
-// node's UDP circuit, and a broken UDP relay never disables TCP routing.
-// Probing follows the configured base mode (ProbeSupportsUDP / IsConfiguredUDPOnly), not
-// the derived effective mode: a tcp_and_udp node whose UDP circuit is currently open still
-// gets UDP probes so it can detect UDP recovery, and one whose TCP circuit is open still
-// gets TCP probes to detect TCP recovery.
+// checkProxy probes a proxy. TCP and UDP use independent circuits. The probe direction is
+// scheme-based (SchemeSupportsUDP): only SOCKS5/SOCKS5h/SS get the DNS UDP probe feeding
+// udpHealth; every node gets the HTTP probe feeding health. There is no configured base mode
+// to gate probing — a node whose UDP circuit is currently open still gets UDP probes so it
+// can detect UDP recovery, and one whose TCP circuit is open still gets TCP probes.
 func (hc *HealthChecker) checkProxy(p *Proxy) {
-	if p.ProbeSupportsUDP() {
+	if p.SchemeSupportsUDP() {
 		hc.checkProxyUDP(p)
 	}
-	if !p.IsConfiguredUDPOnly() {
-		hc.checkProxyTCP(p)
-	}
+	hc.checkProxyTCP(p)
 }
 
 func (hc *HealthChecker) checkProxyTCP(p *Proxy) {
@@ -295,12 +289,19 @@ func (hc *HealthChecker) checkProxyUDP(p *Proxy) {
 	ctx, cancel := context.WithTimeout(hc.ctx, time.Duration(cfg.Timeout)*time.Second)
 	defer cancel()
 
-	latency, err := hc.probeUDP(p, ctx)
+	latency, conn, err := hc.probeUDP(p, ctx)
 	if err != nil {
+		// End-to-end UDP failure. On a still-unknown node this marks it none; a node that
+		// already established standard/raw keeps its last-known-good marker (the circuit
+		// breaker below reports the outage instead).
+		p.noteUDPCapabilityFailure()
 		hc.RecordUDPFailure(p, err)
-	} else {
-		hc.RecordUDPSuccess(p, latency)
+		return
 	}
+	defer conn.Close()
+	// The relay path worked end to end — record how it works (standard ASSOCIATE vs raw).
+	p.classifyUDPCapability(conn)
+	hc.RecordUDPSuccess(p, latency)
 }
 
 // probeUDP sends a real DNS A query through the proxy's UDP relay and requires a valid
@@ -308,7 +309,10 @@ func (hc *HealthChecker) checkProxyUDP(p *Proxy) {
 // exactly the route real UDP traffic takes: standard SOCKS5 UDP ASSOCIATE with the raw
 // fallback for socks5, the raw relay for udp_only, and the ss UDP relay for ss://. A DNS
 // response (matching TXID + QR bit) proves the node's UDP relay is alive end to end.
-func (hc *HealthChecker) probeUDP(p *Proxy, ctx context.Context) (time.Duration, error) {
+//
+// On success the established conn is returned (not closed) so the caller can classify the
+// relay type (standard vs raw) before closing it; on any failure the conn is closed here.
+func (hc *HealthChecker) probeUDP(p *Proxy, ctx context.Context) (time.Duration, net.Conn, error) {
 	cfg := hc.cfg.Load()
 	dnsServer := cfg.UDPProbeDNS
 	if dnsServer == "" {
@@ -320,7 +324,7 @@ func (hc *HealthChecker) probeUDP(p *Proxy, ctx context.Context) (time.Duration,
 	}
 	host, portStr, err := net.SplitHostPort(dnsServer)
 	if err != nil {
-		return 0, fmt.Errorf("invalid udp_probe_dns %q: %w", dnsServer, err)
+		return 0, nil, fmt.Errorf("invalid udp_probe_dns %q: %w", dnsServer, err)
 	}
 	port := 53
 	if p := parsePort(portStr); p > 0 {
@@ -329,15 +333,15 @@ func (hc *HealthChecker) probeUDP(p *Proxy, ctx context.Context) (time.Duration,
 
 	conn, err := p.UDPAssociate(ctx, host, port)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	defer conn.Close()
 
 	query := new(dns.Msg)
 	query.SetQuestion(dns.Fqdn(domain), dns.TypeA)
 	packed, err := query.Pack()
 	if err != nil {
-		return 0, err
+		conn.Close()
+		return 0, nil, err
 	}
 	txid := query.Id
 
@@ -347,27 +351,32 @@ func (hc *HealthChecker) probeUDP(p *Proxy, ctx context.Context) (time.Duration,
 
 	start := time.Now()
 	if _, err := conn.Write(buildUDPFrame(host, port, packed)); err != nil {
-		return 0, err
+		conn.Close()
+		return 0, nil, err
 	}
 	buf := make([]byte, 2048)
 	n, err := conn.Read(buf)
 	if err != nil {
-		return 0, err
+		conn.Close()
+		return 0, nil, err
 	}
 	latency := time.Since(start)
 
 	payload, err := parseUDPFrame(buf[:n])
 	if err != nil {
-		return 0, err
+		conn.Close()
+		return 0, nil, err
 	}
 	var resp dns.Msg
 	if err := resp.Unpack(payload); err != nil {
-		return 0, fmt.Errorf("invalid DNS response: %w", err)
+		conn.Close()
+		return 0, nil, fmt.Errorf("invalid DNS response: %w", err)
 	}
 	if resp.Id != txid || !resp.Response {
-		return 0, fmt.Errorf("invalid DNS response (id=%d, response=%v)", resp.Id, resp.Response)
+		conn.Close()
+		return 0, nil, fmt.Errorf("invalid DNS response (id=%d, response=%v)", resp.Id, resp.Response)
 	}
-	return latency, nil
+	return latency, conn, nil
 }
 
 // buildUDPFrame wraps a payload in a SOCKS5 UDP relay header (RSV=0, FRAG=0, ATYP
