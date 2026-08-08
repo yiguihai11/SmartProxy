@@ -501,6 +501,8 @@ function setProxyScheme(v){
   // ss: use the encryption-method dropdown instead of Username
   var sm=document.getElementById('proxy-ssmethod-row');
   if(sm)sm.style.display=(v==='ss')?'':'none';
+  var slr=document.getElementById('proxy-sslink-row');
+  if(slr)slr.style.display=(v==='ss')?'':'none';
   var urow=document.getElementById('proxy-user-row');
   if(urow)urow.style.display=(v==='ss')?'none':'';
   // plugin row: only for ss (obfs-http/tls and v2ray-plugin are built in, no external binary)
@@ -581,12 +583,113 @@ function getProxyScheme(){
   var b=g.querySelector('.seg-btn.active');
   return b?b.getAttribute('data-val'):'socks5';
 }
-function b64urlDecode(s){
-  try{
-    s=s.replace(/-/g,'+').replace(/_/g,'/');
-    while(s.length%4!==0)s+='=';
-    return atob(s);
-  }catch(e){return ''}
+// b64decodeAny decodes base64 (URL-safe or standard, with or without padding); null on failure.
+// The alphabet regex is mandatory: atob implements WHATWG forgiving-base64, which silently
+// DROPS characters outside the standard alphabet instead of erroring (e.g. URL-safe '-'),
+// so a valid-looking decode can return garbage without a colon. Validate first, then decode.
+function b64decodeAny(s){
+  var cands=[s,s.replace(/-/g,'+').replace(/_/g,'/')];
+  for(var i=0;i<cands.length;i++){
+    var t=cands[i];
+    if(!/^[A-Za-z0-9+/]*={0,2}$/.test(t))continue;
+    try{
+      while(t.length%4!==0)t+='=';
+      return atob(t);
+    }catch(e){}
+  }
+  return null;
+}
+// parseSSUserinfoFields decodes an ss:// userinfo (percent-encoded, as it appears between
+// "ss://" and "@") into method+password, mirroring the backend parseSSUserinfo: base64
+// (URL-safe or standard) or plaintext "method:password"; no colon => passwordless method name.
+function parseSSUserinfoFields(ui){
+  var text=ui;
+  try{text=decodeURIComponent(ui)}catch(e){}
+  var b=b64decodeAny(text);
+  if(b!==null&&b.indexOf(':')>=0)text=b;
+  var ci=text.indexOf(':');
+  if(ci<0)return {method:text,password:''};
+  return {method:text.slice(0,ci),password:text.slice(ci+1)};
+}
+// parseSSLink parses a full ss:// link into {method,password,host,plugin}. Unlike new URL(),
+// it does not stop at the first '/' in a std-base64 userinfo (base64 may contain '/'), so it
+// splits the authority manually. Returns null for a non-ss:// or method-less link.
+function parseSSLink(raw){
+  var s=raw.trim().replace(/\s+/g,'');
+  if(s.slice(0,5).toLowerCase()!=='ss://')return null;
+  var rest=s.slice(5);
+  var hi=rest.indexOf('#');               // strip fragment
+  if(hi>=0)rest=rest.slice(0,hi);
+  var qi=rest.indexOf('?');               // extract plugin query
+  var query=qi>=0?rest.slice(qi+1):'';
+  var hostpart=qi>=0?rest.slice(0,qi):rest;
+  var at=hostpart.lastIndexOf('@');       // userinfo is everything before the LAST '@' (Go
+  var ui=at>=0?hostpart.slice(0,at):'';   // url.Parse semantics; '@' in a password must be
+  var host=at>=0?hostpart.slice(at+1):hostpart; // %40-encoded, base64 never contains '@')
+  if(!host)return null;
+  var f=parseSSUserinfoFields(ui);
+  if(!f.method)return null;
+  var plugin='';
+  var params=query.split('&');
+  for(var i=0;i<params.length;i++){
+    var eq=params[i].indexOf('=');
+    var k=eq<0?params[i]:params[i].slice(0,eq);
+    if(k==='plugin'){
+      var vv=eq<0?'':params[i].slice(eq+1);
+      try{plugin=decodeURIComponent(vv)}catch(e){plugin=vv}
+      break;
+    }
+  }
+  return {method:f.method,password:f.password,host:host,plugin:plugin};
+}
+// fillSSPluginFromQuery splits SIP003 plugin args (obfs-local or v2ray-plugin/xray-plugin)
+// back into the plugin dropdown and its option fields. Callers must reset #proxy-plugin first.
+function fillSSPluginFromQuery(pv){
+  var obfs='',host='',method='',uri='',vmode='',vtls=false,vpath='',vmux='',vsn='',vcert='';
+  if(pv){
+    var parts=pv.split(';');
+    var bin=parts.length?parts[0]:'';
+    for(var i=1;i<parts.length;i++){
+      var eq=parts[i].indexOf('=');
+      var k=eq<0?parts[i]:parts[i].slice(0,eq);
+      var vv=eq<0?'':parts[i].slice(eq+1);
+      if(k==='obfs')obfs=vv;else if(k==='obfs-host')host=vv;
+      else if(k==='http-method')method=vv;else if(k==='obfs-uri')uri=vv;
+      else if(k==='mode')vmode=vv;else if(k==='host')host=vv;
+      else if(k==='path')vpath=vv;else if(k==='mux')vmux=vv;
+      else if(k==='serviceName')vsn=vv;else if(k==='certRaw')vcert=vv;
+      else if(k==='tls')vtls=true;
+    }
+    if(bin==='v2ray-plugin'||bin==='xray-plugin'){
+      document.getElementById('proxy-plugin-bin').value=bin;
+      document.getElementById('proxy-plugin').value=
+        vmode==='quic'?'v2ray-quic':
+        vmode==='grpc'?(vtls?'v2ray-grpc-tls':'v2ray-grpc'):
+        (vtls?'v2ray-ws-tls':'v2ray-ws');
+    }
+  }
+  if(!document.getElementById('proxy-plugin').value)
+    document.getElementById('proxy-plugin').value=obfs==='http'?'obfs-http':obfs==='tls'?'obfs-tls':'';
+  document.getElementById('proxy-obfs-host').value=host;
+  document.getElementById('proxy-obfs-method').value=method||'GET';
+  document.getElementById('proxy-obfs-uri').value=uri||'/';
+  document.getElementById('proxy-v2ray-path').value=vpath||'/';
+  document.getElementById('proxy-v2ray-mux').value=vmux||'1';
+  document.getElementById('proxy-v2ray-servicename').value=vsn||'GunService';
+  document.getElementById('proxy-v2ray-certraw').value=vcert||'';
+}
+// parseSSLinkBtn reads the ss:// link input, parses it, and auto-fills the SS form fields.
+function parseSSLinkBtn(){
+  var el=document.getElementById('proxy-sslink');
+  var f=parseSSLink(el?el.value:'');
+  if(!f){alert('Invalid ss:// link');return}
+  document.getElementById('proxy-server').value=f.host;
+  if(f.method)setSSMethod(f.method);
+  document.getElementById('proxy-pass').value=f.password;
+  document.getElementById('proxy-plugin').value=''; // fillSSPluginFromQuery only fills when empty
+  fillSSPluginFromQuery(f.plugin);
+  syncObfsRows();
+  updateProxyPreview();
 }
 function openProxyDialog(i){
   var p=(i>=0&&healthD.health.proxies[i])||null;
@@ -597,6 +700,7 @@ function openProxyDialog(i){
   document.getElementById('proxy-user').value='';
   document.getElementById('proxy-pass').value='';
   document.getElementById('proxy-server').value='';
+  document.getElementById('proxy-sslink').value='';
   document.getElementById('proxy-plugin').value='';
   document.getElementById('proxy-plugin-bin').value='v2ray-plugin';
   document.getElementById('proxy-obfs-host').value='';
@@ -614,52 +718,13 @@ function openProxyDialog(i){
       if(scheme==='ss'){
         // ss://method:password@host:port, ss://base64(method:password)@host:port,
         // or ss://none@host:port (plain method without password). Decode method into
-        // the dropdown and password into the password field.
-        var sm='',sp='';
+        // the dropdown and password into the password field (mirrors backend parseSSUserinfo).
         if(u.username){
-          if(u.password){sm=decodeURIComponent(u.username);sp=decodeURIComponent(u.password)}
-          else{
-            var dec=b64urlDecode(u.username);
-            var ci=dec.indexOf(':');
-            if(ci>0){sm=dec.slice(0,ci);sp=dec.slice(ci+1)}
-            else{sm=decodeURIComponent(u.username)} // passwordless method name (e.g. none)
-          }
+          var f=parseSSUserinfoFields(u.username+(u.password?':'+u.password:''));
+          if(f.method){setSSMethod(f.method);document.getElementById('proxy-pass').value=f.password}
         }
-        if(sm){setSSMethod(sm);document.getElementById('proxy-pass').value=sp}
         // SIP003 plugin args: obfs-local or v2ray-plugin/xray-plugin, split back into the form
-        var pv=u.searchParams.get('plugin')||'';
-        var obfs='',host='',method='',uri='',vmode='',vtls=false,vpath='',vmux='',vsn='',vcert='';
-        if(pv){
-          var parts=pv.split(';');
-          var bin=parts.length?parts[0]:'';
-          for(var i=1;i<parts.length;i++){
-            var eq=parts[i].indexOf('=');
-            var k=eq<0?parts[i]:parts[i].slice(0,eq);
-            var vv=eq<0?'':parts[i].slice(eq+1);
-            if(k==='obfs')obfs=vv;else if(k==='obfs-host')host=vv;
-            else if(k==='http-method')method=vv;else if(k==='obfs-uri')uri=vv;
-            else if(k==='mode')vmode=vv;else if(k==='host')host=vv;
-            else if(k==='path')vpath=vv;else if(k==='mux')vmux=vv;
-            else if(k==='serviceName')vsn=vv;else if(k==='certRaw')vcert=vv;
-            else if(k==='tls')vtls=true;
-          }
-          if(bin==='v2ray-plugin'||bin==='xray-plugin'){
-            document.getElementById('proxy-plugin-bin').value=bin;
-            document.getElementById('proxy-plugin').value=
-              vmode==='quic'?'v2ray-quic':
-              vmode==='grpc'?(vtls?'v2ray-grpc-tls':'v2ray-grpc'):
-              (vtls?'v2ray-ws-tls':'v2ray-ws');
-          }
-        }
-        if(!document.getElementById('proxy-plugin').value)
-          document.getElementById('proxy-plugin').value=obfs==='http'?'obfs-http':obfs==='tls'?'obfs-tls':'';
-        document.getElementById('proxy-obfs-host').value=host;
-        document.getElementById('proxy-obfs-method').value=method||'GET';
-        document.getElementById('proxy-obfs-uri').value=uri||'/';
-        document.getElementById('proxy-v2ray-path').value=vpath||'/';
-        document.getElementById('proxy-v2ray-mux').value=vmux||'1';
-        document.getElementById('proxy-v2ray-servicename').value=vsn||'GunService';
-        document.getElementById('proxy-v2ray-certraw').value=vcert||'';
+        fillSSPluginFromQuery(u.searchParams.get('plugin')||'');
       }else{
         if(u.username)document.getElementById('proxy-user').value=decodeURIComponent(u.username);
         if(u.password)document.getElementById('proxy-pass').value=decodeURIComponent(u.password);
@@ -1639,6 +1704,13 @@ es.onmessage=function(e){
     </div>
     <div class="dialog-label">Server (host:port)</div>
     <input class="dialog-input" id="proxy-server" placeholder="proxy.example.com:1080" autocomplete="off" oninput="updateProxyPreview()">
+    <div id="proxy-sslink-row" style="display:none">
+      <div class="dialog-label">Import ss:// Link <span style="text-transform:none;font-weight:400">(paste, then Parse — auto-fills server/method/password/plugin)</span></div>
+      <div style="display:flex;gap:8px">
+        <input class="dialog-input" id="proxy-sslink" placeholder="ss://base64(method:password)@host:port?plugin=..." autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter'){event.preventDefault();parseSSLinkBtn()}">
+        <button type="button" class="btn btn-sm" onclick="parseSSLinkBtn()">Parse</button>
+      </div>
+    </div>
     <div id="proxy-ssmethod-row" style="display:none">
       <div class="dialog-label">Encryption Method</div>
       <select class="dialog-input" id="proxy-ss-method" onchange="updateProxyPreview()">
