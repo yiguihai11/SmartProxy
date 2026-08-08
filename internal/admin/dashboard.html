@@ -531,11 +531,11 @@ function syncObfsRows(){
   var vr=document.getElementById('proxy-v2ray-opts-row');
   if(vr)vr.style.display=isV2ray?'':'none';
   var wr=document.getElementById('proxy-v2ray-ws-row');
-  if(wr)wr.style.display=(isV2ray&&(m==='websocket'||m==='websocket-tls'))?'':'none';
+  if(wr)wr.style.display=(isV2ray&&(m==='websocket-http'||m==='websocket-tls'))?'':'none';
   var gr=document.getElementById('proxy-v2ray-grpc-row');
   if(gr)gr.style.display=(isV2ray&&(m==='grpc'||m==='grpc-tls'))?'':'none';
   var tr=document.getElementById('proxy-v2ray-tls-row');
-  if(tr)tr.style.display=(isV2ray&&(m==='websocket-tls'||m==='grpc-tls'||m==='quic'))?'':'none';
+  if(tr)tr.style.display=(isV2ray&&(m==='websocket-tls'||m==='grpc-tls'||m==='quic-tls'))?'':'none';
 }
 // fillModeOptions rebuilds the #proxy-plugin-mode options for the selected plugin type
 // ('' = none). Keeps the current selection when it still applies, else picks the first.
@@ -544,7 +544,7 @@ function fillModeOptions(p){
   if(!sel)return;
   var cur=sel.value;
   var opts=p==='simple-obfs'?[['http','HTTP disguise'],['tls','TLS disguise']]
-    :p==='v2ray-plugin'?[['websocket','WebSocket'],['websocket-tls','WebSocket (TLS)'],['quic','QUIC (TLS)'],['grpc','gRPC'],['grpc-tls','gRPC (TLS)']]
+    :p==='v2ray-plugin'?[['websocket-http','WebSocket (HTTP)'],['websocket-tls','WebSocket (TLS)'],['quic-tls','QUIC (TLS)'],['grpc','gRPC (HTTP/2)'],['grpc-tls','gRPC (TLS)']]
     :[];
   sel.innerHTML='';
   for(var i=0;i<opts.length;i++){
@@ -566,8 +566,8 @@ function buildPlugin(){
   if(p==='v2ray-plugin'){
     // v2ray-plugin / xray-plugin:mode + tls + host + path/mux/serviceName/certRaw
     var bin=document.getElementById('proxy-plugin-bin').value||'v2ray-plugin';
-    var vmode=mode.indexOf('websocket')===0?'websocket':(mode==='quic'?'quic':'grpc');
-    var tls=(mode==='websocket-tls'||mode==='grpc-tls'||mode==='quic'); // quic implies tls
+    var vmode=mode==='quic-tls'?'quic':(mode.indexOf('grpc')===0?'grpc':'websocket');
+    var tls=(mode==='websocket-tls'||mode==='grpc-tls'); // quic-tls: TLS forced server-side, no flag (like v2ray-plugin-android)
     var parts=[bin,'mode='+vmode];
     if(tls)parts.push('tls');
     if(host)parts.push('host='+host);
@@ -695,10 +695,10 @@ function fillSSPluginFromQuery(pv){
     else if(bin==='v2ray-plugin'||bin==='xray-plugin'){
       p='v2ray-plugin';
       document.getElementById('proxy-plugin-bin').value=bin;
-      m=vmode==='websocket'?(vtls?'websocket-tls':'websocket')
+      m=vmode==='websocket'?(vtls?'websocket-tls':'websocket-http')
        :vmode==='grpc'?(vtls?'grpc-tls':'grpc')
-       :vmode==='quic'?'quic'
-       :(vtls?'websocket-tls':'websocket');
+       :vmode==='quic'?'quic-tls'
+       :(vtls?'websocket-tls':'websocket-http');
     }
   }
   document.getElementById('proxy-plugin').value=p;
