@@ -1,10 +1,6 @@
 package upstream
 
-import (
-	"testing"
-
-	"smartproxy/internal/config"
-)
+import "testing"
 
 func TestSetManualState_Disable(t *testing.T) {
 	ph := &ProxyHealth{}
@@ -78,27 +74,3 @@ func TestSetManualState_Multiple(t *testing.T) {
 	_ = ph.Latency() // just ensure no panic
 }
 
-// TestCheckProxy_SkipsUDPOnly verifies the TCP health probe never probes a udp_only
-// upstream: an unreachable probe target would otherwise trip the circuit breaker and
-// disable its UDP relay too.
-func TestCheckProxy_SkipsUDPOnly(t *testing.T) {
-	cfg := config.HealthCheckConf{
-		Enabled:           true,
-		URL:               "http://127.0.0.1:1/", // unreachable; would open the circuit if probed
-		Interval:          1,
-		Timeout:           1,
-		FailuresThreshold: 1,
-	}
-	p := &Proxy{URL: "socks5://127.0.0.1:1234", Mode: ModeUDPOnly}
-	hc := NewHealthChecker(cfg, []*Proxy{p})
-	defer hc.Stop()
-
-	hc.checkProxy(p)
-	if !p.IsAvailable() {
-		t.Fatal("udp_only proxy must stay available: the TCP health probe must skip it")
-	}
-	snap := p.health.Snapshot()
-	if snap.State != "closed" {
-		t.Errorf("expected state closed, got %s", snap.State)
-	}
-}

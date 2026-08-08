@@ -81,7 +81,7 @@ shadowsocks-rust 中 `plain` 与 `none` 是**同一个** `CipherKind::NONE` 的�
 
 - **`tcp_and_udp`**（默认，缺省即此）：TCP + UDP 均可。UDP 先走标准 SOCKS5 UDP ASSOCIATE；**任意失败**（拨号/握手/请求失败、回任何非 0x00 的 rep（含 0x07 CommandNotSupported）、bind 地址解析或拨号失败）都会自动兜底为**裸 UDP** 直连 `Host:socks-port`（打 WARN 日志）。兜底再失败（目标无监听时包会静默丢弃）即表示该节点 UDP 有问题。某些上游（如 shadowsocks-android 插件模式）主实例只启 TCP、SOCKS5 对 UDP ASSOCIATE 回 0x07，但同端口的 UDP 上常有配套的裸 UDP relay（不要求 ASSOCIATE、读到带 SOCKS5 UDP 头的帧就转发），此路径正是为它服务。
 - **`tcp_only`**：只走 TCP。`SupportsUDP()` 为 false，UDP 请求直接报错。
-- **`udp_only`**：没有 TCP 监听器。TCP 路由与 TCP 健康探测都跳过它（所以 TCP 挂了不会熔断掉它的 UDP）；UDP 直接裸中继到自身 `Host:port`，从不尝试 TCP 握手（等价于 shadowsocks-android 的 UDP fallback 实例）。
+- **`udp_only`**：没有 TCP 监听器。TCP 路由与 TCP 健康探测都跳过它（所以 TCP 挂了不会熔断掉它的 UDP）；UDP 直接裸中继到自身 `Host:port`，从不尝试 TCP 握手（等价于 shadowsocks-android 的 UDP fallback 实例）。开启健康检查时会被**主动 UDP 探测**（DNS 查询经裸中继往返，喂独立的 `udpHealth` 电路，见 §4），探测失败只会熔断它的 UDP 路由，不影响任何 TCP。
 
 实现：`rawUDPAssociate(raddr)` 直接 `net.DialUDP` 返回 `UDPProxyConn{UDPConn}`（`tcpConn` 为 nil，`Close` 已做空指针保护）；`rawFallback(cause)` 在 ASSOCIATE 任一步失败后解析 `Host:port` 兜底。注意两点：① `DialUDP` 恒成功，目标无监听时包会静默丢弃（黑洞），故兜底路径打 WARN；② 兜底只在**本代理**的 ASSOCIATE 失败时发生，不改变 `Manager.UDPAssociate` 多代理 failover 语义。DNS 代理查询（`Manager.AcquireDNSUDP`）同走此路径，一处修改同时覆盖 DNS UDP。
 
@@ -101,10 +101,13 @@ StateClosed ──失败 ≥ FailuresThreshold──► StateOpen
         （半开期间任意失败 → 立即回 StateOpen）
 ```
 
-- `IsAvailable()`：Closed / HalfOpen 为可用，Open 不可用。
-- `checkLoop` 每代理一个 goroutine（启动时随机错峰 0–2s），按 `cfg.Interval`（默认 60s）经 HTTP GET `cfg.URL` 探活（2xx–3xx 算成功），延迟做 EMA 平滑（`(lat*3+new)/4`）。
+- **TCP 与 UDP 是两个独立熔断器**：每个 `Proxy` 持有 `health`（TCP）与 `udpHealth`（UDP）两个 `ProxyHealth`。TCP 探活只喂 `health`，DNS UDP 探测只喂 `udpHealth`，开合互不影响——TCP 挂了不会熔断 UDP（`udp_only` 场景），UDP 挂了也不会熔断 TCP。对应地，TCP 路由按 `IsAvailable()`（`health`）过滤，UDP 路由按 `IsUDPAvailable()`（`udpHealth`）过滤。
+- `IsAvailable()` / `IsUDPAvailable()`：Closed / HalfOpen 为可用，Open 不可用。
+- `checkLoop` 每代理一个 goroutine（启动时随机错峰 0–2s），按 `cfg.Interval`（默认 60s）：
+  - **TCP 探活**：`SupportsUDP` 之外（`tcp_and_udp` / `tcp_only`）HTTP GET `cfg.URL` 探活（2xx–3xx 算成功），喂 `health`。
+  - **UDP 探活**：`SupportsUDP`（`tcp_and_udp` / `udp_only`）经 `probeUDP` 发真实 DNS 查询——`p.UDPAssociate(dnsServer, 53)` → 写带 SOCKS5 UDP 头的 DNS A 查询帧 → 收响应帧并校验 TXID + QR 位，延迟做 EMA 平滑，喂 `udpHealth`。DNS 服务器与查询域名可配（`health_check.udp_probe_dns`，默认 `1.1.1.1:53`；`udp_probe_domain`，默认 `dns.google`）。探测复用正常 relay 路径（标准 ASSOCIATE + 裸兜底 / udp_only 裸中继 / ss UDP），所以测的就是真实 UDP 流量走的链路。
 - `AutoDisableSingle`：仅一个代理时自动关闭健康检查。
-- 手动 disable/enable：admin `/health/proxy` → `Manager.SetProxyHealth(alias, available)` → `SetManualState`。
+- 手动 disable/enable：admin `/health/proxy` → `Manager.SetProxyHealth(alias, available)` → `SetManualState`（同时设置两个电路，等价于整节点下线/上线）。
 
 ## §5 选路策略
 

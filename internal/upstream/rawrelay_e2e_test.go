@@ -232,4 +232,12 @@ func TestRawRelayE2E(t *testing.T) {
 		t.Fatalf("DNS response TXID mismatch: query id=%x resp=%x", dnsQuery[:2], dnsResp[:2])
 	}
 	t.Logf("DNS response TXID matched, real end-to-end UDP relay OK")
+
+	// Exercise the production active-UDP health probe (a DNS query through the same relay)
+	// on the real sslocal — proves the health checker's probeUDP works end to end.
+	probeLatency, err := hc.probeUDP(p, ctx)
+	if err != nil {
+		t.Fatalf("probeUDP through real sslocal failed: %v", err)
+	}
+	t.Logf("active UDP health probe latency: %v", probeLatency)
 }

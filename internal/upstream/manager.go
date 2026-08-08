@@ -263,16 +263,16 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 		conn, err := selected.UDPAssociate(ctx, host, port)
 		if m.healthChecker != nil {
 			if err != nil {
-				m.healthChecker.RecordFailure(selected, err)
+				m.healthChecker.RecordUDPFailure(selected, err)
 			} else {
-				m.healthChecker.RecordSuccess(selected, 0)
+				m.healthChecker.RecordUDPSuccess(selected, 0)
 			}
 		}
 		return conn, err
 	}
 	for _, proxy := range m.orderedProxies() {
 		if proxy.SupportsUDP() {
-			if !proxy.IsAvailable() {
+			if !proxy.IsUDPAvailable() {
 				slog.Debug("UDPAssociate: skipping unhealthy proxy", "proxy", proxy.URL)
 				continue
 			}
@@ -281,9 +281,9 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 			conn, err := proxy.UDPAssociate(ctx, host, port)
 			if m.healthChecker != nil {
 				if err != nil {
-					m.healthChecker.RecordFailure(proxy, err)
+					m.healthChecker.RecordUDPFailure(proxy, err)
 				} else {
-					m.healthChecker.RecordSuccess(proxy, 0)
+					m.healthChecker.RecordUDPSuccess(proxy, 0)
 				}
 			}
 			if err == nil {
@@ -306,9 +306,9 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 		conn, err := selected.UDPAssociate(ctx, host, port)
 		if m.healthChecker != nil {
 			if err != nil {
-				m.healthChecker.RecordFailure(selected, err)
+				m.healthChecker.RecordUDPFailure(selected, err)
 			} else {
-				m.healthChecker.RecordSuccess(selected, 0)
+				m.healthChecker.RecordUDPSuccess(selected, 0)
 			}
 		}
 		return conn, err
@@ -316,7 +316,7 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 	// selected == nil: fall back to orderedProxies
 	for _, proxy := range m.orderedProxies() {
 		if proxy.SupportsUDP() {
-			if !proxy.IsAvailable() {
+			if !proxy.IsUDPAvailable() {
 				slog.Debug("UDPAssociateSelected: skipping unhealthy proxy", "proxy", proxy.URL)
 				continue
 			}
@@ -325,9 +325,9 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 			conn, err := proxy.UDPAssociate(ctx, host, port)
 			if m.healthChecker != nil {
 				if err != nil {
-					m.healthChecker.RecordFailure(proxy, err)
+					m.healthChecker.RecordUDPFailure(proxy, err)
 				} else {
-					m.healthChecker.RecordSuccess(proxy, 0)
+					m.healthChecker.RecordUDPSuccess(proxy, 0)
 				}
 			}
 			if err == nil {
@@ -342,13 +342,14 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 }
 
 type ProxyInfo struct {
-	Alias  string              `json:"alias"`
-	URL    string              `json:"url"`
-	Host   string              `json:"host"`
-	Port   int                 `json:"port"`
-	Scheme string              `json:"scheme"`
-	Mode   string              `json:"mode,omitempty"`
-	Health ProxyHealthSnapshot `json:"health"`
+	Alias     string              `json:"alias"`
+	URL       string              `json:"url"`
+	Host      string              `json:"host"`
+	Port      int                 `json:"port"`
+	Scheme    string              `json:"scheme"`
+	Mode      string              `json:"mode,omitempty"`
+	Health    ProxyHealthSnapshot `json:"health"`
+	UDPHealth ProxyHealthSnapshot `json:"udp_health"`
 }
 
 func (m *Manager) Proxies() []ProxyInfo {
@@ -366,13 +367,14 @@ func (m *Manager) Proxies() []ProxyInfo {
 	for _, proxy := range m.defaultProxies {
 		alias := reverseMap[proxy]
 		infos = append(infos, ProxyInfo{
-			Alias:  alias,
-			URL:    proxy.URL,
-			Host:   proxy.Host,
-			Port:   proxy.Port,
-			Scheme: string(proxy.Scheme),
-			Mode:   proxy.ModeName(),
-			Health: proxy.health.Snapshot(),
+			Alias:     alias,
+			URL:       proxy.URL,
+			Host:      proxy.Host,
+			Port:      proxy.Port,
+			Scheme:    string(proxy.Scheme),
+			Mode:      proxy.ModeName(),
+			Health:    proxy.health.Snapshot(),
+			UDPHealth: proxy.udpHealth.Snapshot(),
 		})
 	}
 	return infos
@@ -386,6 +388,7 @@ func (m *Manager) SetProxyHealth(alias string, available bool) error {
 		return fmt.Errorf("proxy alias %q not found", alias)
 	}
 	proxy.health.SetManualState(available)
+	proxy.udpHealth.SetManualState(available)
 	slog.Info("manual proxy health set", "alias", alias, "available", available)
 	return nil
 }

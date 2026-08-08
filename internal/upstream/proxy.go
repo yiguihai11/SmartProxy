@@ -64,6 +64,10 @@ type Proxy struct {
 	//   udp_only:    no TCP listener; UDP goes straight to a raw UDP relay on host:port.
 	Mode   string
 	health ProxyHealth
+	// udpHealth is an independent UDP circuit breaker. TCP health (health) and UDP health
+	// (udpHealth) never affect each other: a dead TCP path does not disable a working UDP
+	// relay (the udp_only use case) and a dead UDP path does not disable TCP routing.
+	udpHealth ProxyHealth
 
 	// ssMethod is the encryption implementation for the ss:// scheme (classic AEAD or
 	// none/plain), built once by NewProxy when parsing method:password; Method is immutable and safe for concurrent use.
@@ -99,6 +103,13 @@ func (p *Proxy) SupportsUDP() bool {
 
 func (p *Proxy) IsAvailable() bool {
 	return p.health.IsAvailable()
+}
+
+// IsUDPAvailable reports whether the independent UDP health circuit is closed. It is
+// independent of IsAvailable (TCP), so a node can be TCP-healthy and UDP-broken, or
+// UDP-healthy while its TCP path is down (udp_only).
+func (p *Proxy) IsUDPAvailable() bool {
+	return p.udpHealth.IsAvailable()
 }
 
 func NewProxy(proxyURL string) (*Proxy, error) {

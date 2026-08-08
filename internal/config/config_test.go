@@ -29,6 +29,39 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.DNS.QueryTimeout != 3 {
 		t.Errorf("expected DNS.QueryTimeout=3, got %d", cfg.DNS.QueryTimeout)
 	}
+	if cfg.Upstream.HealthCheck.UDPProbeDNS != "1.1.1.1:53" {
+		t.Errorf("expected UDPProbeDNS=1.1.1.1:53, got %q", cfg.Upstream.HealthCheck.UDPProbeDNS)
+	}
+	if cfg.Upstream.HealthCheck.UDPProbeDomain != "dns.google" {
+		t.Errorf("expected UDPProbeDomain=dns.google, got %q", cfg.Upstream.HealthCheck.UDPProbeDomain)
+	}
+}
+
+func TestLoad_HealthCheckUDPProbe(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	content := `{
+	  "upstream": {
+	    "health_check": {
+	      "enabled": true,
+	      "udp_probe_dns": "8.8.8.8:5353",
+	      "udp_probe_domain": "example.org"
+	    }
+	  }
+	}`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Upstream.HealthCheck.UDPProbeDNS != "8.8.8.8:5353" {
+		t.Errorf("expected udp_probe_dns=8.8.8.8:5353, got %q", cfg.Upstream.HealthCheck.UDPProbeDNS)
+	}
+	if cfg.Upstream.HealthCheck.UDPProbeDomain != "example.org" {
+		t.Errorf("expected udp_probe_domain=example.org, got %q", cfg.Upstream.HealthCheck.UDPProbeDomain)
+	}
 }
 
 func TestLoad_MinimalConfig(t *testing.T) {

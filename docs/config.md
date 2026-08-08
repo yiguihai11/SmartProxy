@@ -67,6 +67,10 @@
 | `SuccessesThreshold` | `successes` | `1` | 连续成功多少次判为恢复 |
 | `OpenCoolDown` | `open_cool_down` | `30` | 熔断冷却（秒） |
 | `AutoDisableSingle` | `auto_disable_if_single_proxy` | `true` | 仅一个代理时自动停用健康检查 |
+| `UDPProbeDNS` | `udp_probe_dns` | `"1.1.1.1:53"` | 主动 UDP 健康探测的 DNS 服务器：对支持 UDP 的上游，把真实 DNS 查询经其 UDP relay 发到该地址，收到合法响应即判定 UDP 可用 |
+| `UDPProbeDomain` | `udp_probe_domain` | `"dns.google"` | UDP 健康探测查询的域名（A 记录） |
+
+> TCP 与 UDP 健康是**两个独立熔断器**：TCP 探活喂 TCP 电路（`/health` 的 `health`），DNS UDP 探测喂 UDP 电路（`/health` 的 `udp_health`），互不影响。`udp_only` 节点只做 UDP 探测、从不做 TCP 探测；`tcp_and_udp` 两者都做；`tcp_only` 只做 TCP。UDP 路由（`UDPAssociate` failover）按 `udp_health` 熔断，TCP 路由按 `health` 熔断。详见 `docs/upstream.md` §3.2 / §4。
 
 ### `routing`
 

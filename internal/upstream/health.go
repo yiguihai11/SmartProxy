@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -9,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/miekg/dns"
 
 	"smartproxy/internal/safego"
 
@@ -188,13 +191,21 @@ func (hc *HealthChecker) checkLoop(p *Proxy) {
 	}
 }
 
+// checkProxy probes a proxy. TCP and UDP use independent circuits: UDP-capable nodes
+// (tcp_and_udp, udp_only) get a DNS UDP probe feeding udpHealth; TCP-capable nodes
+// (tcp_and_udp, tcp_only) get the HTTP probe feeding health. udp_only has no TCP
+// listener, so it is only UDP-probed — a dead TCP path can never open a udp_only
+// node's UDP circuit, and a broken UDP relay never disables TCP routing.
 func (hc *HealthChecker) checkProxy(p *Proxy) {
-	// udp_only upstreams have no TCP listener: the TCP HTTP probe would always fail and
-	// open the circuit, killing their UDP relay. Skip them entirely; UDP liveness is
-	// handled at relay time by UDPAssociate and the pool's probe.
-	if p.IsUDPOnly() {
-		return
+	if p.SupportsUDP() {
+		hc.checkProxyUDP(p)
 	}
+	if !p.IsUDPOnly() {
+		hc.checkProxyTCP(p)
+	}
+}
+
+func (hc *HealthChecker) checkProxyTCP(p *Proxy) {
 	cfg := hc.cfg.Load()
 
 	p.health.mu.RLock()
@@ -261,12 +272,165 @@ func (hc *HealthChecker) checkProxy(p *Proxy) {
 	}
 }
 
+// checkProxyUDP actively probes a node's UDP relay with a DNS query, feeding the
+// independent udpHealth circuit. It honors the same open-cool-down gate as the TCP probe.
+func (hc *HealthChecker) checkProxyUDP(p *Proxy) {
+	cfg := hc.cfg.Load()
+
+	p.udpHealth.mu.RLock()
+	state := p.udpHealth.state
+	openSince := p.udpHealth.openSince
+	p.udpHealth.mu.RUnlock()
+
+	if state == StateOpen {
+		if time.Since(openSince) < time.Duration(cfg.OpenCoolDown)*time.Second {
+			return
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(hc.ctx, time.Duration(cfg.Timeout)*time.Second)
+	defer cancel()
+
+	latency, err := hc.probeUDP(p, ctx)
+	if err != nil {
+		hc.RecordUDPFailure(p, err)
+	} else {
+		hc.RecordUDPSuccess(p, latency)
+	}
+}
+
+// probeUDP sends a real DNS A query through the proxy's UDP relay and requires a valid
+// DNS response. It reuses the normal relay path (p.UDPAssociate), so the probe exercises
+// exactly the route real UDP traffic takes: standard SOCKS5 UDP ASSOCIATE with the raw
+// fallback for socks5, the raw relay for udp_only, and the ss UDP relay for ss://. A DNS
+// response (matching TXID + QR bit) proves the node's UDP relay is alive end to end.
+func (hc *HealthChecker) probeUDP(p *Proxy, ctx context.Context) (time.Duration, error) {
+	cfg := hc.cfg.Load()
+	dnsServer := cfg.UDPProbeDNS
+	if dnsServer == "" {
+		dnsServer = "1.1.1.1:53"
+	}
+	domain := cfg.UDPProbeDomain
+	if domain == "" {
+		domain = "dns.google"
+	}
+	host, portStr, err := net.SplitHostPort(dnsServer)
+	if err != nil {
+		return 0, fmt.Errorf("invalid udp_probe_dns %q: %w", dnsServer, err)
+	}
+	port := 53
+	if p := parsePort(portStr); p > 0 {
+		port = p
+	}
+
+	conn, err := p.UDPAssociate(ctx, host, port)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+
+	query := new(dns.Msg)
+	query.SetQuestion(dns.Fqdn(domain), dns.TypeA)
+	packed, err := query.Pack()
+	if err != nil {
+		return 0, err
+	}
+	txid := query.Id
+
+	if deadline, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(deadline)
+	}
+
+	start := time.Now()
+	if _, err := conn.Write(buildUDPFrame(host, port, packed)); err != nil {
+		return 0, err
+	}
+	buf := make([]byte, 2048)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return 0, err
+	}
+	latency := time.Since(start)
+
+	payload, err := parseUDPFrame(buf[:n])
+	if err != nil {
+		return 0, err
+	}
+	var resp dns.Msg
+	if err := resp.Unpack(payload); err != nil {
+		return 0, fmt.Errorf("invalid DNS response: %w", err)
+	}
+	if resp.Id != txid || !resp.Response {
+		return 0, fmt.Errorf("invalid DNS response (id=%d, response=%v)", resp.Id, resp.Response)
+	}
+	return latency, nil
+}
+
+// buildUDPFrame wraps a payload in a SOCKS5 UDP relay header (RSV=0, FRAG=0, ATYP
+// addr + port) addressed to host:port — the same framing internal/udp uses on the wire.
+func buildUDPFrame(host string, port int, payload []byte) []byte {
+	addr := encodeSocks5Addr(host, port)
+	frame := make([]byte, 3+len(addr)+len(payload))
+	copy(frame[3:], addr)
+	copy(frame[3+len(addr):], payload)
+	return frame
+}
+
+// parseUDPFrame strips a SOCKS5 UDP relay header and returns the payload. The header is
+// RSV(2) FRAG(1) ATYP(1) DST.ADDR DST.PORT, so the payload starts at 3 + 1 + addr+port.
+func parseUDPFrame(frame []byte) ([]byte, error) {
+	if len(frame) < 4 {
+		return nil, errors.New("short UDP frame")
+	}
+	if frame[0] != 0 || frame[1] != 0 || frame[2] != 0 {
+		return nil, fmt.Errorf("bad UDP frame header: rsv/frag=%d %d %d", frame[0], frame[1], frame[2])
+	}
+	atyp := frame[3]
+	var hdrLen int // ATYP + addr + port
+	switch atyp {
+	case 0x01:
+		hdrLen = 1 + 4 + 2
+	case 0x04:
+		hdrLen = 1 + 16 + 2
+	case 0x03:
+		if len(frame) < 5 {
+			return nil, errors.New("short UDP frame")
+		}
+		hdrLen = 1 + 1 + int(frame[4]) + 2
+	default:
+		return nil, fmt.Errorf("unsupported UDP frame address type: %d", atyp)
+	}
+	if len(frame) < 3+hdrLen {
+		return nil, errors.New("short UDP frame")
+	}
+	return frame[3+hdrLen:], nil
+}
+
+// RecordSuccess records a TCP probe success on the TCP circuit (p.health).
 func (hc *HealthChecker) RecordSuccess(p *Proxy, latency time.Duration) {
+	hc.recordSuccess(p, &p.health, "tcp", latency)
+}
+
+// RecordUDPSuccess records a UDP probe success on the independent UDP circuit (p.udpHealth).
+func (hc *HealthChecker) RecordUDPSuccess(p *Proxy, latency time.Duration) {
+	hc.recordSuccess(p, &p.udpHealth, "udp", latency)
+}
+
+// RecordFailure records a TCP failure on the TCP circuit (p.health).
+func (hc *HealthChecker) RecordFailure(p *Proxy, err error) {
+	hc.recordFailure(p, &p.health, "tcp", err)
+}
+
+// RecordUDPFailure records a UDP failure on the independent UDP circuit (p.udpHealth).
+func (hc *HealthChecker) RecordUDPFailure(p *Proxy, err error) {
+	hc.recordFailure(p, &p.udpHealth, "udp", err)
+}
+
+func (hc *HealthChecker) recordSuccess(p *Proxy, ph *ProxyHealth, circuit string, latency time.Duration) {
 	cfg := hc.cfg.Load()
 	if !cfg.Enabled {
 		return
 	}
-	ph := &p.health
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
 
@@ -275,7 +439,6 @@ func (hc *HealthChecker) RecordSuccess(p *Proxy, latency time.Duration) {
 		if ph.latency == 0 {
 			ph.latency = latency
 		} else {
-
 			ph.latency = (ph.latency*3 + latency) / 4
 		}
 	}
@@ -291,17 +454,16 @@ func (hc *HealthChecker) RecordSuccess(p *Proxy, latency time.Duration) {
 			ph.state = StateClosed
 			ph.consecutiveFailures = 0
 			ph.consecutiveSuccesses = 0
-			slog.Info("proxy recovered", "url", p.URL, "latency", latency)
+			slog.Info("proxy recovered", "url", p.URL, "circuit", circuit, "latency", latency)
 		}
 	}
 }
 
-func (hc *HealthChecker) RecordFailure(p *Proxy, err error) {
+func (hc *HealthChecker) recordFailure(p *Proxy, ph *ProxyHealth, circuit string, err error) {
 	cfg := hc.cfg.Load()
 	if !cfg.Enabled {
 		return
 	}
-	ph := &p.health
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
 
@@ -313,19 +475,19 @@ func (hc *HealthChecker) RecordFailure(p *Proxy, err error) {
 		if ph.consecutiveFailures >= cfg.FailuresThreshold {
 			ph.state = StateOpen
 			ph.openSince = time.Now()
-			slog.Warn("proxy circuit opened", "url", p.URL, "failures", ph.consecutiveFailures, "error", err)
+			slog.Warn("proxy circuit opened", "url", p.URL, "circuit", circuit, "failures", ph.consecutiveFailures, "error", err)
 		}
 	case StateOpen:
 		if time.Since(ph.openSince) >= time.Duration(cfg.OpenCoolDown)*time.Second {
 			ph.state = StateHalfOpen
 			ph.consecutiveSuccesses = 0
 			ph.consecutiveFailures = 0
-			slog.Info("proxy circuit half-open", "url", p.URL)
+			slog.Info("proxy circuit half-open", "url", p.URL, "circuit", circuit)
 		}
 	case StateHalfOpen:
 		ph.state = StateOpen
 		ph.openSince = time.Now()
 		ph.consecutiveSuccesses = 0
-		slog.Warn("proxy circuit re-opened", "url", p.URL, "error", err)
+		slog.Warn("proxy circuit re-opened", "url", p.URL, "circuit", circuit, "error", err)
 	}
 }

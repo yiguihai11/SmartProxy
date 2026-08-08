@@ -74,6 +74,12 @@ type HealthCheckConf struct {
 	SuccessesThreshold int    `json:"successes"`
 	OpenCoolDown       int    `json:"open_cool_down"`
 	AutoDisableSingle  bool   `json:"auto_disable_if_single_proxy"`
+	// UDPProbeDNS is the DNS server the active UDP health probe queries through a
+	// UDP-capable upstream (host:port, default "1.1.1.1:53"). A valid DNS response
+	// means the node's UDP relay works.
+	UDPProbeDNS string `json:"udp_probe_dns,omitempty"`
+	// UDPProbeDomain is the query name the UDP health probe resolves (default "dns.google").
+	UDPProbeDomain string `json:"udp_probe_domain,omitempty"`
 }
 
 type ProxyEntry struct {
@@ -187,6 +193,8 @@ func DefaultConfig() *Config {
 				SuccessesThreshold: 1,
 				OpenCoolDown:       30,
 				AutoDisableSingle:  true,
+				UDPProbeDNS:        "1.1.1.1:53",
+				UDPProbeDomain:     "dns.google",
 			},
 		},
 		Routing: RoutingConf{

@@ -439,7 +439,7 @@ function lhealth(d){
   document.getElementById('proxy-cards').innerHTML=d.health.proxies.map(function(p,i){
     var a=p.health.available,lat=p.health.latency>0?(p.health.latency/1e6).toFixed(1)+'ms':'--';
     return '<div class="proxy-card"><div class="top"><div><div class="alias">'+p.alias+'</div><div class="url">'+p.url+(p.mode==='udp_only'?' · UDP only':(p.mode==='tcp_only'?' · TCP only':''))+'</div></div><span class="status '+(a?'up':'down')+'">'+(a?'Connected':'Disconnected')+'</span></div>'+
-      '<div class="stats"><span>state: '+p.health.state+'</span><span>latency: '+lat+'</span><span>failures: '+p.health.consecutive_failures+'</span></div>'+
+      '<div class="stats"><span>state: '+p.health.state+'</span><span>udp: '+(p.udp_health?(p.udp_health.available?'up':'down'):'n/a')+'</span><span>latency: '+lat+'</span><span>failures: '+p.health.consecutive_failures+'</span></div>'+
       '<div class="actions">'+
       '<button class="btn btn-sm primary" onclick="openProxyDialog('+i+')">Edit</button>'+
       '<button class="btn btn-sm danger" onclick="deleteProxy('+i+')">Delete</button>'+

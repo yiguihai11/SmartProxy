@@ -631,9 +631,47 @@ func TestNewManager_UDPOnly(t *testing.T) {
 			if info.Mode != ModeUDPOnly {
 				t.Errorf("ProxyInfo should expose mode=%s for the udp-only proxy, got %q", ModeUDPOnly, info.Mode)
 			}
+			if !info.UDPHealth.Available {
+				t.Error("ProxyInfo should expose an available udp_health for a fresh proxy")
+			}
 		}
 	}
 	if !found {
 		t.Error("udp-only should appear in Proxies()")
 	}
+}
+
+// TestManager_UDPRoutingUsesUDPHealth verifies UDP routing is gated by the independent UDP
+// circuit (IsUDPAvailable), while TCP routing keeps using IsAvailable — so opening only the
+// UDP circuit changes UDP failover but never TCP.
+func TestManager_UDPRoutingUsesUDPHealth(t *testing.T) {
+	mockAddr, done := startSOCKS5Mock(t)
+	defer done()
+
+	m, err := NewManager(UpstreamConfig{
+		Default: "failover",
+		Proxies: []ProxyEntry{{Alias: "p1", URL: "socks5://" + mockAddr}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proxy := m.defaultProxies[0]
+	// Break only the UDP circuit, the way a UDP health probe failure would.
+	proxy.udpHealth.SetManualState(false)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := m.UDPAssociate(ctx, "example.com", 53, "", nil); err == nil {
+		t.Error("UDPAssociate must skip a proxy whose UDP circuit is open")
+	}
+
+	if !proxy.IsAvailable() {
+		t.Fatal("TCP health must be unaffected by the UDP manual disable")
+	}
+	conn, err := m.ConnectDefault(ctx, "example.com", 80)
+	if err != nil {
+		t.Fatalf("TCP routing must ignore UDP health, got: %v", err)
+	}
+	conn.Close()
 }
