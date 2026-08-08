@@ -200,25 +200,9 @@ func (c *httpObfsConn) Write(p []byte) (int, error) {
 
 func (c *httpObfsConn) Read(p []byte) (int, error) {
 	if c.needStrip {
-		for {
-			if idx := bytes.Index(c.buf, crlfcrlf); idx >= 0 {
-				rest := c.buf[idx+4:]
-				c.buf = nil
-				c.needStrip = false
-				n := copy(p, rest)
-				c.leftover = append(c.leftover[:0], rest[n:]...)
-				if n < len(p) && len(c.leftover) == 0 {
-					m, err := c.Conn.Read(p[n:])
-					n += m
-					if err != nil && n == 0 {
-						return n, err
-					}
-					if err != nil {
-						return n, err
-					}
-				}
-				return n, nil
-			}
+		// Read until the server's obfs response header (\r\n\r\n) is fully buffered, then
+		// strip it and hand the trailing bytes (the relayed SS data) to the upper layer.
+		for bytes.Index(c.buf, crlfcrlf) < 0 {
 			if len(c.buf) > maxObfsHTTPHeader {
 				return 0, errors.New("obfs-http: server response header too large")
 			}
@@ -231,20 +215,23 @@ func (c *httpObfsConn) Read(p []byte) (int, error) {
 				return 0, fmt.Errorf("obfs-http: reading server response: %w", err)
 			}
 		}
+		rest := c.buf[bytes.Index(c.buf, crlfcrlf)+4:]
+		c.buf = nil
+		c.needStrip = false
+		n := copy(p, rest)
+		c.leftover = append(c.leftover[:0], rest[n:]...)
+		if n > 0 {
+			// Return what we have immediately: never block trying to fill p. The relayed
+			// data may be the whole response and the peer may keep the connection open
+			// (HTTP keep-alive), so a fill-read would hang the caller.
+			return n, nil
+		}
+		// The obfs response header arrived alone (no SS data in this read yet): fall
+		// through to serve leftover or do a fresh read of the SS stream.
 	}
 	if len(c.leftover) > 0 {
 		n := copy(p, c.leftover)
 		c.leftover = c.leftover[n:]
-		if n < len(p) {
-			m, err := c.Conn.Read(p[n:])
-			n += m
-			if err != nil && n == 0 {
-				return n, err
-			}
-			if err != nil {
-				return n, err
-			}
-		}
 		return n, nil
 	}
 	return c.Conn.Read(p)
