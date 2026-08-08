@@ -1,6 +1,6 @@
 module smartproxy
 
-go 1.25.5
+go 1.25.0
 
 require (
 	github.com/fsnotify/fsnotify v1.10.1
@@ -12,7 +12,7 @@ require (
 	github.com/sagernet/sing-tun v0.8.10
 	github.com/sevlyar/go-daemon v0.1.7-0.20251110065050-63665fab0d07
 	github.com/stretchr/testify v1.11.1
-	github.com/v2fly/v2ray-core/v5 v5.49.0
+	github.com/v2fly/v2ray-core/v5 v5.45.1
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
 	google.golang.org/protobuf v1.36.11
