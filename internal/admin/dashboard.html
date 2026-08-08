@@ -917,6 +917,16 @@ function openProxyDialog(i){
 function closeProxyDialog(){
   document.getElementById('proxy-overlay').classList.remove('show');
 }
+// togglePassword flips the proxy password field between masked (password) and plaintext (text).
+function togglePassword(){
+  var el=document.getElementById('proxy-pass');
+  var btn=document.getElementById('proxy-pass-toggle');
+  if(!el||!btn)return;
+  var show=el.type==='password';
+  el.type=show?'text':'password';
+  btn.textContent=show?'Hide':'Show';
+  btn.title=show?'Hide password':'Show password';
+}
 function updateProxyPreview(){
   var el=document.getElementById('proxy-preview');
   if(!el)return;
@@ -1910,7 +1920,10 @@ es.onmessage=function(e){
       <input class="dialog-input" id="proxy-user" placeholder="username" autocomplete="off" oninput="updateProxyPreview()">
     </div>
     <div class="dialog-label">Password <span style="text-transform:none;font-weight:400">(optional)</span></div>
-    <input class="dialog-input" id="proxy-pass" type="password" placeholder="password" autocomplete="new-password" oninput="updateProxyPreview()">
+    <div style="display:flex;gap:8px">
+      <input class="dialog-input" id="proxy-pass" type="password" placeholder="password" autocomplete="new-password" oninput="updateProxyPreview()" style="flex:1">
+      <button type="button" class="btn btn-sm" id="proxy-pass-toggle" onclick="togglePassword()" title="Show / hide password">Show</button>
+    </div>
     <div id="proxy-plugin-row" style="display:none">
       <div class="dialog-label">Plugin (SIP003) <span style="text-transform:none;font-weight:400">(simple-obfs / v2ray-plugin built in, no external binary)</span></div>
       <select class="dialog-input" id="proxy-plugin" onchange="syncObfsRows();updateProxyPreview()">
