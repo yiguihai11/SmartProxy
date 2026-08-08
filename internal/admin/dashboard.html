@@ -585,13 +585,12 @@ function buildPlugin(){
     if(cert)parts.push('certRaw='+cert);
     return parts.join(';');
   }
-  // simple-obfs: obfs-local;obfs=http|tls;obfs-host=... (+ http-method/obfs-uri for http)
+  // simple-obfs: obfs-local;obfs=http|tls;obfs-host=... (+ obfs-uri for http). Mirrors
+  // simple-obfs-android's config: only obfs / obfs-host / obfs-uri (no http-method).
   var parts=['obfs-local','obfs='+(mode==='http'?'http':'tls')];
   if(host)parts.push('obfs-host='+host);
   if(mode==='http'){
-    var m=document.getElementById('proxy-obfs-method').value.trim();
     var uri=document.getElementById('proxy-obfs-uri').value.trim();
-    if(m&&m!=='GET')parts.push('http-method='+m);
     if(uri&&uri!=='/')parts.push('obfs-uri='+uri);
   }
   return parts.join(';');
@@ -675,7 +674,7 @@ function parseSSLink(raw){
 // fillSSPluginFromQuery splits SIP003 plugin args (obfs-local or v2ray-plugin/xray-plugin)
 // back into the plugin type + mode dropdowns and the option fields.
 function fillSSPluginFromQuery(pv){
-  var p='',m='',host='',method='',uri='',vpath='',vmux='',vsn='',vcert='';
+  var p='',m='',host='',uri='',vpath='',vmux='',vsn='',vcert='';
   if(pv){
     var parts=pv.split(';');
     var bin=parts.length?parts[0]:'';
@@ -685,7 +684,7 @@ function fillSSPluginFromQuery(pv){
       var k=eq<0?parts[i]:parts[i].slice(0,eq);
       var vv=eq<0?'':parts[i].slice(eq+1);
       if(k==='obfs')obfs=vv;else if(k==='obfs-host')host=vv;
-      else if(k==='http-method')method=vv;else if(k==='obfs-uri')uri=vv;
+      else if(k==='obfs-uri')uri=vv;
       else if(k==='mode')vmode=vv;else if(k==='host')host=vv;
       else if(k==='path')vpath=vv;else if(k==='mux')vmux=vv;
       else if(k==='serviceName')vsn=vv;else if(k==='certRaw')vcert=vv;
@@ -705,7 +704,6 @@ function fillSSPluginFromQuery(pv){
   fillModeOptions(p);
   document.getElementById('proxy-plugin-mode').value=m||'';
   document.getElementById('proxy-obfs-host').value=host;
-  document.getElementById('proxy-obfs-method').value=method||'GET';
   document.getElementById('proxy-obfs-uri').value=uri||'/';
   document.getElementById('proxy-v2ray-path').value=vpath||'/';
   document.getElementById('proxy-v2ray-mux').value=vmux||'1';
@@ -1781,9 +1779,7 @@ es.onmessage=function(e){
         <input class="dialog-input" id="proxy-obfs-host" placeholder="www.bing.com" autocomplete="off" oninput="updateProxyPreview()">
       </div>
       <div id="proxy-obfs-httpopts-row" style="display:none">
-        <div class="dialog-label">HTTP Method <span style="text-transform:none;font-weight:400">(http-method)</span></div>
-        <input class="dialog-input" id="proxy-obfs-method" value="GET" autocomplete="off" oninput="updateProxyPreview()">
-        <div class="dialog-label">URI <span style="text-transform:none;font-weight:400">(obfs-uri)</span></div>
+        <div class="dialog-label">URI <span style="text-transform:none;font-weight:400">(obfs-uri, http mode)</span></div>
         <input class="dialog-input" id="proxy-obfs-uri" value="/" autocomplete="off" oninput="updateProxyPreview()">
       </div>
       <div id="proxy-v2ray-opts-row" style="display:none">
