@@ -31,13 +31,19 @@ func deadUDPPort(t *testing.T) int {
 	return port
 }
 
-// startFrameDNSServer listens on UDP and answers SOCKS5-UDP-frame-wrapped DNS queries
-// with a valid DNS response (same TXID, QR=1) wrapped back in a frame. It doubles as the
-// raw-relay target and the DNS server for udp_only probes: the probe's raw UDP relay dials
-// this address, and the header inside the frame is ignored.
+// startFrameDNSServer listens on IPv4 loopback and answers SOCKS5-UDP-frame-wrapped DNS
+// queries with a valid DNS response (same TXID, QR=1) wrapped back in a frame.
 func startFrameDNSServer(t *testing.T) (*net.UDPConn, int) {
+	return startFrameDNSServerOn(t, net.IPv4(127, 0, 0, 1))
+}
+
+// startFrameDNSServerOn listens on the given IP (IPv4 or IPv6 loopback) and answers
+// SOCKS5-UDP-frame-wrapped DNS queries with a valid DNS response (same TXID, QR=1) wrapped
+// back in a frame. It doubles as the raw-relay target and the DNS server for udp_only probes:
+// the probe's raw UDP relay dials this address, and the header inside the frame is ignored.
+func startFrameDNSServerOn(t *testing.T, ip net.IP) (*net.UDPConn, int) {
 	t.Helper()
-	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: ip, Port: 0})
 	if err != nil {
 		t.Fatal(err)
 	}

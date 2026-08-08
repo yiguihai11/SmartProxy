@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1123,10 +1124,16 @@ func makeSOCKS5UDPFrame(host string, port int, payload []byte) []byte {
 	return append(f, payload...)
 }
 
-// startUDPEcho binds a UDP socket on 127.0.0.1 that echoes every received datagram.
+// startUDPEcho binds a UDP socket on IPv4 loopback that echoes every received datagram.
 func startUDPEcho(t *testing.T) (*net.UDPConn, int) {
+	return startUDPEchoOn(t, net.IPv4(127, 0, 0, 1))
+}
+
+// startUDPEchoOn binds a UDP socket on the given IP (IPv4 or IPv6 loopback) that echoes every
+// received datagram.
+func startUDPEchoOn(t *testing.T, ip net.IP) (*net.UDPConn, int) {
 	t.Helper()
-	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: ip, Port: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1625,18 +1632,25 @@ func TestUDPCapability_UpgradeRawToStandard(t *testing.T) {
 	}
 }
 
-// startAssociateTCP serves a SOCKS5 TCP listener whose UDP ASSOCIATE follows policy:
-//   - "standard": replies rep=0x00 with bind 127.0.0.1:udpPort (the UDP echo relay), then
-//     keeps the control channel open;
+// startAssociateTCP serves a SOCKS5 TCP listener on IPv4 loopback whose UDP ASSOCIATE follows
+// the given policy; see startAssociateTCPOn.
+func startAssociateTCP(t *testing.T, policy string, udpPort int) (tcpPort int, attempts *int32) {
+	return startAssociateTCPOn(t, net.IPv4(127, 0, 0, 1), policy, udpPort)
+}
+
+// startAssociateTCPOn serves a SOCKS5 TCP listener on the given IP (IPv4 or IPv6 loopback)
+// whose UDP ASSOCIATE follows policy:
+//   - "standard": replies rep=0x00 with bind ip:udpPort (the UDP relay, ATYP matching the IP
+//     family — 0x01 IPv4 or 0x04 IPv6), then keeps the control channel open;
 //   - "reject": replies rep=0x07 CommandNotSupported.
 //
 // It returns the TCP port and a counter of accepted TCP connections (to assert when the raw
 // fast path is skipped).
-func startAssociateTCP(t *testing.T, policy string, udpPort int) (tcpPort int, attempts *int32) {
+func startAssociateTCPOn(t *testing.T, ip net.IP, policy string, udpPort int) (tcpPort int, attempts *int32) {
 	t.Helper()
 	var n int32
 	attempts = &n
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", net.JoinHostPort(ip.String(), "0"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1665,7 +1679,16 @@ func startAssociateTCP(t *testing.T, policy string, udpPort int) (tcpPort int, a
 					return
 				}
 				if policy == "standard" {
-					reply := []byte{0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, byte(udpPort >> 8), byte(udpPort & 0xff)}
+					// reply = VER|REP|RSV|ATYP|BND.ADDR|BND.PORT, ATYP matching the IP family
+					var reply []byte
+					if ip4 := ip.To4(); ip4 != nil {
+						reply = []byte{0x05, 0x00, 0x00, 0x01, ip4[0], ip4[1], ip4[2], ip4[3], byte(udpPort >> 8), byte(udpPort & 0xff)}
+					} else {
+						reply = make([]byte, 4+16+2)
+						reply[0], reply[1], reply[2], reply[3] = 0x05, 0x00, 0x00, 0x04
+						copy(reply[4:], ip.To16())
+						reply[4+16], reply[4+16+1] = byte(udpPort>>8), byte(udpPort&0xff)
+					}
 					if _, err := c.Write(reply); err != nil {
 						return
 					}
@@ -1677,6 +1700,116 @@ func startAssociateTCP(t *testing.T, policy string, udpPort int) (tcpPort int, a
 		}
 	}()
 	return tcpPort, attempts
+}
+
+// requireIPv6 skips the test when the loopback has no usable IPv6 (e.g. CI hosts without v6).
+func requireIPv6(t *testing.T) {
+	t.Helper()
+	pc, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
+	if err != nil {
+		t.Skipf("IPv6 loopback unavailable: %v", err)
+	}
+	pc.Close()
+}
+
+// TestUDPCapability_DetectionIPv6 verifies the UDP capability detection path works against an
+// IPv6 node ([::1]): the raw relay round-trips over IPv6, and a standard ASSOCIATE reply with
+// an IPv6 bind address (ATYP=0x04) is parsed and dialed correctly. It is the IPv6 mirror of
+// TestUDPCapability_Detection + the raw fast-path round trip.
+func TestUDPCapability_DetectionIPv6(t *testing.T) {
+	requireIPv6(t)
+
+	t.Run("raw-only node", func(t *testing.T) {
+		// The SOCKS5 TCP reject listener and the UDP frame DNS server must share the SAME port
+		// (like shadowsocks-android: TCP-only SOCKS5 + a raw UDP relay on the same host:port),
+		// so the raw fallback's dial to Host:Port finds the UDP relay there.
+		fdns, dnsPort := startFrameDNSServerOn(t, net.IPv6loopback)
+		defer fdns.Close()
+		ln, err := net.Listen("tcp", net.JoinHostPort("::1", strconv.Itoa(dnsPort)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+		go func() {
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				go func(c net.Conn) {
+					defer c.Close()
+					buf := make([]byte, 258)
+					if _, err := io.ReadFull(c, buf[:2]); err != nil || buf[0] != 0x05 {
+						return
+					}
+					if _, err := io.ReadFull(c, buf[:int(buf[1])]); err != nil {
+						return
+					}
+					if _, err := c.Write([]byte{0x05, 0x00}); err != nil {
+						return
+					}
+					if _, err := io.ReadFull(c, buf[:10]); err != nil { // ASSOCIATE request
+						return
+					}
+					c.Write([]byte{0x05, 0x07, 0x00, 0x01}) // rep=0x07 CommandNotSupported
+				}(conn)
+			}
+		}()
+
+		p := &Proxy{Scheme: SchemeSOCKS5, Host: "::1", Port: dnsPort}
+		cfg := config.HealthCheckConf{Enabled: true, Timeout: 2, FailuresThreshold: 1, SuccessesThreshold: 1}
+		hc := NewHealthChecker(cfg, []*Proxy{p})
+		defer hc.Stop()
+		hc.checkProxyUDP(p)
+		if got := p.UDPCapability(); got != UDPCapRaw {
+			t.Fatalf("IPv6 raw-only node: UDPCapability got %q, want %q", got, UDPCapRaw)
+		}
+	})
+
+	t.Run("standard associate node", func(t *testing.T) {
+		fdns, dnsPort := startFrameDNSServerOn(t, net.IPv6loopback)
+		defer fdns.Close()
+		tcpPort, _ := startAssociateTCPOn(t, net.IPv6loopback, "standard", dnsPort)
+
+		p := &Proxy{Scheme: SchemeSOCKS5, Host: "::1", Port: tcpPort}
+		cfg := config.HealthCheckConf{Enabled: true, Timeout: 2, FailuresThreshold: 1, SuccessesThreshold: 1}
+		hc := NewHealthChecker(cfg, []*Proxy{p})
+		defer hc.Stop()
+		hc.checkProxyUDP(p)
+		if got := p.UDPCapability(); got != UDPCapStandard {
+			t.Fatalf("IPv6 standard node: UDPCapability got %q, want %q", got, UDPCapStandard)
+		}
+	})
+
+	t.Run("raw fast path round trip", func(t *testing.T) {
+		echo, port := startUDPEchoOn(t, net.IPv6loopback)
+		defer echo.Close()
+
+		p := &Proxy{Scheme: SchemeSOCKS5, Host: "::1", Port: port}
+		p.setUDPCapability(UDPCapRaw) // known raw → routing fast path, relay straight to ::1
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		conn, err := p.UDPAssociate(ctx, "example.com", 53)
+		if err != nil {
+			t.Fatalf("IPv6 raw fast path UDPAssociate: %v", err)
+		}
+		defer conn.Close()
+
+		payload := []byte("ipv6-raw")
+		if _, err := conn.Write(payload); err != nil {
+			t.Fatal(err)
+		}
+		conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		buf := make([]byte, 2048)
+		n, err := conn.Read(buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(buf[:n], payload) {
+			t.Fatalf("IPv6 raw echo mismatch: got %x, want contains %x", buf[:n], payload)
+		}
+	})
 }
 
 // TestUDPCapability_RawRecheckUpgrade verifies the raw → standard recovery path: a known-raw
