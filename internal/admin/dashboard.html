@@ -95,7 +95,8 @@ tr:last-child td{border-bottom:none}
 .proxy-card .url{font-size:.8rem;color:var(--text2);word-break:break-all}
 .proxy-card .stats{display:flex;gap:20px;font-size:.82rem;color:var(--text2);margin-top:10px}
 .proxy-card .circs{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
-.proxy-card .circ{display:inline-flex;align-items:center;gap:4px;font-size:.72rem;font-weight:600;color:var(--text2);padding:2px 8px;border:1px solid var(--border);border-radius:10px;line-height:1.3;white-space:nowrap}
+.proxy-card .circ{display:inline-flex;align-items:center;gap:4px;font-size:.72rem;font-weight:600;color:var(--text2);padding:2px 8px;border:1px solid var(--border);border-radius:10px;line-height:1.3;white-space:nowrap;cursor:pointer;user-select:none;transition:filter .15s}
+.proxy-card .circ:hover{filter:brightness(1.15)}
 .proxy-card .circ .dot{width:7px;height:7px;border-radius:50%;background:var(--text3);flex-shrink:0}
 .proxy-card .circ.up{color:var(--green);border-color:var(--green)}
 .proxy-card .circ.up .dot{background:var(--green)}
@@ -104,6 +105,8 @@ tr:last-child td{border-bottom:none}
 .proxy-card .circ.half{color:var(--yellow);border-color:var(--yellow)}
 .proxy-card .circ.half .dot{background:var(--yellow)}
 .proxy-card .circ.na{color:var(--text3)}
+.proxy-card .circ.na{cursor:default}
+.proxy-card .circ.manual{border-style:dashed}
 .proxy-card .actions{margin-top:12px;display:flex;gap:8px}
 .toggle-group{display:flex;gap:4px;margin-bottom:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px;width:fit-content}
 .toggle-btn{padding:5px 14px;border-radius:5px;font-size:.82rem;cursor:pointer;border:none;background:transparent;color:var(--text2);transition:all .15s;font-family:var(--font)}
@@ -447,12 +450,25 @@ function ltraf(d){
 var healthD={health:{proxies:[]}};
 // Per-circuit connectivity badge: up / half (recovering) / down (circuit open) /
 // unknown (never probed yet, e.g. health check disabled) / n/a (scheme without UDP).
+// m marks a manually pinned circuit (dashed border); clicking a pinned circuit releases it.
 function circuitStat(snap,supports){
-  if(!supports)return {c:'na',t:'n/a'};
-  if(!snap)return {c:'na',t:'unknown'};
-  if(snap.state==='open')return {c:'down',t:'down'};
-  if(snap.state==='half_open')return {c:'half',t:'half'};
-  return snap.last_attempt?{c:'up',t:'up'}:{c:'na',t:'unknown'};
+  if(!supports)return {c:'na',t:'n/a',m:false};
+  if(!snap)return {c:'na',t:'unknown',m:false};
+  var m=!!snap.manual;
+  if(snap.state==='open')return {c:'down',t:'down',m:m};
+  if(snap.state==='half_open')return {c:'half',t:'half',m:m};
+  return snap.last_attempt?{c:'up',t:'up',m:m}:{c:'na',t:'unknown',m:m};
+}
+// Click a badge to flip that circuit: up → disable (force down), down → enable (force up),
+// pinned → release back to automatic. Non-probable circuits (unknown/n/a) are not clickable.
+async function toggleCircuit(i,c){
+  var p=healthD.health.proxies[i];
+  if(!p)return;
+  var s=c==='udp'?p.udp_health:p.health;
+  if(!s||!s.last_attempt&&!s.manual&&s.state==='closed')return;
+  var action=s.manual?'auto':(s.available?'disable':'enable');
+  await fetch('/health/proxy?alias='+encodeURIComponent(p.alias)+'&circuit='+c+'&action='+action,{method:'POST'});
+  loadHealth()
 }
 function lhealth(d){
   healthD=d;
@@ -460,8 +476,10 @@ function lhealth(d){
     var a=p.health.available,lat=p.health.latency>0?(p.health.latency/1e6).toFixed(1)+'ms':'--';
     var udpScheme=/^(socks5|socks5h|ss)$/.test(p.scheme);
     var tc=circuitStat(p.health,true),uc=circuitStat(p.udp_health,udpScheme);
+    var tcClk=tc.c==='na'?'':' onclick="toggleCircuit('+i+',\'tcp\')"';
+    var ucClk=uc.c==='na'?'':' onclick="toggleCircuit('+i+',\'udp\')"';
     return '<div class="proxy-card"><div class="top"><div><div class="alias">'+p.alias+'</div><div class="url">'+p.url+' · '+p.mode+(p.udp_capability&&p.udp_capability!=='unknown'?' · '+p.udp_capability:'')+'</div></div>'+
-      '<div class="circs"><span class="circ '+tc.c+'"><i class="dot"></i>TCP '+tc.t+'</span><span class="circ '+uc.c+'"><i class="dot"></i>UDP '+uc.t+'</span></div></div>'+
+      '<div class="circs"><span class="circ '+(tc.c+(tc.m?' manual':''))+'" title="'+(tc.m?'TCP manually pinned — click to restore auto':'Click to toggle TCP')+'"'+tcClk+'><i class="dot"></i>TCP '+tc.t+'</span><span class="circ '+(uc.c+(uc.m?' manual':''))+'" title="'+(uc.m?'UDP manually pinned — click to restore auto':'Click to toggle UDP')+'"'+ucClk+'><i class="dot"></i>UDP '+uc.t+'</span></div></div>'+
       '<div class="stats"><span>latency: '+lat+'</span><span>tcp failures: '+p.health.consecutive_failures+'</span><span>udp failures: '+(p.udp_health?p.udp_health.consecutive_failures:'n/a')+'</span></div>'+
       '<div class="actions">'+
       '<button class="btn btn-sm primary" onclick="openProxyDialog('+i+')">Edit</button>'+
@@ -513,7 +531,9 @@ async function loadHealth(){
 async function tp(i){
   var p=healthD.health.proxies[i];
   if(!p)return;
-  await fetch('/health/proxy?alias='+encodeURIComponent(p.alias)+'&action='+(p.health.available?'disable':'enable'),{method:'POST'});
+  // Disable pins both circuits down (sticky); Enable releases both back to auto.
+  // Force-up an individual probe-down circuit via its TCP/UDP badge instead.
+  await fetch('/health/proxy?alias='+encodeURIComponent(p.alias)+'&action='+(p.health.available?'disable':'auto'),{method:'POST'});
   loadHealth()
 }
 function setProxyScheme(v){

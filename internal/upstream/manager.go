@@ -398,16 +398,37 @@ func (m *Manager) Proxies() []ProxyInfo {
 	return infos
 }
 
-func (m *Manager) SetProxyHealth(alias string, available bool) error {
+// SetCircuitHealth pins or releases one (or both) of a proxy's circuits. circuit is
+// "tcp", "udp" or "both"; action is "enable" (force up), "disable" (force down) or
+// "auto" (release back to automatic health-check control). Pinned circuits stay put
+// across probe cycles until released.
+func (m *Manager) SetCircuitHealth(alias, circuit, action string) error {
 	m.mu.RLock()
 	proxy, ok := m.aliasMap[alias]
 	m.mu.RUnlock()
 	if !ok || proxy == nil {
 		return fmt.Errorf("proxy alias %q not found", alias)
 	}
-	proxy.health.SetManualState(available)
-	proxy.udpHealth.SetManualState(available)
-	slog.Info("manual proxy health set", "alias", alias, "available", available)
+	apply := func(ph *ProxyHealth) {
+		switch action {
+		case "enable":
+			ph.SetManualState(true)
+		case "disable":
+			ph.SetManualState(false)
+		case "auto":
+			ph.ClearManualState()
+		}
+	}
+	switch circuit {
+	case "tcp":
+		apply(&proxy.health)
+	case "udp":
+		apply(&proxy.udpHealth)
+	default: // "both"
+		apply(&proxy.health)
+		apply(&proxy.udpHealth)
+	}
+	slog.Info("manual proxy health set", "alias", alias, "circuit", circuit, "action", action)
 	return nil
 }
 

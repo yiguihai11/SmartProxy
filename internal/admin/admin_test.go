@@ -258,6 +258,71 @@ func TestAdmin_HealthProxyBadAction(t *testing.T) {
 		t.Errorf("expected 400 for bad action, got %d", resp.StatusCode)
 	}
 }
+func TestAdmin_HealthProxyCircuitTCP(t *testing.T) {
+	s := newTestServer(t)
+	startServer(t, s)
+	resp, err := httpPost(s.sockPath, "/health/proxy?alias=ss-local&circuit=tcp&action=disable")
+	if err != nil {
+		t.Fatalf("POST disable tcp failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	resp2, _ := httpGet(s.sockPath, "/health")
+	var data map[string]interface{}
+	json.NewDecoder(resp2.Body).Decode(&data)
+	resp2.Body.Close()
+	first := data["proxies"].([]interface{})[0].(map[string]interface{})
+	health := first["health"].(map[string]interface{})
+	udpHealth := first["udp_health"].(map[string]interface{})
+	if health["available"].(bool) != false {
+		t.Error("expected tcp unavailable after circuit=tcp disable")
+	}
+	if !health["manual"].(bool) {
+		t.Error("expected tcp marked manual")
+	}
+	if udpHealth["available"].(bool) != true {
+		t.Error("expected udp still available after circuit=tcp disable")
+	}
+	if udpHealth["manual"].(bool) != false {
+		t.Error("expected udp not marked manual")
+	}
+}
+func TestAdmin_HealthProxyReleaseToAuto(t *testing.T) {
+	s := newTestServer(t)
+	startServer(t, s)
+	httpPost(s.sockPath, "/health/proxy?alias=ss-local&circuit=both&action=disable")
+	resp, err := httpPost(s.sockPath, "/health/proxy?alias=ss-local&circuit=both&action=auto")
+	if err != nil {
+		t.Fatalf("POST auto failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for action=auto, got %d", resp.StatusCode)
+	}
+	resp2, _ := httpGet(s.sockPath, "/health")
+	var data map[string]interface{}
+	json.NewDecoder(resp2.Body).Decode(&data)
+	resp2.Body.Close()
+	first := data["proxies"].([]interface{})[0].(map[string]interface{})
+	health := first["health"].(map[string]interface{})
+	if !health["available"].(bool) || health["manual"].(bool) {
+		t.Error("expected tcp available and not manual after release to auto")
+	}
+}
+func TestAdmin_HealthProxyBadCircuit(t *testing.T) {
+	s := newTestServer(t)
+	startServer(t, s)
+	resp, err := httpPost(s.sockPath, "/health/proxy?alias=ss-local&circuit=foo&action=disable")
+	if err != nil {
+		t.Fatalf("POST /health/proxy failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for bad circuit, got %d", resp.StatusCode)
+	}
+}
 func TestAdmin_ConfigReloadAvailable(t *testing.T) {
 	s := newTestServer(t)
 	reloaded := false

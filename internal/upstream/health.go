@@ -34,6 +34,11 @@ type ProxyHealth struct {
 	lastAttempt          time.Time
 	openSince            time.Time
 	latency              time.Duration
+	// manual pins the circuit to a fixed availability (true=force up, false=force down)
+	// until ClearManualState. While set, probe results keep refreshing latency/lastAttempt
+	// but never move state — that is what makes per-circuit manual disable/enable sticky
+	// across health-check cycles. nil means fully automatic control.
+	manual *bool
 }
 
 func (ph *ProxyHealth) Latency() time.Duration {
@@ -42,17 +47,37 @@ func (ph *ProxyHealth) Latency() time.Duration {
 	return ph.latency
 }
 
+// SetManualState pins a circuit to a fixed availability and keeps it pinned (sticky):
+// probes keep recording latency/lastAttempt but the circuit cannot move on its own until
+// ClearManualState. available=true forces the circuit up, false forces it down.
 func (ph *ProxyHealth) SetManualState(available bool) {
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
+	m := available
+	ph.manual = &m
 	if available {
 		ph.state = StateClosed
 		ph.consecutiveFailures = 0
+		ph.consecutiveSuccesses = 0
+		ph.openSince = time.Time{}
 	} else {
 		ph.state = StateOpen
 		ph.consecutiveFailures = 0
 		ph.consecutiveSuccesses = 0
+		ph.openSince = time.Now()
 	}
+}
+
+// ClearManualState returns a circuit to automatic health-check control, starting from
+// closed (available). A real outage re-opens it on the next probe cycle.
+func (ph *ProxyHealth) ClearManualState() {
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+	ph.manual = nil
+	ph.state = StateClosed
+	ph.consecutiveFailures = 0
+	ph.consecutiveSuccesses = 0
+	ph.openSince = time.Time{}
 }
 
 func (ph *ProxyHealth) reset() {
@@ -81,6 +106,7 @@ func (ph *ProxyHealth) IsAvailable() bool {
 type ProxyHealthSnapshot struct {
 	State                string        `json:"state"`
 	Available            bool          `json:"available"`
+	Manual               bool          `json:"manual"` // pinned by SetManualState, not moving with probes
 	Latency              time.Duration `json:"latency"`
 	ConsecutiveFailures  int           `json:"consecutive_failures"`
 	ConsecutiveSuccesses int           `json:"consecutive_successes"`
@@ -100,6 +126,7 @@ func (ph *ProxyHealth) Snapshot() ProxyHealthSnapshot {
 	s := ProxyHealthSnapshot{
 		State:                state,
 		Available:            ph.state != StateOpen,
+		Manual:               ph.manual != nil,
 		Latency:              ph.latency,
 		ConsecutiveFailures:  ph.consecutiveFailures,
 		ConsecutiveSuccesses: ph.consecutiveSuccesses,
@@ -455,6 +482,10 @@ func (hc *HealthChecker) recordSuccess(p *Proxy, ph *ProxyHealth, circuit string
 			ph.latency = (ph.latency*3 + latency) / 4
 		}
 	}
+	if ph.manual != nil {
+		// Manually pinned: keep refreshing latency/lastAttempt but never move state.
+		return
+	}
 
 	switch ph.state {
 	case StateClosed:
@@ -481,6 +512,10 @@ func (hc *HealthChecker) recordFailure(p *Proxy, ph *ProxyHealth, circuit string
 	defer ph.mu.Unlock()
 
 	ph.lastAttempt = time.Now()
+	if ph.manual != nil {
+		// Manually pinned: keep refreshing lastAttempt but never move state.
+		return
+	}
 
 	switch ph.state {
 	case StateClosed:

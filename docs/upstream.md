@@ -134,7 +134,7 @@ StateClosed ──失败 ≥ FailuresThreshold──► StateOpen
   - **TCP 探活**：HTTP GET `cfg.URL` 探活（2xx–3xx 算成功），喂 `health`。**所有节点都跑**，无 `udp_only` 豁免（`udp_only` 由「TCP 熔断 open + UDP 正常」自动推出，TCP 探测失败正是其来源）。
   - **UDP 探活**：经 `probeUDP` 发真实 DNS 查询——`p.UDPAssociate(dnsServer, 53)` → 写带 SOCKS5 UDP 头的 DNS A 查询帧 → 收响应帧并校验 TXID + QR 位，延迟做 EMA 平滑，喂 `udpHealth`。DNS 服务器与查询域名可配（`health_check.udp_probe_dns`，默认 `1.1.1.1:53`；`udp_probe_domain`，默认 `dns.google`）。探测复用正常 relay 路径（标准 ASSOCIATE + 裸兜底 / udp_only 裸中继 / ss UDP），所以测的就是真实 UDP 流量走的链路；成功时按连接类型分类并写入 UDP 能力标记，失败时 fresh 节点置 `none`（见 §3.2）。
 - `AutoDisableSingle`：仅一个代理时自动关闭健康检查。
-- 手动 disable/enable：admin `/health/proxy` → `Manager.SetProxyHealth(alias, available)` → `SetManualState`（同时设置两个电路，等价于整节点下线/上线）。
+- 手动 disable/enable：admin `/health/proxy?alias=X&circuit=tcp|udp|both&action=enable|disable|auto` → `Manager.SetCircuitHealth` → `SetManualState` / `ClearManualState`。`circuit` 可单独作用某一路（如只 pin 掉 TCP、保留 UDP），省略即 `both`。**粘性手动覆盖**：电路被 `manual` pin 住后，探测结果只刷新延迟/最近尝试、**不挪动状态**，直到 `action=auto` 释放回自动控制；`enable`=强制 up、`disable`=强制 down、`auto`=释放。整节点按钮 Disable=双路 pin down，Enable=双路释放回 auto；想强制启用某个被探测打挂的电路则点它自己的徽章（force up）。快照新增 `manual` 字段标记 pin 状态，面板卡片 TCP/UDP 徽章即此入口，pin 住的电路用虚线边框标识。
 
 ## §5 选路策略
 

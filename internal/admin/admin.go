@@ -450,16 +450,28 @@ func (s *Server) handleHealthProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	alias := r.URL.Query().Get("alias")
 	action := r.URL.Query().Get("action")
-	if alias == "" || (action != "disable" && action != "enable") {
-		http.Error(w, "need ?alias=xx&action=disable|enable", http.StatusBadRequest)
+	circuit := r.URL.Query().Get("circuit")
+	if alias == "" {
+		http.Error(w, "need ?alias=xx", http.StatusBadRequest)
 		return
 	}
-	err := s.mgr.SetProxyHealth(alias, action == "enable")
+	if action != "enable" && action != "disable" && action != "auto" {
+		http.Error(w, "need ?action=enable|disable|auto", http.StatusBadRequest)
+		return
+	}
+	if circuit == "" {
+		circuit = "both"
+	}
+	if circuit != "tcp" && circuit != "udp" && circuit != "both" {
+		http.Error(w, "need ?circuit=tcp|udp|both", http.StatusBadRequest)
+		return
+	}
+	err := s.mgr.SetCircuitHealth(alias, circuit, action)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	slog.Info("admin: proxy health set", "alias", alias, "action", action)
+	slog.Info("admin: proxy health set", "alias", alias, "circuit", circuit, "action", action)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }

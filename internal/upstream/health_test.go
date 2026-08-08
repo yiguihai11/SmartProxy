@@ -1,6 +1,12 @@
 package upstream
 
-import "testing"
+import (
+	"errors"
+	"testing"
+	"time"
+
+	"smartproxy/internal/config"
+)
 
 func TestSetManualState_Disable(t *testing.T) {
 	ph := &ProxyHealth{}
@@ -72,4 +78,58 @@ func TestSetManualState_Multiple(t *testing.T) {
 	// Latency should not be affected by SetManualState
 	ph.SetManualState(false)
 	_ = ph.Latency() // just ensure no panic
+}
+
+// TestManual_PinnedNotMovedByProbes: a circuit pinned via SetManualState must not move when
+// the health checker records probe results — that is what makes manual disable sticky.
+func TestManual_PinnedNotMovedByProbes(t *testing.T) {
+	hc := NewHealthChecker(config.HealthCheckConf{Enabled: true}, nil)
+	ph := &ProxyHealth{}
+	ph.SetManualState(false) // force down
+
+	// A probe success must NOT reopen a pinned-down circuit, but latency/lastAttempt still refresh.
+	hc.recordSuccess(&Proxy{}, ph, "tcp", time.Millisecond)
+	if ph.IsAvailable() {
+		t.Fatal("manual down must survive probe success")
+	}
+	snap := ph.Snapshot()
+	if !snap.Manual {
+		t.Error("expected manual=true")
+	}
+	if snap.LastAttempt == "" {
+		t.Error("expected lastAttempt still refreshed while pinned")
+	}
+	if snap.Latency != time.Millisecond {
+		t.Errorf("expected latency refreshed, got %v", snap.Latency)
+	}
+
+	// Release back to auto: the next success closes the circuit normally.
+	ph.ClearManualState()
+	if snap := ph.Snapshot(); snap.Manual {
+		t.Error("expected manual=false after ClearManualState")
+	}
+	if !ph.IsAvailable() {
+		t.Fatal("expected available right after release to auto")
+	}
+	hc.recordSuccess(&Proxy{}, ph, "tcp", time.Millisecond)
+	if !ph.IsAvailable() {
+		t.Error("expected still available after a normal success")
+	}
+}
+
+// TestManual_ForceUpSurvivesFailures: a pinned-up circuit stays closed across probe failures.
+func TestManual_ForceUpSurvivesFailures(t *testing.T) {
+	hc := NewHealthChecker(config.HealthCheckConf{Enabled: true}, nil)
+	ph := &ProxyHealth{}
+	ph.SetManualState(true) // force up
+
+	for i := 0; i < 3; i++ {
+		hc.recordFailure(&Proxy{}, ph, "tcp", errors.New("boom"))
+	}
+	if !ph.IsAvailable() {
+		t.Fatal("manual up must survive probe failures")
+	}
+	if snap := ph.Snapshot(); snap.State != "closed" {
+		t.Errorf("expected state closed, got %s", snap.State)
+	}
 }

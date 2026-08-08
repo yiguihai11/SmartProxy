@@ -531,7 +531,7 @@ func newEngineWithRules(content string) *rules.Engine {
 	return eng
 }
 
-func TestSetProxyHealth_Disable(t *testing.T) {
+func TestSetCircuitHealth_DisableBoth(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
 		Default: "failover",
 		Proxies: []ProxyEntry{
@@ -543,22 +543,67 @@ func TestSetProxyHealth_Disable(t *testing.T) {
 	}
 	defer m.dnsUDPPool.Close()
 
-	if err := m.SetProxyHealth("ss-local", false); err != nil {
-		t.Fatalf("SetProxyHealth disable failed: %v", err)
+	if err := m.SetCircuitHealth("ss-local", "both", "disable"); err != nil {
+		t.Fatalf("disable failed: %v", err)
 	}
 
 	infos := m.Proxies()
-	if len(infos) < 1 {
-		t.Fatal("expected at least 1 proxy")
-	}
+	var found bool
 	for _, info := range infos {
-		if info.Alias == "ss-local" && info.Health.Available {
-			t.Error("expected ss-local to be unavailable after disable")
+		if info.Alias != "ss-local" {
+			continue
+		}
+		found = true
+		if info.Health.Available {
+			t.Error("expected tcp unavailable after disable")
+		}
+		if info.UDPHealth.Available {
+			t.Error("expected udp unavailable after disable")
+		}
+		if !info.Health.Manual || !info.UDPHealth.Manual {
+			t.Error("expected both circuits marked manual after disable")
+		}
+	}
+	if !found {
+		t.Fatal("ss-local not found")
+	}
+}
+
+// TestSetCircuitHealth_DisableTCPOnly: disabling only the TCP circuit leaves UDP up, so
+// the auto-derived effective mode becomes udp_only.
+func TestSetCircuitHealth_DisableTCPOnly(t *testing.T) {
+	m, err := NewManager(UpstreamConfig{
+		Default: "failover",
+		Proxies: []ProxyEntry{
+			{Alias: "ss-local", URL: "socks5://127.0.0.1:1081"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.dnsUDPPool.Close()
+
+	if err := m.SetCircuitHealth("ss-local", "tcp", "disable"); err != nil {
+		t.Fatalf("disable tcp failed: %v", err)
+	}
+	infos := m.Proxies()
+	for _, info := range infos {
+		if info.Alias != "ss-local" {
+			continue
+		}
+		if info.Health.Available {
+			t.Error("expected tcp unavailable")
+		}
+		if !info.UDPHealth.Available {
+			t.Error("expected udp still available")
+		}
+		if info.Mode != ModeUDPOnly {
+			t.Errorf("expected effective mode udp_only, got %s", info.Mode)
 		}
 	}
 }
 
-func TestSetProxyHealth_Enable(t *testing.T) {
+func TestSetCircuitHealth_ReleaseToAuto(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
 		Default: "failover",
 		Proxies: []ProxyEntry{
@@ -570,18 +615,24 @@ func TestSetProxyHealth_Enable(t *testing.T) {
 	}
 	defer m.dnsUDPPool.Close()
 
-	_ = m.SetProxyHealth("ss-local", false)
-	_ = m.SetProxyHealth("ss-local", true)
+	_ = m.SetCircuitHealth("ss-local", "both", "disable")
+	_ = m.SetCircuitHealth("ss-local", "both", "auto")
 
 	infos := m.Proxies()
 	for _, info := range infos {
-		if info.Alias == "ss-local" && !info.Health.Available {
-			t.Error("expected ss-local to be available after re-enable")
+		if info.Alias != "ss-local" {
+			continue
+		}
+		if !info.Health.Available || !info.UDPHealth.Available {
+			t.Error("expected circuits available after release to auto")
+		}
+		if info.Health.Manual || info.UDPHealth.Manual {
+			t.Error("expected manual flag cleared after release to auto")
 		}
 	}
 }
 
-func TestSetProxyHealth_UnknownAlias(t *testing.T) {
+func TestSetCircuitHealth_UnknownAlias(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
 		Default: "failover",
 		Proxies: []ProxyEntry{
@@ -593,13 +644,12 @@ func TestSetProxyHealth_UnknownAlias(t *testing.T) {
 	}
 	defer m.dnsUDPPool.Close()
 
-	err = m.SetProxyHealth("nonexistent", false)
-	if err == nil {
+	if err := m.SetCircuitHealth("nonexistent", "both", "disable"); err == nil {
 		t.Fatal("expected error for unknown alias")
 	}
 }
 
-func TestSetProxyHealth_DirectAlias(t *testing.T) {
+func TestSetCircuitHealth_DirectAlias(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
 		Default: "failover",
 		Proxies: []ProxyEntry{
@@ -611,8 +661,7 @@ func TestSetProxyHealth_DirectAlias(t *testing.T) {
 	}
 	defer m.dnsUDPPool.Close()
 
-	err = m.SetProxyHealth("direct", false)
-	if err == nil {
+	if err := m.SetCircuitHealth("direct", "both", "disable"); err == nil {
 		t.Fatal("expected error for direct alias (nil proxy)")
 	}
 }
