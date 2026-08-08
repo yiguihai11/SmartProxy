@@ -185,6 +185,7 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/dracula.css", s.handleDraculaCSS)
 	mux.HandleFunc("/simple.js", s.handleSimpleJS)
 	mux.HandleFunc("/chart.js", s.handleChartJS)
+	mux.HandleFunc("/jsqr.js", s.handleJsqrJS)
 	mux.HandleFunc("/logs", s.handleLogs)
 	mux.HandleFunc("/logs/clear", s.handleLogsClear)
 	mux.HandleFunc("/terminal/clear", s.handleTerminalClear)

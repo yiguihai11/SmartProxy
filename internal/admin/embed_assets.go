@@ -52,3 +52,11 @@ func (s *Server) handleSimpleJS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 	w.Write(simpleJS)
 }
+
+//go:embed static/jsqr.min.js
+var jsqrJS []byte
+
+func (s *Server) handleJsqrJS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Write(jsqrJS)
+}

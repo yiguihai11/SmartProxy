@@ -13,6 +13,7 @@
 <script src="/cm.js"></script>
 <script src="/json.js"></script>
 <script src="/simple.js"></script>
+<script src="/jsqr.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{--bg:#0b0d14;--surface:#12141e;--surface2:#191c28;--border:#1e2132;--border2:#2a2e42;--text:#d6d9e4;--text2:#7a7f99;--text3:#50546b;--accent:#5b6ef5;--accent-hover:#6d7ff7;--accent-glow:rgba(91,110,245,.25);--green:#3ccf8e;--green-bg:rgba(60,207,142,.1);--yellow:#f5b34b;--yellow-bg:rgba(245,179,75,.1);--red:#f06060;--red-bg:rgba(240,96,96,.1);--radius:12px;--radius-sm:8px;--sidebar-w:240px;--font:"SF Pro","Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans SC",sans-serif;--mono:"SF Mono","JetBrains Mono","Fira Code",monospace;--sat:env(safe-area-inset-top,0px);--sar:env(safe-area-inset-right,0px);--sab:env(safe-area-inset-bottom,0px);--sal:env(safe-area-inset-left,0px)}
@@ -713,14 +714,160 @@ function fillSSPluginFromQuery(pv){
 // parseSSLinkBtn reads the ss:// link input, parses it, and auto-fills the SS form fields.
 function parseSSLinkBtn(){
   var el=document.getElementById('proxy-sslink');
-  var f=parseSSLink(el?el.value:'');
-  if(!f){alert('Invalid ss:// link');return}
+  if(!applyQRText(el?el.value:''))alert('Invalid ss:// link');
+}
+// applyQRText parses an ss:// string and fills the SS form (shared by the Parse button
+// and the QR scanner). Returns true on success.
+function applyQRText(text){
+  var f=parseSSLink(text);
+  if(!f)return false;
   document.getElementById('proxy-server').value=f.host;
   if(f.method)setSSMethod(f.method);
   document.getElementById('proxy-pass').value=f.password;
   fillSSPluginFromQuery(f.plugin);
   syncObfsRows();
   updateProxyPreview();
+  return true;
+}
+// ---- QR code scanning of ss:// links ----
+// Two decode paths: native BarcodeDetector (Chromium) when present, else jsQR on a canvas
+// frame. Camera (getUserMedia) and BarcodeDetector require a secure context (HTTPS or
+// localhost); the image-upload/paste channel uses only jsQR and works over plain HTTP.
+var qr={active:false,stream:null,raf:0,detector:null,video:null,canvas:null,last:0,onPaste:null};
+function makeQrDetector(){
+  if(!('BarcodeDetector' in window))return null;
+  try{return new BarcodeDetector({formats:['qr_code']})}catch(e){return null}
+}
+function openQRScanner(){
+  var ov=document.getElementById('qr-overlay');
+  if(!ov)return;
+  qr.active=true;
+  qr.detector=makeQrDetector();
+  qr.video=document.getElementById('qr-video');
+  qr.canvas=document.getElementById('qr-canvas');
+  qr.last=0;qr.raf=0;
+  qr.onPaste=onQrPaste;
+  document.addEventListener('paste',qr.onPaste);
+  qr.canvas.width=qr.canvas.height=0;
+  var camWrap=document.getElementById('qr-cam-wrap');
+  var imgWrap=document.getElementById('qr-img-wrap');
+  var status=document.getElementById('qr-status');
+  if(window.isSecureContext===false||!navigator.mediaDevices){
+    camWrap.style.display='none';
+    imgWrap.style.display='';
+    status.textContent='Camera needs HTTPS or localhost — upload or paste a QR image instead.';
+  }else{
+    camWrap.style.display='';
+    imgWrap.style.display='none';
+    status.textContent='Requesting camera…';
+    startQRCamera();
+  }
+  ov.classList.add('show');
+}
+function startQRCamera(){
+  navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false})
+    .then(function(stream){
+      if(!qr.active){stream.getTracks().forEach(function(t){t.stop()});return}
+      qr.stream=stream;
+      qr.video.srcObject=stream;
+      var st=document.getElementById('qr-status');
+      st.textContent='Point the camera at the QR code…';
+      qr.video.onloadedmetadata=function(){
+        if(qr.active&&!qr.raf)qr.raf=requestAnimationFrame(scanQRFrame);
+      };
+    })
+    .catch(function(err){
+      var st=document.getElementById('qr-status');
+      st.textContent='Camera error ('+err.name+') — upload or paste a QR image instead.';
+      document.getElementById('qr-cam-wrap').style.display='none';
+      document.getElementById('qr-img-wrap').style.display='';
+    });
+}
+function scanQRFrame(t){
+  qr.raf=0;
+  if(!qr.active)return;
+  var v=qr.video;
+  if(v.videoWidth&&t-qr.last>250){
+    qr.last=t;
+    decodeQrFromVideo();
+  }
+  qr.raf=requestAnimationFrame(scanQRFrame);
+}
+function decodeQrFromVideo(){
+  var v=qr.video;
+  if(qr.detector){
+    qr.detector.detect(v).then(function(bars){
+      if(!qr.active)return;
+      for(var i=0;i<bars.length;i++)if(bars[i].rawValue){finishQR(bars[i].rawValue);return}
+    }).catch(function(){});
+    return;
+  }
+  var c=qr.canvas,ctx=c.getContext('2d');
+  c.width=v.videoWidth;c.height=v.videoHeight;
+  ctx.drawImage(v,0,0,c.width,c.height);
+  decodeQrCanvas(c,function(text){finishQR(text)});
+}
+function decodeQrCanvas(c,onOk){
+  var ctx=c.getContext('2d');
+  var img=ctx.getImageData(0,0,c.width,c.height);
+  var code=jsQR(img.data,img.width,img.height,{inversionAttempts:'dontInvert'});
+  if(code&&code.data)onOk(code.data);
+}
+function decodeImageFile(file){
+  if(!file||!qr.active)return;
+  var url=URL.createObjectURL(file);
+  var img=new Image();
+  img.onload=function(){
+    URL.revokeObjectURL(url);
+    if(!qr.active)return;
+    var c=qr.canvas,ctx=c.getContext('2d');
+    c.width=img.width;c.height=img.height;
+    ctx.drawImage(img,0,0);
+    var status=document.getElementById('qr-status');
+    if(qr.detector){
+      qr.detector.detect(c).then(function(bars){
+        if(!qr.active)return;
+        for(var i=0;i<bars.length;i++)if(bars[i].rawValue){finishQR(bars[i].rawValue);return}
+        status.textContent='No QR found — try a sharper screenshot.';
+      }).catch(function(){
+        decodeQrCanvas(c,function(t){if(t)finishQR(t);else status.textContent='No QR found — try a sharper screenshot.'});
+      });
+      return;
+    }
+    decodeQrCanvas(c,function(t){if(t)finishQR(t);else status.textContent='No QR found — try a sharper screenshot.'});
+  };
+  img.onerror=function(){URL.revokeObjectURL(url)};
+  img.src=url;
+}
+function onQrPaste(e){
+  if(!qr.active)return;
+  var items=e.clipboardData&&e.clipboardData.items;
+  if(!items)return;
+  for(var i=0;i<items.length;i++){
+    if(items[i].type&&items[i].type.indexOf('image')===0){
+      var f=items[i].getAsFile();
+      if(f){e.preventDefault();decodeImageFile(f);return}
+    }
+  }
+}
+// finishQR stops the scanner and feeds the decoded string into the SS form.
+function finishQR(text){
+  closeQRScanner();
+  if(applyQRText(text)){
+    document.getElementById('proxy-sslink').value=text;
+  }else{
+    alert('Scanned QR is not a valid ss:// link');
+  }
+}
+function closeQRScanner(){
+  qr.active=false;
+  if(qr.raf)cancelAnimationFrame(qr.raf);
+  qr.raf=0;
+  if(qr.stream){qr.stream.getTracks().forEach(function(t){t.stop()});qr.stream=null}
+  if(qr.video)qr.video.srcObject=null;
+  if(qr.onPaste){document.removeEventListener('paste',qr.onPaste);qr.onPaste=null}
+  var ov=document.getElementById('qr-overlay');
+  if(ov)ov.classList.remove('show');
 }
 function openProxyDialog(i){
   var p=(i>=0&&healthD.health.proxies[i])||null;
@@ -1741,6 +1888,7 @@ es.onmessage=function(e){
       <div style="display:flex;gap:8px">
         <input class="dialog-input" id="proxy-sslink" placeholder="ss://base64(method:password)@host:port?plugin=..." autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter'){event.preventDefault();parseSSLinkBtn()}">
         <button type="button" class="btn btn-sm" onclick="parseSSLinkBtn()">Parse</button>
+        <button type="button" class="btn btn-sm" onclick="openQRScanner()" title="Scan an ss:// QR code (camera needs HTTPS or localhost; image upload/paste works anywhere)">Scan QR</button>
       </div>
     </div>
     <div id="proxy-ssmethod-row" style="display:none">
@@ -1808,6 +1956,24 @@ es.onmessage=function(e){
     <div class="dialog-actions">
       <button class="btn btn-sm" onclick="closeProxyDialog()">Cancel</button>
       <button class="btn btn-sm primary" id="proxy-confirm" onclick="saveProxy()">Add</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="qr-overlay" onclick="if(event.target===this)closeQRScanner()">
+  <div class="dialog" id="qr-dialog" onclick="event.stopPropagation()">
+    <div class="dialog-title">Scan QR Code</div>
+    <div class="dialog-desc" id="qr-status" style="margin-bottom:10px"></div>
+    <div id="qr-cam-wrap">
+      <video id="qr-video" autoplay playsinline muted style="width:100%;max-height:260px;border-radius:8px;background:#000"></video>
+      <canvas id="qr-canvas" style="display:none"></canvas>
+    </div>
+    <div id="qr-img-wrap" style="display:none">
+      <div class="dialog-label">Upload a QR image</div>
+      <input type="file" id="qr-file" accept="image/*" class="dialog-input" onchange="decodeImageFile(this.files&&this.files[0])">
+      <div class="dialog-desc" style="margin-top:8px">…or press <b>Ctrl+V</b> anywhere to paste a screenshot.</div>
+    </div>
+    <div class="dialog-actions">
+      <button class="btn btn-sm primary" onclick="closeQRScanner()">Close</button>
     </div>
   </div>
 </div>
