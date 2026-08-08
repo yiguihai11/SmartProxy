@@ -57,8 +57,8 @@ ss-android 导出的链接可带 `?plugin=id;key=val;key=val`（SIP003 插件）
 - **obfs-http**：首写前置 HTTP GET 请求头（`Content-Length`=首包长，`Host` 在端口非 80 时带 SS 服务器端口，`User-Agent: curl/7.<random>.<random>`、`Sec-WebSocket-Key` 随机——与 obfs-local 一致）；首读剥掉服务端 `HTTP/1.1 101` 响应头（按 `\r\n\r\n` 找边界）；后续读写明文直通。服务器端 `check_http_header` 只校验请求行含 `HTTP/1.1` 与 `Upgrade: websocket`，不校验 `Host`（`obfs-host` 缺省用 SS 服务器主机）。
 - **obfs-tls**：首包藏进 TLS ClientHello 的 **session_ticket 扩展**（138B 固定头 + ticket 扩展 + 数据 + SNI + 66B 其余扩展）；读侧状态机解服务端 `ServerHello`（96B，验证 `0x16`）+ `ChangeCipherSpec`（6B）+ `EncryptedHandshake` 头（5B，len 即首块长），后续按 `0x17` 帧解帧；后续写每包前置 `0x17 0x03 0x03` + len 帧头。
 - **UDP 不经插件**：obfs 只混淆 TCP（SIP003 语义，simple-obfs 两端均无 UDP 处理），`ssUDPAssociate` 直连服务器端口，与 `none`/AEAD 的 UDP relay 一致。
-- **只支持 `obfs-local`**：其它插件二进制（`v2ray-plugin` 等）不内置，`ssConnect`/`ssUDPAssociate` 时返回明确错误提示去掉该参数。
-- **dashboard**：代理对话框的 SS 区块提供「无 / obfs-http / obfs-tls」下拉，选混淆后显示 `obfs-host`（http 额外显示 `http-method`、`obfs-uri`），保存时组装成 `obfs-local;obfs=...;obfs-host=...`；编辑时按 `;key=val` 拆回表单。
+- **内置插件**：`obfs-local`（http/tls 混淆，仅 TCP，见 `obfs.go`）与 `v2ray-plugin` / `xray-plugin`（websocket/grpc/quic 传输、可带 TLS，见 `v2ray.go`）**都已内置**，无需外部二进制；其它插件二进制不内置，`ssConnect`/`ssUDPAssociate` 时返回明确错误提示去掉该参数。
+- **dashboard**：代理对话框的 SS 区块插件拆成两级选择（对齐 shadowsocks-android 的 Plugin + Configure 分离）：先选插件类型「无 / simple-obfs / v2ray-plugin」，再选具体模式——simple-obfs 为 Obfuscation wrapper（http / tls），v2ray-plugin 为 Transport mode（websocket / websocket-tls / quic / grpc / grpc-tls）；随后显示对应参数（obfs 的 `obfs-host`、http 额外 `http-method`/`obfs-uri`；v2ray 的 `host`/`path`/`mux`/`serviceName`/`certRaw`），保存时组装成 `obfs-local;obfs=...;obfs-host=...` 或 `v2ray-plugin;mode=...;tls;...`；编辑时按 `;key=val` 拆回表单。另支持粘贴完整 `ss://` 链接自动导入（base64 / 明文 / 无密码三种 userinfo）。
 - **e2e 验证**（`obfs_e2e_test.go`，`go test -tags e2e`，需 `SS_SERVER_BIN` + `OBFS_SERVER_BIN`）：SmartProxy 带 `?plugin=` 直连真实 simple-obfs `obfs-server`（http/tls）→ 真实 ssserver，TCP 明文往返一致；UDP 直连 SS 服务器端口往返一致。
 
 #### `none`/`plain`（不加密）

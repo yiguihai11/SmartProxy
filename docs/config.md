@@ -54,7 +54,7 @@
 | 字段 | JSON 键 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `Alias` | `alias` | `proxy<N>` | 代理别名（规则引擎引用） |
-| `URL` | `url` | — | 协议 URL：`socks5://` / `socks5h://`（可带 user:pass）、`socks4://`、`http(s)://`（CONNECT）、`ss://`（内置 shadowsocks，见 `docs/upstream.md` §3.1）。`ss://` 支持 `ss://base64(method:password)@host:port`、明文 `ss://method:password@host:port`，或不加密方法的免密码形式 `ss://none@host:port`。方法可为经典 AEAD、AEAD-2022（密码框填 base64 PSK，多 PSK 用 `:` 连接）、或 `none`/`plain`。可带 `?plugin=obfs-local;obfs=http|tls;obfs-host=...`（内置 simple-obfs 混淆，仅 TCP；其它插件不内置会拒绝） |
+| `URL` | `url` | — | 协议 URL：`socks5://` / `socks5h://`（可带 user:pass）、`socks4://`、`http(s)://`（CONNECT）、`ss://`（内置 shadowsocks，见 `docs/upstream.md` §3.1）。`ss://` 支持 `ss://base64(method:password)@host:port`、明文 `ss://method:password@host:port`，或不加密方法的免密码形式 `ss://none@host:port`。方法可为经典 AEAD、AEAD-2022（密码框填 base64 PSK，多 PSK 用 `:` 连接）、或 `none`/`plain`。可带 `?plugin=obfs-local;obfs=http|tls;obfs-host=...`（内置 simple-obfs 混淆，仅 TCP）或 `?plugin=v2ray-plugin;mode=websocket|grpc|quic[;tls];host=...`（内置 v2ray 传输，可带 `path`/`mux`/`serviceName`/`certRaw`）；其它插件不内置会拒绝 |
 
 | Go 字段 | JSON 键 | 默认值 | 说明 |
 | --- | --- | --- | --- |

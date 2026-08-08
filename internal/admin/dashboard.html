@@ -505,50 +505,79 @@ function setProxyScheme(v){
   if(slr)slr.style.display=(v==='ss')?'':'none';
   var urow=document.getElementById('proxy-user-row');
   if(urow)urow.style.display=(v==='ss')?'none':'';
-  // plugin row: only for ss (obfs-http/tls and v2ray-plugin are built in, no external binary)
+  // plugin row: only for ss (simple-obfs and v2ray-plugin are built in, no external binary)
   var pr=document.getElementById('proxy-plugin-row');
   if(pr)pr.style.display=(v==='ss')?'':'none';
   syncObfsRows();
   updateProxyPreview();
 }
-// syncObfsRows shows/hides obfs and v2ray-plugin fields based on the plugin dropdown
+// syncObfsRows rebuilds the transport-mode dropdown for the selected plugin type and
+// shows/hides the plugin option fields. Plugin type and its mode are separate choices
+// (mirrors shadowsocks-android's Plugin + Configure split).
 function syncObfsRows(){
-  var v=document.getElementById('proxy-plugin').value;
-  var isObfs=(v==='obfs-http'||v==='obfs-tls');
-  var isV2ray=v.indexOf('v2ray-')===0;
+  var p=document.getElementById('proxy-plugin').value;
+  fillModeOptions(p);
+  var m=document.getElementById('proxy-plugin-mode').value;
+  var isObfs=(p==='simple-obfs');
+  var isV2ray=(p==='v2ray-plugin');
+  var mr=document.getElementById('proxy-plugin-mode-row');
+  if(mr)mr.style.display=p?'':'none';
+  var ml=document.getElementById('proxy-plugin-mode-label');
+  if(ml)ml.textContent=isV2ray?'Transport mode':'Obfuscation wrapper';
   var hr=document.getElementById('proxy-obfs-host-row');
   if(hr)hr.style.display=(isObfs||isV2ray)?'':'none';
   var or=document.getElementById('proxy-obfs-httpopts-row');
-  if(or)or.style.display=(v==='obfs-http')?'':'none';
+  if(or)or.style.display=(isObfs&&m==='http')?'':'none';
   var vr=document.getElementById('proxy-v2ray-opts-row');
   if(vr)vr.style.display=isV2ray?'':'none';
   var wr=document.getElementById('proxy-v2ray-ws-row');
-  if(wr)wr.style.display=(v==='v2ray-ws'||v==='v2ray-ws-tls')?'':'none';
+  if(wr)wr.style.display=(isV2ray&&(m==='websocket'||m==='websocket-tls'))?'':'none';
   var gr=document.getElementById('proxy-v2ray-grpc-row');
-  if(gr)gr.style.display=(v==='v2ray-grpc'||v==='v2ray-grpc-tls')?'':'none';
+  if(gr)gr.style.display=(isV2ray&&(m==='grpc'||m==='grpc-tls'))?'':'none';
   var tr=document.getElementById('proxy-v2ray-tls-row');
-  if(tr)tr.style.display=(v==='v2ray-ws-tls'||v==='v2ray-grpc-tls'||v==='v2ray-quic')?'':'none';
+  if(tr)tr.style.display=(isV2ray&&(m==='websocket-tls'||m==='grpc-tls'||m==='quic'))?'':'none';
 }
-// buildPlugin assembles the form into a SIP003 plugin argument (empty = no plugin)
+// fillModeOptions rebuilds the #proxy-plugin-mode options for the selected plugin type
+// ('' = none). Keeps the current selection when it still applies, else picks the first.
+function fillModeOptions(p){
+  var sel=document.getElementById('proxy-plugin-mode');
+  if(!sel)return;
+  var cur=sel.value;
+  var opts=p==='simple-obfs'?[['http','HTTP disguise'],['tls','TLS disguise']]
+    :p==='v2ray-plugin'?[['websocket','WebSocket'],['websocket-tls','WebSocket (TLS)'],['quic','QUIC (TLS)'],['grpc','gRPC'],['grpc-tls','gRPC (TLS)']]
+    :[];
+  sel.innerHTML='';
+  for(var i=0;i<opts.length;i++){
+    var o=document.createElement('option');
+    o.value=opts[i][0];o.textContent=opts[i][1];
+    sel.appendChild(o);
+  }
+  if(cur&&opts.length)sel.value=cur;
+  if(!sel.value&&opts.length)sel.value=opts[0][0];
+}
+// buildPlugin assembles the form into a SIP003 plugin argument (empty = no plugin).
+// Plugin type (#proxy-plugin: simple-obfs | v2ray-plugin) and its transport/obfuscation
+// mode (#proxy-plugin-mode) are separate choices, like shadowsocks-android.
 function buildPlugin(){
-  var v=document.getElementById('proxy-plugin').value;
-  if(!v)return '';
+  var p=document.getElementById('proxy-plugin').value;
+  if(!p)return '';
   var host=document.getElementById('proxy-obfs-host').value.trim();
-  if(v.indexOf('v2ray-')===0){
+  var mode=document.getElementById('proxy-plugin-mode').value;
+  if(p==='v2ray-plugin'){
     // v2ray-plugin / xray-plugin:mode + tls + host + path/mux/serviceName/certRaw
     var bin=document.getElementById('proxy-plugin-bin').value||'v2ray-plugin';
-    var mode=(v==='v2ray-ws'||v==='v2ray-ws-tls')?'websocket':(v==='v2ray-quic'?'quic':'grpc');
-    var tls=(v==='v2ray-ws-tls'||v==='v2ray-grpc-tls'||v==='v2ray-quic'); // quic implies tls
-    var parts=[bin,'mode='+mode];
+    var vmode=mode.indexOf('websocket')===0?'websocket':(mode==='quic'?'quic':'grpc');
+    var tls=(mode==='websocket-tls'||mode==='grpc-tls'||mode==='quic'); // quic implies tls
+    var parts=[bin,'mode='+vmode];
     if(tls)parts.push('tls');
     if(host)parts.push('host='+host);
-    if(mode==='websocket'){ // path/mux only apply to websocket; grpc/quic ignore them
+    if(vmode==='websocket'){ // path/mux only apply to websocket; grpc/quic ignore them
       var path=document.getElementById('proxy-v2ray-path').value.trim();
       if(path&&path!=='/')parts.push('path='+path);
       var mux=document.getElementById('proxy-v2ray-mux').value.trim();
       if(mux&&mux!=='1')parts.push('mux='+mux);
     }
-    if(mode==='grpc'){
+    if(vmode==='grpc'){
       var sn=document.getElementById('proxy-v2ray-servicename').value.trim();
       if(sn&&sn!=='GunService')parts.push('serviceName='+sn);
     }
@@ -556,9 +585,10 @@ function buildPlugin(){
     if(cert)parts.push('certRaw='+cert);
     return parts.join(';');
   }
-  var parts=['obfs-local','obfs='+(v==='obfs-http'?'http':'tls')];
+  // simple-obfs: obfs-local;obfs=http|tls;obfs-host=... (+ http-method/obfs-uri for http)
+  var parts=['obfs-local','obfs='+(mode==='http'?'http':'tls')];
   if(host)parts.push('obfs-host='+host);
-  if(v==='obfs-http'){
+  if(mode==='http'){
     var m=document.getElementById('proxy-obfs-method').value.trim();
     var uri=document.getElementById('proxy-obfs-uri').value.trim();
     if(m&&m!=='GET')parts.push('http-method='+m);
@@ -643,12 +673,13 @@ function parseSSLink(raw){
   return {method:f.method,password:f.password,host:host,plugin:plugin};
 }
 // fillSSPluginFromQuery splits SIP003 plugin args (obfs-local or v2ray-plugin/xray-plugin)
-// back into the plugin dropdown and its option fields. Callers must reset #proxy-plugin first.
+// back into the plugin type + mode dropdowns and the option fields.
 function fillSSPluginFromQuery(pv){
-  var obfs='',host='',method='',uri='',vmode='',vtls=false,vpath='',vmux='',vsn='',vcert='';
+  var p='',m='',host='',method='',uri='',vpath='',vmux='',vsn='',vcert='';
   if(pv){
     var parts=pv.split(';');
     var bin=parts.length?parts[0]:'';
+    var obfs='',vmode='',vtls=false;
     for(var i=1;i<parts.length;i++){
       var eq=parts[i].indexOf('=');
       var k=eq<0?parts[i]:parts[i].slice(0,eq);
@@ -660,16 +691,19 @@ function fillSSPluginFromQuery(pv){
       else if(k==='serviceName')vsn=vv;else if(k==='certRaw')vcert=vv;
       else if(k==='tls')vtls=true;
     }
-    if(bin==='v2ray-plugin'||bin==='xray-plugin'){
+    if(bin==='obfs-local'){p='simple-obfs';m=obfs==='tls'?'tls':'http'}
+    else if(bin==='v2ray-plugin'||bin==='xray-plugin'){
+      p='v2ray-plugin';
       document.getElementById('proxy-plugin-bin').value=bin;
-      document.getElementById('proxy-plugin').value=
-        vmode==='quic'?'v2ray-quic':
-        vmode==='grpc'?(vtls?'v2ray-grpc-tls':'v2ray-grpc'):
-        (vtls?'v2ray-ws-tls':'v2ray-ws');
+      m=vmode==='websocket'?(vtls?'websocket-tls':'websocket')
+       :vmode==='grpc'?(vtls?'grpc-tls':'grpc')
+       :vmode==='quic'?'quic'
+       :(vtls?'websocket-tls':'websocket');
     }
   }
-  if(!document.getElementById('proxy-plugin').value)
-    document.getElementById('proxy-plugin').value=obfs==='http'?'obfs-http':obfs==='tls'?'obfs-tls':'';
+  document.getElementById('proxy-plugin').value=p;
+  fillModeOptions(p);
+  document.getElementById('proxy-plugin-mode').value=m||'';
   document.getElementById('proxy-obfs-host').value=host;
   document.getElementById('proxy-obfs-method').value=method||'GET';
   document.getElementById('proxy-obfs-uri').value=uri||'/';
@@ -686,7 +720,6 @@ function parseSSLinkBtn(){
   document.getElementById('proxy-server').value=f.host;
   if(f.method)setSSMethod(f.method);
   document.getElementById('proxy-pass').value=f.password;
-  document.getElementById('proxy-plugin').value=''; // fillSSPluginFromQuery only fills when empty
   fillSSPluginFromQuery(f.plugin);
   syncObfsRows();
   updateProxyPreview();
@@ -702,6 +735,7 @@ function openProxyDialog(i){
   document.getElementById('proxy-server').value='';
   document.getElementById('proxy-sslink').value='';
   document.getElementById('proxy-plugin').value='';
+  document.getElementById('proxy-plugin-mode').value='';
   document.getElementById('proxy-plugin-bin').value='v2ray-plugin';
   document.getElementById('proxy-obfs-host').value='';
   document.getElementById('proxy-obfs-method').value='GET';
@@ -1732,17 +1766,16 @@ es.onmessage=function(e){
     <div class="dialog-label">Password <span style="text-transform:none;font-weight:400">(optional)</span></div>
     <input class="dialog-input" id="proxy-pass" type="password" placeholder="password" autocomplete="new-password" oninput="updateProxyPreview()">
     <div id="proxy-plugin-row" style="display:none">
-      <div class="dialog-label">Plugin (SIP003) <span style="text-transform:none;font-weight:400">(obfs-local / v2ray-plugin built in, no external binary)</span></div>
+      <div class="dialog-label">Plugin (SIP003) <span style="text-transform:none;font-weight:400">(simple-obfs / v2ray-plugin built in, no external binary)</span></div>
       <select class="dialog-input" id="proxy-plugin" onchange="syncObfsRows();updateProxyPreview()">
         <option value="">None</option>
-        <option value="obfs-http">obfs-http — disguised HTTP</option>
-        <option value="obfs-tls">obfs-tls — disguised TLS</option>
-        <option value="v2ray-ws">v2ray-plugin — websocket (HTTP)</option>
-        <option value="v2ray-ws-tls">v2ray-plugin — websocket (TLS)</option>
-        <option value="v2ray-quic">v2ray-plugin — quic (TLS)</option>
-        <option value="v2ray-grpc">v2ray-plugin — grpc</option>
-        <option value="v2ray-grpc-tls">v2ray-plugin — grpc (TLS)</option>
+        <option value="simple-obfs">simple-obfs — HTTP/TLS disguise</option>
+        <option value="v2ray-plugin">v2ray-plugin — websocket / gRPC / QUIC</option>
       </select>
+      <div id="proxy-plugin-mode-row" style="display:none">
+        <div class="dialog-label" id="proxy-plugin-mode-label">Obfuscation wrapper</div>
+        <select class="dialog-input" id="proxy-plugin-mode" onchange="syncObfsRows();updateProxyPreview()"></select>
+      </div>
       <div id="proxy-obfs-host-row" style="display:none">
         <div class="dialog-label">Host <span style="text-transform:none;font-weight:400">(obfs-host / v2ray host, defaults to server host)</span></div>
         <input class="dialog-input" id="proxy-obfs-host" placeholder="www.bing.com" autocomplete="off" oninput="updateProxyPreview()">
