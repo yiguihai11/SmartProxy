@@ -516,7 +516,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Info("admin: config saved to disk", "path", s.configPath)
-		s.reloadConfig()
+		// Reload is owned by the config file watcher (fsnotify watches configPath),
+		// which fires on this write. Calling reloadConfig here as well would
+		// double-trigger a full upstream/engine reload on every save.
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
 	default:
