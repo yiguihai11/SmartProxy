@@ -14,6 +14,7 @@
 <script src="/json.js"></script>
 <script src="/simple.js"></script>
 <script src="/jsqr.js"></script>
+<script src="/qrcode.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{--bg:#0b0d14;--surface:#12141e;--surface2:#191c28;--border:#1e2132;--border2:#2a2e42;--text:#d6d9e4;--text2:#7a7f99;--text3:#50546b;--accent:#5b6ef5;--accent-hover:#6d7ff7;--accent-glow:rgba(91,110,245,.25);--green:#3ccf8e;--green-bg:rgba(60,207,142,.1);--yellow:#f5b34b;--yellow-bg:rgba(245,179,75,.1);--red:#f06060;--red-bg:rgba(240,96,96,.1);--radius:12px;--radius-sm:8px;--sidebar-w:240px;--font:"SF Pro","Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans SC",sans-serif;--mono:"SF Mono","JetBrains Mono","Fira Code",monospace;--sat:env(safe-area-inset-top,0px);--sar:env(safe-area-inset-right,0px);--sab:env(safe-area-inset-bottom,0px);--sal:env(safe-area-inset-left,0px)}
@@ -494,6 +495,7 @@ function lhealth(d){
       '<div class="actions">'+
       '<button class="btn btn-sm primary" onclick="openProxyDialog('+i+')">Edit</button>'+
       '<button class="btn btn-sm danger" onclick="deleteProxy('+i+')">Delete</button>'+
+      (p.scheme==='ss'?'<button class="btn btn-sm" onclick="exportSSLink('+i+')" title="Copy the ss:// share link or show its QR code">Export</button>':'')+
       '<button class="btn btn-sm '+(anyUp?'danger':'primary')+'" onclick="tp('+i+')">'+(anyUp?'Disable':'Enable')+'</button>'+
       '</div></div>';
   }).join('');
@@ -1856,6 +1858,46 @@ function fallbackCopy(text,toast){
   try{document.execCommand('copy');showCopyToast(toast,'Copied!')}catch(e){showCopyToast(toast,'Copy failed')}
   document.body.removeChild(ta);
 }
+// —— ss:// export modal: share link + copy + QR ——
+function exportSSLink(i){
+  var p=(i>=0&&healthD.health.proxies[i])||null;
+  if(!p||p.scheme!=='ss')return;
+  document.getElementById('export-title').textContent='Export — '+p.alias;
+  var link=document.getElementById('export-link');
+  link.value=p.url;
+  link.setSelectionRange(0,p.url.length);
+  renderQR(document.getElementById('export-qr'),p.url);
+  document.getElementById('export-overlay').classList.add('show');
+}
+function closeExportDialog(){
+  document.getElementById('export-overlay').classList.remove('show');
+}
+function copyExportLink(){
+  var link=document.getElementById('export-link');
+  var toast=document.getElementById('copy-toast');
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(link.value).then(function(){showCopyToast(toast,'Link copied')}).catch(function(){fallbackCopy(link.value,toast)});
+  }else{
+    fallbackCopy(link.value,toast);
+  }
+}
+function saveExportQR(){
+  var img=document.getElementById('export-qr').querySelector('img');
+  if(!img||!img.src)return;
+  var a=document.createElement('a');
+  a.href=img.src;a.download='smartproxy-ss.png';a.style.display='none';
+  document.body.appendChild(a);a.click();
+  setTimeout(function(){document.body.removeChild(a)},500);
+}
+function renderQR(el,text){
+  el.innerHTML='';
+  try{
+    var qr=qrcode(0,'M');
+    qr.addData(text);
+    qr.make();
+    el.innerHTML=qr.createImgTag(4,8,'ss:// share link');
+  }catch(e){el.innerHTML='<div class="dialog-desc">QR render failed: '+e.message+'</div>'}
+}
 function exportLogs(){
   var box=document.getElementById("logs-box");
   if(!box){alert("Log area not found");return}
@@ -2059,6 +2101,22 @@ es.onmessage=function(e){
     </div>
     <div class="dialog-actions">
       <button class="btn btn-sm primary" onclick="closeQRScanner()">Close</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="export-overlay" onclick="if(event.target===this)closeExportDialog()">
+  <div class="dialog" id="export-dialog" onclick="event.stopPropagation()">
+    <div class="dialog-title" id="export-title">Export SS Link</div>
+    <div class="dialog-label">Share link</div>
+    <div style="display:flex;gap:8px">
+      <input class="dialog-input" id="export-link" readonly spellcheck="false" style="flex:1;font-family:var(--mono);font-size:.82rem">
+      <button type="button" class="btn btn-sm primary" onclick="copyExportLink()" title="Copy the ss:// link to clipboard">Copy</button>
+    </div>
+    <div class="dialog-label" style="margin-top:14px">QR code</div>
+    <div id="export-qr" style="display:flex;justify-content:center;padding:10px 0;background:var(--bg);border-radius:8px;margin-top:4px"></div>
+    <div class="dialog-actions">
+      <button class="btn btn-sm" onclick="saveExportQR()" title="Download the QR code as a PNG image">Save QR</button>
+      <button class="btn btn-sm primary" onclick="closeExportDialog()">Close</button>
     </div>
   </div>
 </div>

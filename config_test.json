@@ -12,7 +12,10 @@
     "admin_socket": "/tmp/smartproxy.sock",
     "admin_port": 9090,
     "admin_auth": null,
-    "admin_refresh_interval": 3
+    "admin_refresh_interval": 3,
+    "admin_https": true,
+    "admin_cert_file": "",
+    "admin_key_file": ""
   },
   "tun": {
     "enabled": false,

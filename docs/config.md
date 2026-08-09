@@ -22,9 +22,14 @@
 | `RelaxedUDPOriginCheck` | `relaxed_udp_origin_check` | `true` | 放行非预期来源 IP 的 UDP 包 |
 | `UDPAssociateIdleTimeout` | `udp_associate_idle_timeout` | `60` | UDP 会话空闲超时（秒） |
 | `AdminSocket` | `admin_socket` | `""` | Admin 面板 unix socket 路径（可选） |
-| `AdminPort` | `admin_port` | `0` | Admin 面板 HTTP 端口（0 表示禁用）；`admin_port` > 0 时即使 `admin_socket` 为空也会启动面板（纯 TCP） |
+| `AdminPort` | `admin_port` | `0` | Admin 面板 TCP 端口（0 表示禁用）；`admin_port` > 0 时即使 `admin_socket` 为空也会启动面板 |
 | `AdminAuth` | `admin_auth` | 无 | Admin 认证 `{enabled, username, password}` |
 | `AdminRefreshInterval` | `admin_refresh_interval` | `3` | Admin 数据刷新间隔（秒） |
+| `AdminHTTPS` | `admin_https` | `true` | TCP 端口启用 HTTPS：同一端口上明文 HTTP 请求被 301 重定向到 `https://`，TLS 握手正常走 HTTPS。设 `false` 恢复纯 HTTP。默认自动生成自签证书（见下） |
+| `AdminCertFile` | `admin_cert_file` | `""` | 自定义证书 PEM 路径（可选）。为空时用自签证书；设置时须与 `admin_key_file` 一起设置 |
+| `AdminKeyFile` | `admin_key_file` | `""` | 自定义私钥 PEM 路径（可选），须与 `admin_cert_file` 一起设置 |
+
+**Admin HTTPS 自签证书**：`admin_https=true` 且未配 `admin_cert_file`/`admin_key_file` 时，启动自动生成一张 ECDSA P-256 自签证书（CN=`smartproxy`，SAN=localhost/127.0.0.1/::1，397 天有效期），best-effort 写入**配置文件同目录**的 `admin.crt` + `admin.key`，重启复用同一证书（浏览器只需告警/信任一次）。写盘失败则仅内存持有。unix socket（`admin_socket`）仍为纯 HTTP，仅供本机访问。**注意：Admin TLS 配置在启动时生效，改动需重启；`admin_auth` 仍可热重载。**
 
 ### `tun`
 

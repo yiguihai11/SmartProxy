@@ -46,6 +46,15 @@ type ListenConfig struct {
 	AdminPort               int            `json:"admin_port"`
 	AdminAuth               *AdminAuthConf `json:"admin_auth"`
 	AdminRefreshInterval    int            `json:"admin_refresh_interval"`
+	// AdminHTTPS serves the TCP admin listener over TLS and 301-redirects plain
+	// HTTP to https (same host:port, dual-protocol sniffing). Default true: a
+	// self-signed cert+key is auto-generated next to the config file unless
+	// AdminCertFile/AdminKeyFile point at real ones. Set false to keep plain HTTP.
+	AdminHTTPS bool `json:"admin_https"`
+	// AdminCertFile/AdminKeyFile are optional PEM paths overriding the auto-generated
+	// self-signed certificate. Both must be set together.
+	AdminCertFile string `json:"admin_cert_file"`
+	AdminKeyFile  string `json:"admin_key_file"`
 }
 
 type AdminAuthConf struct {
@@ -151,6 +160,9 @@ func (c *Config) Validate() error {
 			errs = append(errs, "upstream.health_check.timeout must be positive")
 		}
 	}
+	if lc := c.Listen; (lc.AdminCertFile == "") != (lc.AdminKeyFile == "") {
+		errs = append(errs, "listen.admin_cert_file and listen.admin_key_file must be both set or both empty")
+	}
 
 	if len(errs) == 0 {
 		return nil
@@ -167,6 +179,7 @@ func DefaultConfig() *Config {
 			RelaxedUDPOriginCheck:   true,
 			UDPAssociateIdleTimeout: 60,
 			AdminRefreshInterval:    3,
+			AdminHTTPS:              true,
 		},
 		TUN: TUNConfig{
 			Enabled:           false,

@@ -60,3 +60,11 @@ func (s *Server) handleJsqrJS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 	w.Write(jsqrJS)
 }
+
+//go:embed static/qrcode.min.js
+var qrcodeJS []byte
+
+func (s *Server) handleQRCodeJS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Write(qrcodeJS)
+}

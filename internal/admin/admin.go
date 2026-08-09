@@ -53,6 +53,10 @@ type Server struct {
 	tcpLn     net.Listener
 	server    *http.Server
 	tcpServer *http.Server
+
+	tlsEnabled bool
+	certFile   string
+	keyFile    string
 }
 
 type cachedStats struct {
@@ -133,13 +137,48 @@ func (s *Server) Start() error {
 			slog.Warn("admin TCP listen failed", "port", s.tcpPort, "error", err)
 		} else {
 			s.tcpLn = tcpLn
-			// The TCP port requires authentication
-			s.tcpServer = &http.Server{Handler: s.authMiddleware(mux)}
-			slog.Info("admin HTTP server started", "port", s.tcpPort)
-			go s.tcpServer.Serve(tcpLn)
+			if s.tlsEnabled {
+				tlsCfg, err := s.buildTLSConfig()
+				if err != nil {
+					// A bad cert (e.g. unreadable configured files) must not take the
+					// panel down: fall back to plain HTTP so it stays reachable.
+					slog.Warn("admin TLS setup failed, falling back to plain HTTP", "error", err)
+					s.tcpServer = &http.Server{Handler: s.authMiddleware(mux)}
+					slog.Info("admin HTTP server started", "port", s.tcpPort)
+					go s.tcpServer.Serve(tcpLn)
+				} else {
+					// One port, two protocols: TLS handshakes are served as HTTPS,
+					// plaintext requests are 301-redirected to https (see tls.go).
+					s.tcpServer = &http.Server{Handler: s.tlsDispatch(mux)}
+					slog.Info("admin HTTPS server started (HTTP redirects to https)", "port", s.tcpPort)
+					go s.tcpServer.Serve(&splitListener{Listener: tcpLn, tlsCfg: tlsCfg})
+				}
+			} else {
+				// The TCP port requires authentication
+				s.tcpServer = &http.Server{Handler: s.authMiddleware(mux)}
+				slog.Info("admin HTTP server started", "port", s.tcpPort)
+				go s.tcpServer.Serve(tcpLn)
+			}
 		}
 	}
 	return nil
+}
+
+// tlsDispatch routes a TCP-port request by transport: real TLS (handshaked by
+// http.Server, r.TLS set) is served through the authenticated mux; plaintext HTTP
+// is bounced to the https:// URL on the same host:port with the original path.
+func (s *Server) tlsDispatch(mux http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS != nil {
+			s.authMiddleware(mux).ServeHTTP(w, r)
+			return
+		}
+		host := r.Host
+		if host == "" {
+			host = "localhost"
+		}
+		http.Redirect(w, r, "https://"+host+r.URL.RequestURI(), http.StatusMovedPermanently)
+	})
 }
 
 func (s *Server) Stop() {
@@ -186,6 +225,7 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/simple.js", s.handleSimpleJS)
 	mux.HandleFunc("/chart.js", s.handleChartJS)
 	mux.HandleFunc("/jsqr.js", s.handleJsqrJS)
+	mux.HandleFunc("/qrcode.js", s.handleQRCodeJS)
 	mux.HandleFunc("/logs", s.handleLogs)
 	mux.HandleFunc("/logs/clear", s.handleLogsClear)
 	mux.HandleFunc("/terminal/clear", s.handleTerminalClear)

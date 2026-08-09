@@ -35,6 +35,33 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Upstream.HealthCheck.UDPProbeDomain != "dns.google" {
 		t.Errorf("expected UDPProbeDomain=dns.google, got %q", cfg.Upstream.HealthCheck.UDPProbeDomain)
 	}
+	if !cfg.Listen.AdminHTTPS {
+		t.Error("expected Listen.AdminHTTPS=true by default")
+	}
+}
+
+func TestValidate_AdminCertKeyPair(t *testing.T) {
+	cfg := DefaultConfig()
+	// both unset: valid (auto self-signed)
+	cfg.Listen.AdminCertFile, cfg.Listen.AdminKeyFile = "", ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("both empty should validate, got: %v", err)
+	}
+	// cert only: invalid
+	cfg.Listen.AdminCertFile = "/tmp/x.crt"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("cert without key should fail validation")
+	}
+	// key only: invalid
+	cfg.Listen.AdminCertFile, cfg.Listen.AdminKeyFile = "", "/tmp/x.key"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("key without cert should fail validation")
+	}
+	// both set: valid
+	cfg.Listen.AdminCertFile, cfg.Listen.AdminKeyFile = "/tmp/x.crt", "/tmp/x.key"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("both set should validate, got: %v", err)
+	}
 }
 
 func TestLoad_HealthCheckUDPProbe(t *testing.T) {

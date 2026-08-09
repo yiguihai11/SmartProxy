@@ -170,6 +170,7 @@ func (e *Engine) Start(ctx context.Context) error {
 		}
 		e.adminServer.SetTCPPort(lc.AdminPort)
 		e.adminServer.SetRefreshInterval(lc.AdminRefreshInterval)
+		e.adminServer.SetTLS(lc.AdminCertFile, lc.AdminKeyFile, lc.AdminHTTPS)
 		if err := e.adminServer.Start(); err != nil {
 			slog.Warn("admin server failed to start", "socket", sockPath, "error", err)
 		}
