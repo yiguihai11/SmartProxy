@@ -16,6 +16,7 @@ import (
 
 	"smartproxy/internal/chnroute"
 	"smartproxy/internal/fwmark"
+	"smartproxy/internal/netutil"
 	"smartproxy/internal/rules"
 	"smartproxy/internal/upstream"
 )
@@ -338,7 +339,8 @@ func dialTCP(ctx context.Context, host string, port int, timeout time.Duration) 
 	if tcp, ok := conn.(*net.TCPConn); ok {
 		tcp.SetNoDelay(true)
 		tcp.SetKeepAlive(true)
-		tcp.SetKeepAlivePeriod(30 * time.Second)
+		tcp.SetKeepAlivePeriod(15 * time.Second)
+		netutil.SetKeepAliveInterval(tcp, 15*time.Second)
 	}
 	return conn, nil
 }

@@ -146,6 +146,11 @@ func (e *Engine) Start(ctx context.Context) error {
 			return fmt.Errorf("failed to listen: %w", err)
 		}
 		e.listener = ln
+		if tcpl, ok := ln.(*net.TCPListener); ok {
+			if err := netutil.EnableTCPFastOpen(tcpl); err != nil {
+				slog.Warn("TCP_FASTOPEN not enabled on SOCKS5 listener", "err", err)
+			}
+		}
 		slog.Info("SOCKS5 server listening", "addr", ln.Addr())
 		safego.Go("engine.serve", func() { e.serve(ctx) })
 	} else {
@@ -200,8 +205,9 @@ func (e *Engine) handleClient(ctx context.Context, conn net.Conn) {
 
 	if tcp, ok := conn.(*net.TCPConn); ok {
 		tcp.SetKeepAlive(true)
-		tcp.SetKeepAlivePeriod(30 * time.Second)
+		tcp.SetKeepAlivePeriod(15 * time.Second)
 		tcp.SetNoDelay(true)
+		netutil.SetKeepAliveInterval(tcp, 15*time.Second)
 	}
 
 	remoteAddr := conn.RemoteAddr().(*net.TCPAddr)

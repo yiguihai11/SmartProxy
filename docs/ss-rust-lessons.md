@@ -36,15 +36,13 @@ ss-rust 数据面（established 之后）**不设任何 idle timeout**，只靠 
 
 rust 在 connect 后 / accept 后都无条件 `set_tcp_nodelay`（`net/sys/unix/mod.rs:114,140`）。SmartProxy 三处已做：accept 路径 `engine.go:204`、上游 dial `proxy.go:668`、直连 dial `route/router.go:339`。代理每跳转发小包，Nagle 必须关，已全覆盖。
 
-### 2.2 KeepAlive：15s vs 我们的 30s；KEEPINTVL 未设 —— 🔶 可借鉴
+### 2.2 KeepAlive：idle=interval=15s —— ✅ 已应用（2026-08-09）
 
-rust 默认 `SO_KEEPALIVE` + `TCP_KEEPIDLE=15s` + `TCP_KEEPINTVL=15s`（`net/option.rs:20-22`，service 默认 `Duration::from_secs(15)`），**不设 KEEPCNT**。注意 rust 的 keepalive 只用于 server 端探测半死客户端，**不用于出站数据面**（见 1.5）。
+rust 默认 `SO_KEEPALIVE` + `TCP_KEEPIDLE=15s` + `TCP_KEEPINTVL=15s`（`net/option.rs:20-22`，service 默认 `Duration::from_secs(15)`），**不设 KEEPCNT**。注意 rust 的 keepalive 只用于探测半死连接，**不用于出站数据面**（见 1.5）。
 
-SmartProxy 统一用 `SetKeepAlivePeriod(30s)`（`engine.go:203`、`proxy.go:667`、`router.go:341`）。差异：
-- idle 30s vs 15s——半死连接被探测出来的时间翻倍。
-- Go 的 `SetKeepAlivePeriod` 只设 KEEPIDLE，KEEPINTVL 恒走内核默认（Linux 约 75s）。要设 KEEPINTVL 得 `unix.SetsockoptInt(fd, IPPROTO_TCP, TCP_KEEPINTVL, n)`，KEEPCNT 同理。
+已对齐：三处 `SetKeepAlivePeriod(30s)` → `15s`（`engine.go` accept、`proxy.go` 上游 dial、`router.go` 直连 dial），并新增 `netutil.SetKeepAliveInterval`（`internal/netutil/tcpopts_linux.go`）在同一 socket 上补 `TCP_KEEPINTVL=15`。原因：Go 的 `SetKeepAlivePeriod` 只设 KEEPIDLE（`tcpsock.go` 仅调 `setKeepAliveIdle`），KEEPINTVL 恒走内核默认 75s，会让半死探测拖 5 倍。KEEPCNT 保持内核默认，与 rust 一致。
 
-若要对齐：把 `SetKeepAlivePeriod` 改 15s，并用 x/sys 在 Dialer.Control / accept 处补 KEEPINTVL=15s。**注意 MPTCP 坑**（rust `unix/mod.rs:76-87` 注释 + mptcp_net-next #383/#353）：Linux MPTCP 内核不支持 KEEPIDLE/KEEPINTVL，只认纯 SO_KEEPALIVE，rust 会降级重试——若 SmartProxy 以后跑 MPTCP 也要处理，否则 SetsockoptInt 直接报错。
+**注意 MPTCP 坑**（rust `unix/mod.rs:76-87` 注释 + mptcp_net-next #383/#353）：Linux MPTCP 内核不支持 KEEPIDLE/KEEPINTVL，只认纯 SO_KEEPALIVE，rust 会降级重试——若 SmartProxy 以后跑 MPTCP，`SetKeepAliveInterval` 的 SetsockoptInt 会失败，需按 rust 语义降级为只留 SO_KEEPALIVE。
 
 ### 2.3 SO_MARK（fwmark）—— ✅ 已应用
 
@@ -54,9 +52,9 @@ rust 在出站 TCP/UDP connect 前设 `SO_MARK`（`net/sys/unix/linux/mod.rs:61-
 
 rust 在 SO_MARK 之后、connect 之前设 `SO_BINDTODEVICE`（`linux/mod.rs:351-371`），用于强制走指定网卡。Go 侧 `unix.SetsockoptString(fd, SOL_SOCKET, SO_BINDTODEVICE, iface)` 放在 Dialer.Control 即可。注意要求 CAP_NET_RAW（Linux 3.9+），失败不应 fatal。SmartProxy 暂无此需求，但作为"出口绑定网卡"能力可备。
 
-### 2.5 TCP_FASTOPEN：监听侧 qlen=1024 —— 🔶 可借鉴
+### 2.5 TCP_FASTOPEN：监听侧 qlen=1024 —— ✅ 已应用（2026-08-09）
 
-rust 在 `listen()` 之后设 `TCP_FASTOPEN=1024`（`net/tcp.rs:159-163`，`linux/mod.rs:171-202`），backlog 也是 1024。注释引用 LWN 508865：建议 5 但既然 backlog 是 1024 就开 1024 个握手槽。Go 无官方 API，需 `tcpl.(*net.TCPListener).SyscallConn().Control(...)` 里 `unix.SetsockoptInt(fd, IPPROTO_TCP, TCP_FASTOPEN, 1024)`。对 SmartProxy 入口（SOCKS5/TUN 监听）可减少首 RTT。
+rust 在 `listen()` 之后设 `TCP_FASTOPEN=1024`（`net/tcp.rs:159-163`，`linux/mod.rs:171-202`），backlog 也是 1024。注释引用 LWN 508865：建议 5 但既然 backlog 是 1024 就开 1024 个握手槽。Go 无官方 API，已实现 `netutil.EnableTCPFastOpen`（`internal/netutil/tcpopts_linux.go`：`net.Listen` 之后经 `SyscallConn().Control` 设 `TCP_FASTOPEN=1024`，best-effort），并在 SOCKS5 入口 `engine.go` 监听建立后调用。对用 TFO 的客户端省首个 RTT，与数据面无关。**客户端侧不适用**，见 2.6。
 
 ### 2.6 客户端 TCP_FASTOPEN_CONNECT —— ❌ 不适用（两个结构性障碍）
 
@@ -206,13 +204,13 @@ rust 提供 manager 接口（端口/IP 上报、节点增删），类似我们�
 
 ## 十、最值得抄的 5 条（按性价比排序）
 
-（§1.5 经实测归为"已应用"、§2.6 经结构分析归为"不适用"，均已从候选里剔除。）
+（§1.5/§2.2/§2.5 经实测已落地为"已应用"，§2.6 经结构分析归为"不适用"，均已从候选里剔除。）
 
-1. **KEEPINTVL 对齐 + idle 15s**（2.2）：半死连接探测从 30s 收到 15s，x/sys 补 KEEPINTVL，注意 MPTCP 降级。
-2. **resolv.conf 热重载 + 1s 防抖**（3.3）：Docker/CNI 环境不用重启即可感知 DNS 变更，复用现有 atomic.Pointer 换根模式。
-3. **监听侧 TCP_FASTOPEN=1024**（2.5）：对用 TFO 的客户端省首个 RTT，Go 需 `SyscallConn` 手动设，与数据面无关。
-4. **SO_BINDTODEVICE + UDP 禁分片**（2.4/2.10）：出口绑定与 UDP MTU 边界，按需上、注意两端协同。
-5. **#292 握手失败静默（上游视角）**（1.4）：区分上游/入口视角，仅对上游 SS 握手失败静默。
+1. **resolv.conf 热重载 + 1s 防抖**（3.3）：Docker/CNI 环境不用重启即可感知 DNS 变更，复用现有 atomic.Pointer 换根模式。
+2. **SO_BINDTODEVICE + UDP 禁分片**（2.4/2.10）：出口绑定与 UDP MTU 边界，按需上、注意两端协同。
+3. **#292 握手失败静默（上游视角）**（1.4）：区分上游/入口视角，仅对上游 SS 握手失败静默。
+4. **SO_SNDBUF/SO_RCVBUF**（2.7）：大带宽场景手动扩缓冲区，accept 后紧跟设置，可做配置项。
+5. **每候选 IP 独立超时**（3.5）：补上 rust 自己留的 TODO，避免单黑洞 IP 拖死链路。
 
 ---
 

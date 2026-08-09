@@ -19,6 +19,7 @@ import (
 
 	"github.com/sagernet/sing-shadowsocks"
 	"smartproxy/internal/fwmark"
+	"smartproxy/internal/netutil"
 )
 
 const proxyDialTimeout = 10 * time.Second
@@ -664,8 +665,9 @@ func (p *Proxy) dial(ctx context.Context) (net.Conn, error) {
 	}
 	if tcp, ok := conn.(*net.TCPConn); ok {
 		tcp.SetKeepAlive(true)
-		tcp.SetKeepAlivePeriod(30 * time.Second)
+		tcp.SetKeepAlivePeriod(15 * time.Second)
 		tcp.SetNoDelay(true)
+		netutil.SetKeepAliveInterval(tcp, 15*time.Second)
 	}
 	return conn, nil
 }
