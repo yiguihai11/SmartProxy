@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -12,6 +13,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/sagernet/sing-shadowsocks"
 	"github.com/sagernet/sing-shadowsocks/shadowaead"
@@ -271,12 +274,130 @@ func (p *Proxy) ssConnect(ctx context.Context, targetHost string, targetPort int
 		}
 	}
 	dest := M.ParseSocksaddrHostPort(targetHost, uint16(targetPort))
-	ssConn, err := p.ssMethod.DialConn(conn, dest)
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("ss handshake to %s failed: %w", p.URL, err)
+
+	// Defer the SS address handshake to the first payload write, so the address header
+	// travels together with the first data chunk in a single write — exactly what the
+	// reference clients (shadowsocks-rust sslocal, ss-android) emit. Sending the bare
+	// address header as the entire obfs-http body (Content-Length == addr header length,
+	// payload in a separate segment ~20ms later) is the shadowsocks-in-obfs signature
+	// GFW's DPI flags and resets. AEAD / AEAD-2022 combine salt+addr+payload into one
+	// encrypted write on the first Write (sing's writeRequest); none/plain does not, so
+	// its address header is merged with the first payload manually below.
+	if p.ssMethod.Name() == shadowsocks.MethodNone {
+		var addrBuf bytes.Buffer
+		if err := M.SocksaddrSerializer.WriteAddrPort(&addrBuf, dest); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("ss address header to %s: %w", p.URL, err)
+		}
+		addr := addrBuf.Bytes()
+		// firstWrite merges [addr][payload] into one obfs body; flush (read-first protocols)
+		// emits the plaintext addr alone.
+		return &deferredSSConn{
+			Conn: conn,
+			firstWrite: func(b []byte) (int, error) {
+				merged := make([]byte, 0, len(addr)+len(b))
+				merged = append(merged, addr...)
+				merged = append(merged, b...)
+				if err := writeAll(conn, merged); err != nil {
+					return 0, err
+				}
+				return len(b), nil
+			},
+			flush: func() error { return writeAll(conn, addr) },
+		}, nil
 	}
-	return ssConn, nil
+
+	// AEAD / AEAD-2022: the deferred conn's first Write fires writeRequest(payload) which
+	// emits salt+addr+payload in one encrypted write; an empty Write fires the addr-only
+	// handshake (writeRequest(nil)) for read-first protocols.
+	early := p.ssMethod.DialEarlyConn(conn, dest)
+	return &deferredSSConn{
+		Conn:       early,
+		firstWrite: early.Write,
+		flush:      func() error { _, err := early.Write(nil); return err },
+	}, nil
+}
+
+// handshakeFlushTimeout mirrors rust sslocal's 500ms first-byte pre-read (shadowsocks-rust
+// issue #232): before starting the bidirectional tunnel sslocal reads the client's first
+// byte for up to 500ms — data means the address header travels with the first payload in
+// one segment, silence means the destination is a read-first protocol (FTP/SMTP) that must
+// get the address header alone so the server can greet.
+//
+// SmartProxy's relay runs both directions concurrently, so the read side can otherwise race
+// the write side and flush the bare address header before the first payload arrives —
+// reproducing the standalone-addr body GFW flags. Instead, the first read waits up to
+// handshakeFlushTimeout for server data (which only arrives after the write direction fired
+// the combined handshake); only a timeout — the client truly sends nothing — flushes.
+const handshakeFlushTimeout = 500 * time.Millisecond
+
+// deferredSSConn defers the SS address handshake until the first payload write, sending
+// [addr][payload] in a single write so the obfs-http body covers both (sslocal's
+// make_first_packet_buffer). firstWrite emits the combined first packet (for AEAD the
+// underlying conn's Write already combines salt+addr+payload; for none/plain the address is
+// merged manually). flush emits the bare address header after the read-first grace timeout.
+type deferredSSConn struct {
+	net.Conn
+	firstWrite func(b []byte) (int, error)
+	flush      func() error
+	mu         sync.Mutex
+	started    bool
+}
+
+// Write passes the first payload through firstWrite (combined handshake), later writes raw.
+// The merged buffer is longer than b, so report len(b) or io.CopyBuffer reads it as
+// io.ErrShortWrite.
+func (c *deferredSSConn) Write(b []byte) (int, error) {
+	c.mu.Lock()
+	if c.started {
+		c.mu.Unlock()
+		return c.Conn.Write(b)
+	}
+	c.started = true
+	c.mu.Unlock()
+	return c.firstWrite(b)
+}
+
+// Read waits up to handshakeFlushTimeout for server data on the first read instead of
+// flushing immediately, so the write direction's combined first packet (TLS/HTTP) wins the
+// race. A timeout means the client sends nothing before the server can respond — a read-first
+// protocol — so the address header is flushed alone and the read retries.
+func (c *deferredSSConn) Read(p []byte) (int, error) {
+	c.mu.Lock()
+	if c.started {
+		c.mu.Unlock()
+		return c.Conn.Read(p)
+	}
+	c.mu.Unlock()
+
+	if err := c.Conn.SetReadDeadline(time.Now().Add(handshakeFlushTimeout)); err != nil {
+		return 0, err
+	}
+	n, err := c.Conn.Read(p)
+	c.Conn.SetReadDeadline(time.Time{})
+
+	if err == nil {
+		return n, nil
+	}
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		return n, err
+	}
+
+	// Grace expired with no server data. Re-check started: the write direction may have
+	// fired the combined handshake in the meantime, in which case just read through.
+	c.mu.Lock()
+	if c.started {
+		c.mu.Unlock()
+		return c.Conn.Read(p)
+	}
+	c.started = true
+	c.mu.Unlock()
+
+	if err := c.flush(); err != nil {
+		return 0, err
+	}
+	return c.Conn.Read(p)
 }
 
 // ssUDPAssociate creates a UDP relay session to the SS server and returns a connection
