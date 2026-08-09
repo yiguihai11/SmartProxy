@@ -133,3 +133,82 @@ func TestManual_ForceUpSurvivesFailures(t *testing.T) {
 		t.Errorf("expected state closed, got %s", snap.State)
 	}
 }
+
+// TestReopenedCircuit_KeepsFailureCount: a circuit that opens, half-opens, then re-opens
+// must keep showing the failure count that opened it — never a misleading 0 next to a
+// "down" badge in the dashboard (regression for the open→half_open→reopen cycle zeroing it).
+func TestReopenedCircuit_KeepsFailureCount(t *testing.T) {
+	hc := NewHealthChecker(config.HealthCheckConf{
+		Enabled:            true,
+		FailuresThreshold:  2,
+		SuccessesThreshold: 1,
+		OpenCoolDown:       0, // cooldown passes on the next probe
+	}, nil)
+	ph := &ProxyHealth{}
+
+	// 2 failures → open (failures=2)
+	hc.recordFailure(&Proxy{}, ph, "tcp", errors.New("x"))
+	hc.recordFailure(&Proxy{}, ph, "tcp", errors.New("x"))
+	if snap := ph.Snapshot(); snap.State != "open" || snap.ConsecutiveFailures != 2 {
+		t.Fatalf("want open/2, got state=%s failures=%d", snap.State, snap.ConsecutiveFailures)
+	}
+
+	// next failure → half_open; the failure count must survive (not reset to 0)
+	hc.recordFailure(&Proxy{}, ph, "tcp", errors.New("x"))
+	snap := ph.Snapshot()
+	if snap.State != "half_open" {
+		t.Fatalf("want half_open, got %s", snap.State)
+	}
+	if snap.ConsecutiveFailures != 2 {
+		t.Errorf("half_open must keep failures=2, got %d", snap.ConsecutiveFailures)
+	}
+
+	// next failure → re-opened; still keeps failures=2
+	hc.recordFailure(&Proxy{}, ph, "tcp", errors.New("x"))
+	snap = ph.Snapshot()
+	if snap.State != "open" {
+		t.Fatalf("want open (reopened), got %s", snap.State)
+	}
+	if snap.ConsecutiveFailures != 2 {
+		t.Errorf("reopened must keep failures=2, got %d", snap.ConsecutiveFailures)
+	}
+
+	// recovery resets the counter back to 0
+	hc.recordFailure(&Proxy{}, ph, "tcp", errors.New("x")) // open → half_open
+	hc.recordSuccess(&Proxy{}, ph, "tcp", time.Millisecond)
+	if snap := ph.Snapshot(); snap.State != "closed" || snap.ConsecutiveFailures != 0 {
+		t.Errorf("recovery must reset to closed/0, got state=%s failures=%d", snap.State, snap.ConsecutiveFailures)
+	}
+}
+
+// TestIsManuallyDisabled: only an explicit SetManualState(false) pin reports disabled.
+// An auto-opened circuit (probe failures) must NOT — rule routing still tries it (warns
+// and proceeds), while a manual Disable is honored as a hard stop.
+func TestIsManuallyDisabled(t *testing.T) {
+	ph := &ProxyHealth{}
+	if ph.IsManuallyDisabled() {
+		t.Fatal("fresh circuit must not be manually disabled")
+	}
+	ph.SetManualState(true)
+	if ph.IsManuallyDisabled() {
+		t.Fatal("forced-up circuit must not be manually disabled")
+	}
+	ph.SetManualState(false)
+	if !ph.IsManuallyDisabled() {
+		t.Fatal("forced-down circuit must be manually disabled")
+	}
+	ph.ClearManualState()
+	if ph.IsManuallyDisabled() {
+		t.Fatal("released circuit must not be manually disabled")
+	}
+
+	// auto-open (simulated probe failures) is NOT a manual disable
+	ph.state = StateOpen
+	ph.openSince = time.Now()
+	if ph.IsManuallyDisabled() {
+		t.Fatal("auto-open circuit must not count as manually disabled")
+	}
+	if ph.IsAvailable() {
+		t.Fatal("auto-open circuit must still be unavailable")
+	}
+}

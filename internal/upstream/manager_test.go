@@ -767,3 +767,53 @@ func TestManager_UDPRoutingUsesUDPHealth(t *testing.T) {
 	}
 	conn.Close()
 }
+
+// TestConnect_RuleRespectsManualDisable: rule routing must honor an explicit manual
+// "Disable" — a rule-selected proxy whose TCP circuit is pinned down returns "failed"
+// instead of being forced into service (the pre-fix contradiction with the Disable button).
+func TestConnect_RuleRespectsManualDisable(t *testing.T) {
+	m, err := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{{Alias: "p1", URL: "socks5://127.0.0.1:1080"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := newEngineWithRules("proxy ip 1.2.3.4 p1\n")
+	// Whole-node Disable (both circuits). With both down the effective mode is
+	// tcp_and_udp (down), so IsUDPOnly() does not intercept — this must reach the
+	// manual-disable check in Connect and fail, not be force-used by the rule.
+	if err := m.SetCircuitHealth("p1", "both", "disable"); err != nil {
+		t.Fatal(err)
+	}
+
+	conn, result := m.Connect(context.Background(), "1.2.3.4", 443, "", eng)
+	if conn != nil {
+		conn.Close()
+	}
+	if result != "failed" {
+		t.Errorf("manually-disabled proxy under a rule must fail, got result=%q", result)
+	}
+}
+
+// TestUDPAssociate_RuleRespectsManualDisable: the same honor applies to the UDP circuit
+// on the rule-selected path of UDPAssociate.
+func TestUDPAssociate_RuleRespectsManualDisable(t *testing.T) {
+	m, err := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{{Alias: "p1", URL: "socks5://127.0.0.1:1080"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng := newEngineWithRules("proxy ip 1.2.3.4 p1\n")
+	if err := m.SetCircuitHealth("p1", "udp", "disable"); err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := m.UDPAssociate(context.Background(), "1.2.3.4", 53, "", eng)
+	if conn != nil {
+		conn.Close()
+	}
+	if err == nil {
+		t.Error("manually-disabled UDP under a rule must fail")
+	}
+}

@@ -216,6 +216,13 @@ func (m *Manager) Connect(ctx context.Context, host string, port int, domain str
 		slog.Warn("rule selected a udp_only proxy for TCP, connection failed", "url", selected.URL)
 		return nil, "failed"
 	}
+	// An explicit manual "Disable" is honored even by rule routing: a disabled node must
+	// never carry traffic, whatever the rule says. Auto-opened circuits (probe failures)
+	// are still tried — rules are explicit intent and a live recovery may succeed.
+	if selected.health.IsManuallyDisabled() {
+		slog.Warn("rule selected a manually-disabled proxy for TCP, connection failed", "url", selected.URL)
+		return nil, "failed"
+	}
 	if !selected.IsAvailable() {
 		slog.Warn("selected proxy is unhealthy but still using it due to rule", "alias", selected.URL)
 	}
@@ -253,6 +260,11 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 		return nil, fmt.Errorf("UDP direct is not supported")
 	}
 	if selected != nil {
+		// Honor an explicit manual "Disable" even under rule routing, mirroring Connect.
+		if selected.udpHealth.IsManuallyDisabled() {
+			slog.Warn("rule selected a manually-disabled proxy for UDP, connection failed", "url", selected.URL)
+			return nil, fmt.Errorf("proxy %s is manually disabled for UDP", selected.URL)
+		}
 		slog.Debug("UDPAssociate: using selected proxy by rule",
 			"proxy", selected.URL, "target", fmt.Sprintf("%s:%d", host, port))
 		conn, err := selected.UDPAssociate(ctx, host, port)

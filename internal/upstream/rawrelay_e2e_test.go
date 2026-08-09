@@ -234,9 +234,12 @@ func TestRawRelayE2E(t *testing.T) {
 
 	// Exercise the production active-UDP health probe (a DNS query through the same relay)
 	// on the real sslocal — proves the health checker's probeUDP works end to end.
-	probeLatency, err := hc.probeUDP(p, ctx)
+	probeLatency, probeConn, err := hc.probeUDP(p, ctx)
 	if err != nil {
 		t.Fatalf("probeUDP through real sslocal failed: %v", err)
+	}
+	if probeConn != nil {
+		probeConn.Close()
 	}
 	t.Logf("active UDP health probe latency: %v", probeLatency)
 }

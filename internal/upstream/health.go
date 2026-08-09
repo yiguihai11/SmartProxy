@@ -80,6 +80,15 @@ func (ph *ProxyHealth) ClearManualState() {
 	ph.openSince = time.Time{}
 }
 
+// IsManuallyDisabled reports whether the circuit is pinned down by SetManualState(false).
+// Unlike IsAvailable (which is also false while a circuit is auto-open from probe failures),
+// this distinguishes an explicit user "Disable" — rule routing must not use such a circuit.
+func (ph *ProxyHealth) IsManuallyDisabled() bool {
+	ph.mu.RLock()
+	defer ph.mu.RUnlock()
+	return ph.manual != nil && !*ph.manual
+}
+
 func (ph *ProxyHealth) reset() {
 	ph.mu.Lock()
 	defer ph.mu.Unlock()
@@ -529,7 +538,10 @@ func (hc *HealthChecker) recordFailure(p *Proxy, ph *ProxyHealth, circuit string
 		if time.Since(ph.openSince) >= time.Duration(cfg.OpenCoolDown)*time.Second {
 			ph.state = StateHalfOpen
 			ph.consecutiveSuccesses = 0
-			ph.consecutiveFailures = 0
+			// Keep consecutiveFailures at the count that opened the circuit: a circuit that
+			// half-opens and re-opens repeatedly must keep showing a real failure count in the
+			// dashboard, not a misleading 0 next to a "down" badge. Recovery resets it to 0
+			// (recordSuccess in StateHalfOpen).
 			slog.Info("proxy circuit half-open", "url", p.URL, "circuit", circuit)
 		}
 	case StateHalfOpen:

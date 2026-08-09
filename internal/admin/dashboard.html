@@ -473,18 +473,28 @@ async function toggleCircuit(i,c){
 function lhealth(d){
   healthD=d;
   document.getElementById('proxy-cards').innerHTML=d.health.proxies.map(function(p,i){
-    var a=p.health.available,lat=p.health.latency>0?(p.health.latency/1e6).toFixed(1)+'ms':'--';
     var udpScheme=/^(socks5|socks5h|ss)$/.test(p.scheme);
+    // Effective availability: the node is "on" if EITHER circuit can carry traffic. A udp_only
+    // node (TCP down, UDP up) is still serving UDP, so its button must read "Disable", not
+    // "Enable" — otherwise the card contradicts its own udp_only/raw badge.
+    var anyUp=p.health.available||(udpScheme&&p.udp_health&&p.udp_health.available);
+    // A node whose circuits are BOTH down is off: show "off", never "tcp_and_udp" (which would
+    // read as "both work" right next to an Enable button and two down badges).
+    var dispMode=anyUp?p.mode:'off';
+    var capTxt=(anyUp&&p.udp_capability&&p.udp_capability!=='unknown')?' · '+p.udp_capability:'';
+    // latency of the circuit actually serving: UDP for a udp_only node (TCP down), else TCP
+    var latVal=(p.mode==='udp_only'&&p.udp_health&&p.udp_health.latency>0)?p.udp_health.latency:p.health.latency;
+    var lat=latVal>0?(latVal/1e6).toFixed(1)+'ms':'--';
     var tc=circuitStat(p.health,true),uc=circuitStat(p.udp_health,udpScheme);
     var tcClk=tc.c==='na'?'':' onclick="toggleCircuit('+i+',\'tcp\')"';
     var ucClk=uc.c==='na'?'':' onclick="toggleCircuit('+i+',\'udp\')"';
-    return '<div class="proxy-card"><div class="top"><div><div class="alias">'+p.alias+'</div><div class="url">'+p.url+' · '+p.mode+(p.udp_capability&&p.udp_capability!=='unknown'?' · '+p.udp_capability:'')+'</div></div>'+
+    return '<div class="proxy-card"><div class="top"><div><div class="alias">'+p.alias+'</div><div class="url">'+p.url+' · '+dispMode+capTxt+'</div></div>'+
       '<div class="circs"><span class="circ '+(tc.c+(tc.m?' manual':''))+'" title="'+(tc.m?'TCP manually pinned — click to restore auto':'Click to toggle TCP')+'"'+tcClk+'><i class="dot"></i>TCP '+tc.t+'</span><span class="circ '+(uc.c+(uc.m?' manual':''))+'" title="'+(uc.m?'UDP manually pinned — click to restore auto':'Click to toggle UDP')+'"'+ucClk+'><i class="dot"></i>UDP '+uc.t+'</span></div></div>'+
-      '<div class="stats"><span>latency: '+lat+'</span><span>tcp failures: '+p.health.consecutive_failures+'</span><span>udp failures: '+(p.udp_health?p.udp_health.consecutive_failures:'n/a')+'</span></div>'+
+      '<div class="stats"><span>latency: '+lat+'</span><span>tcp failures: '+(p.health.manual?'manual':p.health.consecutive_failures)+'</span><span>udp failures: '+(p.udp_health?(p.udp_health.manual?'manual':p.udp_health.consecutive_failures):'n/a')+'</span></div>'+
       '<div class="actions">'+
       '<button class="btn btn-sm primary" onclick="openProxyDialog('+i+')">Edit</button>'+
       '<button class="btn btn-sm danger" onclick="deleteProxy('+i+')">Delete</button>'+
-      '<button class="btn btn-sm '+(a?'danger':'primary')+'" onclick="tp('+i+')">'+(a?'Disable':'Enable')+'</button>'+
+      '<button class="btn btn-sm '+(anyUp?'danger':'primary')+'" onclick="tp('+i+')">'+(anyUp?'Disable':'Enable')+'</button>'+
       '</div></div>';
   }).join('');
   st('health-time');
@@ -531,9 +541,12 @@ async function loadHealth(){
 async function tp(i){
   var p=healthD.health.proxies[i];
   if(!p)return;
-  // Disable pins both circuits down (sticky); Enable releases both back to auto.
-  // Force-up an individual probe-down circuit via its TCP/UDP badge instead.
-  await fetch('/health/proxy?alias='+encodeURIComponent(p.alias)+'&action='+(p.health.available?'disable':'auto'),{method:'POST'});
+  // Whole-node toggle keyed off effective availability (either circuit up → "Disable"):
+  // "Disable" pins both circuits down; "Enable" releases both back to auto.
+  // Re-enable one specific probe-down circuit via its TCP/UDP badge instead.
+  var udpScheme=/^(socks5|socks5h|ss)$/.test(p.scheme);
+  var anyUp=p.health.available||(udpScheme&&p.udp_health&&p.udp_health.available);
+  await fetch('/health/proxy?alias='+encodeURIComponent(p.alias)+'&action='+(anyUp?'disable':'auto'),{method:'POST'});
   loadHealth()
 }
 function setProxyScheme(v){
