@@ -20,7 +20,7 @@
     "admin_https": true,
     "admin_cert_file": "",
     "admin_key_file": "",
-    "admin_cert_sans": []
+    "admin_cert_sans": ["smartproxy.lan"]
   },
   "tun": {
     "enabled": false,
