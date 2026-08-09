@@ -24,9 +24,9 @@ ss-rust 双方向 copy 结束后对已读端 `shutdown(Read)`、对已写端 `sh
 
 ss-rust 对端握手失败时直接把连接静默丢弃，不向客户端写错误响应——避免把"目标端口不存在 / 服务器被墙"这类探测信息回传给客户端，也避免让 GFW 从错误报文里学到握手失败后的行为特征。SmartProxy 目前握手失败会向客户端回 SOCKS5 错误码（对本地客户端友好，但对 SS 上游是泄露探测信号）。若以后要藏行为，可考虑对**上游 SS 握手**失败静默，对**本地 SOCKS5 入口**仍回错误码。两者视角不同，需区分对待。
 
-### 1.5 数据面无空闲超时 —— 🔶 可借鉴
+### 1.5 数据面无空闲超时 —— ✅ 已应用
 
-ss-rust 数据面（established 之后）**不设任何 idle timeout**，只靠 keepalive 保活、靠对端 FIN 收尾；idle 超时只用于握手阶段。SmartProxy `engine.go:198` 对客户端入口设了 30s 全连接 deadline（`conn.SetDeadline(now+30s)`，handleClient 起点），长连接场景（SSH、长轮询、WebSocket）可能被这 30s 掐断。建议核对这 30s 的语义——若只是防握手挂起，应改为"仅握手阶段 deadline，established 后清除"，与 ss-rust 一致。
+ss-rust 数据面（established 之后）**不设任何 idle timeout**，只靠 keepalive 保活、靠对端 FIN 收尾；idle 超时只用于握手阶段。SmartProxy 已全量遵循：所有 deadline 都是"握手/查询期作用 + 进数据面前清理"——`engine.go:231`（SOCKS5 握手后 `conn.SetDeadline(time.Time{})`，注释原文就是 "Clear the handshake deadline; it does not affect the subsequent long-lived relay connection"）、`proxy.go:515`（UDP ASSOCIATE 10s 握手 deadline 在进数据面前清掉）、`tun/handler.go:552`（DNS 查询 socket 每轮重设 30s，属有意闲置回收）。与 ss-rust 哲学一致，无隐患。
 
 ---
 
@@ -58,9 +58,14 @@ rust 在 SO_MARK 之后、connect 之前设 `SO_BINDTODEVICE`（`linux/mod.rs:35
 
 rust 在 `listen()` 之后设 `TCP_FASTOPEN=1024`（`net/tcp.rs:159-163`，`linux/mod.rs:171-202`），backlog 也是 1024。注释引用 LWN 508865：建议 5 但既然 backlog 是 1024 就开 1024 个握手槽。Go 无官方 API，需 `tcpl.(*net.TCPListener).SyscallConn().Control(...)` 里 `unix.SetsockoptInt(fd, IPPROTO_TCP, TCP_FASTOPEN, 1024)`。对 SmartProxy 入口（SOCKS5/TUN 监听）可减少首 RTT。
 
-### 2.6 TCP_FASTOPEN_CONNECT（客户端）—— ⭐ 需改造（rust 没做，Go 可补）
+### 2.6 客户端 TCP_FASTOPEN_CONNECT —— ❌ 不适用（两个结构性障碍）
 
-**ss-rust 客户端没有用 `TCP_FASTOPEN_CONNECT`**（客户端 TFO 走第三方 `tokio_tfo`，grep 全仓库无 FASTOPEN_CONNECT）。Go 侧对应方案是 `unix.SetsockoptInt(fd, IPPROTO_TCP, TCP_FASTOPEN_CONNECT, 1)` 后正常 `connect()`，并让**首写携带数据**——这正好和我们 [gfw-obfs-wire-composition](../.claude/projects/-root-SmartProxy/memory/gfw-obfs-wire-composition.md) 记忆里的「addr+首块一次写」场景契合：TFO 把 SS 地址头 + 首块数据塞进 SYN 的 payload，省一个 RTT，且天然满足"一次写"。这是 rust 覆盖不到、Go 实现可增强的点。
+**ss-rust 客户端没有用 `TCP_FASTOPEN_CONNECT`**（客户端 TFO 走第三方 `tokio_tfo`，grep 全仓库无 FASTOPEN_CONNECT）。评估在 Go 侧补这条时，确认它**对本协议族不适用**，两个无法绕过的障碍：
+
+1. **net.Dialer 在握手完成前不返回**：`net.Dialer` 的 connect 是阻塞式的（`src/net/sock_posix.go` 中 connect 完成后才 `isConnected=true`），返回时 TCP 握手已完成，首个 `Write` 必然是 SYN-ACK 之后的普通数据段；而 SYN 在 `connect()` 里就已发出，只设 `TCP_FASTOPEN_CONNECT` 拿不到"数据在 SYN 里"的收益。
+2. **SS 首块字节依赖首个用户 payload**：`deferredSSConn` 的核心是"addr+首块数据合成一次写"，但首块数据要等 relay 拿到第一个用户包才存在——TFO 却要求 connect 时刻就有数据可带。connect 时只有 SS 地址头已知，而裸 addr 正是被 RST 的 DPI 指纹；obfs-http 的 GET 头 `Content-Length` 必须等于首包长度（addr+payload），connect 时算不出来（`obfs.go:158` buildRequest）；obfs-tls 把首包藏进 ClientHello 的 session_ticket，同理。
+
+要让 SS 吃到 TFO 的 RTT 收益需要"connect 与首块数据并行"（绕过 net.Dialer 的 connect-with-early-data），但首块数据本身不存在于 connect 时刻——**结构性无解**。监听侧 TFO（§2.5，接受客户端 TFO）仍然适用，且与数据面无关。
 
 ### 2.7 SO_SNDBUF / SO_RCVBUF —— 🔶 可借鉴
 
@@ -195,17 +200,19 @@ rust 提供 manager 接口（端口/IP 上报、节点增删），类似我们�
 | [#179](https://github.com/shadowsocks/shadowsocks-rust/issues/179) | 零拷贝 / splice 相关 | ✅ relay/tcp.go 已用 splice |
 | [#373](https://github.com/shadowsocks/shadowsocks-rust/issues/373) | UDP 相关边界 | 🔶 参考 |
 | mptcp_net-next #383/#353 | MPTCP 不支持 KEEPIDLE/KEEPINTVL | 🔶 上 MPTCP 时处理 |
-| LWN 508865 / rust #tokio#2685 | TFO backlog 应匹配握手槽 | 🔶 可借鉴 |
+| LWN 508865 / rust #tokio#2685 | 监听侧 TFO backlog 应匹配握手槽 | 🔶 可借鉴（仅监听侧；客户端侧不适用，见 2.6） |
 
 ---
 
 ## 十、最值得抄的 5 条（按性价比排序）
 
-1. **数据面无 idle timeout**（1.5）：核对 `engine.go:198` 的 30s 全连接 deadline 是否误伤长连接。这条直接影响用户体验，改动最小。
-2. **客户端 TCP_FASTOPEN_CONNECT**（2.6）：省一个 RTT，且天然契合「addr+首块一次写」——GFW 场景下是 rust 都没做、Go 独有的增强。
-3. **KEEPINTVL 对齐 + 15s**（2.2）：把半死连接探测时间从 30s 收到 15s，x/sys 补 KEEPINTVL。
-4. **resolv.conf 热重载 + 1s 防抖**（3.3）：Docker/CNI 环境不用重启即可感知 DNS 变更，复用现有 atomic.Pointer 换根模式。
-5. **SO_BINDTODEVICE + IP_MTU_DISCOVER（UDP）**（2.4/2.10）：出口绑定与 UDP 禁分片，按需上，注意两端协同。
+（§1.5 经实测归为"已应用"、§2.6 经结构分析归为"不适用"，均已从候选里剔除。）
+
+1. **KEEPINTVL 对齐 + idle 15s**（2.2）：半死连接探测从 30s 收到 15s，x/sys 补 KEEPINTVL，注意 MPTCP 降级。
+2. **resolv.conf 热重载 + 1s 防抖**（3.3）：Docker/CNI 环境不用重启即可感知 DNS 变更，复用现有 atomic.Pointer 换根模式。
+3. **监听侧 TCP_FASTOPEN=1024**（2.5）：对用 TFO 的客户端省首个 RTT，Go 需 `SyscallConn` 手动设，与数据面无关。
+4. **SO_BINDTODEVICE + UDP 禁分片**（2.4/2.10）：出口绑定与 UDP MTU 边界，按需上、注意两端协同。
+5. **#292 握手失败静默（上游视角）**（1.4）：区分上游/入口视角，仅对上游 SS 握手失败静默。
 
 ---
 
