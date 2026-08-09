@@ -170,7 +170,9 @@ func (e *Engine) Start(ctx context.Context) error {
 		}
 		e.adminServer.SetTCPPort(lc.AdminPort)
 		e.adminServer.SetRefreshInterval(lc.AdminRefreshInterval)
-		e.adminServer.SetTLS(lc.AdminCertFile, lc.AdminKeyFile, lc.AdminHTTPS)
+		// Extra SANs land in the auto-generated self-signed cert, so a LAN IP in
+		// admin_cert_sans is covered without supplying admin_cert_file/admin_key_file.
+		e.adminServer.SetTLS(lc.AdminCertFile, lc.AdminKeyFile, lc.AdminHTTPS, lc.AdminCertSANs...)
 		if err := e.adminServer.Start(); err != nil {
 			slog.Warn("admin server failed to start", "socket", sockPath, "error", err)
 		}

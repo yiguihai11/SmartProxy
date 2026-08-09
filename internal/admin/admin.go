@@ -54,9 +54,10 @@ type Server struct {
 	server    *http.Server
 	tcpServer *http.Server
 
-	tlsEnabled bool
-	certFile   string
-	keyFile    string
+	tlsEnabled   bool
+	certFile     string
+	keyFile      string
+	tlsExtraSANs []string
 }
 
 type cachedStats struct {

@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -865,4 +866,67 @@ func TestBuildTLSConfig_PersistsNextToConfig(t *testing.T) {
 	if !bytes.Equal(first, second) {
 		t.Error("rebuilt config did not reuse the persisted certificate")
 	}
+}
+
+// TestGenSelfSigned_ExtraSANs: extraSANs are written into the generated cert as
+// DNSName (hostnames) and IPAddress (IP literals) entries, and wildcard-ish bind
+// addresses ("::", "0.0.0.0", "*") are dropped as invalid SANs.
+func TestGenSelfSigned_ExtraSANs(t *testing.T) {
+	cert, err := genSelfSigned("", "", "192.168.1.1", "panel.example.com")
+	if err != nil {
+		t.Fatalf("genSelfSigned: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("parse generated cert: %v", err)
+	}
+	if !slices.Contains(leaf.DNSNames, "panel.example.com") {
+		t.Errorf("expected DNSName panel.example.com, got %v", leaf.DNSNames)
+	}
+	if !hasSANIP(leaf.IPAddresses, "192.168.1.1") {
+		t.Errorf("expected IP SAN 192.168.1.1, got %v", leaf.IPAddresses)
+	}
+
+	cert, err = genSelfSigned("", "", "::", "0.0.0.0", "*")
+	if err != nil {
+		t.Fatalf("genSelfSigned wildcards: %v", err)
+	}
+	leaf, err = x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("parse wildcard cert: %v", err)
+	}
+	if len(leaf.DNSNames) != 1 || len(leaf.IPAddresses) != 2 {
+		t.Errorf("expected only built-in SANs after dropping wildcards, got dns=%v ip=%v", leaf.DNSNames, leaf.IPAddresses)
+	}
+}
+
+// TestCertCoversSANs: a persisted cert is only reused while it covers the requested
+// extra SANs; an added admin_cert_sans entry must force regeneration.
+func TestCertCoversSANs(t *testing.T) {
+	base, err := genSelfSigned("", "")
+	if err != nil {
+		t.Fatalf("genSelfSigned base: %v", err)
+	}
+	if !certCoversSANs(base, nil) {
+		t.Error("built-in cert should cover the default (no extra) SANs")
+	}
+	if certCoversSANs(base, []string{"192.168.1.1"}) {
+		t.Error("built-in cert must not cover an unlisted LAN IP")
+	}
+	with, err := genSelfSigned("", "", "192.168.1.1")
+	if err != nil {
+		t.Fatalf("genSelfSigned extra: %v", err)
+	}
+	if !certCoversSANs(with, []string{"192.168.1.1"}) {
+		t.Error("cert with the extra SAN should cover it")
+	}
+}
+
+func hasSANIP(ips []net.IP, want string) bool {
+	for _, ip := range ips {
+		if ip.String() == want {
+			return true
+		}
+	}
+	return false
 }

@@ -15,7 +15,8 @@
     "admin_refresh_interval": 3,
     "admin_https": true,
     "admin_cert_file": "",
-    "admin_key_file": ""
+    "admin_key_file": "",
+    "admin_cert_sans": []
   },
   "tun": {
     "enabled": false,

@@ -38,6 +38,9 @@ func TestDefaultConfig(t *testing.T) {
 	if !cfg.Listen.AdminHTTPS {
 		t.Error("expected Listen.AdminHTTPS=true by default")
 	}
+	if len(cfg.Listen.AdminCertSANs) != 0 {
+		t.Errorf("expected no default AdminCertSANs, got %v", cfg.Listen.AdminCertSANs)
+	}
 }
 
 func TestValidate_AdminCertKeyPair(t *testing.T) {
@@ -61,6 +64,24 @@ func TestValidate_AdminCertKeyPair(t *testing.T) {
 	cfg.Listen.AdminCertFile, cfg.Listen.AdminKeyFile = "/tmp/x.crt", "/tmp/x.key"
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("both set should validate, got: %v", err)
+	}
+}
+
+func TestValidate_AdminCertSans(t *testing.T) {
+	cfg := DefaultConfig()
+	// no SANs: valid
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("empty admin_cert_sans should validate, got: %v", err)
+	}
+	// valid entries: valid
+	cfg.Listen.AdminCertSANs = []string{"192.168.1.1", "panel.example.com"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid admin_cert_sans should validate, got: %v", err)
+	}
+	// empty entry: invalid
+	cfg.Listen.AdminCertSANs = []string{"192.168.1.1", "  "}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("empty admin_cert_sans entry should fail validation")
 	}
 }
 

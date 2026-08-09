@@ -55,6 +55,12 @@ type ListenConfig struct {
 	// self-signed certificate. Both must be set together.
 	AdminCertFile string `json:"admin_cert_file"`
 	AdminKeyFile  string `json:"admin_key_file"`
+	// AdminCertSANs lists extra hostnames or IP addresses to include in the
+	// auto-generated self-signed certificate's SAN (beyond the built-in
+	// localhost/127.0.0.1/::1) — e.g. the LAN IP the panel is reached through
+	// ("192.168.1.1") — so the browser's hostname-mismatch warning disappears for
+	// that address. Ignored when AdminCertFile/AdminKeyFile are set.
+	AdminCertSANs []string `json:"admin_cert_sans"`
 }
 
 type AdminAuthConf struct {
@@ -162,6 +168,11 @@ func (c *Config) Validate() error {
 	}
 	if lc := c.Listen; (lc.AdminCertFile == "") != (lc.AdminKeyFile == "") {
 		errs = append(errs, "listen.admin_cert_file and listen.admin_key_file must be both set or both empty")
+	}
+	for i, san := range c.Listen.AdminCertSANs {
+		if strings.TrimSpace(san) == "" {
+			errs = append(errs, fmt.Sprintf("listen.admin_cert_sans[%d] must not be empty", i))
+		}
 	}
 
 	if len(errs) == 0 {

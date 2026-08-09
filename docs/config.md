@@ -28,8 +28,11 @@
 | `AdminHTTPS` | `admin_https` | `true` | TCP 端口启用 HTTPS：同一端口上明文 HTTP 请求被 301 重定向到 `https://`，TLS 握手正常走 HTTPS。设 `false` 恢复纯 HTTP。默认自动生成自签证书（见下） |
 | `AdminCertFile` | `admin_cert_file` | `""` | 自定义证书 PEM 路径（可选）。为空时用自签证书；设置时须与 `admin_key_file` 一起设置 |
 | `AdminKeyFile` | `admin_key_file` | `""` | 自定义私钥 PEM 路径（可选），须与 `admin_cert_file` 一起设置 |
+| `AdminCertSANs` | `admin_cert_sans` | `[]` | 附加到自动生成自签证书 SAN 的主机名/IP 列表（如 `["192.168.1.1"]`），用于覆盖通过局域网 IP 访问面板时的"主机名不匹配"告警（见下）。配置了 `admin_cert_file`/`admin_key_file` 时忽略 |
 
-**Admin HTTPS 自签证书**：`admin_https=true` 且未配 `admin_cert_file`/`admin_key_file` 时，启动自动生成一张 ECDSA P-256 自签证书（CN=`smartproxy`，SAN=localhost/127.0.0.1/::1，397 天有效期），best-effort 写入**配置文件同目录**的 `admin.crt` + `admin.key`，重启复用同一证书（浏览器只需告警/信任一次）。写盘失败则仅内存持有。unix socket（`admin_socket`）仍为纯 HTTP，仅供本机访问。**注意：Admin TLS 配置在启动时生效，改动需重启；`admin_auth` 仍可热重载。**
+**Admin HTTPS 自签证书**：`admin_https=true` 且未配 `admin_cert_file`/`admin_key_file` 时，启动自动生成一张 ECDSA P-256 自签证书（CN=`smartproxy`，SAN=localhost/127.0.0.1/::1 **+ `admin_cert_sans` 中列出的主机名/IP**，397 天有效期），best-effort 写入**配置文件同目录**的 `admin.crt` + `admin.key`，重启复用同一证书（浏览器只需告警/信任一次）。**若已存在的证书缺少当前请求的 SAN（比如改过 `admin_cert_sans`），会自动重新生成**。写盘失败则仅内存持有。unix socket（`admin_socket`）仍为纯 HTTP，仅供本机访问。**注意：Admin TLS 配置在启动时生效，改动需重启；`admin_auth` 仍可热重载。**
+
+> 局域网 IP 场景：默认自签证书只覆盖 localhost/127.0.0.1/::1，直接用 `https://192.168.1.1:9090` 访问会报"证书对该地址无效"。在 `admin_cert_sans` 里写上该 IP 即可让自动生成的证书覆盖它，消除主机名不匹配告警；"不受信任"告警则需把 `admin.crt` 装进访问设备的受信任根证书库（Android 7.0+ 装 CA 证书、Chrome 即信任；装证书要求先设锁屏 PIN）。
 
 ### `tun`
 
