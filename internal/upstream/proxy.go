@@ -262,6 +262,26 @@ func (p *Proxy) IsUDPAvailable() bool {
 	return p.udpHealth.IsAvailable()
 }
 
+// pluginFromRawQuery extracts the ?plugin= SIP003 parameter directly from a URL's raw
+// query string. It cannot use u.Query()/url.ParseQuery: Go's query parser silently drops
+// the WHOLE query when a value contains a literal ';' (ss-android share links commonly use
+// plugin=obfs-local;obfs=http;obfs-host=...), which would make the obfs plugin vanish and
+// the node connect raw. We split on '&' only and unescape the value ourselves, so both the
+// literal-';' form and the percent-encoded (%3B) form parse identically.
+func pluginFromRawQuery(rawQuery string) string {
+	for _, kv := range strings.Split(rawQuery, "&") {
+		k, v, _ := strings.Cut(kv, "=")
+		if k != "plugin" {
+			continue
+		}
+		if unescaped, err := url.QueryUnescape(v); err == nil {
+			return unescaped
+		}
+		return v
+	}
+	return ""
+}
+
 func NewProxy(proxyURL string) (*Proxy, error) {
 	u, err := url.Parse(proxyURL)
 	if err != nil {
@@ -269,11 +289,16 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 	}
 
 	scheme := ProxyScheme(strings.ToLower(u.Scheme))
+	// Default ports follow the URI defaults of the reference clients: SOCKS 1080, HTTP 80,
+	// shadowsocks 8388 (shadowsocks-rust Config::from_url uses port.unwrap_or(8388)).
 	port := 1080
-	if u.Port() != "" {
+	switch {
+	case u.Port() != "":
 		port = parsePort(u.Port())
-	} else if scheme == SchemeHTTP || scheme == SchemeHTTPS {
+	case scheme == SchemeHTTP || scheme == SchemeHTTPS:
 		port = 80
+	case scheme == SchemeSS:
+		port = 8388
 	}
 
 	p := &Proxy{
@@ -289,6 +314,24 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 	}
 	if scheme == SchemeSS {
 		method, password, err := parseSSUserinfo(u.User)
+		if err != nil && u.User == nil {
+			// Legacy ss:// QR form: ss://base64(method:password@host:port) has no '@' in the URI,
+			// so url.Parse leaves the whole base64 payload in Host. shadowsocks-rust
+			// (Config::from_url) and shadowsocks-android (Profile.findAllUrls legacyPattern) both
+			// accept it — decode the payload and recover method:password@host[:port].
+			var hostPort string
+			method, password, hostPort, err = parseSSLegacy(rawSSPayload(proxyURL))
+			if err == nil {
+				if h, hp, perr := net.SplitHostPort(hostPort); perr == nil {
+					if pp, aerr := strconv.Atoi(hp); aerr == nil {
+						p.Host = h // SplitHostPort already strips IPv6 brackets
+						p.Port = pp
+					}
+				} else {
+					p.Host = strings.Trim(hostPort, "[]")
+				}
+			}
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -299,7 +342,8 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 		p.ssMethod = ssMethod
 		p.Username, p.Password = method, password
 		// SIP003 plugin options: parsed and kept; at ssConnect time ssPlugin decides whether to run (built-in obfs-local) or error out.
-		if plugin := u.Query().Get("plugin"); plugin != "" {
+		// Parsed from the raw query (not u.Query()) so a literal-';' plugin value survives (see pluginFromRawQuery).
+		if plugin := pluginFromRawQuery(u.RawQuery); plugin != "" {
 			p.Plugin = plugin
 		}
 	}

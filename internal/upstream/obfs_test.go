@@ -195,3 +195,62 @@ func dumpPrintable(b []byte) string {
 	}
 	return string(out)
 }
+
+// TestObfsHTTPWireFormat_LiteralSemicolonURL is the regression test for the plugin-parsing
+// bug: a pasted ss:// share link with a LITERAL ';' in the plugin query
+// (plugin=obfs-local;obfs=http;obfs-host=...) used to lose its plugin entirely (Go's
+// url.ParseQuery drops a query whose value contains ';'), so the node connected raw and the
+// obfs-server rejected it. After the fix the same link must still emit the obfs GET header
+// as the first bytes on the wire.
+func TestObfsHTTPWireFormat_LiteralSemicolonURL(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	_, portStr, _ := net.SplitHostPort(ln.Addr().String())
+
+	captured := make(chan []byte, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			captured <- nil
+			return
+		}
+		defer conn.Close()
+		all, _ := io.ReadAll(conn)
+		captured <- all
+	}()
+
+	// Literal ';'/'=' plugin query — the form ss-android share links and direct config edits use.
+	u := "ss://none@127.0.0.1:" + portStr + "?plugin=obfs-local;obfs=http;obfs-host=upay.10010.com"
+	p, err := NewProxy(u)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+	if p.Plugin == "" {
+		t.Fatal("plugin was dropped during parsing (regression)")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := p.Connect(ctx, "example.com", 443)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	if _, err := conn.Write([]byte("hello-obfs")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	conn.Close()
+
+	raw := <-captured
+	if raw == nil {
+		t.Fatal("listener never accepted a connection")
+	}
+	if !bytes.HasPrefix(raw, []byte("GET / HTTP/1.1\r\n")) {
+		t.Fatalf("literal-';' plugin URL: first bytes are not the obfs GET header: %q", dumpPrintable(raw[:minInt(len(raw), 120)]))
+	}
+	if !bytes.Contains(raw, []byte("Host: upay.10010.com")) {
+		t.Fatalf("obfs Host header missing: %q", dumpPrintable(raw[:minInt(len(raw), 200)]))
+	}
+	t.Logf("literal-';' plugin URL: obfs GET header present (%d bytes captured)", len(raw))
+}

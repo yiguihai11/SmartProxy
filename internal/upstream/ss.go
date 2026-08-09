@@ -137,6 +137,55 @@ func parseSSUserinfo(user *url.Userinfo) (method, password string, err error) {
 	return method, password, nil
 }
 
+// rawSSPayload returns the base64 payload of a legacy ss:// URL — everything after "ss://",
+// up to the query or fragment, with a trailing '/' stripped (rust's to_url emits
+// "host:port/?plugin=..."). It reads the original string rather than u.Hostname() so a
+// payload that url.Parse would mangle survives intact.
+func rawSSPayload(proxyURL string) string {
+	rest := strings.TrimPrefix(proxyURL, "ss://")
+	if i := strings.IndexAny(rest, "?#"); i >= 0 {
+		rest = rest[:i]
+	}
+	return strings.TrimSuffix(rest, "/")
+}
+
+// parseSSLegacy parses the payload of a legacy ss:// QR URL: base64(method:password@host[:port]).
+// Both shadowsocks-rust (Config::from_url legacy branch) and shadowsocks-android
+// (Profile.findAllUrls legacyPattern) accept this form; the payload decodes to
+// "method:password@host:port".
+func parseSSLegacy(payload string) (method, password, hostPort string, err error) {
+	body, ok := decodeSSBase64(payload)
+	if !ok {
+		return "", "", "", errors.New("ss:// URL is missing method:password credentials")
+	}
+	account := string(body)
+	at := strings.LastIndexByte(account, '@')
+	if at < 0 {
+		return "", "", "", fmt.Errorf("legacy ss:// payload missing '@': %q", account)
+	}
+	cred := account[:at]
+	hostPort = account[at+1:]
+	colon := strings.IndexByte(cred, ':')
+	if colon < 0 {
+		return "", "", "", fmt.Errorf("legacy ss:// payload missing method:password")
+	}
+	return cred[:colon], cred[colon+1:], hostPort, nil
+}
+
+// decodeSSBase64 decodes s with every base64 variant (URL-safe and standard, padded and
+// unpadded). The legacy ss:// QR payload may use either alphabet depending on the generator.
+func decodeSSBase64(s string) ([]byte, bool) {
+	for _, enc := range []*base64.Encoding{
+		base64.RawURLEncoding, base64.URLEncoding,
+		base64.RawStdEncoding, base64.StdEncoding,
+	} {
+		if decoded, err := enc.DecodeString(s); err == nil {
+			return decoded, true
+		}
+	}
+	return nil, false
+}
+
 // ssPluginKind reports the SIP003 plugin binary name configured for this ss upstream:
 //
 //	""            - no plugin configured

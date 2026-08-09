@@ -713,7 +713,24 @@ function parseSSLink(raw){
   var host=at>=0?hostpart.slice(at+1):hostpart; // %40-encoded, base64 never contains '@')
   if(!host)return null;
   var f=parseSSUserinfoFields(ui);
-  if(!f.method)return null;
+  if(!f.method){
+    // Legacy ss:// QR form: ss://base64(method:password@host:port) has no '@' in the URI, so
+    // the whole base64 payload sits in the authority (mirrors the backend parseSSLegacy). The
+    // payload decodes to "method:password@host:port".
+    var b=b64decodeAny(host);
+    if(b!==null){
+      var lat=b.lastIndexOf('@');
+      if(lat>=0){
+        var cred=b.slice(0,lat),hp=b.slice(lat+1);
+        var lc=cred.indexOf(':');
+        if(lc>=0){
+          f={method:cred.slice(0,lc),password:cred.slice(lc+1)};
+          host=hp; // host:port (or bare host)
+        }
+      }
+    }
+    if(!f.method)return null;
+  }
   var plugin='';
   var params=query.split('&');
   for(var i=0;i<params.length;i++){

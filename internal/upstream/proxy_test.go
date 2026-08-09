@@ -1929,3 +1929,177 @@ func TestProxyInfo_UDPCapability(t *testing.T) {
 		t.Errorf("ProxyInfo.mode: got %q, want %q (fresh circuits)", infos[0].Mode, ModeTCPAndUDP)
 	}
 }
+
+// TestNewProxy_PluginParsing covers the SIP003 ?plugin= extraction for BOTH the literal-';'
+// form (plugin=obfs-local;obfs=http;obfs-host=...) and the percent-encoded form (%3B/%3D).
+// Go's url.ParseQuery silently drops a query whose value contains a literal ';', which made
+// pasted/plain config ss:// links lose their obfs plugin and connect raw; pluginFromRawQuery
+// must parse both identically.
+func TestNewProxy_PluginParsing(t *testing.T) {
+	const want = "obfs-local;obfs=http;obfs-host=upay.10010.com"
+	for _, tc := range []struct {
+		name string
+		url  string
+	}{
+		{"literal-semicolon", "ss://none@127.0.0.1:80?plugin=obfs-local;obfs=http;obfs-host=upay.10010.com"},
+		{"percent-encoded", "ss://none@127.0.0.1:80?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dupay.10010.com"},
+		{"encoded-value-with-extra-param", "ss://none@127.0.0.1:80?foo=bar&plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dupay.10010.com"},
+		{"no-plugin", "ss://none@127.0.0.1:80"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := NewProxy(tc.url)
+			if err != nil {
+				t.Fatalf("NewProxy(%s): %v", tc.url, err)
+			}
+			if tc.name == "no-plugin" {
+				if p.Plugin != "" {
+					t.Fatalf("expected no plugin, got %q", p.Plugin)
+				}
+				return
+			}
+			if p.Plugin != want {
+				t.Fatalf("Plugin: got %q, want %q", p.Plugin, want)
+			}
+			kind, err := p.ssPluginKind()
+			if err != nil {
+				t.Fatalf("ssPluginKind: %v", err)
+			}
+			if kind != "obfs-local" {
+				t.Fatalf("ssPluginKind: got %q, want obfs-local", kind)
+			}
+			cfg, err := p.ssPlugin()
+			if err != nil {
+				t.Fatalf("ssPlugin: %v", err)
+			}
+			if cfg == nil || cfg.obfs != "http" || cfg.host != "upay.10010.com" {
+				t.Fatalf("ssPlugin: unexpected config %+v", cfg)
+			}
+		})
+	}
+}
+
+// TestPluginFromRawQuery exercises the low-level parser directly, including edge cases the
+// Go query parser rejects.
+func TestPluginFromRawQuery(t *testing.T) {
+	cases := []struct {
+		rawQuery string
+		want     string
+	}{
+		{"plugin=obfs-local;obfs=http;obfs-host=upay.10010.com", "obfs-local;obfs=http;obfs-host=upay.10010.com"},
+		{"plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dupay.10010.com", "obfs-local;obfs=http;obfs-host=upay.10010.com"},
+		{"a=1&b=2", ""},
+		{"", ""},
+		{"plugin=", ""},
+	}
+	for _, tc := range cases {
+		if got := pluginFromRawQuery(tc.rawQuery); got != tc.want {
+			t.Errorf("pluginFromRawQuery(%q) = %q, want %q", tc.rawQuery, got, tc.want)
+		}
+	}
+}
+
+// TestNewProxy_LegacyQRFormat covers the legacy ss:// QR form
+// ss://base64(method:password@host:port) with no '@' in the URI. shadowsocks-rust
+// (Config::from_url) and shadowsocks-android (Profile.findAllUrls legacyPattern) both accept
+// it; the payload lives in the host position so url.Parse leaves it as Hostname. Both padded
+// (StdEncoding) and unpadded (RawURLEncoding) variants must parse.
+func TestNewProxy_LegacyQRFormat(t *testing.T) {
+	// base64 of "none:pass@127.0.0.1:8388" (24 bytes → 32 chars, no padding) and of
+	// "none:pass@1.2.3.4:8388" (22 bytes → 32 chars with StdEncoding's '==').
+	const (
+		unpadded = "ss://bm9uZTpwYXNzQDEyNy4wLjAuMTo4Mzg4"
+		padded   = "ss://bm9uZTpwYXNzQDEuMi4zLjQ6ODM4OA=="
+	)
+	for _, tc := range []struct{ name, url string }{
+		{"unpadded-rawurl", unpadded},
+		{"padded-std", padded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := NewProxy(tc.url)
+			if err != nil {
+				t.Fatalf("NewProxy(%s): %v", tc.url, err)
+			}
+			if tc.name == "padded-std" {
+				if p.Host != "1.2.3.4" || p.Port != 8388 || p.Username != "none" || p.Password != "pass" {
+					t.Errorf("padded: got %q:%d %q/%q, want 1.2.3.4:8388 none/pass", p.Host, p.Port, p.Username, p.Password)
+				}
+				return
+			}
+			if p.Host != "127.0.0.1" {
+				t.Errorf("Host: got %q, want 127.0.0.1", p.Host)
+			}
+			if p.Port != 8388 {
+				t.Errorf("Port: got %d, want 8388", p.Port)
+			}
+			if p.Username != "none" || p.Password != "pass" {
+				t.Errorf("credentials: got %q/%q, want none/pass", p.Username, p.Password)
+			}
+		})
+	}
+	// A legacy payload with standard-alphabet '+' must survive url.Parse's host handling
+	// (rawSSPayload reads the original string, not the mangled Hostname).
+	plusURL := "ss://bm9uZTp+YUAxLjIuMy40OjgzODg=" // base64(std) of "none:~a@1.2.3.4:8388"
+	p, err := NewProxy(plusURL)
+	if err != nil {
+		t.Fatalf("NewProxy(plus payload): %v", err)
+	}
+	if p.Host != "1.2.3.4" || p.Port != 8388 || p.Username != "none" || p.Password != "~a" {
+		t.Errorf("plus payload: got %q:%d %q/%q, want 1.2.3.4:8388 none/~a", p.Host, p.Port, p.Username, p.Password)
+	}
+}
+
+// TestNewProxy_SSDefaultPort verifies the ss:// scheme defaults to port 8388 when omitted,
+// matching shadowsocks-rust Config::from_url (port.unwrap_or(8388)) and shadowsocks-android.
+func TestNewProxy_SSDefaultPort(t *testing.T) {
+	for _, tc := range []struct{ name, url string }{
+		{"plaintext-userinfo", "ss://none@example.com"},
+		{"base64-userinfo", "ss://bm9uZTpwYXNz@example.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := NewProxy(tc.url)
+			if err != nil {
+				t.Fatalf("NewProxy(%s): %v", tc.url, err)
+			}
+			if p.Port != 8388 {
+				t.Fatalf("Port: got %d, want 8388", p.Port)
+			}
+		})
+	}
+	// Other schemes keep their URI defaults: http 80, socks 1080.
+	if p, err := NewProxy("http://example.com"); err != nil || p.Port != 80 {
+		t.Fatalf("http default port: got %d (err %v), want 80", p.Port, err)
+	}
+	if p, err := NewProxy("socks5://example.com"); err != nil || p.Port != 1080 {
+		t.Fatalf("socks5 default port: got %d (err %v), want 1080", p.Port, err)
+	}
+}
+
+// TestParseSSLegacy exercises the low-level legacy parser directly, including the variants
+// a QR generator might emit.
+func TestParseSSLegacy(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload string
+		wantMethod    string
+		wantPassword  string
+		wantHostPort  string
+	}{
+		{"unpadded", "bm9uZTpwYXNzQDEyNy4wLjAuMTo4Mzg4", "none", "pass", "127.0.0.1:8388"},
+		{"padded-std", "bm9uZTpwYXNzQDEuMi4zLjQ6ODM4OA==", "none", "pass", "1.2.3.4:8388"},
+		{"std-alphabet-plus", "bm9uZTp+YUAxLjIuMy40OjgzODg=", "none", "~a", "1.2.3.4:8388"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, pw, hp, err := parseSSLegacy(tc.payload)
+			if err != nil {
+				t.Fatalf("parseSSLegacy: %v", err)
+			}
+			if m != tc.wantMethod || pw != tc.wantPassword || hp != tc.wantHostPort {
+				t.Errorf("parseSSLegacy(%q) = %q/%q/%q, want %q/%q/%q",
+					tc.payload, m, pw, hp, tc.wantMethod, tc.wantPassword, tc.wantHostPort)
+			}
+		})
+	}
+	// non-base64 payload must error, not panic
+	if _, _, _, err := parseSSLegacy("!!not-base64!!"); err == nil {
+		t.Error("parseSSLegacy(non-base64) = nil error, want error")
+	}
+}
