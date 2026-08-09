@@ -12,7 +12,7 @@ SOCKS5 Smart Router（下称"本工程"）是一个基于 Go 的智能分流路�
 | [smart-routing.md](smart-routing.md) | 智能分流：80/443 先直连失败回退代理、动态黑名单、IP 优选 | 分流策略开发者 |
 | [socks5.md](socks5.md) | SOCKS5 服务器：握手、CONNECT、UDP ASSOCIATE 协议实现 | 协议 / 服务端开发者 |
 | [dns.md](dns.md) | DNS 模块：污染检测、缓存、IP 优选、singleflight、代理 DNS | DNS / 网络开发者 |
-| [upstream.md](upstream.md) | 上游代理：健康检查、选择策略（failover/round_robin/random/latency）、UDP 池 | 代理链路开发者 |
+| [upstream.md](upstream.md) | 上游代理：健康检查、选择策略（failover/round_robin/random/latency）、UDP 池；内置 SS 与 obfs，含「SS 地址头须与首块数据合成一次写以过 GFW」的实测坑点 | 代理链路开发者 |
 | [dpi.md](dpi.md) | 流量探测：TLS SNI / HTTP Host 提取 | 分流策略开发者 |
 | [relay.md](relay.md) | 双向转发：TCP splice 零拷贝、缓冲池、字节计数 | 转发 / 性能开发者 |
 | [hot-reload.md](hot-reload.md) | 热重载：config.json / acl.txt / chnroute.txt 的事件驱动 watcher | 运维、全部开发者 |

@@ -36,7 +36,7 @@ UDP 支持：`socks5` / `socks5h`（标准 UDP ASSOCIATE，失败自动兜底裸
 > `none`/`plain` 与 AEAD 的差异及 wire 格式，见下「`none`/`plain`（不加密）」小节。
 
 - **凭据解析**（`parseSSUserinfo`）：userinfo 优先按 shadowsocks URI 规范做 base64 解码（RawURL / URL / RawStd / Std 四种都试），失败则按明文 `method:password` 处理，第一个 `:` 之后整段为密码（含冒号也保留）。注意 `url.Parse` 会在第一个冒号处切分并把后续冒号 percent-encode，实现用 `Username()/Password()` 取回解码后的密码再重组。`none`/`plain` 不需要密码，可写免密码形式 `ss://none@host:port`（无冒号）；解码仅在结果含 `:`（即 `method:password` 结构）时接受，避免 `none` 这种恰好是合法 base64 的明文方法名被误解码。
-- **TCP**：`ssConnect` 走 `dial`（fwmark + keepalive）→ `ssMethod.DialConn(conn, dest)` 得到加密流，透明对接上层。
+- **TCP**：`ssConnect` 走 `dial`（fwmark + keepalive）→ `ssMethod.DialEarlyConn(conn, dest)` **延迟地址握手**——地址头不在建连时发，而是与首个数据写合成一次发（none+obfs 过 GFW 的关键，见下方「过 GFW 的线格式」小节），透明对接上层。
 - **UDP**：`ssUDPAssociate` 直接 `net.DialUDP` 到 SS 服务器端口，用 `ssMethod.DialPacketConn` 得到逐包携带目标地址的 packet conn（sing 的 `clientPacketConn` 每包自含 destination），因此**单条 UDP 连接即可服务任意目标**，与 SOCKS5 上游的复用模型一致。适配器 `ssUDPConn` 把上游一侧的 SOCKS5-UDP 帧（RSV|FRAG|ATYP|ADDR|PORT|payload）翻译成 SS UDP 包：`Write` 解析帧→`WritePacket`（预留 headroom + AEAD tag 容量，避免 sing `buf` panic）；`Read` 从 `ReadPacket` 拿到 payload + 来源地址→补 SOCKS5 响应头返回完整帧。`ss` 的 UDP 恒为标准能力（内置 relay 无需裸中继兜底，无 `raw` 概念），生效 mode 仍由双熔断按 §3.2 自动推出。
 
 UDP 复用池（§6）对 `ss` 同样生效：`ssUDPConn` 实现了 `ProbeTCP()`（无 TCP 控制信道，返回 nil 视为健康，靠 TTL 淘汰兜底），池的 `Acquire/Release/Discard` 已从 `*UDPProxyConn` 泛化为 `net.Conn` + 可选 `tcpProbeConn` 接口。
@@ -74,6 +74,43 @@ shadowsocks-rust 中 `plain` 与 `none` 是**同一个** `CipherKind::NONE` 的�
 
 - **互通性**：sing-shadowsocks 的 `shadowsocks.NewNone()` 产出与 rust 端完全相同的 wire 格式，客户端直接互通；`ssUDPConn` 适配器逐包携带目标地址的模型对 `none` 同样适用（无 tag，`WritePacket` 只明文序列化地址）。TCP/UDP 均有进程内测试覆盖。
 - **用途与风险**：零保密性、零完整性，中间人可读改全部流量。只用于调试、测试，或隧道本身已被 TLS/SSH 加密、不想叠加加密开销的场景；不要单独用于生产。smartproxy 与官方 shadowsocks-android 一样把 `none` 放进下拉（官方 App 的 `arrays.xml` 第一个就是 `NONE`），并标注「明文不加密 ⚠」。
+
+#### 过 GFW 的线格式：地址头必须与首块数据合成一次写
+
+> 这是真实踩过的坑（2026-08，用户设备实测）：同一个 `ss://none` + obfs-http 节点，**安卓 shadowsocks-rust/ss-android 能过 GFW，SmartProxy 却被 RST**。关掉智能代理、用不敏感域名直连确认节点本身是好的——问题确凿出在 GFW。此节记录根因、修复，以及向 shadowsocks-rust 学到的设计。
+
+**根因（pcap 实锤）**：旧实现 `ssConnect` 用 `Method.DialConn`（**eager 握手**）——TCP 建连后立即把 SS 地址头单独发出。在 obfs-http 层，这构成一个 `Content-Length == 地址头长度`、body 只有裸地址头的 GET：
+
+```
+GET / HTTP/1.1\r\nHost: upay.10010.com\r\n...\r\nContent-Length: 12\r\n\r\n
+03 08 v2ex.com 01 bb          ← 裸 SS 地址头（12B）作为整个 body
+...（TLS ClientHello 517B 在 ~20ms 后的另一个包里）
+```
+
+`Content-Length: 12` 且 body 恰为**一个孤立的 shadowsocks 地址头**，是「shadowsocks-in-http-obfs」的精确 DPI 指纹 → GFW 直接 RST。
+
+**参考客户端怎么做**：sslocal/ss-android **延迟地址握手**——建连后什么都不发，等首个数据写（TLS ClientHello）到达时把 `[地址头][首块数据]` 合成**一次写**，obfs body 变成 `Content-Length: 529`、内容像一个 TLS 握手的前缀：
+
+```
+GET / HTTP/1.1\r\n...\r\nContent-Length: 529\r\n\r\n
+03 08 v2ex.com 01 bb  +  TLS ClientHello(517B)   ← 一个 TCP 段里
+```
+
+抓包对比**逐字节一致**（修复后 SmartProxy 与 sslocal 参考 pcap：`Content-Length=529`、`bodylen=529`、TLS 从 body 偏移 12 开始、addr 头 `03 08 76326578...01bb`）。地址头从不在线上单独出现 → DPI 无从认指纹。
+
+**修复（`internal/upstream/ss.go` 的 `deferredSSConn`）**：
+
+1. `ssConnect` 改 `DialEarlyConn`（延迟握手）：AEAD/2022 的首个 `Write` 触发 sing 的 `writeRequest(payload)`，内部天然把 salt+addr+payload 合成一次加密写；`none`/`plain` 的 `noneConn.Write` 是**两次独立写**（先地址头再 payload），必须手动把 `[addr][payload]` 合成一次 `writeAll`。
+2. **双向 relay 的竞态**（最隐蔽的坑）：SmartProxy 的 TCP relay 同时跑 c2r / r2c 两个 goroutine，r2c 读侧会**抢先**在首个数据写之前触发握手——裸地址头又单独上线。rust 是事件驱动天然没有这竞态；Go 的阻塞读无法区分「服务端还没回应」与「先读后写协议」。于是复刻 shadowsocks-rust `establish_tcp_tunnel` 的 500ms 语义（issue #232）：`deferredSSConn.Read` 的首读带 **500ms 读 deadline** 等服务端数据——数据只有写侧先发合并握手后才会到，TLS/HTTP 场景写侧毫秒级先发、读侧直接拿到数据**不 flush**；只有 500ms 超时（客户端真的一字节不发，如 FTP/SMTP 等服务端先发言的协议）才 flush 裸地址头并重试读。
+3. **返回值陷阱**：合并写后必须返回 `len(b)`（调用方 payload 长度）而非 `len(merged)`，否则 `io.CopyBuffer` 把 `n != len(b)` 当成 `io.ErrShortWrite` 切断 relay。
+
+**学到的设计（"ss 太厉害，要向它学习"）**：
+
+- **与参考实现逐字节对齐，而不是"能互通就行"**。能互通 ≠ 过 GFW：任何 wire 差异都可能成为 DPI 指纹。修这类问题先抓双方 pcap 逐段对比，别猜。
+- **地址头延迟到首块数据**是 shadowsocks 客户端的一致选择（rust 的 `make_first_packet_buffer`、sing 的 `DialEarlyConn`），既省一个 RTT 又消掉「孤立地址头」指纹。
+- **先读后写协议（FTP/SMTP）用 500ms 首字节预读兜底**（rust #232）：既不让写优先场景退化（写侧毫秒级先到），又保证读优先场景不死锁。这个"带超时的首次决策"模式值得复用。
+
+**验证**：`internal/upstream/ss_deferred_test.go`（写合并 / 读 flush / 先写后读直通 / 端到端 `Content-Length` 回归）；真机抓包见 `/tmp/ref/ref-v2ex.pcap`（参考）与 `/tmp/cap/fix2.pcap`（修复后）；最终用户设备 Termux 实测 `ip.cn` / `v2ex.com` 均 `connected via` 该节点。参考实现源码：`shadowsocks-rust/crates/shadowsocks-service/src/local/utils.rs`（`establish_tcp_tunnel`）。
 
 ### 上游能力自动辨识与裸 UDP 兜底
 
