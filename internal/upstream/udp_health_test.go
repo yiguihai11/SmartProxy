@@ -233,7 +233,7 @@ func TestCheckProxy_AutoUDPOnly(t *testing.T) {
 }
 
 // TestCheckProxy_DeadUDPMarksNone verifies a fresh node whose UDP fails end to end (no
-// ASSOCIATE, no answering raw relay) is marked UDPCapNone — the "否则不支持udp" case. Its TCP
+// ASSOCIATE, no answering raw relay) is marked UDPCapNone — the "otherwise UDP unsupported" case. Its TCP
 // circuit also opens (no TCP listener), so the effective mode stays tcp_and_udp with both
 // circuit snapshots reporting the outage.
 func TestCheckProxy_DeadUDPMarksNone(t *testing.T) {

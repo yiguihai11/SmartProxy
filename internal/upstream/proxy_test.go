@@ -1633,7 +1633,7 @@ func TestUDPCapability_StickyOnFailure(t *testing.T) {
 }
 
 // TestUDPCapability_NoneFromUnknown verifies a fresh (unknown) node whose UDP probe fails
-// end to end is marked none — the "否则不支持udp" case.
+// end to end is marked none — the "otherwise UDP unsupported" case.
 func TestUDPCapability_NoneFromUnknown(t *testing.T) {
 	p := &Proxy{Scheme: SchemeSOCKS5}
 	if got := p.UDPCapability(); got != UDPCapUnknown {
