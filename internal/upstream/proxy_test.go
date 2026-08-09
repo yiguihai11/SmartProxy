@@ -275,17 +275,25 @@ func TestUDPAssociate_UnsupportedScheme(t *testing.T) {
 	}
 }
 
-// TestPluginNode_UDPDown verifies an SS node with a SIP003 plugin is TCP-only: the plugin
-// protocol has no UDP channel, so the node reports tcp_only, its UDP capability is none
-// from construction (not unknown), and any UDP relay attempt fails fast instead of sending
-// un-obfuscated SS UDP straight to the server.
-func TestPluginNode_UDPDown(t *testing.T) {
+// TestPluginNode_UDPDownDefault verifies an SS node with a SIP003 plugin defaults to UDP
+// down — equivalent to the user manually disabling the UDP circuit. It is not hard TCP-only:
+// the scheme stays UDP-probeable, and releasing the circuit (action=auto) re-enables UDP
+// probing so a deployment that exposes the SS UDP port directly can come up.
+func TestPluginNode_UDPDownDefault(t *testing.T) {
 	p, err := NewProxy("ss://none:pass@127.0.0.1:80?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dupay.10010.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.SchemeSupportsUDP() {
-		t.Error("SS+plugin must not support UDP")
+	// Scheme remains UDP-capable: the node can be UDP-probed once the user releases it.
+	if !p.SchemeSupportsUDP() {
+		t.Error("SS+plugin must stay scheme UDP-capable (probeable after manual release)")
+	}
+	// Default: UDP circuit manually disabled → effective tcp_only, capability none, UDP down.
+	if !p.udpHealth.IsManuallyDisabled() {
+		t.Error("plugin node's UDP circuit should default to manually disabled")
+	}
+	if p.IsUDPAvailable() {
+		t.Error("plugin node's UDP should be down by default")
 	}
 	if got := p.EffectiveMode(); got != ModeTCPOnly {
 		t.Errorf("EffectiveMode: got %q, want %q", got, ModeTCPOnly)
@@ -293,14 +301,20 @@ func TestPluginNode_UDPDown(t *testing.T) {
 	if got := p.UDPCapability(); got != UDPCapNone {
 		t.Errorf("UDPCapability: got %q, want %q", got, UDPCapNone)
 	}
-	if _, err := p.UDPAssociate(context.Background(), "example.com", 53); err == nil {
-		t.Error("UDPAssociate should fail for a plugin node")
+	// UDPAssociate still works at the transport level: SS UDP dials straight to the server
+	// port and succeeds fire-and-forget even with no listener — it is the circuit that gates
+	// routing, not the transport call.
+	if _, err := p.UDPAssociate(context.Background(), "example.com", 53); err != nil {
+		t.Errorf("UDPAssociate should reach the direct UDP relay, got: %v", err)
 	}
 
-	// Plain SS (no plugin) stays UDP-capable: probeable, capability unknown until probed.
+	// Plain SS (no plugin) defaults UDP up: automatic circuit, capability unknown until probed.
 	p2, err := NewProxy("ss://none:pass@127.0.0.1:80")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if p2.udpHealth.IsManuallyDisabled() {
+		t.Error("plain SS UDP circuit should default to automatic, not manual-down")
 	}
 	if !p2.SchemeSupportsUDP() {
 		t.Error("plain SS must support UDP")
@@ -1369,7 +1383,6 @@ func TestEffectiveMode(t *testing.T) {
 	cases := []struct {
 		name   string
 		scheme ProxyScheme
-		plugin string // non-empty = SS + SIP003 plugin (TCP-only)
 		tcpUp  bool
 		udpUp  bool
 		want   string
@@ -1380,8 +1393,6 @@ func TestEffectiveMode(t *testing.T) {
 		{name: "socks5, both down", scheme: SchemeSOCKS5, tcpUp: false, udpUp: false, want: ModeTCPAndUDP},
 		{name: "socks5h", scheme: SchemeSOCKS5H, tcpUp: true, udpUp: true, want: ModeTCPAndUDP},
 		{name: "ss, tcp up udp down", scheme: SchemeSS, tcpUp: true, udpUp: false, want: ModeTCPOnly},
-		{name: "ss+plugin, both up", scheme: SchemeSS, plugin: "obfs-local", tcpUp: true, udpUp: true, want: ModeTCPOnly},
-		{name: "ss+plugin, tcp down udp up", scheme: SchemeSS, plugin: "obfs-local", tcpUp: false, udpUp: true, want: ModeTCPOnly},
 		// Non-UDP schemes are always tcp_only regardless of circuits.
 		{name: "http, both up", scheme: SchemeHTTP, tcpUp: true, udpUp: true, want: ModeTCPOnly},
 		{name: "http, tcp down udp up", scheme: SchemeHTTP, tcpUp: false, udpUp: true, want: ModeTCPOnly},
@@ -1390,7 +1401,7 @@ func TestEffectiveMode(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p := &Proxy{Scheme: tc.scheme, Plugin: tc.plugin}
+			p := &Proxy{Scheme: tc.scheme}
 			p.health.SetManualState(tc.tcpUp)
 			p.udpHealth.SetManualState(tc.udpUp)
 			if got := p.EffectiveMode(); got != tc.want {

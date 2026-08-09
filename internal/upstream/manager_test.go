@@ -625,6 +625,35 @@ func TestReload_PreservesManualEnable(t *testing.T) {
 	}
 }
 
+// TestReload_ReleasedPluginNodeStaysReleased verifies a plugin node the user released to
+// automatic (re-enabling UDP probing) does not revert to the default UDP-down on reload.
+// Reload rebuilds the proxy, whose construction default is manual-down; the restore pass
+// must re-apply the released state over that default.
+func TestReload_ReleasedPluginNodeStaysReleased(t *testing.T) {
+	pluginURL := "ss://none:pass@127.0.0.1:80?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dupay.10010.com"
+	m, _ := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{{Alias: "p1", URL: pluginURL}},
+	})
+	if !m.aliasMap["p1"].udpHealth.IsManuallyDisabled() {
+		t.Fatal("precondition: fresh plugin node should default to UDP-down")
+	}
+	// User opts into UDP probing by releasing the circuit to automatic.
+	if err := m.SetCircuitHealth("p1", "udp", "auto"); err != nil {
+		t.Fatal(err)
+	}
+	if m.aliasMap["p1"].udpHealth.IsManuallyDisabled() {
+		t.Fatal("precondition: released circuit must not be manually disabled")
+	}
+
+	m.Reload(UpstreamConfig{
+		Proxies: []ProxyEntry{{Alias: "p1", URL: pluginURL}},
+	})
+
+	if m.aliasMap["p1"].udpHealth.IsManuallyDisabled() {
+		t.Error("plugin node released to auto must stay released after reload, not revert to default UDP-down")
+	}
+}
+
 func newEngineWithRules(content string) *rules.Engine {
 	dir, _ := os.MkdirTemp("", "upstream-test")
 	path := filepath.Join(dir, "rules.txt")

@@ -403,17 +403,13 @@ func (c *deferredSSConn) Read(p []byte) (int, error) {
 // ssUDPAssociate creates a UDP relay session to the SS server and returns a connection
 // satisfying SmartProxy's upstream UDP contract (net.Conn + full SOCKS5-UDP frames).
 func (p *Proxy) ssUDPAssociate(ctx context.Context, targetHost string, targetPort int) (net.Conn, error) {
-	// A SIP003 plugin only obfuscates the TCP stream — there is no UDP channel, so a plugin
-	// node is TCP-only (SchemeSupportsUDP returns false and routing never calls this). Fail
-	// fast here anyway: bypassing the plugin and sending plain SS UDP straight to the server
-	// would be silently dropped by the obfs listener or, worse, leak an un-obfuscated packet
-	// when the raw SS UDP port is reachable. We still validate the plugin kind first to avoid
-	// silently ignoring a mistyped plugin name.
+	// The plugin only obfuscates TCP (SIP003 semantics); SS UDP bypasses the plugin and
+	// connects directly to the server's UDP port. Plugin nodes default to UDP down (the
+	// circuit is manually disabled at construction), so this is normally unreached — it only
+	// runs after the user releases the circuit to automatic and UDP probing succeeds. We
+	// still validate the plugin kind to avoid silently ignoring a mistyped plugin name.
 	if _, err := p.ssPluginKind(); err != nil {
 		return nil, err
-	}
-	if p.Plugin != "" {
-		return nil, fmt.Errorf("ss proxy %q: UDP relay is not supported with a SIP003 plugin (TCP-only)", p.URL)
 	}
 	if p.ssMethod == nil {
 		return nil, fmt.Errorf("ss proxy %q has no method", p.URL)

@@ -22,7 +22,7 @@
 | `https` | HTTP CONNECT over TLS（`tls.Client` + `HandshakeContext`） |
 | `ss` | Shadowsocks（经典 AEAD，内置实现，无需外部 `sslocal`）。URL 形如 `ss://base64(method:password)@host:port`，也兼容明文 `ss://method:password@host:port`。TCP + UDP 均支持，见 §3.1 |
 
-UDP 支持：`socks5` / `socks5h`（标准 UDP ASSOCIATE，失败自动兜底裸 UDP，见 §3.2）与 `ss`（内置 SS UDP relay，见 §3.1；**带 SIP003 插件的 `ss` 节点除外**——插件无 UDP 通道，恒为 TCP-only，见 §1 SIP003 小节）。**每个上游的 TCP/UDP 能力自动辨识、无需配置**：生效 mode（`tcp_and_udp` / `tcp_only` / `udp_only`）由 scheme + 双熔断动态推出，UDP 能力标记（`standard` / `raw` / `none`）由探测与真实流量推导，见 §3.2。
+UDP 支持：`socks5` / `socks5h`（标准 UDP ASSOCIATE，失败自动兜底裸 UDP，见 §3.2）与 `ss`（内置 SS UDP relay，见 §3.1）。**带 SIP003 插件的 `ss` 节点默认 UDP 关闭**（等效手动关闭，可手动释放开启探测，见 §1 SIP003 小节）。**每个上游的 TCP/UDP 能力自动辨识、无需配置**：生效 mode（`tcp_and_udp` / `tcp_only` / `udp_only`）由 scheme + 双熔断动态推出，UDP 能力标记（`standard` / `raw` / `none`）由探测与真实流量推导，见 §3.2。
 
 ## §3 连接建立
 
@@ -56,7 +56,7 @@ ss-android 导出的链接可带 `?plugin=id;key=val;key=val`（SIP003 插件）
 
 - **obfs-http**：首写前置 HTTP GET 请求头（`Content-Length`=首包长，`Host` 在端口非 80 时带 SS 服务器端口，`User-Agent: curl/7.<random>.<random>`、`Sec-WebSocket-Key` 随机——与 obfs-local 一致）；首读剥掉服务端 `HTTP/1.1 101` 响应头（按 `\r\n\r\n` 找边界）；后续读写明文直通。服务器端 `check_http_header` 只校验请求行含 `HTTP/1.1` 与 `Upgrade: websocket`，不校验 `Host`（`obfs-host` 缺省用 SS 服务器主机）。
 - **obfs-tls**：首包藏进 TLS ClientHello 的 **session_ticket 扩展**（138B 固定头 + ticket 扩展 + 数据 + SNI + 66B 其余扩展）；读侧状态机解服务端 `ServerHello`（96B，验证 `0x16`）+ `ChangeCipherSpec`（6B）+ `EncryptedHandshake` 头（5B，len 即首块长），后续按 `0x17` 帧解帧；后续写每包前置 `0x17 0x03 0x03` + len 帧头。
-- **UDP 关闭**：obfs 只混淆 TCP（SIP003 语义，simple-obfs/v2ray-plugin 两端均无 UDP 通道），带插件的节点**按协议视为 TCP-only**——`SchemeSupportsUDP()` 对 SS+plugin 返回 false，恒为 `tcp_only`、从不 UDP 探测、UDP 能力标记构造时即置 `none`，`ssUDPAssociate` 对插件节点直接报错（不再绕过插件往服务器端口发裸 SS UDP——obfs 监听端不会转发 UDP，直连 SS 端口又依赖服务端把 UDP 单独暴露在公网、属部署事故而非协议能力）。
+- **UDP 默认关闭（可手动开启探测）**：obfs 只混淆 TCP（SIP003 语义，simple-obfs/v2ray-plugin 两端均无 UDP 通道），所以带插件的节点**默认把 UDP 电路手动置 down**——等效用户手动点了 UDP 关闭（构造时 `udpHealth.SetManualState(false)`）：面板显示 `tcp_only` + UDP down（manual 虚线框）、路由不选它做 UDP、健康检查也不探测它。但插件节点**不是硬 TCP-only**：`SchemeSupportsUDP()` 恒 true，SS UDP 仍绕过插件直连服务器 UDP 端口（`ssUDPAssociate`），所以部署若确实把 SS UDP 单独暴露在公网，在面板点 UDP 徽章释放回 auto（`action=auto`）后探测会跑起来，成功即把节点打成 UDP 可用（`tcp_and_udp`）。默认关闭只是"先当它没有"，不是协议上禁止。
 - **内置插件**：`obfs-local`（http/tls 混淆，仅 TCP，见 `obfs.go`）与 `v2ray-plugin` / `xray-plugin`（websocket/grpc/quic 传输、可带 TLS，见 `v2ray.go`）**都已内置**，无需外部二进制；其它插件二进制不内置，`ssConnect`/`ssUDPAssociate` 时返回明确错误提示去掉该参数。
 - **dashboard**：代理对话框的 SS 区块插件拆成两级选择（对齐 shadowsocks-android 的 Plugin + Configure 分离）：先选插件类型「无 / simple-obfs / v2ray-plugin」，再选具体模式——simple-obfs 为 Obfuscation wrapper（http / tls），v2ray-plugin 为 Transport mode（websocket-http / websocket-tls / quic-tls / grpc / grpc-tls，命名对齐 v2ray-plugin-android）；随后显示对应参数（obfs 的 `obfs-host`、http 额外 `obfs-uri`——无 `http-method`，对齐 simple-obfs-android 的 obfs / obfs-host / obfs-uri 三字段配置；v2ray 的 `host`/`path`/`mux`/`serviceName`/`certRaw`），保存时组装成 `obfs-local;obfs=...;obfs-host=...` 或 `v2ray-plugin;mode=...;tls;...`（`quic-tls` 不写 `tls` flag，QUIC 服务端强制 TLS，与安卓一致）；编辑时按 `;key=val` 拆回表单。另支持粘贴完整 `ss://` 链接自动导入（base64 / 明文 / 无密码三种 userinfo），或在 SS 区块点 **Scan QR** 扫码导入（`/jsqr.js` 内联 jsQR + 原生 `BarcodeDetector`）：扫码/图片/Paste 解码结果走同一条 `parseSSLink` → 表单填充链路。相机总是尝试调用（由浏览器决定是否允许——`getUserMedia`/`BarcodeDetector` 只在 HTTPS 或 localhost 等安全上下文放行）；普通 HTTP 远程访问（如 `http://192.168.1.1`）时浏览器会拒绝相机，自动落到**图片上传/粘贴**通道（纯 jsQR、任何协议可用）。
 - **e2e 验证**（`obfs_e2e_test.go`，`go test -tags e2e`，需 `SS_SERVER_BIN` + `OBFS_SERVER_BIN`）：SmartProxy 带 `?plugin=` 直连真实 simple-obfs `obfs-server`（http/tls）→ 真实 ssserver，TCP 明文往返一致；UDP 直连 SS 服务器端口往返一致。
@@ -120,7 +120,8 @@ GET / HTTP/1.1\r\n...\r\nContent-Length: 529\r\n\r\n
 
 `EffectiveMode()` 由 scheme 静态基态与 TCP/UDP 双熔断动态推出：
 
-- **`http` / `https` / `socks4`，以及带 SIP003 插件的 `ss`**：确定不支持 UDP，恒为 `tcp_only`，从不探测 UDP（插件无 UDP 通道，见 §1 SIP003 小节）。
+- **`http` / `https` / `socks4`**：确定不支持 UDP，恒为 `tcp_only`，从不探测 UDP。
+- **带 SIP003 插件的 `ss`**：scheme 仍可探测 UDP，但**默认把 UDP 电路手动置 down**（等效手动关闭，见 §1 SIP003 小节）——未释放前恒为 `tcp_only` 且不探测；用户释放回 auto 后才探测，探测成功即恢复 UDP 可用。
 - **`socks5` / `socks5h` / 纯 `ss`**（`SchemeSupportsUDP()`）：
 
   | TCP 熔断 | UDP 熔断 | 生效 mode |

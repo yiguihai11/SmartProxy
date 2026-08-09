@@ -88,7 +88,10 @@ func (m *Manager) captureManualPins() map[string][2]circuitPin {
 // restoreManualPins re-applies saved manual pins to proxies that still exist after a reload.
 // An alias that disappeared from the config drops its pin (the node no longer exists); an
 // alias that kept its name keeps its pin even if its URL changed, since the user disabled
-// the alias, not the server. Caller must not hold m.mu.
+// the alias, not the server. The saved state is applied in full — pinned circuits are
+// re-pinned and released circuits are cleared — so the exact pre-reload manual state wins
+// over any construction default (e.g. a plugin node released to automatic stays released,
+// instead of reverting to its default UDP-down). Caller must not hold m.mu.
 func (m *Manager) restoreManualPins(pins map[string][2]circuitPin) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -97,12 +100,15 @@ func (m *Manager) restoreManualPins(pins map[string][2]circuitPin) {
 		if !ok || p == nil {
 			continue
 		}
-		if pin[0].pinned {
-			p.health.SetManualState(pin[0].up)
+		restore := func(ph *ProxyHealth, cp circuitPin) {
+			if cp.pinned {
+				ph.SetManualState(cp.up)
+			} else {
+				ph.ClearManualState()
+			}
 		}
-		if pin[1].pinned {
-			p.udpHealth.SetManualState(pin[1].up)
-		}
+		restore(&p.health, pin[0])
+		restore(&p.udpHealth, pin[1])
 	}
 }
 

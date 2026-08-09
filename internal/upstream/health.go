@@ -321,6 +321,14 @@ func (hc *HealthChecker) checkProxyTCP(p *Proxy) {
 // checkProxyUDP actively probes a node's UDP relay with a DNS query, feeding the
 // independent udpHealth circuit. It honors the same open-cool-down gate as the TCP probe.
 func (hc *HealthChecker) checkProxyUDP(p *Proxy) {
+	// A manually-disabled UDP circuit is not probed: the user (or the plugin-node default)
+	// pinned it down, so probing is wasted and, for plugin nodes, would defeat the "UDP
+	// down until the user releases it" intent. Releasing the circuit (action=auto) or
+	// forcing it up (action=enable) resumes UDP probing.
+	if p.udpHealth.IsManuallyDisabled() {
+		return
+	}
+
 	cfg := hc.cfg.Load()
 
 	p.udpHealth.mu.RLock()

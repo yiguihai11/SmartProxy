@@ -206,20 +206,19 @@ func TestNewProxySSPlugin(t *testing.T) {
 		t.Errorf("obfs config = %+v", cfg)
 	}
 
-	// A SIP003 plugin has no UDP channel (obfs only wraps the TCP stream), so a plugin node
-	// is TCP-only: UDPAssociate must fail fast with a clear error instead of sending bare SS
-	// UDP straight to the server.
+	// UDP bypasses the plugin: obfs-local's UDPAssociate connects directly to the server port
+	// (dial succeeds fire-and-forget even with no listener). The plugin node's UDP-down is a
+	// default circuit pin, not a transport gate.
 	local, err := NewProxy("ss://" + b64url("aes-128-gcm:secret") + "@127.0.0.1:8388?plugin=" + url.QueryEscape(pluginSpec))
 	if err != nil {
 		t.Fatalf("NewProxy local failed: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if conn, err := local.UDPAssociate(ctx, "example.com", 80); err == nil {
+	if conn, err := local.UDPAssociate(ctx, "example.com", 80); err != nil {
+		t.Errorf("UDPAssociate with obfs-local should be allowed, got: %v", err)
+	} else {
 		conn.Close()
-		t.Error("UDPAssociate with obfs-local must fail (plugin nodes are TCP-only)")
-	} else if !strings.Contains(err.Error(), "not supported with a SIP003 plugin") {
-		t.Errorf("unexpected UDPAssociate error: %v", err)
 	}
 }
 

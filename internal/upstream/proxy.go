@@ -97,17 +97,16 @@ type Proxy struct {
 }
 
 // SchemeSupportsUDP reports whether the upstream's protocol can carry UDP at all. This is a
-// static property of the scheme (and, for SS, the presence of a SIP003 plugin) and never
-// changes: only SOCKS5 / SOCKS5h / SS have a UDP relay concept; http/https/socks4 are
-// TCP-only and are never UDP-probed. An SS node with a SIP003 plugin is also TCP-only —
-// obfs-local/v2ray-plugin wrap only the TCP stream (the plugin protocol has no UDP channel),
-// so it is classified tcp_only and never UDP-probed.
+// static property of the scheme and never changes: only SOCKS5 / SOCKS5h / SS have a UDP
+// relay concept; http/https/socks4 are TCP-only and are never UDP-probed. An SS node with a
+// SIP003 plugin is still probeable: the plugin wraps only the TCP stream, but UDP goes
+// straight to the server's UDP port, so it may work when the deployment exposes it. Plugin
+// nodes default to UDP down (udpHealth manually disabled at construction, see NewProxy) and
+// are only UDP-probed once the user releases the circuit.
 func (p *Proxy) SchemeSupportsUDP() bool {
 	switch p.Scheme {
-	case SchemeSOCKS5, SchemeSOCKS5H:
+	case SchemeSOCKS5, SchemeSOCKS5H, SchemeSS:
 		return true
-	case SchemeSS:
-		return p.Plugin == ""
 	}
 	return false
 }
@@ -351,10 +350,13 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 		// Parsed from the raw query (not u.Query()) so a literal-';' plugin value survives (see pluginFromRawQuery).
 		if plugin := pluginFromRawQuery(u.RawQuery); plugin != "" {
 			p.Plugin = plugin
-			// A plugin only obfuscates the TCP stream; there is no UDP channel (see
-			// SchemeSupportsUDP). Mark the capability none up front so the dashboard
-			// reports it, instead of unknown until a never-issued probe.
+			// A plugin only obfuscates the TCP stream. Most deployments do not expose a UDP
+			// relay, so a plugin node defaults to UDP down — equivalent to the user manually
+			// disabling the UDP circuit. The dashboard badge can release it to automatic
+			// (action=auto), which re-enables UDP probing; if the server's UDP port is
+			// reachable directly the node then comes up as UDP-capable (see SchemeSupportsUDP).
 			p.udpCapability = UDPCapNone
+			p.udpHealth.SetManualState(false)
 		}
 	}
 	slog.Info("upstream proxy loaded", "url", proxyURL)
