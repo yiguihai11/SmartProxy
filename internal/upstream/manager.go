@@ -38,6 +38,10 @@ func NewManager(cfg UpstreamConfig) (*Manager, error) {
 
 func (m *Manager) Reload(cfg UpstreamConfig) {
 	m.mu.Lock()
+	// Rebuild creates brand-new Proxy objects whose health is fully automatic, which would
+	// silently revert any explicit user disable/enable. Preserve the manual pins (keyed by
+	// alias) so a config hot-reload keeps the user's choice.
+	pins := m.captureManualPins()
 	m.rebuildFromConfig(cfg)
 	newProxies := m.defaultProxies
 	m.mu.Unlock()
@@ -50,10 +54,56 @@ func (m *Manager) Reload(cfg UpstreamConfig) {
 	for _, p := range newProxies {
 		p.health.reset()
 	}
+	// Restore after reset so a pin's forced state wins over the fresh automatic state.
+	m.restoreManualPins(pins)
+
 	if m.healthChecker != nil {
 		m.healthChecker.Reload(cfg.HealthCheck, newProxies)
 	}
 	slog.Info("upstream manager reloaded", "aliases", len(m.aliasMap), "strategy", m.strategy)
+}
+
+// circuitPin captures one health circuit's manual pin: whether it is pinned and, if so,
+// the forced availability. Both index 0 (TCP) and index 1 (UDP) live in the same array.
+type circuitPin struct {
+	pinned bool
+	up     bool
+}
+
+// captureManualPins records each proxy's manual circuit pins keyed by alias. Caller must
+// hold m.mu (any level).
+func (m *Manager) captureManualPins() map[string][2]circuitPin {
+	pins := make(map[string][2]circuitPin, len(m.aliasMap))
+	for alias, p := range m.aliasMap {
+		if p == nil {
+			continue // "direct" has no health circuit
+		}
+		tpinned, tup := p.health.ManualPin()
+		upinned, uup := p.udpHealth.ManualPin()
+		pins[alias] = [2]circuitPin{{pinned: tpinned, up: tup}, {pinned: upinned, up: uup}}
+	}
+	return pins
+}
+
+// restoreManualPins re-applies saved manual pins to proxies that still exist after a reload.
+// An alias that disappeared from the config drops its pin (the node no longer exists); an
+// alias that kept its name keeps its pin even if its URL changed, since the user disabled
+// the alias, not the server. Caller must not hold m.mu.
+func (m *Manager) restoreManualPins(pins map[string][2]circuitPin) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for alias, pin := range pins {
+		p, ok := m.aliasMap[alias]
+		if !ok || p == nil {
+			continue
+		}
+		if pin[0].pinned {
+			p.health.SetManualState(pin[0].up)
+		}
+		if pin[1].pinned {
+			p.udpHealth.SetManualState(pin[1].up)
+		}
+	}
 }
 
 func (m *Manager) rebuildFromConfig(cfg UpstreamConfig) {

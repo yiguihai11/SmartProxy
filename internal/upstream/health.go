@@ -89,6 +89,18 @@ func (ph *ProxyHealth) IsManuallyDisabled() bool {
 	return ph.manual != nil && !*ph.manual
 }
 
+// ManualPin reports whether the circuit is manually pinned and, if so, the pinned
+// availability (true=forced up, false=forced down). The second return is meaningful
+// only when pinned is true. Used to preserve manual pins across a hot reload.
+func (ph *ProxyHealth) ManualPin() (pinned, available bool) {
+	ph.mu.RLock()
+	defer ph.mu.RUnlock()
+	if ph.manual == nil {
+		return false, false
+	}
+	return true, *ph.manual
+}
+
 func (ph *ProxyHealth) reset() {
 	ph.mu.Lock()
 	defer ph.mu.Unlock()

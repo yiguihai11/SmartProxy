@@ -523,6 +523,108 @@ func TestReload_DirectRemains(t *testing.T) {
 	}
 }
 
+func TestReload_PreservesManualDisable(t *testing.T) {
+	m, _ := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{
+			{Alias: "p1", URL: "socks5://a:1080"},
+			{Alias: "p2", URL: "socks5://b:1080"},
+		},
+	})
+	if err := m.SetCircuitHealth("p1", "tcp", "disable"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetCircuitHealth("p2", "both", "disable"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Hot reload with the same two proxies — the manual disables must survive.
+	m.Reload(UpstreamConfig{
+		Proxies: []ProxyEntry{
+			{Alias: "p1", URL: "socks5://a:1080"},
+			{Alias: "p2", URL: "socks5://b:1080"},
+		},
+	})
+
+	p1 := m.aliasMap["p1"]
+	if p1 == nil {
+		t.Fatal("p1 should exist after reload")
+	}
+	if !p1.health.IsManuallyDisabled() {
+		t.Error("p1 TCP manual disable should survive reload")
+	}
+	if p1.udpHealth.IsManuallyDisabled() {
+		t.Error("p1 UDP should NOT be manually disabled (only TCP was)")
+	}
+	p2 := m.aliasMap["p2"]
+	if p2 == nil {
+		t.Fatal("p2 should exist after reload")
+	}
+	if !p2.health.IsManuallyDisabled() || !p2.udpHealth.IsManuallyDisabled() {
+		t.Error("p2 both-circuit manual disable should survive reload")
+	}
+}
+
+func TestReload_ManualDisableSurvivesURLChange(t *testing.T) {
+	m, _ := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{{Alias: "p1", URL: "socks5://old:1080"}},
+	})
+	if err := m.SetCircuitHealth("p1", "tcp", "disable"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same alias, different server: the user disabled the alias, not the server, so the
+	// pin must stay put.
+	m.Reload(UpstreamConfig{
+		Proxies: []ProxyEntry{{Alias: "p1", URL: "socks5://new:1080"}},
+	})
+
+	if !m.aliasMap["p1"].health.IsManuallyDisabled() {
+		t.Error("manual disable should survive an alias's URL change")
+	}
+}
+
+func TestReload_RemovedAliasDropsPin(t *testing.T) {
+	m, _ := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{
+			{Alias: "p1", URL: "socks5://a:1080"},
+			{Alias: "p2", URL: "socks5://b:1080"},
+		},
+	})
+	if err := m.SetCircuitHealth("p2", "both", "disable"); err != nil {
+		t.Fatal(err)
+	}
+
+	// p2 removed from config: its pin must not be resurrected, and p1 keeps its state.
+	m.Reload(UpstreamConfig{
+		Proxies: []ProxyEntry{{Alias: "p1", URL: "socks5://a:1080"}},
+	})
+
+	if _, ok := m.aliasMap["p2"]; ok {
+		t.Fatal("p2 should be removed after reload")
+	}
+	if p1 := m.aliasMap["p1"]; p1.health.IsManuallyDisabled() {
+		t.Error("p1 was never disabled, should not be disabled after reload")
+	}
+}
+
+func TestReload_PreservesManualEnable(t *testing.T) {
+	m, _ := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{{Alias: "p1", URL: "socks5://a:1080"}},
+	})
+	if err := m.SetCircuitHealth("p1", "tcp", "enable"); err != nil {
+		t.Fatal(err)
+	}
+
+	m.Reload(UpstreamConfig{
+		Proxies: []ProxyEntry{{Alias: "p1", URL: "socks5://a:1080"}},
+	})
+
+	pinned, up := m.aliasMap["p1"].health.ManualPin()
+	if !pinned || !up {
+		t.Errorf("manual enable should survive reload, got pinned=%v up=%v", pinned, up)
+	}
+}
+
 func newEngineWithRules(content string) *rules.Engine {
 	dir, _ := os.MkdirTemp("", "upstream-test")
 	path := filepath.Join(dir, "rules.txt")
