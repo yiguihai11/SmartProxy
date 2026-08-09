@@ -77,9 +77,11 @@ rust 只在 listener 设 REUSEADDR，且**刻意排除 Windows**（`net/tcp.rs:1
 
 rust 不直接设置但这是同类代理的共识做法；SmartProxy `internal/netutil/netutil.go:53` 已做 `SetLinger(0)`（立即 RST 关闭，避免 TIME_WAIT 堆积），符合预期。
 
-### 2.10 IP_MTU_DISCOVER 禁 UDP 分片 + MTU 校验 —— 🔶 可借鉴
+### 2.10 IP_MTU_DISCOVER 禁 UDP 分片 + MTU 校验 —— 🔶 直连已应用 / 代理待协同
 
-rust 出站 UDP 默认 `IP_PMTUDISC_DO` 禁分片（`linux/mod.rs:235-272,313-317`），只有显式 `allow_fragmentation=true` 才放开；且所有 send/recv 路径都做 `len > mtu` 校验（`net/udp.rs:201-303`）。Go 无现成 API，需 `unix.SetsockoptInt(fd, IPPROTO_IP, IP_MTU_DISCOVER, IP_PMTUDISC_DO)`（v6 用 `IPPROTO_IPV6`/`IPV6_MTU_DISCOVER`）。对 SmartProxy UDP relay：禁分片能避免"隧道内 1500+ 报文被 GFW 特征识别"，但要先确认隧道对端（服务器）也在做同样的 MTU 边界处理，否则超大报文会静默丢——这是**两端协同**的改动，故标需改造。
+rust 出站 UDP 默认 `IP_PMTUDISC_DO` 禁分片（`linux/mod.rs:235-272,313-317`），只有显式 `allow_fragmentation=true` 才放开；且所有 send/recv 路径都做 `len > mtu` 校验（`net/udp.rs:201-303`）。Go 无现成 API，已实现 `udp.setDisableUDPFragmentation`（`internal/udp/sockopt_linux.go`，v4 `IP_MTU_DISCOVER` 优先、v6 兜底，best-effort），接入**直连 UDP** 转发 socket（`udp/handler.go` 的 Control 回调，游戏/DNS 直连那一路）。分片 UDP 被中间设备丢弃是静默丢包 + 应用层超时的延迟尖峰来源；直连路径游戏包通常 < MTU，禁分片零影响、纯防御性收益。
+
+**代理路径（SS 隧道）未启用**：发送的是 [加密封装后的包]，比原始包大 20–40+ 字节，原始包接近 MTU 时封装后必超 MTU；且 `IP_PMTUDISC_DO` 依赖 ICMP "frag needed" 学 PMTU，GFW / 过滤 ICMP 的链路上学不到会误伤。若要启用需 SS 服务器端同样处理（两端协同）+ 显式 MTU 配置——列为后续，不动已过 GFW 实测的链路。
 
 ---
 
@@ -204,10 +206,10 @@ rust 提供 manager 接口（端口/IP 上报、节点增删），类似我们�
 
 ## 十、最值得抄的 5 条（按性价比排序）
 
-（§1.5/§2.2/§2.5 经实测已落地为"已应用"，§2.6 经结构分析归为"不适用"，均已从候选里剔除。）
+（§1.5/§2.2/§2.5/§2.10直连 经实测已落地为"已应用"，§2.6 经结构分析归为"不适用"，均已从候选里剔除。）
 
 1. **resolv.conf 热重载 + 1s 防抖**（3.3）：Docker/CNI 环境不用重启即可感知 DNS 变更，复用现有 atomic.Pointer 换根模式。
-2. **SO_BINDTODEVICE + UDP 禁分片**（2.4/2.10）：出口绑定与 UDP MTU 边界，按需上、注意两端协同。
+2. **SO_BINDTODEVICE + 代理 UDP 禁分片**（2.4/2.10）：出口绑定指定网卡；代理路径禁分片需 SS 服务器协同，未启用。
 3. **#292 握手失败静默（上游视角）**（1.4）：区分上游/入口视角，仅对上游 SS 握手失败静默。
 4. **SO_SNDBUF/SO_RCVBUF**（2.7）：大带宽场景手动扩缓冲区，accept 后紧跟设置，可做配置项。
 5. **每候选 IP 独立超时**（3.5）：补上 rust 自己留的 TODO，避免单黑洞 IP 拖死链路。

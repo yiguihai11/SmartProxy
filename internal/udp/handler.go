@@ -298,7 +298,15 @@ func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip 
 			if err := fwmark.Control(network, address, raw); err != nil {
 				return err
 			}
-			return setSocketBuffers(raw)
+			if err := setSocketBuffers(raw); err != nil {
+				return err
+			}
+			// Direct UDP only: fail fast on oversized datagrams instead of emitting fragile fragments.
+			// (The proxied SS path is intentionally left alone — server-side coordination required.)
+			if err := setDisableUDPFragmentation(raw); err != nil {
+				slog.Debug("IP_MTU_DISCOVER not set on direct UDP socket", "err", err)
+			}
+			return nil
 		}}
 		remoteConn, err = d.DialContext(ctx, "udp", net.JoinHostPort(ip, strconv.Itoa(port)))
 	} else if selected != nil {
