@@ -275,6 +275,41 @@ func TestUDPAssociate_UnsupportedScheme(t *testing.T) {
 	}
 }
 
+// TestPluginNode_UDPDown verifies an SS node with a SIP003 plugin is TCP-only: the plugin
+// protocol has no UDP channel, so the node reports tcp_only, its UDP capability is none
+// from construction (not unknown), and any UDP relay attempt fails fast instead of sending
+// un-obfuscated SS UDP straight to the server.
+func TestPluginNode_UDPDown(t *testing.T) {
+	p, err := NewProxy("ss://none:pass@127.0.0.1:80?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dupay.10010.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.SchemeSupportsUDP() {
+		t.Error("SS+plugin must not support UDP")
+	}
+	if got := p.EffectiveMode(); got != ModeTCPOnly {
+		t.Errorf("EffectiveMode: got %q, want %q", got, ModeTCPOnly)
+	}
+	if got := p.UDPCapability(); got != UDPCapNone {
+		t.Errorf("UDPCapability: got %q, want %q", got, UDPCapNone)
+	}
+	if _, err := p.UDPAssociate(context.Background(), "example.com", 53); err == nil {
+		t.Error("UDPAssociate should fail for a plugin node")
+	}
+
+	// Plain SS (no plugin) stays UDP-capable: probeable, capability unknown until probed.
+	p2, err := NewProxy("ss://none:pass@127.0.0.1:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p2.SchemeSupportsUDP() {
+		t.Error("plain SS must support UDP")
+	}
+	if got := p2.UDPCapability(); got != UDPCapUnknown {
+		t.Errorf("plain SS UDPCapability: got %q, want %q", got, UDPCapUnknown)
+	}
+}
+
 func TestConnect_UnsupportedScheme(t *testing.T) {
 	p := &Proxy{Scheme: "unknown", Host: "127.0.0.1", Port: 1080}
 	_, err := p.Connect(context.Background(), "example.com", 80)
@@ -1334,6 +1369,7 @@ func TestEffectiveMode(t *testing.T) {
 	cases := []struct {
 		name   string
 		scheme ProxyScheme
+		plugin string // non-empty = SS + SIP003 plugin (TCP-only)
 		tcpUp  bool
 		udpUp  bool
 		want   string
@@ -1344,6 +1380,8 @@ func TestEffectiveMode(t *testing.T) {
 		{name: "socks5, both down", scheme: SchemeSOCKS5, tcpUp: false, udpUp: false, want: ModeTCPAndUDP},
 		{name: "socks5h", scheme: SchemeSOCKS5H, tcpUp: true, udpUp: true, want: ModeTCPAndUDP},
 		{name: "ss, tcp up udp down", scheme: SchemeSS, tcpUp: true, udpUp: false, want: ModeTCPOnly},
+		{name: "ss+plugin, both up", scheme: SchemeSS, plugin: "obfs-local", tcpUp: true, udpUp: true, want: ModeTCPOnly},
+		{name: "ss+plugin, tcp down udp up", scheme: SchemeSS, plugin: "obfs-local", tcpUp: false, udpUp: true, want: ModeTCPOnly},
 		// Non-UDP schemes are always tcp_only regardless of circuits.
 		{name: "http, both up", scheme: SchemeHTTP, tcpUp: true, udpUp: true, want: ModeTCPOnly},
 		{name: "http, tcp down udp up", scheme: SchemeHTTP, tcpUp: false, udpUp: true, want: ModeTCPOnly},
@@ -1352,7 +1390,7 @@ func TestEffectiveMode(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p := &Proxy{Scheme: tc.scheme}
+			p := &Proxy{Scheme: tc.scheme, Plugin: tc.plugin}
 			p.health.SetManualState(tc.tcpUp)
 			p.udpHealth.SetManualState(tc.udpUp)
 			if got := p.EffectiveMode(); got != tc.want {

@@ -22,7 +22,7 @@
 | `https` | HTTP CONNECT over TLS（`tls.Client` + `HandshakeContext`） |
 | `ss` | Shadowsocks（经典 AEAD，内置实现，无需外部 `sslocal`）。URL 形如 `ss://base64(method:password)@host:port`，也兼容明文 `ss://method:password@host:port`。TCP + UDP 均支持，见 §3.1 |
 
-UDP 支持：`socks5` / `socks5h`（标准 UDP ASSOCIATE，失败自动兜底裸 UDP，见 §3.2）与 `ss`（内置 SS UDP relay，见 §3.1）。**每个上游的 TCP/UDP 能力自动辨识、无需配置**：生效 mode（`tcp_and_udp` / `tcp_only` / `udp_only`）由 scheme + 双熔断动态推出，UDP 能力标记（`standard` / `raw` / `none`）由探测与真实流量推导，见 §3.2。
+UDP 支持：`socks5` / `socks5h`（标准 UDP ASSOCIATE，失败自动兜底裸 UDP，见 §3.2）与 `ss`（内置 SS UDP relay，见 §3.1；**带 SIP003 插件的 `ss` 节点除外**——插件无 UDP 通道，恒为 TCP-only，见 §1 SIP003 小节）。**每个上游的 TCP/UDP 能力自动辨识、无需配置**：生效 mode（`tcp_and_udp` / `tcp_only` / `udp_only`）由 scheme + 双熔断动态推出，UDP 能力标记（`standard` / `raw` / `none`）由探测与真实流量推导，见 §3.2。
 
 ## §3 连接建立
 
@@ -56,7 +56,7 @@ ss-android 导出的链接可带 `?plugin=id;key=val;key=val`（SIP003 插件）
 
 - **obfs-http**：首写前置 HTTP GET 请求头（`Content-Length`=首包长，`Host` 在端口非 80 时带 SS 服务器端口，`User-Agent: curl/7.<random>.<random>`、`Sec-WebSocket-Key` 随机——与 obfs-local 一致）；首读剥掉服务端 `HTTP/1.1 101` 响应头（按 `\r\n\r\n` 找边界）；后续读写明文直通。服务器端 `check_http_header` 只校验请求行含 `HTTP/1.1` 与 `Upgrade: websocket`，不校验 `Host`（`obfs-host` 缺省用 SS 服务器主机）。
 - **obfs-tls**：首包藏进 TLS ClientHello 的 **session_ticket 扩展**（138B 固定头 + ticket 扩展 + 数据 + SNI + 66B 其余扩展）；读侧状态机解服务端 `ServerHello`（96B，验证 `0x16`）+ `ChangeCipherSpec`（6B）+ `EncryptedHandshake` 头（5B，len 即首块长），后续按 `0x17` 帧解帧；后续写每包前置 `0x17 0x03 0x03` + len 帧头。
-- **UDP 不经插件**：obfs 只混淆 TCP（SIP003 语义，simple-obfs 两端均无 UDP 处理），`ssUDPAssociate` 直连服务器端口，与 `none`/AEAD 的 UDP relay 一致。
+- **UDP 关闭**：obfs 只混淆 TCP（SIP003 语义，simple-obfs/v2ray-plugin 两端均无 UDP 通道），带插件的节点**按协议视为 TCP-only**——`SchemeSupportsUDP()` 对 SS+plugin 返回 false，恒为 `tcp_only`、从不 UDP 探测、UDP 能力标记构造时即置 `none`，`ssUDPAssociate` 对插件节点直接报错（不再绕过插件往服务器端口发裸 SS UDP——obfs 监听端不会转发 UDP，直连 SS 端口又依赖服务端把 UDP 单独暴露在公网、属部署事故而非协议能力）。
 - **内置插件**：`obfs-local`（http/tls 混淆，仅 TCP，见 `obfs.go`）与 `v2ray-plugin` / `xray-plugin`（websocket/grpc/quic 传输、可带 TLS，见 `v2ray.go`）**都已内置**，无需外部二进制；其它插件二进制不内置，`ssConnect`/`ssUDPAssociate` 时返回明确错误提示去掉该参数。
 - **dashboard**：代理对话框的 SS 区块插件拆成两级选择（对齐 shadowsocks-android 的 Plugin + Configure 分离）：先选插件类型「无 / simple-obfs / v2ray-plugin」，再选具体模式——simple-obfs 为 Obfuscation wrapper（http / tls），v2ray-plugin 为 Transport mode（websocket-http / websocket-tls / quic-tls / grpc / grpc-tls，命名对齐 v2ray-plugin-android）；随后显示对应参数（obfs 的 `obfs-host`、http 额外 `obfs-uri`——无 `http-method`，对齐 simple-obfs-android 的 obfs / obfs-host / obfs-uri 三字段配置；v2ray 的 `host`/`path`/`mux`/`serviceName`/`certRaw`），保存时组装成 `obfs-local;obfs=...;obfs-host=...` 或 `v2ray-plugin;mode=...;tls;...`（`quic-tls` 不写 `tls` flag，QUIC 服务端强制 TLS，与安卓一致）；编辑时按 `;key=val` 拆回表单。另支持粘贴完整 `ss://` 链接自动导入（base64 / 明文 / 无密码三种 userinfo），或在 SS 区块点 **Scan QR** 扫码导入（`/jsqr.js` 内联 jsQR + 原生 `BarcodeDetector`）：扫码/图片/Paste 解码结果走同一条 `parseSSLink` → 表单填充链路。相机总是尝试调用（由浏览器决定是否允许——`getUserMedia`/`BarcodeDetector` 只在 HTTPS 或 localhost 等安全上下文放行）；普通 HTTP 远程访问（如 `http://192.168.1.1`）时浏览器会拒绝相机，自动落到**图片上传/粘贴**通道（纯 jsQR、任何协议可用）。
 - **e2e 验证**（`obfs_e2e_test.go`，`go test -tags e2e`，需 `SS_SERVER_BIN` + `OBFS_SERVER_BIN`）：SmartProxy 带 `?plugin=` 直连真实 simple-obfs `obfs-server`（http/tls）→ 真实 ssserver，TCP 明文往返一致；UDP 直连 SS 服务器端口往返一致。
@@ -120,8 +120,8 @@ GET / HTTP/1.1\r\n...\r\nContent-Length: 529\r\n\r\n
 
 `EffectiveMode()` 由 scheme 静态基态与 TCP/UDP 双熔断动态推出：
 
-- **`http` / `https` / `socks4`**：确定不支持 UDP，恒为 `tcp_only`，从不探测 UDP。
-- **`socks5` / `socks5h` / `ss`**（`SchemeSupportsUDP()`）：
+- **`http` / `https` / `socks4`，以及带 SIP003 插件的 `ss`**：确定不支持 UDP，恒为 `tcp_only`，从不探测 UDP（插件无 UDP 通道，见 §1 SIP003 小节）。
+- **`socks5` / `socks5h` / 纯 `ss`**（`SchemeSupportsUDP()`）：
 
   | TCP 熔断 | UDP 熔断 | 生效 mode |
   |---|---|---|
@@ -171,7 +171,7 @@ StateClosed ──失败 ≥ FailuresThreshold──► StateOpen
   - **TCP 探活**：HTTP GET `cfg.URL` 探活（2xx–3xx 算成功），喂 `health`。**所有节点都跑**，无 `udp_only` 豁免（`udp_only` 由「TCP 熔断 open + UDP 正常」自动推出，TCP 探测失败正是其来源）。
   - **UDP 探活**：经 `probeUDP` 发真实 DNS 查询——`p.UDPAssociate(dnsServer, 53)` → 写带 SOCKS5 UDP 头的 DNS A 查询帧 → 收响应帧并校验 TXID + QR 位，延迟做 EMA 平滑，喂 `udpHealth`。DNS 服务器与查询域名可配（`health_check.udp_probe_dns`，默认 `1.1.1.1:53`；`udp_probe_domain`，默认 `dns.google`）。探测复用正常 relay 路径（标准 ASSOCIATE + 裸兜底 / udp_only 裸中继 / ss UDP），所以测的就是真实 UDP 流量走的链路；成功时按连接类型分类并写入 UDP 能力标记，失败时 fresh 节点置 `none`（见 §3.2）。
 - `AutoDisableSingle`：仅一个代理时自动关闭健康检查。
-- 手动 disable/enable：admin `/health/proxy?alias=X&circuit=tcp|udp|both&action=enable|disable|auto` → `Manager.SetCircuitHealth` → `SetManualState` / `ClearManualState`。`circuit` 可单独作用某一路（如只 pin 掉 TCP、保留 UDP），省略即 `both`。**粘性手动覆盖**：电路被 `manual` pin 住后，探测结果只刷新延迟/最近尝试、**不挪动状态**，直到 `action=auto` 释放回自动控制；`enable`=强制 up、`disable`=强制 down、`auto`=释放。整节点按钮 Disable=双路 pin down，Enable=双路释放回 auto；想强制启用某个被探测打挂的电路则点它自己的徽章（force up）。快照新增 `manual` 字段标记 pin 状态，面板卡片 TCP/UDP 徽章即此入口，pin 住的电路用虚线边框标识。
+- 手动 disable/enable：admin `/health/proxy?alias=X&circuit=tcp|udp|both&action=enable|disable|auto` → `Manager.SetCircuitHealth` → `SetManualState` / `ClearManualState`。`circuit` 可单独作用某一路（如只 pin 掉 TCP、保留 UDP），省略即 `both`。**粘性手动覆盖**：电路被 `manual` pin 住后，探测结果只刷新延迟/最近尝试、**不挪动状态**，直到 `action=auto` 释放回自动控制；`enable`=强制 up、`disable`=强制 down、`auto`=释放。整节点按钮 Disable=双路 pin down，Enable=双路释放回 auto；想强制启用某个被探测打挂的电路则点它自己的徽章（force up）。快照新增 `manual` 字段标记 pin 状态，面板卡片 TCP/UDP 徽章即此入口，pin 住的电路用虚线边框标识。**热重载保活**：`Manager.Reload` 重建 Proxy 前按 alias 快照各电路的手动 pin，重载后仍存在的节点原样恢复（改 URL 不改 alias 也保持）——用户手动关闭的节点不会因配置热重载被静默重新启用；从配置里删掉的节点其 pin 随之消失。
 
 ## §5 选路策略
 
