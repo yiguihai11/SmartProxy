@@ -279,6 +279,47 @@ func SetStaticRecordIP(records []StaticRecord, host string, ip net.IP) []StaticR
 	return append(records, StaticRecord{Host: host, IP: IPList{newAddr}})
 }
 
+// SetStaticRecordIPs is the batch form of SetStaticRecordIP: it replaces host's
+// addresses of the same family as the given ips wholesale with the full new list,
+// while preserving addresses of the opposite family. Used to pin a multi-answer
+// cache row (all entries share the row's family) as a static record.
+func SetStaticRecordIPs(records []StaticRecord, host string, ips []net.IP) []StaticRecord {
+	host = normHost(host)
+	if len(ips) == 0 {
+		return records
+	}
+	addrs := make(IPList, 0, len(ips))
+	for _, ip := range ips {
+		addrs = append(addrs, ip.String())
+	}
+	familyV4 := ips[0].To4() != nil
+	for i := range records {
+		cur := normHost(records[i].Host)
+		if cur != host {
+			continue
+		}
+		var kept IPList
+		for _, a := range records[i].IP {
+			parsed := net.ParseIP(a)
+			if parsed == nil {
+				continue
+			}
+			if (parsed.To4() != nil) == familyV4 {
+				continue // drop the family being replaced wholesale
+			}
+			kept = append(kept, a)
+		}
+		kept = append(kept, addrs...)
+		// Copy the whole slice and set the new IPs on the copied element so the
+		// caller's slice is never mutated.
+		next := make([]StaticRecord, len(records))
+		copy(next, records)
+		next[i].IP = kept
+		return next
+	}
+	return append(records, StaticRecord{Host: host, IP: addrs})
+}
+
 // RemoveStaticRecordIP removes ip from host's static record; when the record's IP
 // list becomes empty the whole host record is dropped. The input slice is not
 // modified; a new slice is returned.

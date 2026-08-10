@@ -467,9 +467,9 @@ func (s *Server) handleCache(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var req struct {
-			Qname string `json:"qname"`
-			Qtype uint16 `json:"qtype"`
-			IP    string `json:"ip"`
+			Qname string       `json:"qname"`
+			Qtype uint16       `json:"qtype"`
+			IP    config.IPList `json:"ip"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
@@ -480,29 +480,37 @@ func (s *Server) handleCache(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "qname must not be empty", http.StatusBadRequest)
 			return
 		}
-		ip := net.ParseIP(strings.TrimSpace(req.IP))
-		if ip == nil {
-			http.Error(w, "ip must be a valid IP address", http.StatusBadRequest)
+		if len(req.IP) == 0 {
+			http.Error(w, "ip must contain at least one IP address", http.StatusBadRequest)
 			return
 		}
-		// The address family must match the cached row's type (A→IPv4, AAAA→IPv6).
-		switch req.Qtype {
-		case mdns.TypeA:
-			if ip.To4() == nil {
-				http.Error(w, "A record requires an IPv4 address", http.StatusBadRequest)
+		var ips []net.IP
+		for _, raw := range req.IP {
+			ip := net.ParseIP(strings.TrimSpace(raw))
+			if ip == nil {
+				http.Error(w, "ip must be a valid IP address", http.StatusBadRequest)
 				return
 			}
-		case mdns.TypeAAAA:
-			if ip.To4() != nil {
-				http.Error(w, "AAAA record requires an IPv6 address", http.StatusBadRequest)
+			// The address family must match the cached row's type (A→IPv4, AAAA→IPv6).
+			switch req.Qtype {
+			case mdns.TypeA:
+				if ip.To4() == nil {
+					http.Error(w, "A record requires an IPv4 address", http.StatusBadRequest)
+					return
+				}
+			case mdns.TypeAAAA:
+				if ip.To4() != nil {
+					http.Error(w, "AAAA record requires an IPv6 address", http.StatusBadRequest)
+					return
+				}
+			default:
+				http.Error(w, "only A/AAAA records can be pinned", http.StatusBadRequest)
 				return
 			}
-		default:
-			http.Error(w, "only A/AAAA records can be pinned", http.StatusBadRequest)
-			return
+			ips = append(ips, ip)
 		}
 		_, verr, werr := s.saveConfig(func(c *config.Config) {
-			c.DNS.StaticRecords = config.SetStaticRecordIP(c.DNS.StaticRecords, req.Qname, ip)
+			c.DNS.StaticRecords = config.SetStaticRecordIPs(c.DNS.StaticRecords, req.Qname, ips)
 		})
 		if verr != nil {
 			http.Error(w, "validation failed: "+verr.Error(), http.StatusBadRequest)
@@ -516,11 +524,11 @@ func (s *Server) handleCache(w http.ResponseWriter, r *http.Request) {
 		// panel's cache view consistent with what is actually served.
 		s.dns.CacheRemove(req.Qname, req.Qtype)
 		slog.Info("admin: pinned DNS answer as static record",
-			"qname", req.Qname, "qtype", req.Qtype, "ip", ip.String())
+			"qname", req.Qname, "qtype", req.Qtype, "ips", req.IP)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status": "ok",
 			"host":   req.Qname,
-			"ip":     ip.String(),
+			"ip":     req.IP,
 		})
 
 	default:

@@ -1489,7 +1489,7 @@ function openCachePinDialog(qname,qtype,answers){
   document.getElementById('cachepin-desc').textContent=qname+' — '+(cacheTypes[qtype]||qtype)+' record';
   var list=(answers||'').split('\n').filter(function(s){return s.length});
   document.getElementById('cachepin-current').innerHTML=list.map(function(a){return '<span>'+a+'</span>'}).join('');
-  document.getElementById('cachepin-ip').value=list[0]||'';
+  document.getElementById('cachepin-ip').value=list.join(', ');
   document.getElementById('cachepin-overlay').classList.add('show');
   setTimeout(function(){document.getElementById('cachepin-ip').focus()},50);
 }
@@ -1498,10 +1498,12 @@ function closeCachePinDialog(){
 }
 function confirmCachePin(){
   var ip=document.getElementById('cachepin-ip').value.trim();
-  if(!ip){alert('Enter an IP address');return}
+  if(!ip){alert('Enter at least one IP address');return}
+  var ips=ip.split(',').map(function(s){return s.trim()}).filter(function(s){return s.length});
+  if(!ips.length){alert('Enter at least one IP address');return}
   var btn=document.getElementById('cachepin-confirm');
   btn.disabled=true;btn.textContent='Pinning...';
-  fetch('/cache',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qname:cachePinQname,qtype:cachePinQtype,ip:ip})}).then(function(r){
+  fetch('/cache',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qname:cachePinQname,qtype:cachePinQtype,ip:ips})}).then(function(r){
     return r.json().then(function(d){
       if(r.ok)return d;
       throw new Error(d.error||('HTTP '+r.status));
@@ -1510,7 +1512,7 @@ function confirmCachePin(){
     closeCachePinDialog();
     cacheSelected={};
     loadCache();
-    setTimeout(function(){alert('Pinned: '+d.host+' → '+d.ip+'\nPersistent static record, hot-applied')},100);
+    setTimeout(function(){alert('Pinned: '+d.host+' → '+(d.ip||[]).join(', ')+'\nPersistent static record, hot-applied')},100);
   }).catch(function(e){alert('Error: '+e.message)}).finally(function(){btn.disabled=false;btn.textContent='Pin as static record'});
 }
 // ---- DNS page tabs: cache ↔ static records ----
@@ -2179,8 +2181,8 @@ es.onmessage=function(e){
     <div class="dialog-desc" id="cachepin-desc"></div>
     <div class="dialog-label">Answers (current)</div>
     <div class="dialog-list" id="cachepin-current"></div>
-    <div class="dialog-label">New Address</div>
-    <input class="dialog-input" id="cachepin-ip" placeholder="1.2.3.4 or 2001:db8::1" autocomplete="off" spellcheck="false">
+    <div class="dialog-label">New Address(es)</div>
+    <input class="dialog-input" id="cachepin-ip" placeholder="1.2.3.4, 2001:db8::1 (comma-separated)" autocomplete="off" spellcheck="false">
     <div class="dialog-actions">
       <button class="btn btn-sm" onclick="closeCachePinDialog()">Cancel</button>
       <button class="btn btn-sm primary" id="cachepin-confirm" onclick="confirmCachePin()">Pin as static record</button>

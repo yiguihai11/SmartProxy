@@ -238,7 +238,7 @@ func TestAdmin_CachePinStaticRecord(t *testing.T) {
 	s.SetReloadConfig(func() {}) // availability check only; real reload is fsnotify-owned
 	startServer(t, s)
 
-	post := func(qname string, qtype uint16, ip string) (*http.Response, error) {
+	post := func(qname string, qtype uint16, ip interface{}) (*http.Response, error) {
 		c := &http.Client{Transport: &http.Transport{DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
 			return net.Dial("unix", s.sockPath)
 		}}, Timeout: 5 * time.Second}
@@ -293,6 +293,52 @@ func TestAdmin_CachePinStaticRecord(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("TXT pin should be 400, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Multiple IPs → all written; response echoes the array.
+	if err := os.WriteFile(cfgPath, []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	resp, err = post("example.com", mdns.TypeA, []string{"9.9.9.9", "8.8.4.4"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("expected 200 for multi-IP pin, got %d: %s", resp.StatusCode, body)
+	}
+	var multiResp struct {
+		Host string   `json:"host"`
+		IP   []string `json:"ip"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&multiResp); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if multiResp.Host != "example.com" || len(multiResp.IP) != 2 ||
+		multiResp.IP[0] != "9.9.9.9" || multiResp.IP[1] != "8.8.4.4" {
+		t.Errorf("response did not echo both IPs: %+v", multiResp)
+	}
+	disk, err = os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("config not written: %v", err)
+	}
+	var got2 config.Config
+	if err := json.Unmarshal(disk, &got2); err != nil {
+		t.Fatalf("written config invalid: %v", err)
+	}
+	if len(got2.DNS.StaticRecords) != 1 || len(got2.DNS.StaticRecords[0].IP) != 2 {
+		t.Fatalf("multi-IP static record not written correctly: %+v", got2.DNS.StaticRecords)
+	}
+	// Mixed family in one A pin → 400, nothing written.
+	resp, err = post("example.com", mdns.TypeA, []string{"1.2.3.4", "::1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("A pin mixing IPv6 should be 400, got %d", resp.StatusCode)
 	}
 	resp.Body.Close()
 }

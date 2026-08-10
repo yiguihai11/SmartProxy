@@ -546,6 +546,30 @@ func TestSetStaticRecordIP(t *testing.T) {
 	}
 }
 
+func TestSetStaticRecordIPs(t *testing.T) {
+	// Batch into a fresh host → all addresses kept in order.
+	out := SetStaticRecordIPs(nil, "example.com", []net.IP{net.ParseIP("9.9.9.9"), net.ParseIP("8.8.4.4")})
+	if len(out) != 1 || len(out[0].IP) != 2 || out[0].IP[0] != "9.9.9.9" || out[0].IP[1] != "8.8.4.4" {
+		t.Fatalf("fresh-host batch failed: %+v", out)
+	}
+	// Batch replaces the same family wholesale but preserves the opposite family.
+	out = SetStaticRecordIPs(out, "example.com", []net.IP{net.ParseIP("7.7.7.7")})
+	if len(out[0].IP) != 1 || out[0].IP[0] != "7.7.7.7" {
+		t.Fatalf("expected v4 replaced wholesale, got %v", out[0].IP)
+	}
+	out = SetStaticRecordIP(out, "example.com", net.ParseIP("2001:db8::1"))
+	out = SetStaticRecordIPs(out, "example.com", []net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("2.2.2.2")})
+	if len(out[0].IP) != 3 || out[0].IP[0] != "2001:db8::1" || out[0].IP[1] != "1.1.1.1" || out[0].IP[2] != "2.2.2.2" {
+		t.Fatalf("expected v6 kept + both v4 written, got %v", out[0].IP)
+	}
+	// Empty input is a no-op.
+	before := SetStaticRecordIPs(nil, "x.lan", []net.IP{net.ParseIP("1.1.1.1")})
+	after := SetStaticRecordIPs(before, "x.lan", nil)
+	if len(after) != 1 || after[0].IP[0] != "1.1.1.1" {
+		t.Fatalf("empty batch mutated records: %+v", after)
+	}
+}
+
 // TestStaticRecords_JSONForms verifies the "ip" field accepts both a single
 // address string and an array of addresses.
 func TestStaticRecords_JSONForms(t *testing.T) {
