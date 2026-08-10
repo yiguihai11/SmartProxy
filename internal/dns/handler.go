@@ -182,20 +182,20 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 					foreignHost = cfg.foreignIPv6
 					foreignPort = cfg.foreignIPv6Port
 				}
-				resp, rerr = h.queryViaProxyVerifyID(ctx, queryWire, foreignHost, foreignPort)
+				resp, rerr = h.queryForeignDNSWithRetry(ctx, queryWire, foreignHost, foreignPort)
 				if rerr != nil {
-					slog.Error("foreign DNS fallback also failed", "qname", qname, "error", rerr)
-					return nil, nil
+					slog.Error("foreign DNS fallback also failed, answering SERVFAIL", "qname", qname, "error", rerr)
+					return h.buildSERVFAIL(queryWire), nil
 				}
 				h.cache.Set(qname, qtype, resp, 0)
 				return resp, nil
 			}
 		} else {
 			slog.Debug("querying foreign DNS via proxy", "target", fmt.Sprintf("%s:%d", targetIP, targetPort))
-			resp, rerr = h.queryViaProxyVerifyID(ctx, queryWire, targetIP, targetPort)
+			resp, rerr = h.queryForeignDNSWithRetry(ctx, queryWire, targetIP, targetPort)
 			if rerr != nil {
-				slog.Error("foreign DNS query failed", "error", rerr)
-				return nil, nil
+				slog.Error("foreign DNS query failed, answering SERVFAIL", "error", rerr)
+				return h.buildSERVFAIL(queryWire), nil
 			}
 		}
 
@@ -215,12 +215,12 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 					foreignHost = cfg.foreignIPv6
 					foreignPort = cfg.foreignIPv6Port
 				}
-				fallback, ferr := h.queryViaProxyVerifyID(ctx, queryWire, foreignHost, foreignPort)
+				fallback, ferr := h.queryForeignDNSWithRetry(ctx, queryWire, foreignHost, foreignPort)
 				if ferr != nil || fallback == nil {
-					slog.Warn("foreign DNS fallback failed, not caching polluted response",
+					slog.Warn("foreign DNS fallback failed, answering SERVFAIL",
 						"qname", qname, "foreignTarget", fmt.Sprintf("%s:%d", foreignHost, foreignPort),
 						"error", ferr, "queryLen", len(queryWire))
-					return nil, nil
+					return h.buildSERVFAIL(queryWire), nil
 				}
 				resp = fallback
 				h.cache.Set(qname, qtype, resp, 0)
@@ -260,8 +260,8 @@ func (h *Handler) QueryUDPVerifyID(ctx context.Context, queryWire []byte, host s
 	return resp, nil
 }
 
-func (h *Handler) queryViaProxyVerifyID(ctx context.Context, queryWire []byte, dnsHost string, dnsPort int) ([]byte, error) {
-	resp, err := h.queryViaProxy(ctx, queryWire, dnsHost, dnsPort)
+func (h *Handler) queryViaProxyVerifyID(ctx context.Context, queryWire []byte, dnsHost string, dnsPort int, timeout time.Duration) ([]byte, error) {
+	resp, err := h.queryViaProxy(ctx, queryWire, dnsHost, dnsPort, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -269,6 +269,35 @@ func (h *Handler) queryViaProxyVerifyID(ctx context.Context, queryWire []byte, d
 		return nil, fmt.Errorf("DNS transaction ID mismatch")
 	}
 	return resp, nil
+}
+
+// queryForeignDNSWithRetry queries a foreign DNS server through the proxy,
+// retrying once when the first attempt fails. The total time across attempts is
+// bounded by cfg.queryTimeout (split evenly between them), so the retry never
+// pushes the whole foreign lookup past the configured DNS timeout. On persistent
+// failure it returns the last error so the caller can answer SERVFAIL instead of
+// silently dropping the query.
+func (h *Handler) queryForeignDNSWithRetry(ctx context.Context, queryWire []byte, host string, port int) ([]byte, error) {
+	cfg := h.cfg.Load()
+	const attempts = 2
+	perAttempt := cfg.queryTimeout / attempts
+	if perAttempt < time.Millisecond {
+		perAttempt = cfg.queryTimeout
+	}
+	budgetCtx, cancel := context.WithTimeout(ctx, cfg.queryTimeout)
+	defer cancel()
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		resp, err := h.queryViaProxyVerifyID(budgetCtx, queryWire, host, port, perAttempt)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("DNS query failed")
+	}
+	return nil, lastErr
 }
 
 func (h *Handler) queryUDP(ctx context.Context, queryWire []byte, host string, port int) ([]byte, error) {
@@ -301,8 +330,7 @@ func (h *Handler) queryUDP(ctx context.Context, queryWire []byte, host string, p
 	return resp, nil
 }
 
-func (h *Handler) queryViaProxy(ctx context.Context, queryWire []byte, dnsHost string, dnsPort int) ([]byte, error) {
-	cfg := h.cfg.Load()
+func (h *Handler) queryViaProxy(ctx context.Context, queryWire []byte, dnsHost string, dnsPort int, timeout time.Duration) ([]byte, error) {
 	slog.Debug("querying DNS via proxy", "dns", fmt.Sprintf("%s:%d", dnsHost, dnsPort),
 		"queryLen", len(queryWire))
 
@@ -340,7 +368,7 @@ func (h *Handler) queryViaProxy(ctx context.Context, queryWire []byte, dnsHost s
 		"dns", fmt.Sprintf("%s:%d", dnsHost, dnsPort),
 		"totalPacketLen", len(packet), "headerLen", len(header), "payloadLen", len(queryWire))
 
-	deadline := time.Now().Add(cfg.queryTimeout)
+	deadline := time.Now().Add(timeout)
 	udpConn.SetDeadline(deadline)
 	writeStart := time.Now()
 	if _, err := udpConn.Write(packet); err != nil {
@@ -359,7 +387,7 @@ func (h *Handler) queryViaProxy(ctx context.Context, queryWire []byte, dnsHost s
 		slog.Error("DNS proxy read error",
 			"dns", fmt.Sprintf("%s:%d", dnsHost, dnsPort),
 			"error", err,
-			"timeout", cfg.queryTimeout,
+			"timeout", timeout,
 			"readWait", readLatency)
 		return nil, fmt.Errorf("DNS proxy read error: %w", err)
 	}
@@ -499,6 +527,24 @@ func (h *Handler) StaticRecordAnswer(queryWire []byte) ([]byte, bool) {
 		return nil, false
 	}
 	return buildStaticResponse(msg, ips)
+}
+
+// buildSERVFAIL packs a ServerFailure response for the given query, so a failed
+// foreign-DNS lookup surfaces as a real DNS error the client can act on (e.g.
+// fall back to its own secondary resolver) instead of a silent timeout. On an
+// unpack/pack failure it returns the original wire unchanged.
+func (h *Handler) buildSERVFAIL(queryWire []byte) []byte {
+	msg := new(dns.Msg)
+	if err := msg.Unpack(queryWire); err != nil {
+		return queryWire
+	}
+	resp := msg.SetReply(msg)
+	resp.Rcode = dns.RcodeServerFailure
+	wire, err := resp.Pack()
+	if err != nil {
+		return queryWire
+	}
+	return wire
 }
 
 func (h *Handler) buildFakeResponse(queryWire []byte) []byte {

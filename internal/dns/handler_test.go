@@ -15,6 +15,7 @@ import (
 	"smartproxy/internal/chnroute"
 	"smartproxy/internal/netutil"
 	"smartproxy/internal/rules"
+	"smartproxy/internal/upstream"
 )
 
 func TestCache_GetMiss(t *testing.T) {
@@ -591,6 +592,75 @@ func TestHandler_IsDomestic(t *testing.T) {
 		if got != tt.expect {
 			t.Errorf("IsDomestic(%q) = %v, want %v", tt.ip, got, tt.expect)
 		}
+	}
+}
+
+func TestBuildSERVFAIL(t *testing.T) {
+	cn := chnroute.New()
+	h := NewHandler(100, 60, "", "", cn, nil, 3, "0.0.0.0", "::", false, PreferNone, nil, true)
+
+	query := buildTestDNSQuery("example.com", dns.TypeA)
+	resp := h.buildSERVFAIL(query)
+
+	msg := new(dns.Msg)
+	if err := msg.Unpack(resp); err != nil {
+		t.Fatalf("failed to unpack SERVFAIL response: %v", err)
+	}
+	if !msg.Response {
+		t.Error("expected response flag set")
+	}
+	if msg.Rcode != dns.RcodeServerFailure {
+		t.Errorf("expected SERVFAIL (%d), got %d", dns.RcodeServerFailure, msg.Rcode)
+	}
+	if len(msg.Answer) != 0 {
+		t.Errorf("expected no answers in SERVFAIL, got %d", len(msg.Answer))
+	}
+}
+
+func TestBuildSERVFAIL_BadWire(t *testing.T) {
+	cn := chnroute.New()
+	h := NewHandler(100, 60, "", "", cn, nil, 3, "0.0.0.0", "::", false, PreferNone, nil, true)
+
+	resp := h.buildSERVFAIL([]byte{0x00, 0x01})
+	if string(resp) != "\x00\x01" {
+		t.Error("expected original wire for invalid input")
+	}
+}
+
+// TestHandleDNS_ForeignFailureAnswersSERVFAIL drives the direct-foreign path (an
+// empty chnroute makes every target non-domestic) through a dead proxy, asserting
+// the handler answers SERVFAIL — bounded by the configured queryTimeout — instead
+// of returning nil and letting the client hang.
+func TestHandleDNS_ForeignFailureAnswersSERVFAIL(t *testing.T) {
+	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
+		Default: "failover",
+		Proxies: []upstream.ProxyEntry{
+			{Alias: "dead", URL: "socks5://127.0.0.1:1081"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	cn := chnroute.New()
+	h := NewHandler(100, 60, "", "", cn, mgr, 3, "0.0.0.0", "::", false, PreferNone, nil, true)
+
+	query := buildTestDNSQuery("example.com", dns.TypeA)
+	start := time.Now()
+	resp := h.HandleDNS(context.Background(), query, "8.8.8.8", 53, nil)
+	elapsed := time.Since(start)
+	if elapsed > 4*time.Second {
+		t.Errorf("foreign fallback exceeded queryTimeout budget: %v", elapsed)
+	}
+	if resp == nil {
+		t.Fatal("expected SERVFAIL response, got nil")
+	}
+	msg := new(dns.Msg)
+	if err := msg.Unpack(resp); err != nil {
+		t.Fatalf("unpack: %v", err)
+	}
+	if msg.Rcode != dns.RcodeServerFailure {
+		t.Errorf("expected SERVFAIL (%d), got %d", dns.RcodeServerFailure, msg.Rcode)
 	}
 }
 
