@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"net"
 	"strings"
@@ -121,10 +123,39 @@ type DNSConf struct {
 	StaticRecords []StaticRecord `json:"static_records"`
 }
 
-// StaticRecord is a single host→IP static DNS entry.
+// StaticRecord is a single host→IP(s) static DNS entry. The same host may carry
+// multiple entries or one entry with multiple IPs to attach both an IPv4 and an
+// IPv6 address.
 type StaticRecord struct {
 	Host string `json:"host"`
-	IP   string `json:"ip"`
+	IP   IPList `json:"ip"`
+}
+
+// IPList is a []string that also unmarshals from a plain JSON string, so a static
+// record's "ip" field accepts either a single address ("1.2.3.4") or an array of
+// addresses (["1.2.3.4", "::1"]).
+type IPList []string
+
+func (l *IPList) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		*l = nil
+		return nil
+	}
+	if b[0] == '[' {
+		var arr []string
+		if err := json.Unmarshal(b, &arr); err != nil {
+			return err
+		}
+		*l = arr
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	*l = []string{s}
+	return nil
 }
 
 type DNSCacheC struct {
@@ -190,8 +221,13 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(sr.Host) == "" {
 			errs = append(errs, fmt.Sprintf("dns.static_records[%d].host must not be empty", i))
 		}
-		if net.ParseIP(strings.TrimSpace(sr.IP)) == nil {
-			errs = append(errs, fmt.Sprintf("dns.static_records[%d].ip must be a valid IP", i))
+		if len(sr.IP) == 0 {
+			errs = append(errs, fmt.Sprintf("dns.static_records[%d].ip must not be empty", i))
+		}
+		for j, ip := range sr.IP {
+			if net.ParseIP(strings.TrimSpace(ip)) == nil {
+				errs = append(errs, fmt.Sprintf("dns.static_records[%d].ip[%d] must be a valid IP", i, j))
+			}
 		}
 	}
 
@@ -202,22 +238,27 @@ func (c *Config) Validate() error {
 }
 
 // StaticRecordsMap normalizes the static record list into a host→IPs lookup table:
-// host is lowercased with a trailing dot stripped, same-host IPs are grouped (so
-// an IPv4 and an IPv6 address can coexist for one host), and invalid entries are
-// skipped. Returns nil when no records are configured.
+// host is lowercased with a trailing dot stripped, all listed IPs for a host are
+// grouped (so an IPv4 and an IPv6 address coexist for one host), and invalid
+// entries are skipped. Returns nil when no records are configured.
 func (d DNSConf) StaticRecordsMap() map[string][]net.IP {
 	var m map[string][]net.IP
 	for _, r := range d.StaticRecords {
 		host := strings.ToLower(strings.TrimSpace(r.Host))
 		host = strings.TrimSuffix(host, ".")
-		ip := net.ParseIP(strings.TrimSpace(r.IP))
-		if host == "" || ip == nil {
+		if host == "" {
 			continue
 		}
-		if m == nil {
-			m = make(map[string][]net.IP)
+		for _, entry := range r.IP {
+			ip := net.ParseIP(strings.TrimSpace(entry))
+			if ip == nil {
+				continue
+			}
+			if m == nil {
+				m = make(map[string][]net.IP)
+			}
+			m[host] = append(m[host], ip)
 		}
-		m[host] = append(m[host], ip)
 	}
 	return m
 }

@@ -352,19 +352,24 @@ func TestValidate_StaticRecords(t *testing.T) {
 		t.Errorf("expected no default static records, got %v", cfg.DNS.StaticRecords)
 	}
 	// valid entry
-	cfg.DNS.StaticRecords = []StaticRecord{{Host: "smartproxy.lan", IP: "192.168.1.1"}}
+	cfg.DNS.StaticRecords = []StaticRecord{{Host: "smartproxy.lan", IP: IPList{"192.168.1.1"}}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("valid static record should validate, got: %v", err)
 	}
 	// empty host
-	cfg.DNS.StaticRecords = []StaticRecord{{Host: "  ", IP: "192.168.1.1"}}
+	cfg.DNS.StaticRecords = []StaticRecord{{Host: "  ", IP: IPList{"192.168.1.1"}}}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("empty host should fail validation")
 	}
 	// invalid IP
-	cfg.DNS.StaticRecords = []StaticRecord{{Host: "smartproxy.lan", IP: "not-an-ip"}}
+	cfg.DNS.StaticRecords = []StaticRecord{{Host: "smartproxy.lan", IP: IPList{"not-an-ip"}}}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("invalid IP should fail validation")
+	}
+	// empty IP list
+	cfg.DNS.StaticRecords = []StaticRecord{{Host: "smartproxy.lan", IP: nil}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("empty IP list should fail validation")
 	}
 }
 
@@ -375,10 +380,10 @@ func TestStaticRecordsMap(t *testing.T) {
 	}
 
 	cfg.StaticRecords = []StaticRecord{
-		{Host: "SmartProxy.LAN.", IP: "192.168.1.1"},
-		{Host: "smartproxy.lan", IP: "fc00::1"},
-		{Host: "  ", IP: "1.2.3.4"},      // empty host → skipped
-		{Host: "bad.example", IP: "oops"}, // invalid IP → skipped
+		{Host: "SmartProxy.LAN.", IP: IPList{"192.168.1.1"}},
+		{Host: "smartproxy.lan", IP: IPList{"fc00::1"}},
+		{Host: "  ", IP: IPList{"1.2.3.4"}},      // empty host → skipped
+		{Host: "bad.example", IP: IPList{"oops"}}, // invalid IP → skipped
 	}
 	m := cfg.StaticRecordsMap()
 	if len(m) != 1 {
@@ -398,5 +403,45 @@ func TestStaticRecordsMap(t *testing.T) {
 	}
 	if !hasV4 || !hasV6 {
 		t.Errorf("expected both v4 and v6 grouped, got %v", ips)
+	}
+}
+
+// TestStaticRecords_JSONForms verifies the "ip" field accepts both a single
+// address string and an array of addresses.
+func TestStaticRecords_JSONForms(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	content := `{
+	  "dns": {
+	    "enabled": true,
+	    "static_records": [
+	      { "host": "single.lan", "ip": "1.2.3.4" },
+	      { "host": "smartproxy.lan", "ip": ["192.168.1.1", "::1"] }
+	    ]
+	  }
+	}`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.DNS.StaticRecords) != 2 {
+		t.Fatalf("expected 2 records, got %d", len(cfg.DNS.StaticRecords))
+	}
+	if len(cfg.DNS.StaticRecords[0].IP) != 1 || cfg.DNS.StaticRecords[0].IP[0] != "1.2.3.4" {
+		t.Errorf("single-address form failed: %v", cfg.DNS.StaticRecords[0].IP)
+	}
+	if len(cfg.DNS.StaticRecords[1].IP) != 2 ||
+		cfg.DNS.StaticRecords[1].IP[0] != "192.168.1.1" || cfg.DNS.StaticRecords[1].IP[1] != "::1" {
+		t.Errorf("array form failed: %v", cfg.DNS.StaticRecords[1].IP)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("both forms should validate, got: %v", err)
+	}
+	m := cfg.DNS.StaticRecordsMap()
+	if len(m["smartproxy.lan"]) != 2 {
+		t.Errorf("expected 2 IPs for smartproxy.lan, got %v", m["smartproxy.lan"])
 	}
 }
