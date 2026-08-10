@@ -63,7 +63,7 @@
 | --- | --- | --- | --- |
 | `Alias` | `alias` | `proxy<N>` | 代理别名（规则引擎引用） |
 | `URL` | `url` | — | 协议 URL：`socks5://` / `socks5h://`（可带 user:pass）、`socks4://`、`http(s)://`（CONNECT）、`ss://`（内置 shadowsocks，见 `docs/upstream.md` §3.1）。`ss://` 支持 `ss://base64(method:password)@host:port`、明文 `ss://method:password@host:port`，或不加密方法的免密码形式 `ss://none@host:port`。方法可为经典 AEAD、AEAD-2022（密码框填 base64 PSK，多 PSK 用 `:` 连接）、或 `none`/`plain`。可带 `?plugin=obfs-local;obfs=http|tls;obfs-host=...`（内置 simple-obfs 混淆，仅 TCP）或 `?plugin=v2ray-plugin;mode=websocket|grpc|quic[;tls];host=...`（内置 v2ray 传输，可带 `path`/`mux`/`serviceName`/`certRaw`）；其它插件不内置会拒绝 |
-| `UDPInTCP` | `udp_in_tcp` | `false` | 仅 `socks5`/`socks5h` 有效：选中后走 hev UDP-in-TCP（hev-socks5-server 的私有 CMD=5 FWD_UDP 扩展），UDP 报文封装在该节点的 TCP 连接里分帧传输，节点无需 UDP 监听。该节点被视为 **UDP-only**（`EffectiveMode` 恒为 `udp_only`）：TCP 由其它节点转发，UDP 直发此节点。也可用 URL 的 `?udp_in_tcp=1` 查询参数表达（导入链接）。面板 Add/Edit Proxy 模态框底部复选框编辑此项 |
+| `UDPInTCP` | `udp_in_tcp` | `false` | 仅 `socks5`/`socks5h` 有效：选中后 UDP 走 hev UDP-in-TCP（hev-socks5-server 的私有 CMD=5 FWD_UDP 扩展），UDP 报文封装在该节点的 TCP 连接里分帧传输，节点无需 UDP 监听。**因为承载 TCP 流是明文帧（GFW 可识别），该节点 TCP 默认手动关闭**（手动 pin 下，`EffectiveMode` 为 `udp_only`，TCP 路由跳过它）；用户可在节点卡片上手动打开 TCP 电路（`enable`/`auto`）后恢复为 `tcp_and_udp`。UDP 路由恒走帧路径，绝不落到裸 UDP 快路径。也可用 URL 的 `?udp_in_tcp=1` 查询参数表达（导入链接）。面板 Add/Edit Proxy 模态框底部复选框编辑此项 |
 
 | Go 字段 | JSON 键 | 默认值 | 说明 |
 | --- | --- | --- | --- |

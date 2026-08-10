@@ -28,6 +28,58 @@ func TestNewManager_Empty(t *testing.T) {
 	}
 }
 
+func TestNewManager_UDPInTCPEntryDefaultsTCPDown(t *testing.T) {
+	m, err := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{
+			{Alias: "hev", URL: "socks5://hev.proxy:1080", UDPInTCP: true},
+			{Alias: "plain", URL: "socks5://plain.proxy:1080"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hev := m.aliasMap["hev"]
+	if hev == nil || !hev.UDPInTCP {
+		t.Fatal("hev node should be UDPInTCP")
+	}
+	// The config-field udp_in_tcp switch (not the URL query) also pins TCP manually down:
+	// plaintext framed carrier is GFW-fingerprintable, so TCP defaults off.
+	if hev.EffectiveMode() != ModeUDPOnly {
+		t.Errorf("hev EffectiveMode = %s, want udp_only (default)", hev.EffectiveMode())
+	}
+	if !hev.health.IsManuallyDisabled() {
+		t.Error("hev TCP should be manually disabled (manual pin down), not auto-open")
+	}
+	if !hev.SupportsUDP() {
+		t.Error("hev node should still support UDP routing (framed path)")
+	}
+	plain := m.aliasMap["plain"]
+	if plain == nil {
+		t.Fatal("plain node missing")
+	}
+	if plain.IsUDPOnly() {
+		t.Error("plain socks5 node should not be udp_only")
+	}
+
+	// The user can re-enable TCP; the node returns to full tcp_and_udp.
+	hev.health.SetManualState(true)
+	if hev.EffectiveMode() != ModeTCPAndUDP {
+		t.Errorf("after enable: EffectiveMode = %s, want tcp_and_udp", hev.EffectiveMode())
+	}
+
+	// A reload preserves the user's re-enable (restoreManualPins wins over the
+	// construction default) instead of reverting to the manual TCP-down.
+	m.Reload(UpstreamConfig{
+		Proxies: []ProxyEntry{
+			{Alias: "hev", URL: "socks5://hev.proxy:1080", UDPInTCP: true},
+			{Alias: "plain", URL: "socks5://plain.proxy:1080"},
+		},
+	})
+	if got := m.aliasMap["hev"].EffectiveMode(); got != ModeTCPAndUDP {
+		t.Errorf("after reload: EffectiveMode = %s, want tcp_and_udp (user re-enable preserved)", got)
+	}
+}
+
 func TestNewManager_WithProxies(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
 		Default: "failover",

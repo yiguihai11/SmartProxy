@@ -141,6 +141,11 @@ func (m *Manager) rebuildFromConfig(cfg UpstreamConfig) {
 		// The config entry's udp_in_tcp field (the panel switch) is the primary source;
 		// an imported link may also carry ?udp_in_tcp=1, which NewProxy already parsed.
 		proxy.UDPInTCP = entry.UDPInTCP || proxy.UDPInTCP
+		// A udp_in_tcp node defaults to TCP manually down (plaintext framed carrier, GFW-
+		// fingerprintable); the user can re-enable it per circuit. restoreManualPins runs
+		// after rebuild and re-applies any saved pin, so this default only sticks on
+		// freshly-built nodes and never reverts a user's re-enable.
+		proxy.applyUDPInTCPDefaults()
 		aliasMap[alias] = proxy
 		defaultProxies = append(defaultProxies, proxy)
 	}

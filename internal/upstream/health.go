@@ -252,6 +252,14 @@ func (hc *HealthChecker) checkProxy(p *Proxy) {
 }
 
 func (hc *HealthChecker) checkProxyTCP(p *Proxy) {
+	// A manually-disabled TCP circuit is not probed, mirroring the UDP gate: the user (or
+	// the udp_in_tcp node default) pinned it down, so probing is wasted and, for udp_in_tcp
+	// nodes, would exercise the plaintext framed carrier that the pin is protecting against.
+	// Releasing the circuit (action=auto) or forcing it up (action=enable) resumes TCP probing.
+	if p.health.IsManuallyDisabled() {
+		return
+	}
+
 	cfg := hc.cfg.Load()
 
 	p.health.mu.RLock()

@@ -122,6 +122,7 @@ GET / HTTP/1.1\r\n...\r\nContent-Length: 529\r\n\r\n
 
 - **`http` / `https` / `socks4`**：确定不支持 UDP，恒为 `tcp_only`，从不探测 UDP。
 - **带 SIP003 插件的 `ss`**：scheme 仍可探测 UDP，但**默认把 UDP 电路手动置 down**（等效手动关闭，见 §1 SIP003 小节）——未释放前恒为 `tcp_only` 且不探测；用户释放回 auto 后才探测，探测成功即恢复 UDP 可用。
+- **hev UDP-in-TCP 的 `socks5`/`socks5h`**（`udp_in_tcp`，见 `docs/config.md`）：与插件节点对称——**默认把 TCP 电路手动置 down**。承载 UDP 的 TCP 流是明文帧（GFW 可识别），未开启前恒为 `udp_only` 且不参与 TCP 路由；用户手动 enable/auto 该节点的 TCP 电路后恢复为完整 `tcp_and_udp`。UDP 恒走帧路径（CMD=5），绝不落裸 UDP 快路径。
 - **`socks5` / `socks5h` / 纯 `ss`**（`SchemeSupportsUDP()`）：
 
   | TCP 熔断 | UDP 熔断 | 生效 mode |

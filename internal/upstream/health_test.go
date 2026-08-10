@@ -2,6 +2,8 @@ package upstream
 
 import (
 	"errors"
+	"net"
+	"strconv"
 	"testing"
 	"time"
 
@@ -131,6 +133,40 @@ func TestManual_ForceUpSurvivesFailures(t *testing.T) {
 	}
 	if snap := ph.Snapshot(); snap.State != "closed" {
 		t.Errorf("expected state closed, got %s", snap.State)
+	}
+}
+
+// TestCheckProxyTCP_SkipsManualDown: a TCP circuit pinned down (SetManualState(false)) must
+// not be probed — for a udp_in_tcp node this protects the plaintext framed carrier from
+// being exercised while TCP is disabled, and it mirrors the existing UDP-side gate.
+func TestCheckProxyTCP_SkipsManualDown(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	accepted := make(chan struct{}, 1)
+	go func() {
+		ln.Accept()
+		accepted <- struct{}{}
+	}()
+
+	host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	p := &Proxy{Scheme: SchemeSOCKS5, Host: host, Port: port}
+	p.health.SetManualState(false) // TCP manually disabled
+
+	hc := NewHealthChecker(config.HealthCheckConf{
+		Enabled: true, Timeout: 1,
+		URL: "http://example.com/generate_204",
+	}, []*Proxy{p})
+	hc.checkProxyTCP(p)
+
+	select {
+	case <-accepted:
+		t.Fatal("TCP probe ran despite a manually-disabled circuit")
+	case <-time.After(150 * time.Millisecond):
+		// good: the probe was skipped
 	}
 }
 

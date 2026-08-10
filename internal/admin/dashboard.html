@@ -2320,9 +2320,9 @@ es.onmessage=function(e){
     <div id="proxy-udpintcp-row" style="display:none">
       <label class="dialog-label" style="display:flex;align-items:center;gap:8px;cursor:pointer">
         <input type="checkbox" id="proxy-udpintcp" onchange="updateProxyPreview()">
-        <span>UDP in TCP <span style="text-transform:none;font-weight:400;color:var(--text3)">(hev-socks5-server CMD=5, UDP-only node)</span></span>
+        <span>UDP in TCP <span style="text-transform:none;font-weight:400;color:var(--text3)">(hev-socks5-server CMD=5)</span></span>
       </label>
-      <div class="dialog-desc" style="margin-top:4px">Frames UDP datagrams over this node's TCP connection; the node needs no UDP listener. Only meaningful for SOCKS5/SOCKS5H servers running hev-socks5-server.</div>
+      <div class="dialog-desc" style="margin-top:4px">Carries this node's UDP datagrams framed over its TCP connection, so the node needs no UDP listener. Because the carrier is plaintext (GFW-fingerprintable), this node's TCP defaults to manually disabled; enable its TCP circuit on the node card to proxy TCP too. Only meaningful for SOCKS5/SOCKS5H servers running hev-socks5-server.</div>
     </div>
     <div class="dialog-desc" id="proxy-preview" style="display:none;font-family:var(--mono);font-size:.8rem"></div>
     <div class="dialog-actions">

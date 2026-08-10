@@ -82,11 +82,13 @@ type Proxy struct {
 	// v2ray.go); on TCP connect it wraps the matching transport under the SS encryption layer, and unknown plugins return a clear error.
 	Plugin string
 	// UDPInTCP selects the hev UDP-in-TCP relay (hev-socks5-server's private CMD=5
-	// extension) for a socks5/socks5h node: UDP packets are framed over the same TCP
-	// connection, so the node needs no UDP listener. It is set from the config entry's
-	// udp_in_tcp field (the panel switch) OR the URL's ?udp_in_tcp=1 query (imported
-	// links); routing then treats the node as UDP-only (EffectiveMode → udp_only), but its
-	// TCP circuit still tracks the carrier channel that actually carries the frames.
+	// extension) for a socks5/socks5h node: UDP packets are framed over a TCP connection
+	// instead of a UDP ASSOCIATE, so the node needs no UDP listener. It is set from the
+	// config entry's udp_in_tcp field (the panel switch) OR the URL's ?udp_in_tcp=1 query
+	// (imported links). The carrier TCP stream is plaintext framed UDP (GFW-fingerprintable),
+	// so the node defaults to TCP manually down (applyUDPInTCPDefaults) and only relays TCP
+	// once the user enables that circuit; UDP routing always takes the framed path
+	// (see UDPAssociate).
 	UDPInTCP bool
 	health   ProxyHealth
 	// udpCapability is how this node's UDP relay works, auto-detected (see UDPCapability).
@@ -139,12 +141,10 @@ func (p *Proxy) EffectiveMode() string {
 	if !p.SchemeSupportsUDP() {
 		return ModeTCPOnly
 	}
-	// A udp_in_tcp node carries UDP only (framed over its TCP connection), so it is
-	// udp_only by configuration, independent of probe results: routing rejects TCP for it,
-	// while the TCP health circuit merely tracks the carrier channel.
-	if p.UDPInTCP {
-		return ModeUDPOnly
-	}
+	// A udp_in_tcp node is udp_only by default, but through a manual TCP circuit pin
+	// (applyUDPInTCPDefaults) rather than a hard-coded mode: once the user enables TCP the
+	// mode derives from the dual circuits like any other socks5 node — only the UDP
+	// transport differs (see UDPAssociate).
 	tcpUp := p.health.IsAvailable()
 	udpUp := p.udpHealth.IsAvailable()
 	switch {
@@ -164,6 +164,23 @@ func (p *Proxy) IsUDPOnly() bool { return p.EffectiveMode() == ModeUDPOnly }
 
 // IsTCPOnly reports whether routing must treat the upstream as TCP-only (never UDP).
 func (p *Proxy) IsTCPOnly() bool { return p.EffectiveMode() == ModeTCPOnly }
+
+// applyUDPInTCPDefaults pins the TCP circuit down (manual) when the node is a hev
+// UDP-in-TCP relay (socks5/socks5h only): the carrier TCP stream is plaintext framed UDP,
+// which GFW can fingerprint, so the node does not proxy regular TCP until the user
+// explicitly enables it (SetCircuitHealth tcp enable/auto). This mirrors the SIP003-plugin
+// default (which pins UDP down) on the TCP side. A manual pin is preserved across reloads
+// (Manager.restoreManualPins), so only freshly-built nodes pick up the default and a user's
+// re-enable sticks.
+func (p *Proxy) applyUDPInTCPDefaults() {
+	if !p.UDPInTCP {
+		return
+	}
+	if p.Scheme != SchemeSOCKS5 && p.Scheme != SchemeSOCKS5H {
+		return
+	}
+	p.health.SetManualState(false)
+}
 
 // SupportsUDP reports whether routing may use this upstream to relay UDP (via UDPProxyConn
 // or the ss UDP relay). Effective-mode based: a UDP-capable node whose UDP circuit is open
@@ -358,6 +375,7 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 	// field (the panel switch) is OR-ed in later by the manager (see rebuildFromConfig).
 	if (scheme == SchemeSOCKS5 || scheme == SchemeSOCKS5H) && boolFromRawQuery(u.RawQuery, "udp_in_tcp") {
 		p.UDPInTCP = true
+		p.applyUDPInTCPDefaults()
 	}
 	if u.User != nil && scheme != SchemeSS {
 		p.Username = u.User.Username()
@@ -437,8 +455,9 @@ func (p *Proxy) UDPAssociate(ctx context.Context, targetHost string, targetPort 
 	switch p.Scheme {
 	case SchemeSOCKS5, SchemeSOCKS5H:
 		// A udp_in_tcp node must be routed here first: socks5UDPAssociate's raw fast path
-		// keys on IsUDPOnly() (which a UDPInTCP node satisfies), and that would skip the
-		// TCP handshake entirely — the exact opposite of what this protocol requires.
+		// keys on IsUDPOnly(), which such a node satisfies by default (manual TCP-down) —
+		// and that would skip the TCP handshake entirely, the exact opposite of what this
+		// protocol requires. The framed path is mandatory for such nodes regardless of mode.
 		if p.UDPInTCP {
 			return p.socks5UDPInTCP(ctx)
 		}

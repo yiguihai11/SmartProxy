@@ -2245,26 +2245,102 @@ func TestNewProxy_UDPInTCPFlag(t *testing.T) {
 	}
 }
 
-func TestUDPInTCP_EffectiveModeUDPOnly(t *testing.T) {
+func TestUDPInTCP_TCPDisabledByDefault_ManualRecovery(t *testing.T) {
 	p, err := NewProxy("socks5://user:pass@127.0.0.1:1080?udp_in_tcp=1")
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The carrier TCP stream is plaintext framed UDP, so a udp_in_tcp node defaults to TCP
+	// manually down → udp_only (mirrors the SIP003 plugin's UDP-down default). UDP routing
+	// must still pick the node up.
 	if got := p.EffectiveMode(); got != ModeUDPOnly {
 		t.Errorf("EffectiveMode = %s, want %s", got, ModeUDPOnly)
 	}
 	if !p.IsUDPOnly() {
-		t.Error("IsUDPOnly() = false, want true")
+		t.Error("IsUDPOnly() = false, want true (TCP defaults manually disabled)")
 	}
 	if !p.SupportsUDP() {
 		t.Error("SupportsUDP() = false, want true (UDP routing must pick the node up)")
 	}
-	// Even with both health circuits forced up, a udp_in_tcp node stays udp_only —
-	// the mode is configured, not derived from probing.
+	// The disable is a manual circuit pin, not a hard-coded mode: the user can re-enable TCP
+	// (SetCircuitHealth tcp enable) and the node returns to a full tcp_and_udp member of TCP
+	// routing.
 	p.health.SetManualState(true)
+	if got := p.EffectiveMode(); got != ModeTCPAndUDP {
+		t.Errorf("EffectiveMode after TCP enable = %s, want %s", got, ModeTCPAndUDP)
+	}
+	if p.IsUDPOnly() {
+		t.Error("IsUDPOnly() after TCP enable = true, want false")
+	}
+	// Releasing to auto also recovers TCP (both circuits probe healthy on a fresh node).
+	p.health.ClearManualState()
+	if got := p.EffectiveMode(); got != ModeTCPAndUDP {
+		t.Errorf("EffectiveMode after TCP auto = %s, want %s", got, ModeTCPAndUDP)
+	}
+	// Dynamic derivation still holds: TCP manually down while UDP up → udp_only.
+	p.health.SetManualState(false)
 	p.udpHealth.SetManualState(true)
 	if got := p.EffectiveMode(); got != ModeUDPOnly {
-		t.Errorf("EffectiveMode with circuits up = %s, want %s", got, ModeUDPOnly)
+		t.Errorf("EffectiveMode with TCP down = %s, want %s", got, ModeUDPOnly)
+	}
+}
+
+func TestUDPInTCP_RoutesFramedEvenWhenTCPDown(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	cmdSeen := make(chan byte, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		// SOCKS5 greeting (no auth).
+		var g [2]byte
+		if _, err := io.ReadFull(conn, g[:]); err != nil {
+			return
+		}
+		io.ReadFull(conn, make([]byte, int(g[1])))
+		conn.Write([]byte{0x05, 0x00})
+		// Request must be CMD=5 (hev FWD_UDP) — the framed path, not raw.
+		req := make([]byte, 10)
+		if _, err := io.ReadFull(conn, req); err != nil {
+			return
+		}
+		cmdSeen <- req[1]
+		conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		time.Sleep(200 * time.Millisecond)
+	}()
+
+	host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	p := &Proxy{Scheme: SchemeSOCKS5, Host: host, Port: port, UDPInTCP: true}
+	// TCP circuit down + UDP up → IsUDPOnly() true. socks5UDPAssociate's raw fast path keys
+	// on that, but a udp_in_tcp node must still dial TCP and frame its UDP.
+	p.health.SetManualState(false)
+	p.udpHealth.SetManualState(true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, err := p.UDPAssociate(ctx, "8.8.8.8", 53)
+	if err != nil {
+		t.Fatalf("UDPAssociate: %v", err)
+	}
+	defer conn.Close()
+	if _, ok := conn.(*udpInTCPConn); !ok {
+		t.Fatalf("UDPAssociate returned %T, want *udpInTCPConn (framed path)", conn)
+	}
+	select {
+	case cmd := <-cmdSeen:
+		if cmd != 0x05 {
+			t.Errorf("mock saw CMD=%d, want 5 (FWD_UDP)", cmd)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("mock server never saw the CMD=5 request (UDPAssociate took the raw path?)")
 	}
 }
 
