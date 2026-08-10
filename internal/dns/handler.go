@@ -47,6 +47,10 @@ type Handler struct {
 	chnroute    *chnroute.Trie
 	upstreamMgr *upstream.Manager
 	group       singleflight.Group
+	// staticRecords is the host→IPs override table (hosts-override semantics,
+	// checked before block rules and cache). The whole map is swapped atomically on
+	// config reload so readers always see a consistent snapshot.
+	staticRecords atomic.Pointer[map[string][]net.IP]
 }
 
 func NewHandler(cacheSize, cacheTTL int,
@@ -130,6 +134,17 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 	qtype := msg.Question[0].Qtype
 	// Logging INFO for every query is pure overhead under high query rates; the hot path is downgraded to Debug
 	slog.Debug("handling DNS query", "qname", qname, "qtype", qtype)
+
+	// Static records are authoritative overrides: answer before block rules so an
+	// explicit hosts-style entry always wins over a blocklist or stale cache.
+	if m := h.staticRecords.Load(); m != nil && len(*m) > 0 {
+		if ips, ok := (*m)[qname]; ok {
+			slog.Debug("static record hit", "qname", qname)
+			if resp, ok := buildStaticResponse(msg, ips); ok {
+				return resp
+			}
+		}
+	}
 
 	if engine != nil && engine.IsDomainBlocked(qname) {
 		slog.Info("blocked DNS query", "domain", qname)
@@ -423,6 +438,67 @@ func extractIP(rr dns.RR) string {
 		return r.AAAA.String()
 	}
 	return ""
+}
+
+// staticRecordTTL is the TTL for answers synthesized from static records.
+const staticRecordTTL = 60
+
+// buildStaticResponse builds an authoritative answer for a static-record hit. The
+// record type follows the query type: TypeA → A records (IPv4 entries), TypeAAAA →
+// AAAA records (IPv6 entries), TypeANY → both families, and any other type yields
+// an empty NOERROR answer (NODATA) so the client can fall back to another query.
+func buildStaticResponse(msg *dns.Msg, ips []net.IP) ([]byte, bool) {
+	qtype := msg.Question[0].Qtype
+	resp := msg.SetReply(msg)
+	resp.Authoritative = true
+	for _, ip := range ips {
+		if v4 := ip.To4(); v4 != nil && (qtype == dns.TypeA || qtype == dns.TypeANY) {
+			resp.Answer = append(resp.Answer, &dns.A{
+				Hdr: dns.RR_Header{Name: msg.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: staticRecordTTL},
+				A:   v4,
+			})
+		} else if v4 == nil && (qtype == dns.TypeAAAA || qtype == dns.TypeANY) {
+			resp.Answer = append(resp.Answer, &dns.AAAA{
+				Hdr:  dns.RR_Header{Name: msg.Question[0].Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: staticRecordTTL},
+				AAAA: ip,
+			})
+		}
+	}
+	wire, err := resp.Pack()
+	if err != nil {
+		return nil, false
+	}
+	return wire, true
+}
+
+// SetStaticRecords replaces the static-record lookup table atomically. The caller
+// must build a fresh map per update (never mutate one in place) so concurrent
+// readers always see a complete snapshot.
+func (h *Handler) SetStaticRecords(m map[string][]net.IP) {
+	h.staticRecords.Store(&m)
+}
+
+// StaticRecordAnswer serves a static-record answer for the given raw DNS query,
+// returning (wire, true) on a hit. The UDP relay path calls this first so static
+// records are honored ahead of its own blocked-domain/cache shortcut.
+func (h *Handler) StaticRecordAnswer(queryWire []byte) ([]byte, bool) {
+	m := h.staticRecords.Load()
+	if m == nil || len(*m) == 0 {
+		return nil, false
+	}
+	msg := new(dns.Msg)
+	if err := msg.Unpack(queryWire); err != nil {
+		return nil, false
+	}
+	if len(msg.Question) == 0 {
+		return nil, false
+	}
+	qname := strings.ToLower(strings.TrimSuffix(msg.Question[0].Name, "."))
+	ips, ok := (*m)[qname]
+	if !ok || len(ips) == 0 {
+		return nil, false
+	}
+	return buildStaticResponse(msg, ips)
 }
 
 func (h *Handler) buildFakeResponse(queryWire []byte) []byte {

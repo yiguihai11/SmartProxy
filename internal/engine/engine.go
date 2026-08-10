@@ -96,6 +96,7 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 		preferMode != dns.PreferNone, preferMode, preferPorts,
 		cfg.DNS.Enabled,
 	)
+	dnsHandler.SetStaticRecords(cfg.DNS.StaticRecordsMap())
 
 	eng := &Engine{
 		Chnroute:    cn,

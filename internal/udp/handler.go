@@ -492,6 +492,13 @@ func (h *Handler) isDomestic(ip string) bool {
 func (h *Handler) handleDNS(ctx context.Context, payload []byte, clientAddr net.Addr,
 	origIP string, origPort int, realIP string, realPort int) {
 
+	// Static records are authoritative overrides: answer first so they win over the
+	// blocked-domain and cache shortcuts below (and stay consistent with the TUN path).
+	if resp, ok := h.dnsHandler.StaticRecordAnswer(payload); ok {
+		h.sendDNSResponse(resp, clientAddr, origIP, origPort)
+		return
+	}
+
 	qname := extractDNSQname(payload)
 	if qname != "" && h.ruleEngine.IsDomainBlocked(qname) {
 		slog.Info("blocked DNS query", "domain", qname)

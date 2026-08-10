@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"strings"
 )
 
@@ -108,11 +109,22 @@ type RoutingConf struct {
 }
 
 type DNSConf struct {
-	Enabled        bool       `json:"enabled"`
-	Cache          DNSCacheC  `json:"cache"`
-	Foreign        DNSForeign `json:"foreign"`
-	QueryTimeout   int        `json:"query_timeout"`
-	SpeedCheckMode string     `json:"speed_check_mode"`
+	Enabled        bool           `json:"enabled"`
+	Cache          DNSCacheC      `json:"cache"`
+	Foreign        DNSForeign     `json:"foreign"`
+	QueryTimeout   int            `json:"query_timeout"`
+	SpeedCheckMode string         `json:"speed_check_mode"`
+	// StaticRecords maps hostnames to fixed IPs served directly by the built-in DNS
+	// interceptor (hosts-override semantics; checked before block rules and cache).
+	// The same host may appear multiple times to attach both an IPv4 and an IPv6
+	// address. Edited by hand in the config file.
+	StaticRecords []StaticRecord `json:"static_records"`
+}
+
+// StaticRecord is a single host→IP static DNS entry.
+type StaticRecord struct {
+	Host string `json:"host"`
+	IP   string `json:"ip"`
 }
 
 type DNSCacheC struct {
@@ -174,11 +186,40 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Sprintf("listen.admin_cert_sans[%d] must not be empty", i))
 		}
 	}
+	for i, sr := range c.DNS.StaticRecords {
+		if strings.TrimSpace(sr.Host) == "" {
+			errs = append(errs, fmt.Sprintf("dns.static_records[%d].host must not be empty", i))
+		}
+		if net.ParseIP(strings.TrimSpace(sr.IP)) == nil {
+			errs = append(errs, fmt.Sprintf("dns.static_records[%d].ip must be a valid IP", i))
+		}
+	}
 
 	if len(errs) == 0 {
 		return nil
 	}
 	return fmt.Errorf("config validation failed:\n  - %s", strings.Join(errs, "\n  - "))
+}
+
+// StaticRecordsMap normalizes the static record list into a host→IPs lookup table:
+// host is lowercased with a trailing dot stripped, same-host IPs are grouped (so
+// an IPv4 and an IPv6 address can coexist for one host), and invalid entries are
+// skipped. Returns nil when no records are configured.
+func (d DNSConf) StaticRecordsMap() map[string][]net.IP {
+	var m map[string][]net.IP
+	for _, r := range d.StaticRecords {
+		host := strings.ToLower(strings.TrimSpace(r.Host))
+		host = strings.TrimSuffix(host, ".")
+		ip := net.ParseIP(strings.TrimSpace(r.IP))
+		if host == "" || ip == nil {
+			continue
+		}
+		if m == nil {
+			m = make(map[string][]net.IP)
+		}
+		m[host] = append(m[host], ip)
+	}
+	return m
 }
 
 func DefaultConfig() *Config {

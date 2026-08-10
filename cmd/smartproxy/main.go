@@ -203,6 +203,7 @@ func main() {
 			cfg.DNS.Enabled,
 			preferMode != dns.PreferNone, preferMode, preferPorts,
 		)
+		eng.DNSHandler.SetStaticRecords(cfg.DNS.StaticRecordsMap())
 		if eng.AdminServer() != nil {
 			eng.AdminServer().SetAdminAuth(cfg.Listen.AdminAuth)
 		}

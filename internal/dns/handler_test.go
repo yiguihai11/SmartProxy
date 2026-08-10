@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -820,5 +821,151 @@ func TestCache_ClearThenReuse(t *testing.T) {
 	}
 	if got := c.Get("b.com", dns.TypeA); string(got) != "\x02" {
 		t.Error("cache should work after Clear+Set")
+	}
+}
+
+func TestStaticRecords_HandleDNS(t *testing.T) {
+	cn := chnroute.New()
+	h := NewHandler(100, 60, "", "", cn, nil, 3, "0.0.0.0", "::", false, PreferNone, nil, true)
+	h.SetStaticRecords(map[string][]net.IP{
+		"smartproxy.lan": {net.ParseIP("192.168.1.1"), net.ParseIP("fc00::1")},
+	})
+
+	t.Run("A query returns IPv4 record", func(t *testing.T) {
+		resp := h.HandleDNS(context.Background(), buildTestDNSQuery("smartproxy.lan", dns.TypeA), "8.8.8.8", 53, nil)
+		msg := new(dns.Msg)
+		if err := msg.Unpack(resp); err != nil {
+			t.Fatalf("unpack: %v", err)
+		}
+		if !msg.Response || !msg.Authoritative {
+			t.Errorf("expected authoritative response, resp=%v auth=%v", msg.Response, msg.Authoritative)
+		}
+		if len(msg.Answer) != 1 {
+			t.Fatalf("expected 1 answer, got %d", len(msg.Answer))
+		}
+		a, ok := msg.Answer[0].(*dns.A)
+		if !ok {
+			t.Fatalf("expected A record, got %T", msg.Answer[0])
+		}
+		if a.A.String() != "192.168.1.1" {
+			t.Errorf("expected 192.168.1.1, got %s", a.A.String())
+		}
+		if a.Hdr.Ttl != staticRecordTTL {
+			t.Errorf("expected TTL %d, got %d", staticRecordTTL, a.Hdr.Ttl)
+		}
+	})
+
+	t.Run("AAAA query returns IPv6 record", func(t *testing.T) {
+		resp := h.HandleDNS(context.Background(), buildTestDNSQuery("smartproxy.lan", dns.TypeAAAA), "8.8.8.8", 53, nil)
+		msg := new(dns.Msg)
+		if err := msg.Unpack(resp); err != nil {
+			t.Fatalf("unpack: %v", err)
+		}
+		if len(msg.Answer) != 1 {
+			t.Fatalf("expected 1 answer, got %d", len(msg.Answer))
+		}
+		aaaa, ok := msg.Answer[0].(*dns.AAAA)
+		if !ok {
+			t.Fatalf("expected AAAA record, got %T", msg.Answer[0])
+		}
+		if aaaa.AAAA.String() != "fc00::1" {
+			t.Errorf("expected fc00::1, got %s", aaaa.AAAA.String())
+		}
+	})
+
+	t.Run("ANY query returns both families", func(t *testing.T) {
+		resp := h.HandleDNS(context.Background(), buildTestDNSQuery("smartproxy.lan", dns.TypeANY), "8.8.8.8", 53, nil)
+		msg := new(dns.Msg)
+		if err := msg.Unpack(resp); err != nil {
+			t.Fatalf("unpack: %v", err)
+		}
+		var v4, v6 int
+		for _, rr := range msg.Answer {
+			switch rr.(type) {
+			case *dns.A:
+				v4++
+			case *dns.AAAA:
+				v6++
+			}
+		}
+		if v4 != 1 || v6 != 1 {
+			t.Errorf("expected 1 A and 1 AAAA, got A=%d AAAA=%d", v4, v6)
+		}
+	})
+
+	t.Run("other qtype returns NODATA", func(t *testing.T) {
+		resp := h.HandleDNS(context.Background(), buildTestDNSQuery("smartproxy.lan", dns.TypeTXT), "8.8.8.8", 53, nil)
+		msg := new(dns.Msg)
+		if err := msg.Unpack(resp); err != nil {
+			t.Fatalf("unpack: %v", err)
+		}
+		if !msg.Response {
+			t.Error("expected response flag")
+		}
+		if len(msg.Answer) != 0 {
+			t.Errorf("expected empty answer (NODATA), got %d", len(msg.Answer))
+		}
+	})
+}
+
+func TestStaticRecordAnswer(t *testing.T) {
+	cn := chnroute.New()
+	h := NewHandler(100, 60, "", "", cn, nil, 3, "0.0.0.0", "::", false, PreferNone, nil, true)
+
+	if _, ok := h.StaticRecordAnswer(buildTestDNSQuery("smartproxy.lan", dns.TypeA)); ok {
+		t.Error("expected miss when no static records are set")
+	}
+
+	h.SetStaticRecords(map[string][]net.IP{
+		"smartproxy.lan": {net.ParseIP("192.168.1.1")},
+	})
+
+	wire, ok := h.StaticRecordAnswer(buildTestDNSQuery("smartproxy.lan", dns.TypeA))
+	if !ok {
+		t.Fatal("expected hit for smartproxy.lan")
+	}
+	msg := new(dns.Msg)
+	if err := msg.Unpack(wire); err != nil {
+		t.Fatalf("unpack: %v", err)
+	}
+	if len(msg.Answer) != 1 || msg.Answer[0].Header().Rrtype != dns.TypeA {
+		t.Errorf("expected 1 A answer, got %d", len(msg.Answer))
+	}
+
+	if _, ok := h.StaticRecordAnswer(buildTestDNSQuery("other.com", dns.TypeA)); ok {
+		t.Error("expected miss for unknown domain")
+	}
+}
+
+func TestStaticRecords_BeforeBlock(t *testing.T) {
+	dir := t.TempDir()
+	rulePath := filepath.Join(dir, "acl.txt")
+	if err := os.WriteFile(rulePath, []byte("block domain evil.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := rules.New(rulePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cn := chnroute.New()
+	h := NewHandler(100, 60, "", "", cn, nil, 3, "0.0.0.0", "::", false, PreferNone, nil, true)
+	h.SetStaticRecords(map[string][]net.IP{
+		"evil.com": {net.ParseIP("192.168.1.1")},
+	})
+
+	resp := h.HandleDNS(context.Background(), buildTestDNSQuery("evil.com", dns.TypeA), "8.8.8.8", 53, engine)
+	msg := new(dns.Msg)
+	if err := msg.Unpack(resp); err != nil {
+		t.Fatalf("unpack: %v", err)
+	}
+	if len(msg.Answer) != 1 {
+		t.Fatalf("expected 1 answer, got %d", len(msg.Answer))
+	}
+	a, ok := msg.Answer[0].(*dns.A)
+	if !ok {
+		t.Fatalf("expected A record, got %T", msg.Answer[0])
+	}
+	if a.A.String() != "192.168.1.1" {
+		t.Errorf("static record should win over block rule, got %s", a.A.String())
 	}
 }

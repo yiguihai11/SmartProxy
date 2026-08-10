@@ -345,3 +345,58 @@ func TestApplyDefaults_EmptyFields(t *testing.T) {
 		t.Errorf("SmartProxy.Ports: got %d", len(cfg.SmartProxy.Ports))
 	}
 }
+
+func TestValidate_StaticRecords(t *testing.T) {
+	cfg := DefaultConfig()
+	if len(cfg.DNS.StaticRecords) != 0 {
+		t.Errorf("expected no default static records, got %v", cfg.DNS.StaticRecords)
+	}
+	// valid entry
+	cfg.DNS.StaticRecords = []StaticRecord{{Host: "smartproxy.lan", IP: "192.168.1.1"}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid static record should validate, got: %v", err)
+	}
+	// empty host
+	cfg.DNS.StaticRecords = []StaticRecord{{Host: "  ", IP: "192.168.1.1"}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("empty host should fail validation")
+	}
+	// invalid IP
+	cfg.DNS.StaticRecords = []StaticRecord{{Host: "smartproxy.lan", IP: "not-an-ip"}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("invalid IP should fail validation")
+	}
+}
+
+func TestStaticRecordsMap(t *testing.T) {
+	cfg := DNSConf{}
+	if m := cfg.StaticRecordsMap(); m != nil {
+		t.Errorf("expected nil map for empty records, got %v", m)
+	}
+
+	cfg.StaticRecords = []StaticRecord{
+		{Host: "SmartProxy.LAN.", IP: "192.168.1.1"},
+		{Host: "smartproxy.lan", IP: "fc00::1"},
+		{Host: "  ", IP: "1.2.3.4"},      // empty host → skipped
+		{Host: "bad.example", IP: "oops"}, // invalid IP → skipped
+	}
+	m := cfg.StaticRecordsMap()
+	if len(m) != 1 {
+		t.Fatalf("expected 1 host after normalization, got %d", len(m))
+	}
+	ips := m["smartproxy.lan"]
+	if len(ips) != 2 {
+		t.Fatalf("expected 2 IPs grouped for smartproxy.lan, got %d", len(ips))
+	}
+	var hasV4, hasV6 bool
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			hasV4 = true
+		} else {
+			hasV6 = true
+		}
+	}
+	if !hasV4 || !hasV6 {
+		t.Errorf("expected both v4 and v6 grouped, got %v", ips)
+	}
+}

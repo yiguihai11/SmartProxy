@@ -95,8 +95,11 @@
 | `Foreign` | `foreign` | `{ipv4, ipv6}` | 国外 DNS 地址（`foreign.ipv4` 默认 `1.1.1.1:53`，`foreign.ipv6` 默认 `[2606:4700:4700::1111]:53`） |
 | `Cache` | `cache` | `{size:10000, ttl:300}` | DNS 缓存：`cache.size` 条目数、`cache.ttl` 秒 |
 | `SpeedCheckMode` | `speed_check_mode` | `""` | IP 优选（DNS IP preference）模式与端口（如 `icmp:80,443`），由 `dns.ParseSpeedCheckMode` 解析；留空表示不启用（`PreferNone`） |
+| `StaticRecords` | `static_records` | `[]` | 静态 DNS 解析记录（hosts 覆盖）：`[{host, ip}]`；同一 `host` 可多条以同时配 IPv4 与 IPv6。查询按类型应答：`A`→v4 记录、`AAAA`→v6 记录、`ANY`→两者、未配的族回 NODATA（空应答让客户端回落）。优先生效于拦截规则与缓存。改配置后热重载生效，无需重启 |
 
 > 域名被封时回填的 IP 已硬编码（IPv4 `0.0.0.0`、IPv6 `::`），不再由 `blocked_ip` / `blocked_ipv6` 配置。
+>
+> `static_records` 示例：`"static_records": [{"host": "smartproxy.lan", "ip": "192.168.1.1"}]` —— 让面板访问主机名 `smartproxy.lan` 直接解析到路由器局域网 IP，无需在路由器上额外配 dnsmasq/hosts（需设备 DNS 查询流经 SmartProxy 才生效）。
 
 ### `smart_proxy`
 
