@@ -65,7 +65,12 @@ const (
 const rawRecheckInterval = 10 * time.Minute
 
 type Proxy struct {
-	URL      string
+	URL string
+	// Name is the node's friendly name taken from the ss:// URL's #fragment
+	// (e.g. ss://…@host:port#美国 洛杉矶), matching how shadowsocks-android names
+	// imported profiles. Empty when the URL has no fragment. Purely cosmetic —
+	// routing and identity use Scheme/Host/Port/Alias.
+	Name     string
 	Scheme   ProxyScheme
 	Host     string
 	Port     int
@@ -313,6 +318,10 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 		Port:          port,
 		udpCapability: UDPCapUnknown,
 	}
+	// The #fragment is the node's friendly name (shadowsocks-android reads the same
+	// field as profile.name). url.Parse already percent-decodes Fragment, so use it
+	// as-is; a missing fragment leaves the name empty.
+	p.Name = strings.TrimSpace(u.Fragment)
 	if u.User != nil && scheme != SchemeSS {
 		p.Username = u.User.Username()
 		p.Password, _ = u.User.Password()
@@ -359,7 +368,7 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 			p.udpHealth.SetManualState(false)
 		}
 	}
-	slog.Info("upstream proxy loaded", "url", proxyURL)
+	slog.Info("upstream proxy loaded", "url", proxyURL, "name", p.Name)
 	return p, nil
 }
 

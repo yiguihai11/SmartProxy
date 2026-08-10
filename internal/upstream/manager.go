@@ -423,6 +423,9 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 type ProxyInfo struct {
 	Alias  string `json:"alias"`
 	URL    string `json:"url"`
+	// Name is the node's friendly name from the ss:// #fragment (see Proxy.Name);
+	// empty for URLs without one.
+	Name   string `json:"name"`
 	Host   string `json:"host"`
 	Port   int    `json:"port"`
 	Scheme string `json:"scheme"`
@@ -454,6 +457,7 @@ func (m *Manager) Proxies() []ProxyInfo {
 		infos = append(infos, ProxyInfo{
 			Alias:         alias,
 			URL:           proxy.URL,
+			Name:          proxy.Name,
 			Host:          proxy.Host,
 			Port:          proxy.Port,
 			Scheme:        string(proxy.Scheme),

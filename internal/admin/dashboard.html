@@ -500,13 +500,17 @@ function lhealth(d){
     // read as "both work" right next to an Enable button and two down badges).
     var dispMode=anyUp?p.mode:'off';
     var capTxt=(anyUp&&p.udp_capability&&p.udp_capability!=='unknown')?' · '+p.udp_capability:'';
+    // Show the node's friendly ss:// name when it has one; the alias (the config key used for
+    // edit/delete) stays visible when it differs from the displayed name.
+    var dispName=p.name||p.alias;
+    var aliasTxt=(p.name&&p.name!==p.alias)?' · '+p.alias:'';
     // latency of the circuit actually serving: UDP for a udp_only node (TCP down), else TCP
     var latVal=(p.mode==='udp_only'&&p.udp_health&&p.udp_health.latency>0)?p.udp_health.latency:p.health.latency;
     var lat=latVal>0?(latVal/1e6).toFixed(1)+'ms':'--';
     var tc=circuitStat(p.health,true),uc=circuitStat(p.udp_health,udpScheme);
     var tcClk=tc.c==='na'?'':' onclick="toggleCircuit('+i+',\'tcp\')"';
     var ucClk=uc.c==='na'?'':' onclick="toggleCircuit('+i+',\'udp\')"';
-    return '<div class="proxy-card"><div class="top"><div><div class="alias">'+p.alias+'</div><div class="url">'+p.url+' · '+dispMode+capTxt+'</div></div>'+
+    return '<div class="proxy-card"><div class="top"><div><div class="alias">'+dispName+'</div><div class="url">'+p.url+aliasTxt+' · '+dispMode+capTxt+'</div></div>'+
       '<div class="circs"><span class="circ '+(tc.c+(tc.m?' manual':''))+'" title="'+(tc.m?'TCP manually pinned — click to restore auto':'Click to toggle TCP')+'"'+tcClk+'><i class="dot"></i>TCP '+tc.t+'</span><span class="circ '+(uc.c+(uc.m?' manual':''))+'" title="'+(uc.m?'UDP manually pinned — click to restore auto':'Click to toggle UDP')+'"'+ucClk+'><i class="dot"></i>UDP '+uc.t+'</span></div></div>'+
       '<div class="stats"><span>latency: '+lat+'</span><span>tcp failures: '+(p.health.manual?'manual':p.health.consecutive_failures)+'</span><span>udp failures: '+(p.udp_health?(p.udp_health.manual?'manual':p.udp_health.consecutive_failures):'n/a')+'</span></div>'+
       '<div class="actions">'+

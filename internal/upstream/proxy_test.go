@@ -2123,6 +2123,68 @@ func TestNewProxy_SSDefaultPort(t *testing.T) {
 	}
 }
 
+// TestNewProxy_NameFragment verifies the ss:// #fragment is captured as the node's
+// friendly name, mirroring shadowsocks-android (profile.name = uri.fragment). The
+// fragment is percent-decoded by url.Parse, so a URL-encoded Chinese name must
+// round-trip to the readable form.
+func TestNewProxy_NameFragment(t *testing.T) {
+	t.Run("modern-encoded-name", func(t *testing.T) {
+		// ss://none:ODI4...@host:80 with plugin and an encoded Chinese fragment (the
+		// exact shape from exported ss:// links, e.g. "美国 加利福尼亚州 洛杉矶").
+		url := "ss://bm9uZTpPREk0WmpBd1pHTXRORFF6@103.11.76.248:80?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dupay.10010.com#%E7%BE%8E%E5%9B%BD%20%E5%8A%A0%E5%88%A9%E7%A6%8F%E5%B0%BC%E4%BA%9A%E5%B7%9E%20%E6%B4%9B%E6%9D%89%E7%9F%B6%20%205gnetworks.au"
+		p, err := NewProxy(url)
+		if err != nil {
+			t.Fatalf("NewProxy: %v", err)
+		}
+		want := "美国 加利福尼亚州 洛杉矶  5gnetworks.au"
+		if p.Name != want {
+			t.Errorf("Name: got %q, want %q", p.Name, want)
+		}
+		if p.Host != "103.11.76.248" || p.Port != 80 {
+			t.Errorf("host/port: got %q:%d, want 103.11.76.248:80", p.Host, p.Port)
+		}
+		if p.Plugin == "" {
+			t.Error("plugin should still parse alongside the fragment")
+		}
+	})
+
+	t.Run("legacy-qr-name", func(t *testing.T) {
+		// Legacy QR form with a #name fragment: ss://base64(method:pass@host:port)#名称.
+		p, err := NewProxy("ss://bm9uZTpwYXNzQDEyNy4wLjAuMTo4Mzg4#%E7%BE%8E%E5%9B%BD%20%E8%8A%82%E7%82%B9")
+		if err != nil {
+			t.Fatalf("NewProxy: %v", err)
+		}
+		if p.Host != "127.0.0.1" || p.Port != 8388 {
+			t.Errorf("host/port: got %q:%d, want 127.0.0.1:8388", p.Host, p.Port)
+		}
+		if p.Name != "美国 节点" {
+			t.Errorf("Name: got %q, want %q", p.Name, "美国 节点")
+		}
+	})
+
+	t.Run("no-fragment", func(t *testing.T) {
+		p, err := NewProxy("ss://none:pass@127.0.0.1:80")
+		if err != nil {
+			t.Fatalf("NewProxy: %v", err)
+		}
+		if p.Name != "" {
+			t.Errorf("Name: got %q, want empty", p.Name)
+		}
+	})
+
+	t.Run("literal-percent-in-name", func(t *testing.T) {
+		// A fragment whose decoded text contains a literal '%' (encoded as %25) must
+		// survive: url.Parse already decodes it, so we must not re-unescape.
+		p, err := NewProxy("ss://none:pass@127.0.0.1:80#100%25off")
+		if err != nil {
+			t.Fatalf("NewProxy: %v", err)
+		}
+		if p.Name != "100%off" {
+			t.Errorf("Name: got %q, want %q", p.Name, "100%off")
+		}
+	})
+}
+
 // TestParseSSLegacy exercises the low-level legacy parser directly, including the variants
 // a QR generator might emit.
 func TestParseSSLegacy(t *testing.T) {
