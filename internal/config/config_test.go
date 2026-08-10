@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -403,6 +404,39 @@ func TestStaticRecordsMap(t *testing.T) {
 	}
 	if !hasV4 || !hasV6 {
 		t.Errorf("expected both v4 and v6 grouped, got %v", ips)
+	}
+}
+
+func TestSetStaticRecordIP(t *testing.T) {
+	// New host → appended record.
+	out := SetStaticRecordIP(nil, "smartproxy.lan", net.ParseIP("127.0.0.1"))
+	if len(out) != 1 || out[0].Host != "smartproxy.lan" || len(out[0].IP) != 1 || out[0].IP[0] != "127.0.0.1" {
+		t.Fatalf("new host append failed: %+v", out)
+	}
+	// Existing host, new family added alongside the old one.
+	out = SetStaticRecordIP(out, "SmartProxy.LAN.", net.ParseIP("::1"))
+	if len(out) != 1 {
+		t.Fatalf("expected host merge, got %d records", len(out))
+	}
+	got := out[0].IP
+	if len(got) != 2 || got[0] != "127.0.0.1" || got[1] != "::1" {
+		t.Fatalf("expected both families kept, got %v", got)
+	}
+	// Replacing the v4 address drops only v4, keeps v6.
+	out = SetStaticRecordIP(out, "smartproxy.lan", net.ParseIP("192.168.1.1"))
+	if len(out[0].IP) != 2 || out[0].IP[0] != "::1" || out[0].IP[1] != "192.168.1.1" {
+		t.Fatalf("expected v4 replaced, v6 kept, got %v", out[0].IP)
+	}
+	// Replacing the v6 address drops only v6, keeps v4.
+	out = SetStaticRecordIP(out, "smartproxy.lan", net.ParseIP("fd00::2"))
+	if len(out[0].IP) != 2 || out[0].IP[0] != "192.168.1.1" || out[0].IP[1] != "fd00::2" {
+		t.Fatalf("expected v6 replaced, v4 kept, got %v", out[0].IP)
+	}
+	// Input slice is never mutated.
+	src := []StaticRecord{{Host: "a.lan", IP: IPList{"1.1.1.1"}}}
+	_ = SetStaticRecordIP(src, "a.lan", net.ParseIP("2.2.2.2"))
+	if src[0].IP[0] != "1.1.1.1" || len(src[0].IP) != 1 {
+		t.Fatalf("input slice was mutated: %+v", src)
 	}
 }
 

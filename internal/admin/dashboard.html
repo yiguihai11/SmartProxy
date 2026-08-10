@@ -1411,7 +1411,12 @@ function renderCache(){
     var k=cacheKey(e);
     var checked=cacheSelected[k]?'checked':'';
     var ans=e.answers&&e.answers.length?e.answers.join('<br>'):'-';
-    return '<tr><td class="td-chk"><input class="cb-row" type="checkbox" '+checked+' onchange="cacheToggleRow(\''+e.qname.replace(/'/g,"\\'")+'\','+e.qtype+')"></td><td class="clickable" style="word-break:break-all" onclick="cacheOpenACL(\''+e.qname.replace(/'/g,"\\'")+'\')">'+e.qname+'</td><td>'+(cacheTypes[e.qtype]||e.qtype)+'</td><td style="font-family:var(--mono);font-size:.8rem;word-break:break-all">'+ans+'</td><td>'+ts2t(e.expires)+'</td></tr>'
+    // A/AAAA rows carry editable IP answers; clicking pins a persistent static record.
+    var editable=(e.qtype===1||e.qtype===28);
+    var ansCell=editable
+      ?'<td class="clickable" title="Click to pin as static record" style="font-family:var(--mono);font-size:.8rem;word-break:break-all" onclick="openCachePinDialog(\''+e.qname.replace(/'/g,"\\'")+'\','+e.qtype+',\''+e.answers.join('\\n').replace(/'/g,"\\'")+'\')">'+ans+'</td>'
+      :'<td style="font-family:var(--mono);font-size:.8rem;word-break:break-all">'+ans+'</td>';
+    return '<tr><td class="td-chk"><input class="cb-row" type="checkbox" '+checked+' onchange="cacheToggleRow(\''+e.qname.replace(/'/g,"\\'")+'\','+e.qtype+')"></td><td class="clickable" style="word-break:break-all" onclick="cacheOpenACL(\''+e.qname.replace(/'/g,"\\'")+'\')">'+e.qname+'</td><td>'+(cacheTypes[e.qtype]||e.qtype)+'</td>'+ansCell+'<td>'+ts2t(e.expires)+'</td></tr>'
   }).join('');
   document.getElementById('cache-pagination').style.display='flex';
   document.getElementById('cache-prev').disabled=cachePage<=1;
@@ -1457,6 +1462,39 @@ async function cacheDeleteSelected(){
 }
 function cacheOpenACL(qname){
   openACLDialog([{value:qname,type:'domain',source:'cache'}]);
+}
+// Clicking a cache row's Answers pins it as a persistent static record
+// (dns.static_records), hot-applied via config reload. The static record wins over
+// the cache, so the entry is removed once pinned.
+var cachePinQname='',cachePinQtype=0;
+function openCachePinDialog(qname,qtype,answers){
+  cachePinQname=qname;cachePinQtype=qtype;
+  document.getElementById('cachepin-desc').textContent=qname+' — '+(cacheTypes[qtype]||qtype)+' record';
+  var list=(answers||'').split('\n').filter(function(s){return s.length});
+  document.getElementById('cachepin-current').innerHTML=list.map(function(a){return '<span>'+a+'</span>'}).join('');
+  document.getElementById('cachepin-ip').value=list[0]||'';
+  document.getElementById('cachepin-overlay').classList.add('show');
+  setTimeout(function(){document.getElementById('cachepin-ip').focus()},50);
+}
+function closeCachePinDialog(){
+  document.getElementById('cachepin-overlay').classList.remove('show');
+}
+function confirmCachePin(){
+  var ip=document.getElementById('cachepin-ip').value.trim();
+  if(!ip){alert('Enter an IP address');return}
+  var btn=document.getElementById('cachepin-confirm');
+  btn.disabled=true;btn.textContent='Pinning...';
+  fetch('/cache',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qname:cachePinQname,qtype:cachePinQtype,ip:ip})}).then(function(r){
+    return r.json().then(function(d){
+      if(r.ok)return d;
+      throw new Error(d.error||('HTTP '+r.status));
+    });
+  }).then(function(d){
+    closeCachePinDialog();
+    cacheSelected={};
+    loadCache();
+    setTimeout(function(){alert('Pinned: '+d.host+' → '+d.ip+'\nPersistent static record, hot-applied')},100);
+  }).catch(function(e){alert('Error: '+e.message)}).finally(function(){btn.disabled=false;btn.textContent='Pin as static record'});
 }
 function toggleCacheFilter(){
   var dd=document.getElementById('cache-filter-dropdown');
@@ -1987,6 +2025,20 @@ es.onmessage=function(e){
     <div class="dialog-actions">
       <button class="btn btn-sm" onclick="closeACLDialog()">Cancel</button>
       <button class="btn btn-sm primary" id="acl-confirm" onclick="confirmACL()">Add</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="cachepin-overlay" onclick="if(event.target===this)closeCachePinDialog()">
+  <div class="dialog" onclick="event.stopPropagation()">
+    <div class="dialog-title">Pin DNS Answer</div>
+    <div class="dialog-desc" id="cachepin-desc"></div>
+    <div class="dialog-label">Answers (current)</div>
+    <div class="dialog-list" id="cachepin-current"></div>
+    <div class="dialog-label">New Address</div>
+    <input class="dialog-input" id="cachepin-ip" placeholder="1.2.3.4 or 2001:db8::1" autocomplete="off" spellcheck="false">
+    <div class="dialog-actions">
+      <button class="btn btn-sm" onclick="closeCachePinDialog()">Cancel</button>
+      <button class="btn btn-sm primary" id="cachepin-confirm" onclick="confirmCachePin()">Pin as static record</button>
     </div>
   </div>
 </div>

@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	mdns "github.com/miekg/dns"
+
 	"smartproxy/internal/chnroute"
 	"smartproxy/internal/config"
 	"smartproxy/internal/dns"
@@ -211,6 +213,90 @@ func TestAdmin_CacheFlush(t *testing.T) {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
 	}
 }
+func TestAdmin_CachePinStaticRecord(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	cfg := config.DefaultConfig()
+	// Seed a cache entry so the pin endpoint has something to supersede.
+	m := new(mdns.Msg)
+	m.SetQuestion("example.com.", mdns.TypeA)
+	m.Answer = []mdns.RR{&mdns.A{
+		Hdr: mdns.RR_Header{Name: "example.com.", Rrtype: mdns.TypeA, Class: mdns.ClassINET, Ttl: 60},
+		A:   net.ParseIP("1.2.3.4"),
+	}}
+	wire, err := m.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dh := dns.NewHandler(1000, 300, "1.1.1.1:53", "[2606:4700:4700::1111]:53",
+		chnroute.New(), newTestManager(t), 3, "0.0.0.0", "::", false, "", nil, true)
+	dh.CacheSet("example.com", mdns.TypeA, wire, time.Minute)
+	rt := route.New(chnroute.New(), newTestManager(t), false, 3*time.Second, []int{80, 443}, 300*time.Second)
+	s := New(tempSocket(t), rt, newTestManager(t), dh, chnroute.New())
+	s.SetConfigSrc(func() *config.Config { return cfg })
+	s.SetConfigPath(cfgPath)
+	s.SetReloadConfig(func() {}) // availability check only; real reload is fsnotify-owned
+	startServer(t, s)
+
+	post := func(qname string, qtype uint16, ip string) (*http.Response, error) {
+		c := &http.Client{Transport: &http.Transport{DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+			return net.Dial("unix", s.sockPath)
+		}}, Timeout: 5 * time.Second}
+		body, _ := json.Marshal(map[string]interface{}{"qname": qname, "qtype": qtype, "ip": ip})
+		return c.Post("http://unix/cache", "application/json", bytes.NewReader(body))
+	}
+
+	// Valid A pin → config written + cache entry removed.
+	resp, err := post("example.com", mdns.TypeA, "5.6.7.8")
+	if err != nil {
+		t.Fatalf("POST /cache failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	resp.Body.Close()
+	if dh.CacheLen() != 0 {
+		t.Errorf("expected cache entry removed, still %d entries", dh.CacheLen())
+	}
+	disk, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("config not written: %v", err)
+	}
+	var got config.Config
+	if err := json.Unmarshal(disk, &got); err != nil {
+		t.Fatalf("written config invalid: %v", err)
+	}
+	if len(got.DNS.StaticRecords) != 1 || got.DNS.StaticRecords[0].Host != "example.com" ||
+		len(got.DNS.StaticRecords[0].IP) != 1 || got.DNS.StaticRecords[0].IP[0] != "5.6.7.8" {
+		t.Fatalf("static record not written correctly: %+v", got.DNS.StaticRecords)
+	}
+
+	// Family mismatch → 400, config untouched.
+	if err := os.WriteFile(cfgPath, []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	resp, err = post("example.com", mdns.TypeA, "::1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("A record with IPv6 should be 400, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Unsupported type → 400.
+	resp, err = post("example.com", mdns.TypeTXT, "1.2.3.4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("TXT pin should be 400, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
 func TestAdmin_HealthProxyToggle(t *testing.T) {
 	s := newTestServer(t)
 	startServer(t, s)

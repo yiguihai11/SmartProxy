@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"smartproxy/internal/chnroute"
+	mdns "github.com/miekg/dns"
+
 	"smartproxy/internal/config"
 	"smartproxy/internal/dns"
 	"smartproxy/internal/logbuf"
@@ -447,6 +449,85 @@ func (s *Server) handleCache(w http.ResponseWriter, r *http.Request) {
 		s.dns.CacheRemove(qname, qtype)
 		slog.Info("admin: removed DNS cache entry", "qname", qname, "qtype", qtype)
 		w.WriteHeader(http.StatusNoContent)
+
+	case http.MethodPost:
+		// Pin a cached answer as a persistent static record: the edited address is
+		// written into dns.static_records, then hot-applied by the config file
+		// watcher (same reload path as handleConfig — no manual reloadConfig here,
+		// which would double-trigger a full engine reload). Static records are
+		// checked before the cache on both TUN and UDP paths, so once the reload
+		// lands the new address wins over any cached answer.
+		if s.configSrc == nil {
+			http.Error(w, "config not available", http.StatusServiceUnavailable)
+			return
+		}
+		if s.configPath == "" || s.reloadConfig == nil {
+			http.Error(w, "config write not available", http.StatusServiceUnavailable)
+			return
+		}
+		var req struct {
+			Qname string `json:"qname"`
+			Qtype uint16 `json:"qtype"`
+			IP    string `json:"ip"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		req.Qname = strings.TrimSpace(req.Qname)
+		if req.Qname == "" {
+			http.Error(w, "qname must not be empty", http.StatusBadRequest)
+			return
+		}
+		ip := net.ParseIP(strings.TrimSpace(req.IP))
+		if ip == nil {
+			http.Error(w, "ip must be a valid IP address", http.StatusBadRequest)
+			return
+		}
+		// The address family must match the cached row's type (A→IPv4, AAAA→IPv6).
+		switch req.Qtype {
+		case mdns.TypeA:
+			if ip.To4() == nil {
+				http.Error(w, "A record requires an IPv4 address", http.StatusBadRequest)
+				return
+			}
+		case mdns.TypeAAAA:
+			if ip.To4() != nil {
+				http.Error(w, "AAAA record requires an IPv6 address", http.StatusBadRequest)
+				return
+			}
+		default:
+			http.Error(w, "only A/AAAA records can be pinned", http.StatusBadRequest)
+			return
+		}
+		live := s.configSrc()
+		// Apply to a copy so the live config is never mutated before the disk write.
+		next := *live
+		next.DNS.StaticRecords = config.SetStaticRecordIP(
+			append([]config.StaticRecord{}, live.DNS.StaticRecords...), req.Qname, ip)
+		if err := next.Validate(); err != nil {
+			http.Error(w, "validation failed: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		indented, err := json.MarshalIndent(next, "", "  ")
+		if err != nil {
+			http.Error(w, "format error", http.StatusInternalServerError)
+			return
+		}
+		if err := os.WriteFile(s.configPath, indented, 0644); err != nil {
+			http.Error(w, "write failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		// The static record now supersedes the cache entry, so drop it to keep the
+		// panel's cache view consistent with what is actually served.
+		s.dns.CacheRemove(req.Qname, req.Qtype)
+		slog.Info("admin: pinned DNS answer as static record",
+			"qname", req.Qname, "qtype", req.Qtype, "ip", ip.String())
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "ok",
+			"host":   req.Qname,
+			"ip":     ip.String(),
+		})
 
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

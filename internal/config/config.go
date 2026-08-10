@@ -237,6 +237,44 @@ func (c *Config) Validate() error {
 	return fmt.Errorf("config validation failed:\n  - %s", strings.Join(errs, "\n  - "))
 }
 
+// SetStaticRecordIP inserts ip into host's static record, replacing existing
+// addresses of the same address family (IPv4 vs IPv6) while preserving the other
+// family — so pinning a new IPv4 on a host that already has both families keeps its
+// IPv6 untouched. When host has no record yet, a new one is appended. The input
+// slice is not modified; a new slice is returned.
+func SetStaticRecordIP(records []StaticRecord, host string, ip net.IP) []StaticRecord {
+	host = strings.ToLower(strings.TrimSpace(host))
+	host = strings.TrimSuffix(host, ".")
+	newAddr := ip.String()
+	wantV4 := ip.To4() != nil
+	for i := range records {
+		cur := strings.ToLower(strings.TrimSpace(records[i].Host))
+		cur = strings.TrimSuffix(cur, ".")
+		if cur != host {
+			continue
+		}
+		var kept IPList
+		for _, a := range records[i].IP {
+			parsed := net.ParseIP(a)
+			if parsed == nil {
+				continue
+			}
+			if (parsed.To4() != nil) == wantV4 {
+				continue // drop the family being replaced
+			}
+			kept = append(kept, a)
+		}
+		kept = append(kept, newAddr)
+		// Copy the whole slice and set the new IP on the copied element so the
+		// caller's slice is never mutated.
+		next := make([]StaticRecord, len(records))
+		copy(next, records)
+		next[i].IP = kept
+		return next
+	}
+	return append(records, StaticRecord{Host: host, IP: IPList{newAddr}})
+}
+
 // StaticRecordsMap normalizes the static record list into a host→IPs lookup table:
 // host is lowercased with a trailing dot stripped, all listed IPs for a host are
 // grouped (so an IPv4 and an IPv6 address coexist for one host), and invalid
