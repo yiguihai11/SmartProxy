@@ -208,6 +208,7 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/blacklist", s.handleBlacklist)
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/cache", s.handleCache)
+	mux.HandleFunc("/dns/static", s.handleDNSStatic)
 	mux.HandleFunc("/route", s.handleRoute)
 	mux.HandleFunc("/dashboard", s.handleDashboard)
 	mux.HandleFunc("/cache/flush", s.handleCacheFlush)
@@ -500,22 +501,15 @@ func (s *Server) handleCache(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "only A/AAAA records can be pinned", http.StatusBadRequest)
 			return
 		}
-		live := s.configSrc()
-		// Apply to a copy so the live config is never mutated before the disk write.
-		next := *live
-		next.DNS.StaticRecords = config.SetStaticRecordIP(
-			append([]config.StaticRecord{}, live.DNS.StaticRecords...), req.Qname, ip)
-		if err := next.Validate(); err != nil {
-			http.Error(w, "validation failed: "+err.Error(), http.StatusBadRequest)
+		_, verr, werr := s.saveConfig(func(c *config.Config) {
+			c.DNS.StaticRecords = config.SetStaticRecordIP(c.DNS.StaticRecords, req.Qname, ip)
+		})
+		if verr != nil {
+			http.Error(w, "validation failed: "+verr.Error(), http.StatusBadRequest)
 			return
 		}
-		indented, err := json.MarshalIndent(next, "", "  ")
-		if err != nil {
-			http.Error(w, "format error", http.StatusInternalServerError)
-			return
-		}
-		if err := os.WriteFile(s.configPath, indented, 0644); err != nil {
-			http.Error(w, "write failed: "+err.Error(), http.StatusInternalServerError)
+		if werr != nil {
+			http.Error(w, "write failed: "+werr.Error(), http.StatusInternalServerError)
 			return
 		}
 		// The static record now supersedes the cache entry, so drop it to keep the
@@ -659,6 +653,153 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
+// saveConfig copies the live config, applies mutate to the copy, validates it,
+// and writes it to disk — the same persistence path as handleConfig, where the
+// actual reload is owned by the config file watcher (fsnotify) so no manual
+// reloadConfig call happens here. Returns the updated copy plus two errors:
+// validationErr (client-facing, 400) and writeErr (server-facing, 500).
+func (s *Server) saveConfig(mutate func(c *config.Config)) (*config.Config, error, error) {
+	next := *s.configSrc()
+	mutate(&next)
+	if err := next.Validate(); err != nil {
+		return nil, err, nil
+	}
+	indented, err := json.MarshalIndent(next, "", "  ")
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := os.WriteFile(s.configPath, indented, 0644); err != nil {
+		return nil, nil, err
+	}
+	slog.Info("admin: config saved to disk", "path", s.configPath)
+	return &next, nil, nil
+}
+
+// ---- static DNS records ----
+
+// handleDNSStatic manages dns.static_records (hosts-override) directly:
+//   GET    → the configured record list
+//   POST   → upsert {host, ip}, where ip is a single address or an array; each
+//            address replaces only its own family (A→v4, AAAA→v6) on that host
+//   DELETE → ?host=X[&ip=Y]; with ip the single address is dropped (empty record
+//            is removed), without ip the whole host record is dropped
+// Mutations persist to config.json and hot-apply via the config file watcher.
+func (s *Server) handleDNSStatic(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	requireWrite := func() bool {
+		if s.configSrc == nil {
+			http.Error(w, "config not available", http.StatusServiceUnavailable)
+			return false
+		}
+		if s.configPath == "" || s.reloadConfig == nil {
+			http.Error(w, "config write not available", http.StatusServiceUnavailable)
+			return false
+		}
+		return true
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		if s.configSrc == nil {
+			http.Error(w, "config not available", http.StatusServiceUnavailable)
+			return
+		}
+		json.NewEncoder(w).Encode(s.configSrc().DNS.StaticRecords)
+
+	case http.MethodPost:
+		if !requireWrite() {
+			return
+		}
+		var req struct {
+			Host string        `json:"host"`
+			IP   config.IPList `json:"ip"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		req.Host = strings.TrimSpace(req.Host)
+		if req.Host == "" {
+			http.Error(w, "host must not be empty", http.StatusBadRequest)
+			return
+		}
+		if len(req.IP) == 0 {
+			http.Error(w, "ip must not be empty", http.StatusBadRequest)
+			return
+		}
+		ips := make([]net.IP, 0, len(req.IP))
+		for _, s := range req.IP {
+			ip := net.ParseIP(strings.TrimSpace(s))
+			if ip == nil {
+				http.Error(w, "ip must be a valid IP address: "+strings.TrimSpace(s), http.StatusBadRequest)
+				return
+			}
+			ips = append(ips, ip)
+		}
+		next, verr, werr := s.saveConfig(func(c *config.Config) {
+			for _, ip := range ips {
+				c.DNS.StaticRecords = config.SetStaticRecordIP(c.DNS.StaticRecords, req.Host, ip)
+			}
+		})
+		if verr != nil {
+			http.Error(w, "validation failed: "+verr.Error(), http.StatusBadRequest)
+			return
+		}
+		if werr != nil {
+			http.Error(w, "write failed: "+werr.Error(), http.StatusInternalServerError)
+			return
+		}
+		slog.Info("admin: static record upserted", "host", req.Host, "ip", req.IP)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":  "ok",
+			"records": next.DNS.StaticRecords,
+		})
+
+	case http.MethodDelete:
+		if !requireWrite() {
+			return
+		}
+		host := strings.TrimSpace(r.URL.Query().Get("host"))
+		if host == "" {
+			http.Error(w, "missing host query param", http.StatusBadRequest)
+			return
+		}
+		var next *config.Config
+		var verr, werr error
+		if ipStr := strings.TrimSpace(r.URL.Query().Get("ip")); ipStr != "" {
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				http.Error(w, "invalid ip query param", http.StatusBadRequest)
+				return
+			}
+			next, verr, werr = s.saveConfig(func(c *config.Config) {
+				c.DNS.StaticRecords = config.RemoveStaticRecordIP(c.DNS.StaticRecords, host, ip)
+			})
+		} else {
+			next, verr, werr = s.saveConfig(func(c *config.Config) {
+				c.DNS.StaticRecords = config.RemoveStaticRecord(c.DNS.StaticRecords, host)
+			})
+		}
+		if verr != nil {
+			http.Error(w, "validation failed: "+verr.Error(), http.StatusBadRequest)
+			return
+		}
+		if werr != nil {
+			http.Error(w, "write failed: "+werr.Error(), http.StatusInternalServerError)
+			return
+		}
+		slog.Info("admin: static record removed", "host", host)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":  "ok",
+			"records": next.DNS.StaticRecords,
+		})
+
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

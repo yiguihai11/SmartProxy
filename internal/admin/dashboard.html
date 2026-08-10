@@ -276,21 +276,37 @@ tr:last-child td{border-bottom:none}
   </div>
 </div>
 <div class="view" id="view-cache">
-  <div class="view-title">DNS Cache</div>
+  <div class="view-title">DNS</div>
   <div class="view-meta"><span class="dot"></span><span id="cache-time"></span><button class="btn btn-sm active-auto" id="cache-auto-btn" onclick="toggleCacheAuto()" style="margin-left:auto">Auto</button></div>
-  <div class="toolbar"><input class="search-input" id="cache-search" placeholder="Search domain, answer..." oninput="cacheOnSearch()"><span class="filter-wrap"><span class="filter-trigger" id="cache-filter-trigger" onclick="toggleCacheFilter()">Type: All ▾</span><div class="filter-dropdown" id="cache-filter-dropdown"><div class="filter-option selected" data-value="all" onclick="setCacheFilter('all')">All</div></div></span><span class="page-info" id="cache-info"></span></div>
-  <div class="batch-bar" id="cache-batch-bar">
-    <span class="count" id="cache-batch-count">0 selected</span>
-    <select id="cache-batch-action"><option value="block">Block</option><option value="allow">Allow</option><option value="proxy">Proxy</option></select>
-    <button class="btn btn-sm primary" onclick="cacheBatchACL()">Apply</button>
-    <button class="btn btn-sm danger" onclick="cacheDeleteSelected()">Delete</button>
+  <div class="seg-group" id="dns-tabs" style="margin-bottom:10px">
+    <button type="button" class="seg-btn active" data-dnstab="cache" onclick="switchDNSTab('cache')">Cache</button>
+    <button type="button" class="seg-btn" data-dnstab="static" onclick="switchDNSTab('static')">Static Records</button>
   </div>
-  <div id="cache-list" class="table-wrap">Loading...</div>
-  <div class="pagination" id="cache-pagination" style="display:none">
-    <button class="btn btn-sm" id="cache-prev" onclick="cacheGoToPage(-1)" disabled>Prev</button>
-    <input class="page-input" id="cache-page-input" type="number" min="1" value="1" onchange="cacheGoPage(this.value)">
-    <span class="page-info" id="cache-page-info"></span>
-    <button class="btn btn-sm" id="cache-next" onclick="cacheGoToPage(1)">Next</button>
+  <div id="dns-cache-tab">
+    <div class="toolbar"><input class="search-input" id="cache-search" placeholder="Search domain, answer..." oninput="cacheOnSearch()"><span class="filter-wrap"><span class="filter-trigger" id="cache-filter-trigger" onclick="toggleCacheFilter()">Type: All ▾</span><div class="filter-dropdown" id="cache-filter-dropdown"><div class="filter-option selected" data-value="all" onclick="setCacheFilter('all')">All</div></div></span><span class="page-info" id="cache-info"></span></div>
+    <div class="batch-bar" id="cache-batch-bar">
+      <span class="count" id="cache-batch-count">0 selected</span>
+      <select id="cache-batch-action"><option value="block">Block</option><option value="allow">Allow</option><option value="proxy">Proxy</option></select>
+      <button class="btn btn-sm primary" onclick="cacheBatchACL()">Apply</button>
+      <button class="btn btn-sm danger" onclick="cacheDeleteSelected()">Delete</button>
+    </div>
+    <div id="cache-list" class="table-wrap">Loading...</div>
+    <div class="pagination" id="cache-pagination" style="display:none">
+      <button class="btn btn-sm" id="cache-prev" onclick="cacheGoToPage(-1)" disabled>Prev</button>
+      <input class="page-input" id="cache-page-input" type="number" min="1" value="1" onchange="cacheGoPage(this.value)">
+      <span class="page-info" id="cache-page-info"></span>
+      <button class="btn btn-sm" id="cache-next" onclick="cacheGoToPage(1)">Next</button>
+    </div>
+  </div>
+  <div id="dns-static-tab" style="display:none">
+    <div class="toolbar">
+      <input class="search-input" id="static-search" placeholder="Search host..." oninput="staticOnSearch()">
+      <input class="search-input" id="static-host" placeholder="hostname" autocomplete="off" spellcheck="false" style="min-width:170px">
+      <input class="search-input" id="static-ip" placeholder="IP or 1.2.3.4, ::1" autocomplete="off" spellcheck="false" style="min-width:160px">
+      <button class="btn btn-sm primary" onclick="staticAdd()">Add</button>
+      <span class="page-info" id="static-info"></span>
+    </div>
+    <div id="static-list" class="table-wrap">Loading...</div>
   </div>
 </div>
 <div class="view" id="view-config">
@@ -373,7 +389,7 @@ function navTo(n){
   if(ni)ni.classList.add('active');
   var vi=document.getElementById('view-'+n);
   if(vi)vi.classList.add('active');
-  var ld={dashboard:loadDashboard,traffic:loadTraffic,health:loadHealth,blacklist:loadBlacklist,cache:loadCache,config:loadConfig};
+  var ld={dashboard:loadDashboard,traffic:loadTraffic,health:loadHealth,blacklist:loadBlacklist,cache:loadDNS,config:loadConfig};
   if(ld[n])ld[n]();
 }
 function ldash(d){
@@ -1496,6 +1512,92 @@ function confirmCachePin(){
     setTimeout(function(){alert('Pinned: '+d.host+' → '+d.ip+'\nPersistent static record, hot-applied')},100);
   }).catch(function(e){alert('Error: '+e.message)}).finally(function(){btn.disabled=false;btn.textContent='Pin as static record'});
 }
+// ---- DNS page tabs: cache ↔ static records ----
+var dnsTab='cache',staticData=[],staticSearch='';
+function switchDNSTab(tab){
+  dnsTab=tab;
+  document.querySelectorAll('#dns-tabs .seg-btn').forEach(function(b){b.classList.toggle('active',b.dataset.dnstab===tab)});
+  document.getElementById('dns-cache-tab').style.display=tab==='cache'?'':'none';
+  document.getElementById('dns-static-tab').style.display=tab==='static'?'':'none';
+  if(tab==='cache')loadCache();
+  else loadStatic();
+}
+function loadDNS(){
+  if(dnsTab==='static')loadStatic();
+  else loadCache();
+}
+async function loadStatic(){
+  try{
+    var r=await fetch('/dns/static');
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    staticData=await r.json();
+    if(!Array.isArray(staticData))staticData=[];
+    st('cache-time');
+    renderStatic();
+  }catch(e){document.getElementById('static-list').innerHTML='<div style="padding:32px;text-align:center;color:var(--text2)">Error: '+e.message+'</div>'}
+}
+function staticGetFiltered(){
+  if(!staticSearch)return staticData;
+  var q=staticSearch.toLowerCase();
+  return staticData.filter(function(e){return (e.host&&e.host.toLowerCase().indexOf(q)!==-1)||(e.ip&&e.ip.some(function(a){return a.toLowerCase().indexOf(q)!==-1}))});
+}
+function renderStatic(){
+  var el=document.getElementById('static-list');
+  var rows=staticGetFiltered();
+  document.getElementById('static-info').textContent=rows.length+' records';
+  if(!rows.length){
+    el.innerHTML='<div style="padding:32px;text-align:center;color:var(--text2)">No static records</div>';
+    return;
+  }
+  el.innerHTML='<table><thead><tr><th>Host</th><th>Addresses</th><th></th></tr></thead><tbody>'+
+    rows.map(function(e){
+      var host=(e.host||'').replace(/'/g,"\\'");
+      var chips=(e.ip||[]).map(function(a){
+        return '<span class="tag" style="margin:2px 4px 2px 0">'+a+' <a href="javascript:void(0)" onclick="staticDeleteIP(\''+host+'\',\''+a.replace(/'/g,"\\'")+'\')" style="color:var(--text3)">×</a></span>';
+      }).join('');
+      return '<tr><td style="word-break:break-all">'+e.host+'</td><td style="font-family:var(--mono);font-size:.8rem;word-break:break-all">'+chips+'</td>'+
+        '<td style="text-align:right"><button class="btn btn-sm danger" onclick="staticDeleteHost(\''+host+'\')">Delete</button></td></tr>';
+    }).join('')+'</tbody></table>';
+}
+function staticOnSearch(){staticSearch=document.getElementById('static-search').value;renderStatic()}
+function staticAdd(){
+  var host=document.getElementById('static-host').value.trim();
+  var ip=document.getElementById('static-ip').value.trim();
+  if(!host){alert('Enter a hostname');return}
+  if(!ip){alert('Enter an IP address');return}
+  var ips=ip.split(',').map(function(s){return s.trim()}).filter(function(s){return s.length});
+  var btn=document.querySelector('#dns-static-tab .btn.primary');
+  btn.disabled=true;btn.textContent='Adding...';
+  fetch('/dns/static',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:host,ip:ips})}).then(function(r){
+    return r.json().then(function(d){
+      if(r.ok)return d;
+      throw new Error(d.error||('HTTP '+r.status));
+    });
+  }).then(function(d){
+    staticData=d.records;
+    document.getElementById('static-host').value='';
+    document.getElementById('static-ip').value='';
+    renderStatic();
+  }).catch(function(e){alert('Error: '+e.message)}).finally(function(){btn.disabled=false;btn.textContent='Add'});
+}
+function staticDeleteIP(host,ip){
+  fetch('/dns/static?host='+encodeURIComponent(host)+'&ip='+encodeURIComponent(ip),{method:'DELETE'}).then(function(r){
+    return r.json().then(function(d){
+      if(r.ok)return d;
+      throw new Error(d.error||('HTTP '+r.status));
+    });
+  }).then(function(d){staticData=d.records;renderStatic()}).catch(function(e){alert('Error: '+e.message)});
+}
+function staticDeleteHost(host){
+  confirmDelete('Delete static record for "'+host+'"?',function(){
+    fetch('/dns/static?host='+encodeURIComponent(host),{method:'DELETE'}).then(function(r){
+      return r.json().then(function(d){
+        if(r.ok)return d;
+        throw new Error(d.error||('HTTP '+r.status));
+      });
+    }).then(function(d){staticData=d.records;renderStatic()}).catch(function(e){alert('Error: '+e.message)});
+  });
+}
 function toggleCacheFilter(){
   var dd=document.getElementById('cache-filter-dropdown');
   closeAllFilterDropdowns();
@@ -1976,7 +2078,7 @@ document.querySelectorAll('.nav-item:not(.section)').forEach(function(item){
     item.classList.add('active');
     var vi=document.getElementById('view-'+item.dataset.view);
     if(vi)vi.classList.add('active');
-    var ld={dashboard:loadDashboard,traffic:loadTraffic,health:loadHealth,blacklist:loadBlacklist,cache:loadCache,logs:loadLogs,config:loadConfig};
+    var ld={dashboard:loadDashboard,traffic:loadTraffic,health:loadHealth,blacklist:loadBlacklist,cache:loadDNS,logs:loadLogs,config:loadConfig};
     if(ld[item.dataset.view])ld[item.dataset.view]();
   });
 });
@@ -2003,7 +2105,7 @@ es.onmessage=function(e){
     else if(v==='traffic'&&trafficAuto)ltraf(d);
     else if(v==='health')lhealth(d);
     else if(v==='blacklist'&&blAuto)refreshBlacklist();
-    else if(v==='cache'&&cacheAuto)refreshCache();
+    else if(v==='cache'&&cacheAuto){if(dnsTab==='static')loadStatic();else refreshCache()}
     else if(v==='logs'&&logsAuto)refreshLogs();
   }catch(ex){log('SSE err: '+ex.message)}
 };

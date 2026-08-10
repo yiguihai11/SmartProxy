@@ -237,19 +237,23 @@ func (c *Config) Validate() error {
 	return fmt.Errorf("config validation failed:\n  - %s", strings.Join(errs, "\n  - "))
 }
 
+// normHost lowercases a hostname and strips a trailing dot, the canonical form
+// used for static-record host lookups and merging.
+func normHost(host string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+}
+
 // SetStaticRecordIP inserts ip into host's static record, replacing existing
 // addresses of the same address family (IPv4 vs IPv6) while preserving the other
 // family — so pinning a new IPv4 on a host that already has both families keeps its
 // IPv6 untouched. When host has no record yet, a new one is appended. The input
 // slice is not modified; a new slice is returned.
 func SetStaticRecordIP(records []StaticRecord, host string, ip net.IP) []StaticRecord {
-	host = strings.ToLower(strings.TrimSpace(host))
-	host = strings.TrimSuffix(host, ".")
+	host = normHost(host)
 	newAddr := ip.String()
 	wantV4 := ip.To4() != nil
 	for i := range records {
-		cur := strings.ToLower(strings.TrimSpace(records[i].Host))
-		cur = strings.TrimSuffix(cur, ".")
+		cur := normHost(records[i].Host)
 		if cur != host {
 			continue
 		}
@@ -275,6 +279,46 @@ func SetStaticRecordIP(records []StaticRecord, host string, ip net.IP) []StaticR
 	return append(records, StaticRecord{Host: host, IP: IPList{newAddr}})
 }
 
+// RemoveStaticRecordIP removes ip from host's static record; when the record's IP
+// list becomes empty the whole host record is dropped. The input slice is not
+// modified; a new slice is returned.
+func RemoveStaticRecordIP(records []StaticRecord, host string, ip net.IP) []StaticRecord {
+	host = normHost(host)
+	out := make([]StaticRecord, 0, len(records))
+	for _, r := range records {
+		if normHost(r.Host) != host {
+			out = append(out, r)
+			continue
+		}
+		var kept IPList
+		for _, a := range r.IP {
+			parsed := net.ParseIP(a)
+			if parsed != nil && parsed.Equal(ip) {
+				continue
+			}
+			kept = append(kept, a)
+		}
+		if len(kept) > 0 {
+			r.IP = kept
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// RemoveStaticRecord drops host's static record entirely. The input slice is not
+// modified; a new slice is returned.
+func RemoveStaticRecord(records []StaticRecord, host string) []StaticRecord {
+	host = normHost(host)
+	out := make([]StaticRecord, 0, len(records))
+	for _, r := range records {
+		if normHost(r.Host) != host {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // StaticRecordsMap normalizes the static record list into a host→IPs lookup table:
 // host is lowercased with a trailing dot stripped, all listed IPs for a host are
 // grouped (so an IPv4 and an IPv6 address coexist for one host), and invalid
@@ -282,8 +326,7 @@ func SetStaticRecordIP(records []StaticRecord, host string, ip net.IP) []StaticR
 func (d DNSConf) StaticRecordsMap() map[string][]net.IP {
 	var m map[string][]net.IP
 	for _, r := range d.StaticRecords {
-		host := strings.ToLower(strings.TrimSpace(r.Host))
-		host = strings.TrimSuffix(host, ".")
+		host := normHost(r.Host)
 		if host == "" {
 			continue
 		}

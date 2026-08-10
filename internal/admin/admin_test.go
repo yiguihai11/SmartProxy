@@ -297,6 +297,133 @@ func TestAdmin_CachePinStaticRecord(t *testing.T) {
 	resp.Body.Close()
 }
 
+func TestAdmin_DNSStatic(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	cfg := config.DefaultConfig()
+	cfg.DNS.StaticRecords = []config.StaticRecord{{Host: "smartproxy.lan", IP: config.IPList{"192.168.1.1"}}}
+	if err := os.WriteFile(cfgPath, []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	dh := dns.NewHandler(1000, 300, "1.1.1.1:53", "[2606:4700:4700::1111]:53",
+		chnroute.New(), newTestManager(t), 3, "0.0.0.0", "::", false, "", nil, true)
+	rt := route.New(chnroute.New(), newTestManager(t), false, 3*time.Second, []int{80, 443}, 300*time.Second)
+	s := New(tempSocket(t), rt, newTestManager(t), dh, chnroute.New())
+	s.SetConfigSrc(func() *config.Config { return cfg })
+	s.SetConfigPath(cfgPath)
+	s.SetReloadConfig(func() {})
+	// In production the config file watcher reloads configSrc after each write;
+	// simulate that here so subsequent mutations build on the persisted state.
+	reload := func() {
+		b, err := os.ReadFile(cfgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var c config.Config
+		if err := json.Unmarshal(b, &c); err != nil {
+			t.Fatal(err)
+		}
+		cfg = &c
+	}
+	startServer(t, s)
+
+	do := func(method, path string, body []byte) (*http.Response, []byte) {
+		t.Helper()
+		c := &http.Client{Transport: &http.Transport{DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+			return net.Dial("unix", s.sockPath)
+		}}, Timeout: 5 * time.Second}
+		var req *http.Request
+		var err error
+		if body != nil {
+			req, err = http.NewRequest(method, "http://unix"+path, bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+		} else {
+			req, err = http.NewRequest(method, "http://unix"+path, nil)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s failed: %v", method, path, err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp, b
+	}
+
+	// GET returns the seed record.
+	resp, b := do("GET", "/dns/static", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET: expected 200, got %d: %s", resp.StatusCode, b)
+	}
+	var list []config.StaticRecord
+	if err := json.Unmarshal(b, &list); err != nil {
+		t.Fatalf("GET: bad json: %v", err)
+	}
+	if len(list) != 1 || list[0].Host != "smartproxy.lan" || list[0].IP[0] != "192.168.1.1" {
+		t.Fatalf("GET: unexpected list %+v", list)
+	}
+
+	// POST adds a second family to the same host.
+	body := []byte(`{"host":"SmartProxy.LAN.","ip":["::1"]}`)
+	resp, b = do("POST", "/dns/static", body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST: expected 200, got %d: %s", resp.StatusCode, b)
+	}
+	var upd struct{ Records []config.StaticRecord `json:"records"` }
+	if err := json.Unmarshal(b, &upd); err != nil {
+		t.Fatalf("POST: bad json: %v", err)
+	}
+	if len(upd.Records) != 1 || len(upd.Records[0].IP) != 2 {
+		t.Fatalf("POST: expected merged v4+v6, got %+v", upd.Records)
+	}
+	disk, _ := os.ReadFile(cfgPath)
+	var onDisk config.Config
+	if err := json.Unmarshal(disk, &onDisk); err != nil {
+		t.Fatalf("config on disk invalid: %v", err)
+	}
+	if len(onDisk.DNS.StaticRecords) != 1 || len(onDisk.DNS.StaticRecords[0].IP) != 2 {
+		t.Fatalf("config not persisted: %+v", onDisk.DNS.StaticRecords)
+	}
+	reload()
+
+	// DELETE a single IP → v6 left.
+	resp, b = do("DELETE", "/dns/static?host=smartproxy.lan&ip=192.168.1.1", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("DELETE ip: expected 200, got %d: %s", resp.StatusCode, b)
+	}
+	if err := json.Unmarshal(b, &upd); err != nil {
+		t.Fatalf("DELETE ip: bad json: %v", err)
+	}
+	if len(upd.Records) != 1 || len(upd.Records[0].IP) != 1 || upd.Records[0].IP[0] != "::1" {
+		t.Fatalf("DELETE ip: expected ::1 left, got %+v", upd.Records)
+	}
+	reload()
+
+	// DELETE whole host → empty list.
+	resp, b = do("DELETE", "/dns/static?host=smartproxy.lan", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("DELETE host: expected 200, got %d: %s", resp.StatusCode, b)
+	}
+	if err := json.Unmarshal(b, &upd); err != nil {
+		t.Fatalf("DELETE host: bad json: %v", err)
+	}
+	if len(upd.Records) != 0 {
+		t.Fatalf("DELETE host: expected empty, got %+v", upd.Records)
+	}
+
+	// Bad IP → 400, empty host → 400.
+	resp, _ = do("POST", "/dns/static", []byte(`{"host":"x.lan","ip":"not-an-ip"}`))
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("POST bad ip: expected 400, got %d", resp.StatusCode)
+	}
+	resp, _ = do("POST", "/dns/static", []byte(`{"host":"  ","ip":"1.2.3.4"}`))
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("POST empty host: expected 400, got %d", resp.StatusCode)
+	}
+}
+
 func TestAdmin_HealthProxyToggle(t *testing.T) {
 	s := newTestServer(t)
 	startServer(t, s)

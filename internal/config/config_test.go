@@ -407,6 +407,55 @@ func TestStaticRecordsMap(t *testing.T) {
 	}
 }
 
+func TestRemoveStaticRecordIP(t *testing.T) {
+	records := []StaticRecord{
+		{Host: "smartproxy.lan", IP: IPList{"192.168.1.1", "::1"}},
+		{Host: "other.lan", IP: IPList{"10.0.0.1"}},
+	}
+	// Remove one address of a multi-family record → other family stays.
+	out := RemoveStaticRecordIP(records, "SmartProxy.LAN.", net.ParseIP("192.168.1.1"))
+	if len(out) != 2 {
+		t.Fatalf("expected 2 records, got %d: %+v", len(out), out)
+	}
+	if len(out[0].IP) != 1 || out[0].IP[0] != "::1" {
+		t.Fatalf("expected only v6 left, got %v", out[0].IP)
+	}
+	// Remove the last address → whole record dropped.
+	out = RemoveStaticRecordIP(out, "smartproxy.lan", net.ParseIP("::1"))
+	if len(out) != 1 || out[0].Host != "other.lan" {
+		t.Fatalf("expected empty record dropped, got %+v", out)
+	}
+	// Removing a non-existent IP is a no-op.
+	out = RemoveStaticRecordIP(records, "smartproxy.lan", net.ParseIP("9.9.9.9"))
+	if len(out) != 2 || len(out[0].IP) != 2 {
+		t.Fatalf("expected no-op, got %+v", out)
+	}
+	// Input not mutated.
+	if len(records[0].IP) != 2 || records[0].IP[0] != "192.168.1.1" {
+		t.Fatalf("input mutated: %+v", records[0].IP)
+	}
+}
+
+func TestRemoveStaticRecord(t *testing.T) {
+	records := []StaticRecord{
+		{Host: "smartproxy.lan", IP: IPList{"192.168.1.1", "::1"}},
+		{Host: "other.lan", IP: IPList{"10.0.0.1"}},
+	}
+	out := RemoveStaticRecord(records, "SmartProxy.LAN.")
+	if len(out) != 1 || out[0].Host != "other.lan" {
+		t.Fatalf("expected other.lan only, got %+v", out)
+	}
+	// Unknown host → unchanged.
+	out = RemoveStaticRecord(records, "nope.lan")
+	if len(out) != 2 {
+		t.Fatalf("expected unchanged, got %+v", out)
+	}
+	// Input not mutated.
+	if len(records) != 2 || records[0].Host != "smartproxy.lan" {
+		t.Fatalf("input mutated: %+v", records)
+	}
+}
+
 func TestSetStaticRecordIP(t *testing.T) {
 	// New host → appended record.
 	out := SetStaticRecordIP(nil, "smartproxy.lan", net.ParseIP("127.0.0.1"))
