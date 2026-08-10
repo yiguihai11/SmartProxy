@@ -37,10 +37,13 @@ func (s *Server) SetTLS(certFile, keyFile string, enabled bool, extraSANs ...str
 // buildTLSConfig loads the configured certificate pair, or falls back to an
 // auto-generated self-signed certificate persisted next to the config file.
 func (s *Server) buildTLSConfig() (*tls.Config, error) {
-	cert, err := s.loadCertificate()
+	cert, certPEM, err := s.loadCertificate()
 	if err != nil {
 		return nil, err
 	}
+	// Keep the public certificate available for the panel's /admin.crt download
+	// (handleAdminCert). Only the leaf cert PEM is kept — never the private key.
+	s.certPEM = certPEM
 	return &tls.Config{
 		MinVersion:   tls.VersionTLS12,
 		Certificates: []tls.Certificate{cert},
@@ -50,13 +53,13 @@ func (s *Server) buildTLSConfig() (*tls.Config, error) {
 	}, nil
 }
 
-func (s *Server) loadCertificate() (tls.Certificate, error) {
+func (s *Server) loadCertificate() (tls.Certificate, []byte, error) {
 	if s.certFile != "" || s.keyFile != "" {
 		cert, err := tls.LoadX509KeyPair(s.certFile, s.keyFile)
 		if err != nil {
-			return tls.Certificate{}, fmt.Errorf("load admin TLS cert: %w", err)
+			return tls.Certificate{}, nil, fmt.Errorf("load admin TLS cert: %w", err)
 		}
-		return cert, nil
+		return cert, pemLeaf(cert), nil
 	}
 	// Auto-generated self-signed pair, persisted so restarts reuse the same
 	// certificate (the browser only warns once instead of on every start).
@@ -71,12 +74,19 @@ func (s *Server) loadCertificate() (tls.Certificate, error) {
 			// otherwise regenerate so a changed admin_cert_sans takes effect instead
 			// of silently serving a cert that is invalid for the panel's address.
 			if certCoversSANs(cert, s.tlsExtraSANs) {
-				return cert, nil
+				return cert, pemLeaf(cert), nil
 			}
 		}
-		return genSelfSigned(certPath, keyPath, s.tlsExtraSANs...)
+		cert, err := genSelfSigned(certPath, keyPath, s.tlsExtraSANs...)
+		return cert, pemLeaf(cert), err
 	}
-	return genSelfSigned("", "", s.tlsExtraSANs...)
+	cert, err := genSelfSigned("", "", s.tlsExtraSANs...)
+	return cert, pemLeaf(cert), err
+}
+
+// pemLeaf re-encodes the leaf certificate's DER bytes as PEM, for serving admin.crt.
+func pemLeaf(cert tls.Certificate) []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]})
 }
 
 // genSelfSigned creates an ECDSA P-256 self-signed CA/server certificate
@@ -100,10 +110,10 @@ func genSelfSigned(certPath, keyPath string, extraSANs ...string) (tls.Certifica
 	notBefore := time.Now().Add(-time.Hour)
 	extraDNS, extraIPs := splitSANs(extraSANs)
 	tmpl := &x509.Certificate{
-		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "smartproxy"},
-		NotBefore:             notBefore,
-		NotAfter:              notBefore.Add(397 * 24 * time.Hour),
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "smartproxy"},
+		NotBefore:    notBefore,
+		NotAfter:     notBefore.Add(397 * 24 * time.Hour),
 		// CertSign is mandatory when IsCA is set (x509.CreateCertificate rejects
 		// the combination otherwise); digitalSignature+keyEncipherment keep the
 		// cert usable as a TLS server certificate too.

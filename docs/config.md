@@ -32,7 +32,7 @@
 
 **Admin HTTPS 自签证书**：`admin_https=true` 且未配 `admin_cert_file`/`admin_key_file` 时，启动自动生成一张 ECDSA P-256 自签证书（CN=`smartproxy`，SAN=localhost/127.0.0.1/::1 **+ `admin_cert_sans` 中列出的主机名/IP**，397 天有效期），best-effort 写入**配置文件同目录**的 `admin.crt` + `admin.key`，重启复用同一证书（浏览器只需告警/信任一次）。**若已存在的证书缺少当前请求的 SAN（比如改过 `admin_cert_sans`），会自动重新生成**。写盘失败则仅内存持有。unix socket（`admin_socket`）仍为纯 HTTP，仅供本机访问。**注意：Admin TLS 配置在启动时生效，改动需重启；`admin_auth` 仍可热重载。**
 
-> 局域网 IP 场景：默认自签证书只覆盖 localhost/127.0.0.1/::1，直接用 `https://192.168.1.1:9090` 访问会报"证书对该地址无效"。在 `admin_cert_sans` 里写上该 IP 即可让自动生成的证书覆盖它，消除主机名不匹配告警；"不受信任"告警则需把 `admin.crt` 装进访问设备的受信任根证书库（Android 7.0+ 装 CA 证书、Chrome 即信任；装证书要求先设锁屏 PIN）。
+> 局域网 IP 场景：默认自签证书只覆盖 localhost/127.0.0.1/::1，直接用 `https://192.168.1.1:9090` 访问会报"证书对该地址无效"。在 `admin_cert_sans` 里写上该 IP 即可让自动生成的证书覆盖它，消除主机名不匹配告警；"不受信任"告警则需把 `admin.crt` 装进访问设备的受信任根证书库（Android 7.0+ 装 CA 证书、Chrome 即信任；装证书要求先设锁屏 PIN）。**面板 System → TLS Cert 页可直接下载当前证书（`GET /admin.crt`，只含公钥证书、不含私钥）**，省去登服务器复制文件的步骤。
 
 ### `tun`
 

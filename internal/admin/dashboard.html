@@ -204,6 +204,7 @@ tr:last-child td{border-bottom:none}
     <div class="nav-item section">System</div>
     <div class="nav-item" data-view="logs"><span class="nav-icon">L</span><span>Logs</span></div>
     <div class="nav-item" data-view="cache"><span class="nav-icon">D</span><span>DNS Cache</span></div>
+    <div class="nav-item" data-view="tls"><span class="nav-icon">🔐</span><span>TLS Cert</span></div>
     <div class="nav-item" data-view="config"><span class="nav-icon">C</span><span>Config</span></div>
   </div>
   <div class="sidebar-footer"><button class="theme-btn" id="theme-btn" onclick="toggleTheme()" title="Toggle theme">☀️</button></div>
@@ -315,6 +316,22 @@ tr:last-child td{border-bottom:none}
   <div class="view-meta"><span class="dot"></span><span id="cfg-time"></span></div>
   <div class="toggle-group" id="cfg-toggles"></div>
   <div id="cfg-content"></div>
+</div>
+<div class="view" id="view-tls">
+  <div class="view-title">TLS Certificate</div>
+  <div class="view-meta"><span class="dot"></span><span>Self-signed admin certificate</span></div>
+  <div class="card" style="max-width:720px;line-height:1.7;color:var(--text2)">
+    <p style="margin-bottom:16px">The panel serves HTTPS with a self-signed certificate
+      (<code>admin.crt</code>). Install it as a <b>trusted CA</b> on each device that opens
+      the panel to clear the "untrusted" warning — Android 7.0+ requires a lock-screen PIN to
+      install a CA; iOS needs the profile installed then trusted in Settings &gt; General &gt;
+      VPN &amp; Device Management. The certificate covers <code>localhost</code>,
+      <code>127.0.0.1</code>, <code>::1</code> and every address in
+      <code>admin_cert_sans</code> (config <code>listen</code> block); edit that field if a LAN
+      IP is missing and restart — the cert regenerates automatically. The certificate rotates
+      when its SAN list no longer matches.</p>
+    <a class="btn btn-sm primary" href="/admin.crt" download="admin.crt">Download admin.crt</a>
+  </div>
 </div>
 <div class="app-footer">© 2026 <a href="https://gitlab.com/yiguihai" target="_blank" rel="noopener">爱翻墙的红杏</a></div>
 </div>

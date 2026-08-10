@@ -18,8 +18,8 @@ import (
 	"sync"
 	"time"
 
-	"smartproxy/internal/chnroute"
 	mdns "github.com/miekg/dns"
+	"smartproxy/internal/chnroute"
 
 	"smartproxy/internal/config"
 	"smartproxy/internal/dns"
@@ -60,6 +60,9 @@ type Server struct {
 	certFile     string
 	keyFile      string
 	tlsExtraSANs []string
+	// certPEM is the public certificate in use (auto-generated or custom), captured at
+	// buildTLSConfig for the /admin.crt download. Empty when HTTPS is not in use.
+	certPEM []byte
 }
 
 type cachedStats struct {
@@ -233,6 +236,7 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/logs", s.handleLogs)
 	mux.HandleFunc("/logs/clear", s.handleLogsClear)
 	mux.HandleFunc("/terminal/clear", s.handleTerminalClear)
+	mux.HandleFunc("/admin.crt", s.handleAdminCert)
 	mux.HandleFunc("/", s.handleRoot)
 	mux.HandleFunc("/events", s.handleEvents)
 	return mux
@@ -467,8 +471,8 @@ func (s *Server) handleCache(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var req struct {
-			Qname string       `json:"qname"`
-			Qtype uint16       `json:"qtype"`
+			Qname string        `json:"qname"`
+			Qtype uint16        `json:"qtype"`
 			IP    config.IPList `json:"ip"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -661,6 +665,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
+
 // saveConfig copies the live config, applies mutate to the copy, validates it,
 // and writes it to disk — the same persistence path as handleConfig, where the
 // actual reload is owned by the config file watcher (fsnotify) so no manual
@@ -686,11 +691,13 @@ func (s *Server) saveConfig(mutate func(c *config.Config)) (*config.Config, erro
 // ---- static DNS records ----
 
 // handleDNSStatic manages dns.static_records (hosts-override) directly:
-//   GET    → the configured record list
-//   POST   → upsert {host, ip}, where ip is a single address or an array; each
-//            address replaces only its own family (A→v4, AAAA→v6) on that host
-//   DELETE → ?host=X[&ip=Y]; with ip the single address is dropped (empty record
-//            is removed), without ip the whole host record is dropped
+//
+//	GET    → the configured record list
+//	POST   → upsert {host, ip}, where ip is a single address or an array; each
+//	         address replaces only its own family (A→v4, AAAA→v6) on that host
+//	DELETE → ?host=X[&ip=Y]; with ip the single address is dropped (empty record
+//	         is removed), without ip the whole host record is dropped
+//
 // Mutations persist to config.json and hot-apply via the config file watcher.
 func (s *Server) handleDNSStatic(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -867,6 +874,26 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(version.Info())
+}
+
+// handleAdminCert serves the current admin leaf certificate as PEM for download, so a device
+// that reaches the panel can install it as a trusted CA (Android / iOS / desktop) to clear
+// the "untrusted" warning. Only the public certificate is served — never the private key.
+// Available whenever HTTPS is in use (auto-generated or custom cert files); 404 with a hint
+// when HTTPS is off (buildTLSConfig never ran) so the panel stays plain HTTP.
+func (s *Server) handleAdminCert(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if len(s.certPEM) == 0 {
+		http.Error(w, "admin HTTPS is not enabled (admin_https=false or TLS setup failed); no certificate to download", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.Header().Set("Content-Disposition", `attachment; filename="admin.crt"`)
+	w.Header().Set("Content-Length", strconv.Itoa(len(s.certPEM)))
+	w.Write(s.certPEM)
 }
 
 // ---- file browser ----
