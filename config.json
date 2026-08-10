@@ -9,7 +9,7 @@
     },
     "relaxed_udp_origin_check": true,
     "udp_associate_idle_timeout": 60,
-    "admin_socket": "/data/data/com.termux/files/home/tmp/smartproxy.sock",
+    "admin_socket": "",
     "admin_port": 9090,
     "admin_auth": {
       "enabled": true,
@@ -49,12 +49,18 @@
       "failures": 2,
       "successes": 1,
       "open_cool_down": 30,
-      "auto_disable_if_single_proxy": true
+      "auto_disable_if_single_proxy": true,
+      "udp_probe_dns": "1.1.1.1:53",
+      "udp_probe_domain": "dns.google"
     },
     "proxies": [
       {
-        "alias": "ss-local",
-        "url": "socks5://127.0.0.1:1081"
+        "alias": "test",
+        "url": "ss://none:ODI4ZjAwZGMtNDQz@103.11.76.248:80?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dupay.10010.com"
+      },
+      {
+        "alias": "ss",
+        "url": "ss://2022-blake3-aes-128-gcm:NzJlOTQ5NWYtM2ZkYi00Cg%3D%3D@103.11.76.248:28679"
       }
     ]
   },
@@ -74,11 +80,16 @@
     },
     "query_timeout": 3,
     "speed_check_mode": "tcp:443",
-    "static_records": []
+    "static_records": [
+      {
+        "host": "smartproxy.lan",
+        "ip": ["127.0.0.1", "::1"]
+      }
+    ]
   },
   "smart_proxy": {
     "enabled": true,
-    "timeout": 3,
+    "timeout": 2,
     "ports": [
       80,
       443
