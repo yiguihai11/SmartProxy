@@ -456,6 +456,63 @@ func TestRemoveStaticRecord(t *testing.T) {
 	}
 }
 
+func TestReplaceStaticRecord(t *testing.T) {
+	records := []StaticRecord{
+		{Host: "smartproxy.lan", IP: IPList{"192.168.1.1", "::1"}},
+		{Host: "other.lan", IP: IPList{"10.0.0.1"}},
+	}
+	// In-place: swap the address list wholesale (drops v4, adds a new v4+v6 set).
+	out := ReplaceStaticRecord(records, "smartproxy.lan", "smartproxy.lan", []net.IP{net.ParseIP("1.2.3.4")})
+	if len(out) != 2 {
+		t.Fatalf("expected 2 records, got %d: %+v", len(out), out)
+	}
+	for _, r := range out {
+		if r.Host == "smartproxy.lan" {
+			if len(r.IP) != 1 || r.IP[0] != "1.2.3.4" {
+				t.Fatalf("expected replaced single address, got %+v", r.IP)
+			}
+		}
+	}
+	// Rename: old host gone, new host carries the list.
+	out = ReplaceStaticRecord(records, "smartproxy.lan", "panel.lan", []net.IP{net.ParseIP("::1"), net.ParseIP("127.0.0.1")})
+	if len(out) != 2 {
+		t.Fatalf("expected 2 records after rename, got %d: %+v", len(out), out)
+	}
+	var found bool
+	for _, r := range out {
+		if r.Host == "smartproxy.lan" {
+			t.Fatal("old host should be gone")
+		}
+		if r.Host == "panel.lan" {
+			found = true
+			if len(r.IP) != 2 || r.IP[0] != "::1" || r.IP[1] != "127.0.0.1" {
+				t.Fatalf("renamed record wrong: %+v", r.IP)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("new host not found")
+	}
+	// Renaming onto an existing host collapses both into one record (each host
+	// keeps exactly one entry after the call).
+	out = ReplaceStaticRecord(records, "other.lan", "smartproxy.lan", []net.IP{net.ParseIP("9.9.9.9")})
+	if len(out) != 1 {
+		t.Fatalf("expected 1 record, got %d: %+v", len(out), out)
+	}
+	if out[0].Host != "smartproxy.lan" || len(out[0].IP) != 1 || out[0].IP[0] != "9.9.9.9" {
+		t.Fatalf("expected collapsed smartproxy.lan=9.9.9.9, got %+v", out[0])
+	}
+	// Empty IP list removes the record without adding.
+	out = ReplaceStaticRecord(records, "smartproxy.lan", "smartproxy.lan", nil)
+	if len(out) != 1 || out[0].Host != "other.lan" {
+		t.Fatalf("expected record removed, got %+v", out)
+	}
+	// Input not mutated.
+	if len(records) != 2 || len(records[0].IP) != 2 || records[0].IP[0] != "192.168.1.1" {
+		t.Fatalf("input mutated: %+v", records)
+	}
+}
+
 func TestSetStaticRecordIP(t *testing.T) {
 	// New host → appended record.
 	out := SetStaticRecordIP(nil, "smartproxy.lan", net.ParseIP("127.0.0.1"))

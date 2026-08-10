@@ -424,6 +424,101 @@ func TestAdmin_DNSStatic(t *testing.T) {
 	}
 }
 
+func TestAdmin_DNSStaticEdit(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	cfg := config.DefaultConfig()
+	cfg.DNS.StaticRecords = []config.StaticRecord{{Host: "smartproxy.lan", IP: config.IPList{"192.168.1.1", "::1"}}}
+	dh := dns.NewHandler(1000, 300, "1.1.1.1:53", "[2606:4700:4700::1111]:53",
+		chnroute.New(), newTestManager(t), 3, "0.0.0.0", "::", false, "", nil, true)
+	rt := route.New(chnroute.New(), newTestManager(t), false, 3*time.Second, []int{80, 443}, 300*time.Second)
+	s := New(tempSocket(t), rt, newTestManager(t), dh, chnroute.New())
+	s.SetConfigSrc(func() *config.Config { return cfg })
+	s.SetConfigPath(cfgPath)
+	s.SetReloadConfig(func() {})
+	reload := func() {
+		b, err := os.ReadFile(cfgPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var c config.Config
+		if err := json.Unmarshal(b, &c); err != nil {
+			t.Fatal(err)
+		}
+		cfg = &c
+	}
+	startServer(t, s)
+	do := func(method, path string, body []byte) (*http.Response, []byte) {
+		t.Helper()
+		c := &http.Client{Transport: &http.Transport{DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+			return net.Dial("unix", s.sockPath)
+		}}, Timeout: 5 * time.Second}
+		req, err := http.NewRequest(method, "http://unix"+path, bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s failed: %v", method, path, err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp, b
+	}
+
+	// Edit: replace the address list wholesale (drops ::1, sets new v4).
+	resp, b := do("PUT", "/dns/static", []byte(`{"old_host":"smartproxy.lan","host":"smartproxy.lan","ip":["5.6.7.8"]}`))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT: expected 200, got %d: %s", resp.StatusCode, b)
+	}
+	var upd struct{ Records []config.StaticRecord `json:"records"` }
+	if err := json.Unmarshal(b, &upd); err != nil {
+		t.Fatalf("PUT: bad json: %v", err)
+	}
+	if len(upd.Records) != 1 || len(upd.Records[0].IP) != 1 || upd.Records[0].IP[0] != "5.6.7.8" {
+		t.Fatalf("PUT: expected single 5.6.7.8, got %+v", upd.Records)
+	}
+	reload()
+
+	// Edit rename: old host removed, new host carries the list.
+	resp, b = do("PUT", "/dns/static", []byte(`{"old_host":"smartproxy.lan","host":"panel.lan","ip":["127.0.0.1","::1"]}`))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT rename: expected 200, got %d: %s", resp.StatusCode, b)
+	}
+	if err := json.Unmarshal(b, &upd); err != nil {
+		t.Fatalf("PUT rename: bad json: %v", err)
+	}
+	if len(upd.Records) != 1 || upd.Records[0].Host != "panel.lan" ||
+		len(upd.Records[0].IP) != 2 || upd.Records[0].IP[1] != "::1" {
+		t.Fatalf("PUT rename: unexpected %+v", upd.Records)
+	}
+	disk, _ := os.ReadFile(cfgPath)
+	var onDisk config.Config
+	if err := json.Unmarshal(disk, &onDisk); err != nil {
+		t.Fatalf("config on disk invalid: %v", err)
+	}
+	if len(onDisk.DNS.StaticRecords) != 1 || onDisk.DNS.StaticRecords[0].Host != "panel.lan" {
+		t.Fatalf("config not persisted: %+v", onDisk.DNS.StaticRecords)
+	}
+
+	// Missing old_host / empty host / bad ip → 400.
+	resp, _ = do("PUT", "/dns/static", []byte(`{"host":"x.lan","ip":["1.2.3.4"]}`))
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("PUT missing old_host: expected 400, got %d", resp.StatusCode)
+	}
+	resp, _ = do("PUT", "/dns/static", []byte(`{"old_host":"panel.lan","host":"  ","ip":["1.2.3.4"]}`))
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("PUT empty host: expected 400, got %d", resp.StatusCode)
+	}
+	resp, _ = do("PUT", "/dns/static", []byte(`{"old_host":"panel.lan","host":"x.lan","ip":["oops"]}`))
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("PUT bad ip: expected 400, got %d", resp.StatusCode)
+	}
+}
+
 func TestAdmin_HealthProxyToggle(t *testing.T) {
 	s := newTestServer(t)
 	startServer(t, s)

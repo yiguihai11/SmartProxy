@@ -1553,10 +1553,13 @@ function renderStatic(){
   el.innerHTML='<table><thead><tr><th>Host</th><th>Addresses</th><th></th></tr></thead><tbody>'+
     rows.map(function(e){
       var host=(e.host||'').replace(/'/g,"\\'");
+      var ipsStr=(e.ip||[]).join(', ').replace(/'/g,"\\'");
       var chips=(e.ip||[]).map(function(a){
-        return '<span class="tag" style="margin:2px 4px 2px 0">'+a+' <a href="javascript:void(0)" onclick="staticDeleteIP(\''+host+'\',\''+a.replace(/'/g,"\\'")+'\')" style="color:var(--text3)">×</a></span>';
+        return '<span class="tag" style="margin:2px 4px 2px 0">'+a+' <a href="javascript:void(0)" onclick="event.stopPropagation();staticDeleteIP(\''+host+'\',\''+a.replace(/'/g,"\\'")+'\')" style="color:var(--text3)">×</a></span>';
       }).join('');
-      return '<tr><td style="word-break:break-all">'+e.host+'</td><td style="font-family:var(--mono);font-size:.8rem;word-break:break-all">'+chips+'</td>'+
+      return '<tr>'+
+        '<td class="clickable" title="Click to edit" style="word-break:break-all" onclick="openStaticEditDialog(\''+host+'\',\''+ipsStr+'\')">'+e.host+'</td>'+
+        '<td class="clickable" title="Click to edit" style="font-family:var(--mono);font-size:.8rem;word-break:break-all" onclick="openStaticEditDialog(\''+host+'\',\''+ipsStr+'\')">'+chips+'</td>'+
         '<td style="text-align:right"><button class="btn btn-sm danger" onclick="staticDeleteHost(\''+host+'\')">Delete</button></td></tr>';
     }).join('')+'</tbody></table>';
 }
@@ -1606,6 +1609,37 @@ function staticDeleteHost(host){
       });
     }).then(function(d){staticData=d.records;renderStatic()}).catch(function(e){alert('Error: '+e.message)});
   });
+}
+var staticEditOldHost='';
+function openStaticEditDialog(host,ipsStr){
+  staticEditOldHost=host;
+  document.getElementById('staticedit-host').value=host;
+  document.getElementById('staticedit-ip').value=ipsStr;
+  document.getElementById('staticedit-overlay').classList.add('show');
+  setTimeout(function(){document.getElementById('staticedit-host').focus()},50);
+}
+function closeStaticEditDialog(){
+  document.getElementById('staticedit-overlay').classList.remove('show');
+}
+function confirmStaticEdit(){
+  var oldHost=staticEditOldHost;
+  var host=document.getElementById('staticedit-host').value.trim();
+  var ip=document.getElementById('staticedit-ip').value.trim();
+  if(!host){alert('Enter a hostname');return}
+  var ips=ip.split(',').map(function(s){return s.trim()}).filter(function(s){return s.length});
+  if(!ips.length){alert('Enter at least one IP address');return}
+  var btn=document.getElementById('staticedit-confirm');
+  btn.disabled=true;btn.textContent='Saving...';
+  fetch('/dns/static',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({old_host:oldHost,host:host,ip:ips})}).then(function(r){
+    return r.json().then(function(d){
+      if(r.ok)return d;
+      throw new Error(d.error||('HTTP '+r.status));
+    });
+  }).then(function(d){
+    staticData=d.records;
+    closeStaticEditDialog();
+    renderStatic();
+  }).catch(function(e){alert('Error: '+e.message)}).finally(function(){btn.disabled=false;btn.textContent='Save'});
 }
 function toggleCacheFilter(){
   var dd=document.getElementById('cache-filter-dropdown');
@@ -2164,6 +2198,20 @@ es.onmessage=function(e){
     <div class="dialog-actions">
       <button class="btn btn-sm" onclick="closeStaticAddDialog()">Cancel</button>
       <button class="btn btn-sm primary" id="staticadd-confirm" onclick="confirmStaticAdd()">Add</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="staticedit-overlay" onclick="if(event.target===this)closeStaticEditDialog()">
+  <div class="dialog" onclick="event.stopPropagation()">
+    <div class="dialog-title">Edit Static Record</div>
+    <div class="dialog-desc">Replace this hostname's record. Addresses are replaced wholesale — use a comma-separated list for multiple.</div>
+    <div class="dialog-label">Host</div>
+    <input class="dialog-input" id="staticedit-host" placeholder="hostname" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter'){event.preventDefault();confirmStaticEdit()}">
+    <div class="dialog-label">IP Address(es)</div>
+    <input class="dialog-input" id="staticedit-ip" placeholder="1.2.3.4, ::1" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter'){event.preventDefault();confirmStaticEdit()}">
+    <div class="dialog-actions">
+      <button class="btn btn-sm" onclick="closeStaticEditDialog()">Cancel</button>
+      <button class="btn btn-sm primary" id="staticedit-confirm" onclick="confirmStaticEdit()">Save</button>
     </div>
   </div>
 </div>

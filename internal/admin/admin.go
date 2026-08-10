@@ -756,6 +756,58 @@ func (s *Server) handleDNSStatic(w http.ResponseWriter, r *http.Request) {
 			"records": next.DNS.StaticRecords,
 		})
 
+	case http.MethodPut:
+		// Edit an existing record: replaces old_host's record (and any record
+		// already carrying host) with a fresh record holding exactly ip — so the
+		// address list can be swapped wholesale, unlike POST's family-aware merge.
+		if !requireWrite() {
+			return
+		}
+		var req struct {
+			OldHost string        `json:"old_host"`
+			Host    string        `json:"host"`
+			IP      config.IPList `json:"ip"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		req.OldHost = strings.TrimSpace(req.OldHost)
+		req.Host = strings.TrimSpace(req.Host)
+		if req.OldHost == "" {
+			http.Error(w, "old_host must not be empty", http.StatusBadRequest)
+			return
+		}
+		if req.Host == "" {
+			http.Error(w, "host must not be empty", http.StatusBadRequest)
+			return
+		}
+		ips := make([]net.IP, 0, len(req.IP))
+		for _, s := range req.IP {
+			ip := net.ParseIP(strings.TrimSpace(s))
+			if ip == nil {
+				http.Error(w, "ip must be a valid IP address: "+strings.TrimSpace(s), http.StatusBadRequest)
+				return
+			}
+			ips = append(ips, ip)
+		}
+		next, verr, werr := s.saveConfig(func(c *config.Config) {
+			c.DNS.StaticRecords = config.ReplaceStaticRecord(c.DNS.StaticRecords, req.OldHost, req.Host, ips)
+		})
+		if verr != nil {
+			http.Error(w, "validation failed: "+verr.Error(), http.StatusBadRequest)
+			return
+		}
+		if werr != nil {
+			http.Error(w, "write failed: "+werr.Error(), http.StatusInternalServerError)
+			return
+		}
+		slog.Info("admin: static record replaced", "old_host", req.OldHost, "host", req.Host, "ip", req.IP)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":  "ok",
+			"records": next.DNS.StaticRecords,
+		})
+
 	case http.MethodDelete:
 		if !requireWrite() {
 			return

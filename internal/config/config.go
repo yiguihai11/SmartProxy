@@ -319,6 +319,35 @@ func RemoveStaticRecord(records []StaticRecord, host string) []StaticRecord {
 	return out
 }
 
+// ReplaceStaticRecord is the edit operation: it drops oldHost's record (and, if
+// different, any existing record already carrying host) and sets host's record to
+// exactly ips, so every host ends up with at most one record. When host == oldHost
+// the record's IP list is replaced in place. A host with no ips is simply removed.
+// The input slice is not modified; a new slice is returned.
+func ReplaceStaticRecord(records []StaticRecord, oldHost, host string, ips []net.IP) []StaticRecord {
+	oldHost = normHost(oldHost)
+	host = normHost(host)
+	ipStrs := make(IPList, 0, len(ips))
+	for _, ip := range ips {
+		ipStrs = append(ipStrs, ip.String())
+	}
+	out := make([]StaticRecord, 0, len(records)+1)
+	for _, r := range records {
+		cur := normHost(r.Host)
+		if cur == oldHost {
+			continue // the record being edited is dropped
+		}
+		if host != "" && cur == host {
+			continue // a pre-existing record for the new host is replaced below
+		}
+		out = append(out, r)
+	}
+	if host != "" && len(ipStrs) > 0 {
+		out = append(out, StaticRecord{Host: host, IP: ipStrs})
+	}
+	return out
+}
+
 // StaticRecordsMap normalizes the static record list into a host→IPs lookup table:
 // host is lowercased with a trailing dot stripped, all listed IPs for a host are
 // grouped (so an IPv4 and an IPv6 address coexist for one host), and invalid
