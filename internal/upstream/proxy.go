@@ -81,7 +81,14 @@ type Proxy struct {
 	// and v2ray-plugin/xray-plugin (all 5 Android modes of websocket/grpc/quic, see
 	// v2ray.go); on TCP connect it wraps the matching transport under the SS encryption layer, and unknown plugins return a clear error.
 	Plugin string
-	health ProxyHealth
+	// UDPInTCP selects the hev UDP-in-TCP relay (hev-socks5-server's private CMD=5
+	// extension) for a socks5/socks5h node: UDP packets are framed over the same TCP
+	// connection, so the node needs no UDP listener. It is set from the config entry's
+	// udp_in_tcp field (the panel switch) OR the URL's ?udp_in_tcp=1 query (imported
+	// links); routing then treats the node as UDP-only (EffectiveMode → udp_only), but its
+	// TCP circuit still tracks the carrier channel that actually carries the frames.
+	UDPInTCP bool
+	health   ProxyHealth
 	// udpCapability is how this node's UDP relay works, auto-detected (see UDPCapability).
 	// It is written by successful relays (standard ASSOCIATE, raw fallback, ss) and read by
 	// the raw routing fast path in socks5UDPAssociate; guarded by capMu.
@@ -131,6 +138,12 @@ func (p *Proxy) SchemeSupportsUDP() bool {
 func (p *Proxy) EffectiveMode() string {
 	if !p.SchemeSupportsUDP() {
 		return ModeTCPOnly
+	}
+	// A udp_in_tcp node carries UDP only (framed over its TCP connection), so it is
+	// udp_only by configuration, independent of probe results: routing rejects TCP for it,
+	// while the TCP health circuit merely tracks the carrier channel.
+	if p.UDPInTCP {
+		return ModeUDPOnly
 	}
 	tcpUp := p.health.IsAvailable()
 	udpUp := p.udpHealth.IsAvailable()
@@ -292,6 +305,24 @@ func pluginFromRawQuery(rawQuery string) string {
 	return ""
 }
 
+// boolFromRawQuery reports whether a raw query string sets key to a truthy value
+// ("1", "true", "yes", "on"). Like pluginFromRawQuery it splits on '&' only — Go's
+// url.Query() drops the whole query when any value contains a literal ';', which SIP003
+// plugin values commonly do — so it is safe to run on any upstream URL.
+func boolFromRawQuery(rawQuery, key string) bool {
+	for _, kv := range strings.Split(rawQuery, "&") {
+		k, v, _ := strings.Cut(kv, "=")
+		if k != key {
+			continue
+		}
+		switch strings.ToLower(v) {
+		case "1", "true", "yes", "on":
+			return true
+		}
+	}
+	return false
+}
+
 func NewProxy(proxyURL string) (*Proxy, error) {
 	u, err := url.Parse(proxyURL)
 	if err != nil {
@@ -322,6 +353,12 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 	// field as profile.name). url.Parse already percent-decodes Fragment, so use it
 	// as-is; a missing fragment leaves the name empty.
 	p.Name = strings.TrimSpace(u.Fragment)
+	// udp_in_tcp selects the hev UDP-in-TCP relay for a socks5/socks5h node. Parsed
+	// from the URL query so an imported link can carry it; the config entry's udp_in_tcp
+	// field (the panel switch) is OR-ed in later by the manager (see rebuildFromConfig).
+	if (scheme == SchemeSOCKS5 || scheme == SchemeSOCKS5H) && boolFromRawQuery(u.RawQuery, "udp_in_tcp") {
+		p.UDPInTCP = true
+	}
 	if u.User != nil && scheme != SchemeSS {
 		p.Username = u.User.Username()
 		p.Password, _ = u.User.Password()
@@ -399,6 +436,12 @@ func (p *Proxy) UDPAssociate(ctx context.Context, targetHost string, targetPort 
 	// degraded node can detect UDP recovery. Non-UDP schemes fail in the switch below.
 	switch p.Scheme {
 	case SchemeSOCKS5, SchemeSOCKS5H:
+		// A udp_in_tcp node must be routed here first: socks5UDPAssociate's raw fast path
+		// keys on IsUDPOnly() (which a UDPInTCP node satisfies), and that would skip the
+		// TCP handshake entirely — the exact opposite of what this protocol requires.
+		if p.UDPInTCP {
+			return p.socks5UDPInTCP(ctx)
+		}
 		return p.socks5UDPAssociate(ctx, targetHost, targetPort)
 	case SchemeSS:
 		return p.ssUDPAssociate(ctx, targetHost, targetPort)
@@ -558,6 +601,143 @@ func (p *Proxy) socks5UDPAssociate(ctx context.Context, targetHost string, targe
 		"proxy", p.Host, "localAddr", udpConn.LocalAddr(), "remoteAddr", raddr)
 	return &UDPProxyConn{UDPConn: udpConn, tcpConn: conn}, nil
 }
+
+// socks5UDPInTCP establishes a hev UDP-in-TCP relay (hev-socks5-server's private
+// CMD=5 FWD_UDP extension): UDP datagrams are framed over the same TCP connection, so the
+// node needs no UDP listener at all. It is selected explicitly per-node (UDPInTCP), so
+// failures are returned as-is — there is deliberately no raw UDP fallback, because this
+// node has no UDP path to fall back to.
+func (p *Proxy) socks5UDPInTCP(ctx context.Context) (net.Conn, error) {
+	conn, err := p.dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
+
+	if err := p.socks5Handshake(conn); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	// CMD=5 (HEV_SOCKS5_REQ_CMD_FWD_UDP) is a hev private extension — standard SOCKS5 only
+	// defines 1=CONNECT, 2=BIND, 3=UDP_ASSOCIATE. The address block is an all-zero IPv4;
+	// the server replies with the usual VER REP RSV ATYP BND.ADDR BND.PORT.
+	req := []byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0}
+	if _, err := conn.Write(req); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	resp := make([]byte, 4)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if resp[1] != 0x00 {
+		conn.Close()
+		return nil, fmt.Errorf("UDP-in-TCP handshake rejected: rep=%d", resp[1])
+	}
+	if err := skipSOCKS5Addr(conn, resp[3]); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	conn.SetDeadline(time.Time{})
+
+	slog.Debug("UDP-in-TCP relay established", "proxy", p.Host)
+	return newUDPInTCPConn(conn), nil
+}
+
+// udpInTCPConn adapts a hev UDP-in-TCP framed byte stream to the SOCKS5 UDP packet
+// shape the rest of SmartProxy uses. Both formats share the exact same address block
+// (ATYP + addr + port) and differ only in the leading 3 bytes:
+//
+//	SOCKS5 UDP packet : RSV(2) FRAG(1) ATYP ADDR PORT payload
+//	hev frame         : datlen(2) hdrlen(1) ATYP ADDR PORT payload
+//
+// datlen/hdrlen are big-endian and hdrlen = 3 + len(addr block), so the conversion is a
+// drop-in swap of the 3-byte prefix (same total length). Write translates SOCKS5 UDP packet
+// → hev frame, Read translates the reverse.
+type udpInTCPConn struct {
+	conn net.Conn
+}
+
+func newUDPInTCPConn(conn net.Conn) *udpInTCPConn {
+	return &udpInTCPConn{conn: conn}
+}
+
+func (u *udpInTCPConn) Read(p []byte) (int, error) {
+	var hdr [3]byte
+	if _, err := io.ReadFull(u.conn, hdr[:]); err != nil {
+		return 0, err
+	}
+	hdrLen := int(hdr[2])
+	if hdrLen < 5 {
+		return 0, fmt.Errorf("udp-over-tcp: malformed frame header (hdrlen=%d)", hdrLen)
+	}
+	addrLen := hdrLen - 3
+	total := 3 + addrLen + int(binary.BigEndian.Uint16(hdr[0:2]))
+	if total > len(p) {
+		return 0, io.ErrShortBuffer
+	}
+	// Everything after the frame header is byte-identical to a SOCKS5 UDP packet's
+	// addr block + payload; only prefix it with the RSV+FRAG zeros.
+	p[0], p[1], p[2] = 0, 0, 0
+	if _, err := io.ReadFull(u.conn, p[3:total]); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func (u *udpInTCPConn) Write(p []byte) (int, error) {
+	if len(p) < 4 {
+		return 0, fmt.Errorf("udp-over-tcp: SOCKS5 UDP packet too short")
+	}
+	addrLen := udpInTCPAddrLen(p[3:])
+	if addrLen < 0 || 3+addrLen > len(p) {
+		return 0, fmt.Errorf("udp-over-tcp: malformed SOCKS5 UDP address block")
+	}
+	hdrLen := 3 + addrLen
+	// Drop RSV+FRAG, prepend datlen+hdrlen — the frame has the same total length.
+	frame := make([]byte, len(p))
+	binary.BigEndian.PutUint16(frame[0:2], uint16(len(p)-hdrLen))
+	frame[2] = byte(hdrLen)
+	copy(frame[3:], p[3:])
+	if _, err := u.conn.Write(frame); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// udpInTCPAddrLen returns the on-wire length of a SOCKS5 UDP address block
+// (ATYP + addr + port) given a slice starting at ATYP, or -1 if malformed.
+func udpInTCPAddrLen(atyp []byte) int {
+	if len(atyp) == 0 {
+		return -1
+	}
+	switch atyp[0] {
+	case 0x01:
+		return 7
+	case 0x04:
+		return 19
+	case 0x03:
+		if len(atyp) < 2 {
+			return -1
+		}
+		return 4 + int(atyp[1])
+	default:
+		return -1
+	}
+}
+
+// ProbeTCP lets the UDP reuse pool verify a pooled conn. The TCP stream here carries framed
+// data, not a control channel, so a probe read would consume a frame — always report healthy
+// (TTL eviction is the fallback), matching ss UDP / raw UDP conns.
+func (u *udpInTCPConn) ProbeTCP() error { return nil }
+
+func (u *udpInTCPConn) Close() error                       { return u.conn.Close() }
+func (u *udpInTCPConn) LocalAddr() net.Addr                { return u.conn.LocalAddr() }
+func (u *udpInTCPConn) RemoteAddr() net.Addr               { return u.conn.RemoteAddr() }
+func (u *udpInTCPConn) SetDeadline(t time.Time) error      { return u.conn.SetDeadline(t) }
+func (u *udpInTCPConn) SetReadDeadline(t time.Time) error  { return u.conn.SetReadDeadline(t) }
+func (u *udpInTCPConn) SetWriteDeadline(t time.Time) error { return u.conn.SetWriteDeadline(t) }
 
 func (p *Proxy) socks5Handshake(rw io.ReadWriter) error {
 	methods := []byte{0x00}

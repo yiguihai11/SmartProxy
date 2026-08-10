@@ -103,6 +103,10 @@ type HealthCheckConf struct {
 type ProxyEntry struct {
 	Alias string `json:"alias"`
 	URL   string `json:"url"`
+	// UDPInTCP selects the hev UDP-in-TCP relay (socks5/socks5h only, see
+	// upstream.Proxy.UDPInTCP): UDP is framed over the node's TCP connection, so the
+	// node needs no UDP listener. Edited from the panel's Add/Edit Proxy checkbox.
+	UDPInTCP bool `json:"udp_in_tcp,omitempty"`
 }
 
 type RoutingConf struct {
@@ -111,11 +115,11 @@ type RoutingConf struct {
 }
 
 type DNSConf struct {
-	Enabled        bool           `json:"enabled"`
-	Cache          DNSCacheC      `json:"cache"`
-	Foreign        DNSForeign     `json:"foreign"`
-	QueryTimeout   int            `json:"query_timeout"`
-	SpeedCheckMode string         `json:"speed_check_mode"`
+	Enabled        bool       `json:"enabled"`
+	Cache          DNSCacheC  `json:"cache"`
+	Foreign        DNSForeign `json:"foreign"`
+	QueryTimeout   int        `json:"query_timeout"`
+	SpeedCheckMode string     `json:"speed_check_mode"`
 	// StaticRecords maps hostnames to fixed IPs served directly by the built-in DNS
 	// interceptor (hosts-override semantics; checked before block rules and cache).
 	// The same host may appear multiple times to attach both an IPv4 and an IPv6

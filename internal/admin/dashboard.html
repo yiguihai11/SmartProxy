@@ -587,6 +587,9 @@ function setProxyScheme(v){
   // plugin row: only for ss (simple-obfs and v2ray-plugin are built in, no external binary)
   var pr=document.getElementById('proxy-plugin-row');
   if(pr)pr.style.display=(v==='ss')?'':'none';
+  // UDP-in-TCP switch: only for socks5/socks5h (hev UDP-in-TCP is a SOCKS5 extension)
+  var utr=document.getElementById('proxy-udpintcp-row');
+  if(utr)utr.style.display=(v==='socks5'||v==='socks5h')?'':'none';
   syncObfsRows();
   updateProxyPreview();
 }
@@ -984,8 +987,10 @@ function openProxyDialog(i){
   document.getElementById('proxy-v2ray-mux').value='1';
   document.getElementById('proxy-v2ray-servicename').value='GunService';
   document.getElementById('proxy-v2ray-certraw').value='';
+  document.getElementById('proxy-udpintcp').checked=false;
   var scheme='socks5';
   if(p){
+    if(p.udp_in_tcp)document.getElementById('proxy-udpintcp').checked=true;
     var u=null;
     try{u=new URL(p.url)}catch(e){}
     if(u&&u.protocol){scheme=u.protocol.slice(0,-1);document.getElementById('proxy-server').value=u.host;
@@ -1042,7 +1047,8 @@ function updateProxyPreview(){
   var plugin=buildPlugin();
   if(plugin)url+='?plugin='+encodeURIComponent(plugin);
   el.style.display='block';
-  el.innerHTML=url.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  el.innerHTML=url.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')+
+    (document.getElementById('proxy-udpintcp').checked?' <b style="color:var(--yellow)">[UDP in TCP]</b>':'');
 }
 async function putProxyConfig(mutate){
   var cfg=await jf('/config');
@@ -1072,14 +1078,15 @@ async function saveProxy(){
   var plugin=buildPlugin();
   if(plugin)url+='?plugin='+encodeURIComponent(plugin);
   try{var chk=new URL(url);if(!chk.hostname)throw new Error('bad host')}catch(e){alert('Invalid server address: '+server);return}
+  var udpintcp=document.getElementById('proxy-udpintcp').checked;
   var editing=document.getElementById('proxy-dialog').dataset.alias||'';
   try{
     await putProxyConfig(function(cfg){
       var ps=cfg.upstream.proxies;
-      function entry(){return {alias:alias,url:url}}
+      function entry(){return {alias:alias,url:url,udp_in_tcp:udpintcp}}
       if(editing){
         for(var i=0;i<ps.length;i++){
-          if(ps[i].alias===editing){ps[i].alias=alias;ps[i].url=url;return}
+          if(ps[i].alias===editing){ps[i].alias=alias;ps[i].url=url;ps[i].udp_in_tcp=udpintcp;return}
           if(ps[i].alias===alias){alert('Alias "'+alias+'" already exists');throw new Error('dup')}
         }
         ps.push(entry());
@@ -2309,6 +2316,13 @@ es.onmessage=function(e){
         <div class="dialog-label">Certificate (certRaw) <span style="text-transform:none;font-weight:400">(PEM or base64, leave empty for system CA)</span></div>
         <textarea class="dialog-input" id="proxy-v2ray-certraw" rows="2" placeholder="-----BEGIN CERTIFICATE-----&#10;..." autocomplete="off" oninput="updateProxyPreview()"></textarea>
       </div>
+    </div>
+    <div id="proxy-udpintcp-row" style="display:none">
+      <label class="dialog-label" style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="proxy-udpintcp" onchange="updateProxyPreview()">
+        <span>UDP in TCP <span style="text-transform:none;font-weight:400;color:var(--text3)">(hev-socks5-server CMD=5, UDP-only node)</span></span>
+      </label>
+      <div class="dialog-desc" style="margin-top:4px">Frames UDP datagrams over this node's TCP connection; the node needs no UDP listener. Only meaningful for SOCKS5/SOCKS5H servers running hev-socks5-server.</div>
     </div>
     <div class="dialog-desc" id="proxy-preview" style="display:none;font-family:var(--mono);font-size:.8rem"></div>
     <div class="dialog-actions">

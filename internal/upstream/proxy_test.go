@@ -2214,3 +2214,209 @@ func TestParseSSLegacy(t *testing.T) {
 		t.Error("parseSSLegacy(non-base64) = nil error, want error")
 	}
 }
+
+func TestNewProxy_UDPInTCPFlag(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want bool
+	}{
+		{"plain socks5", "socks5://127.0.0.1:1080", false},
+		{"socks5 query 1", "socks5://user:pass@127.0.0.1:1080?udp_in_tcp=1", true},
+		{"socks5h query true", "socks5h://proxy.example.com:2080?udp_in_tcp=true", true},
+		{"socks5h query yes", "socks5h://proxy.example.com:2080?udp_in_tcp=yes", true},
+		{"socks5 query on", "socks5://127.0.0.1:1080?udp_in_tcp=on", true},
+		{"socks5 query 0 is off", "socks5://127.0.0.1:1080?udp_in_tcp=0", false},
+		{"other query untouched", "socks5://127.0.0.1:1080?plugin=foo", false},
+		{"http ignores flag", "http://proxy:8080?udp_in_tcp=1", false},
+		{"socks4 ignores flag", "socks4://10.0.0.1:9050?udp_in_tcp=1", false},
+		{"ss ignores flag", "ss://none:pass@1.2.3.4:8388?udp_in_tcp=1", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := NewProxy(tt.url)
+			if err != nil {
+				t.Fatalf("NewProxy(%q): %v", tt.url, err)
+			}
+			if p.UDPInTCP != tt.want {
+				t.Errorf("UDPInTCP = %v, want %v", p.UDPInTCP, tt.want)
+			}
+		})
+	}
+}
+
+func TestUDPInTCP_EffectiveModeUDPOnly(t *testing.T) {
+	p, err := NewProxy("socks5://user:pass@127.0.0.1:1080?udp_in_tcp=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.EffectiveMode(); got != ModeUDPOnly {
+		t.Errorf("EffectiveMode = %s, want %s", got, ModeUDPOnly)
+	}
+	if !p.IsUDPOnly() {
+		t.Error("IsUDPOnly() = false, want true")
+	}
+	if !p.SupportsUDP() {
+		t.Error("SupportsUDP() = false, want true (UDP routing must pick the node up)")
+	}
+	// Even with both health circuits forced up, a udp_in_tcp node stays udp_only —
+	// the mode is configured, not derived from probing.
+	p.health.SetManualState(true)
+	p.udpHealth.SetManualState(true)
+	if got := p.EffectiveMode(); got != ModeUDPOnly {
+		t.Errorf("EffectiveMode with circuits up = %s, want %s", got, ModeUDPOnly)
+	}
+}
+
+func TestUDPInTCPConn_FrameRoundTrip(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	uc := newUDPInTCPConn(client)
+
+	// SOCKS5 UDP packet: RSV+FRAG(3) ATYP=IPv4(1) addr(4) port(2) payload.
+	packet := []byte{0, 0, 0, 0x01, 192, 168, 1, 1, 0x00, 0x35}
+	packet = append(packet, []byte("payload123")...)
+
+	// net.Pipe is synchronous: the raw server side must run in a goroutine, reading the
+	// client's frame and echoing it back.
+	gotFrame := make(chan []byte, 1)
+	go func() {
+		frame := make([]byte, len(packet))
+		if _, err := io.ReadFull(server, frame); err != nil {
+			gotFrame <- nil
+			return
+		}
+		gotFrame <- frame
+		server.Write(frame)
+	}()
+
+	// Write: SOCKS5 UDP packet → hev frame (datlen|hdrlen|addr block|payload).
+	if _, err := uc.Write(packet); err != nil {
+		t.Fatal(err)
+	}
+	wantFrame := make([]byte, len(packet))
+	binary.BigEndian.PutUint16(wantFrame[0:2], uint16(len(packet)-10))
+	wantFrame[2] = 10 // hdrlen = 3 + addrblock(7)
+	copy(wantFrame[3:], packet[3:])
+	select {
+	case f := <-gotFrame:
+		if f == nil {
+			t.Fatal("server read failed")
+		}
+		if !bytes.Equal(f, wantFrame) {
+			t.Errorf("wire frame = %x, want %x", f, wantFrame)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not receive frame")
+	}
+
+	// Read: hev frame → SOCKS5 UDP packet.
+	got := make([]byte, len(packet))
+	if _, err := io.ReadFull(uc, got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, packet) {
+		t.Errorf("read packet = %x, want %x", got, packet)
+	}
+}
+
+func TestSocks5UDPInTCP_viaMock(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	gotFrame := make(chan []byte, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		// SOCKS5 greeting (no auth).
+		var g [2]byte
+		if _, err := io.ReadFull(conn, g[:]); err != nil {
+			return
+		}
+		io.ReadFull(conn, make([]byte, int(g[1])))
+		conn.Write([]byte{0x05, 0x00})
+
+		// Request must be CMD=5 (hev FWD_UDP).
+		req := make([]byte, 10)
+		if _, err := io.ReadFull(conn, req); err != nil {
+			return
+		}
+		if req[0] != 0x05 || req[1] != 0x05 {
+			t.Errorf("request cmd = %d, want 5 (FWD_UDP)", req[1])
+			return
+		}
+		conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+
+		// Read one client frame, then echo it back.
+		frame := make([]byte, 3+7+9)
+		if _, err := io.ReadFull(conn, frame); err != nil {
+			return
+		}
+		gotFrame <- frame
+		conn.Write(frame)
+		time.Sleep(50 * time.Millisecond)
+	}()
+
+	host, portStr, _ := net.SplitHostPort(ln.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	p := &Proxy{Scheme: SchemeSOCKS5, Host: host, Port: port, UDPInTCP: true}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, err := p.socks5UDPInTCP(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, ok := conn.(*udpInTCPConn); !ok {
+		t.Fatalf("expected *udpInTCPConn, got %T", conn)
+	}
+
+	// Write a SOCKS5 UDP packet; the mock must receive the equivalent hev frame.
+	packet := []byte{0, 0, 0, 0x01, 127, 0, 0, 1, 0x1f, 0x90}
+	packet = append(packet, []byte("hello-udp")...)
+	if _, err := conn.Write(packet); err != nil {
+		t.Fatal(err)
+	}
+	wantFrame := make([]byte, len(packet))
+	binary.BigEndian.PutUint16(wantFrame[0:2], uint16(len(packet)-10))
+	wantFrame[2] = 10
+	copy(wantFrame[3:], packet[3:])
+	select {
+	case f := <-gotFrame:
+		if !bytes.Equal(f, wantFrame) {
+			t.Errorf("wire frame = %x, want %x", f, wantFrame)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("mock server did not receive a frame")
+	}
+
+	// The echoed frame comes back as a SOCKS5 UDP packet.
+	buf := make([]byte, 128)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf[:n], packet) {
+		t.Errorf("read back = %x, want %x", buf[:n], packet)
+	}
+}
+
+func TestUDPInTCP_ProbeTCPIsNoop(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	uc := newUDPInTCPConn(client)
+	if err := uc.ProbeTCP(); err != nil {
+		t.Errorf("ProbeTCP() = %v, want nil (framed data must not be probe-read)", err)
+	}
+}

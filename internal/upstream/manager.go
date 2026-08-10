@@ -138,6 +138,9 @@ func (m *Manager) rebuildFromConfig(cfg UpstreamConfig) {
 			slog.Warn("failed to create proxy", "url", entry.URL, "error", err)
 			continue
 		}
+		// The config entry's udp_in_tcp field (the panel switch) is the primary source;
+		// an imported link may also carry ?udp_in_tcp=1, which NewProxy already parsed.
+		proxy.UDPInTCP = entry.UDPInTCP || proxy.UDPInTCP
 		aliasMap[alias] = proxy
 		defaultProxies = append(defaultProxies, proxy)
 	}
@@ -155,6 +158,9 @@ type UpstreamConfig struct {
 type ProxyEntry struct {
 	Alias string
 	URL   string
+	// UDPInTCP carries the node's udp_in_tcp switch from the config entry (see
+	// Proxy.UDPInTCP). It is OR-ed with whatever the URL's ?udp_in_tcp=1 query set.
+	UDPInTCP bool
 }
 
 func (m *Manager) SelectProxy(targetIP string, targetPort int, domain string, engine *rules.Engine) (string, *Proxy) {
@@ -421,14 +427,17 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 }
 
 type ProxyInfo struct {
-	Alias  string `json:"alias"`
-	URL    string `json:"url"`
+	Alias string `json:"alias"`
+	URL   string `json:"url"`
 	// Name is the node's friendly name from the ss:// #fragment (see Proxy.Name);
 	// empty for URLs without one.
 	Name   string `json:"name"`
 	Host   string `json:"host"`
 	Port   int    `json:"port"`
 	Scheme string `json:"scheme"`
+	// UDPInTCP reports whether the node is configured as a hev UDP-in-TCP relay
+	// (see Proxy.UDPInTCP). The panel reads this to pre-check the switch when editing.
+	UDPInTCP bool `json:"udp_in_tcp"`
 	// Mode is the effective mode derived purely from scheme capability plus probe results
 	// (see Proxy.EffectiveMode) — the value routing actually uses, so it moves over time.
 	Mode string `json:"mode"`
@@ -461,6 +470,7 @@ func (m *Manager) Proxies() []ProxyInfo {
 			Host:          proxy.Host,
 			Port:          proxy.Port,
 			Scheme:        string(proxy.Scheme),
+			UDPInTCP:      proxy.UDPInTCP,
 			Mode:          proxy.EffectiveMode(),
 			UDPCapability: string(proxy.UDPCapability()),
 			Health:        proxy.health.Snapshot(),
