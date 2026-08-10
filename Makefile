@@ -11,12 +11,15 @@ OUTDIR := build
 GIT_TAG    := $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null)
 VERSION    ?= $(if $(GIT_TAG),$(patsubst v%,%,$(GIT_TAG)),1.0.0)
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
-BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+# Local "YYYY-MM-DD HH:MM:SS". The -X value is wrapped in single quotes because
+# go build splits -ldflags with quoted.Split (quotes group a span; backslashes
+# do not escape) — the recipe's outer double quotes keep the inner quotes intact.
+BUILD_TIME ?= $(shell date +%Y-%m-%d\ %H:%M:%S)
 
 LDFLAGS := -s -w \
 	-X smartproxy/internal/version.Version=$(VERSION) \
 	-X smartproxy/internal/version.GitCommit=$(GIT_COMMIT) \
-	-X smartproxy/internal/version.BuildTime=$(BUILD_TIME)
+	-X 'smartproxy/internal/version.BuildTime=$(BUILD_TIME)'
 
 CROSS := \
 	$(OUTDIR)/$(BINARY)-linux-amd64 \

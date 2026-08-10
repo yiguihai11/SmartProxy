@@ -20,7 +20,8 @@ var (
 	Version = "1.0.0"
 	// GitCommit is the short commit hash the binary was built from.
 	GitCommit = "unknown"
-	// BuildTime is the UTC build timestamp (RFC3339).
+	// BuildTime is the local build timestamp (YYYY-MM-DD HH:MM:SS), matching the
+	// panel/console log display so "built" reads the same way.
 	BuildTime = "unknown"
 )
 

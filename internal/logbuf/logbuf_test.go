@@ -1,11 +1,13 @@
 package logbuf
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -86,6 +88,40 @@ func TestSlogHandler(t *testing.T) {
 
 	assert.Equal(t, "ERROR", entries[2].Level)
 	assert.Equal(t, "DEBUG", entries[3].Level)
+}
+
+func TestSlogHandlerLocation(t *testing.T) {
+	shanghai, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Skip("Asia/Shanghai tzdata unavailable")
+	}
+	buf := NewRingBuffer(10)
+	sh := NewSlogHandlerLevel(nil, buf, slog.LevelInfo).WithLocation(shanghai)
+
+	// A UTC record (as captured on a UTC process) must be stored in the console
+	// handler's display zone so panel and terminal agree.
+	utcTime := time.Date(2026, 8, 10, 15, 51, 17, 0, time.UTC)
+	var r slog.Record
+	r = slog.NewRecord(utcTime, slog.LevelInfo, "smartproxy starting", 0)
+	if err := sh.Handle(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+
+	entries := buf.GetAll()
+	assert.Len(t, entries, 1)
+	assert.Equal(t, "2026-08-10 23:51:17", entries[0].Timestamp)
+
+	// WithAttrs/WithGroup copies must keep the location: drive the derived
+	// handler directly with the same fixed-time record.
+	logger := slog.New(NewSlogHandlerLevel(nil, buf, slog.LevelInfo).WithLocation(shanghai)).
+		With("mod", "test").WithGroup("sub")
+	if err := logger.Handler().Handle(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	second := buf.GetAll()[1]
+	assert.Equal(t, "2026-08-10 23:51:17", second.Timestamp)
+	assert.Contains(t, second.Message, "[sub] smartproxy starting")
+	assert.Contains(t, second.Message, "mod=test")
 }
 
 func TestSlogHandlerWithAttrsAndGroup(t *testing.T) {

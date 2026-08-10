@@ -86,7 +86,7 @@ func newNamedLogger(level string, quiet bool) *slog.Logger {
 			},
 		})
 	}
-	return slog.New(logbuf.NewSlogHandlerLevel(baseHandler, logbuf.Default, lvl))
+	return slog.New(logbuf.NewSlogHandlerLevel(baseHandler, logbuf.Default, lvl).WithLocation(shanghaiLoc))
 }
 
 func setupLogger(level string, quiet bool) *slog.Logger {

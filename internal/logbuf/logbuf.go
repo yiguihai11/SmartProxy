@@ -94,6 +94,10 @@ type SlogHandler struct {
 	attrs    []slog.Attr
 	groups   []string
 	minLevel slog.Level
+	// location, when set, converts each record's time into this zone before the
+	// timestamp is stored in the buffer — so the panel's logs match the location
+	// the console handler displays (e.g. Asia/Shanghai on a UTC process).
+	location *time.Location
 }
 
 func NewSlogHandler(h slog.Handler, buf *RingBuffer) *SlogHandler {
@@ -109,6 +113,16 @@ func NewSlogHandlerLevel(h slog.Handler, buf *RingBuffer, minLevel slog.Level) *
 		buffer:   buf,
 		minLevel: minLevel,
 	}
+}
+
+// WithLocation sets the timezone log timestamps are converted into before being
+// buffered. When nil, time.Local is used. Returns the receiver for chaining.
+func (sh *SlogHandler) WithLocation(loc *time.Location) *SlogHandler {
+	if loc == nil {
+		loc = time.Local
+	}
+	sh.location = loc
+	return sh
 }
 
 func (sh *SlogHandler) Enabled(ctx context.Context, level slog.Level) bool {
@@ -153,6 +167,9 @@ func (sh *SlogHandler) Handle(ctx context.Context, r slog.Record) error {
 		if t.IsZero() {
 			t = time.Now()
 		}
+		if sh.location != nil {
+			t = t.In(sh.location)
+		}
 
 		sh.buffer.Add(LogEntry{
 			Timestamp: t.Format("2006-01-02 15:04:05"),
@@ -181,6 +198,7 @@ func (sh *SlogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 		attrs:    newAttrs,
 		groups:   sh.groups,
 		minLevel: sh.minLevel,
+		location: sh.location,
 	}
 }
 
@@ -201,5 +219,6 @@ func (sh *SlogHandler) WithGroup(name string) slog.Handler {
 		attrs:    sh.attrs,
 		groups:   newGroups,
 		minLevel: sh.minLevel,
+		location: sh.location,
 	}
 }
