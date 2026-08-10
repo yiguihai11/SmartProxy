@@ -8,6 +8,10 @@
 *.log
 *.sock
 
+# runtime-generated admin TLS cert pair (auto-created next to the config file)
+admin.crt
+admin.key
+
 # editor / OS cruft
 .DS_Store
 *.swp
