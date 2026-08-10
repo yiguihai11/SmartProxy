@@ -164,6 +164,7 @@ tr:last-child td{border-bottom:none}
 .batch-bar .count{color:var(--text);font-size:.82rem;font-weight:500}
 .batch-bar select{background:var(--surface);border:1px solid var(--border);border-radius:5px;padding:5px 8px;color:var(--text);font-family:var(--font);font-size:.82rem;outline:none;cursor:pointer}
 .batch-bar select:focus{border-color:var(--accent)}
+.add-bar{display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);margin-top:12px}
 .td-chk{width:32px;text-align:center!important}
 .th-chk{width:32px;text-align:center!important}
 .cb-row{cursor:pointer;width:16px;height:16px;accent-color:var(--accent);vertical-align:middle}
@@ -301,12 +302,12 @@ tr:last-child td{border-bottom:none}
   <div id="dns-static-tab" style="display:none">
     <div class="toolbar">
       <input class="search-input" id="static-search" placeholder="Search host..." oninput="staticOnSearch()">
-      <input class="search-input" id="static-host" placeholder="hostname" autocomplete="off" spellcheck="false" style="min-width:170px">
-      <input class="search-input" id="static-ip" placeholder="IP or 1.2.3.4, ::1" autocomplete="off" spellcheck="false" style="min-width:160px">
-      <button class="btn btn-sm primary" onclick="staticAdd()">Add</button>
       <span class="page-info" id="static-info"></span>
     </div>
     <div id="static-list" class="table-wrap">Loading...</div>
+    <div class="add-bar" id="static-add-bar">
+      <button class="btn btn-sm primary" onclick="openStaticAddDialog()">+ Add</button>
+    </div>
   </div>
 </div>
 <div class="view" id="view-config">
@@ -1560,13 +1561,22 @@ function renderStatic(){
     }).join('')+'</tbody></table>';
 }
 function staticOnSearch(){staticSearch=document.getElementById('static-search').value;renderStatic()}
-function staticAdd(){
-  var host=document.getElementById('static-host').value.trim();
-  var ip=document.getElementById('static-ip').value.trim();
+function openStaticAddDialog(){
+  document.getElementById('staticadd-host').value='';
+  document.getElementById('staticadd-ip').value='';
+  document.getElementById('staticadd-overlay').classList.add('show');
+  setTimeout(function(){document.getElementById('staticadd-host').focus()},50);
+}
+function closeStaticAddDialog(){
+  document.getElementById('staticadd-overlay').classList.remove('show');
+}
+function confirmStaticAdd(){
+  var host=document.getElementById('staticadd-host').value.trim();
+  var ip=document.getElementById('staticadd-ip').value.trim();
   if(!host){alert('Enter a hostname');return}
   if(!ip){alert('Enter an IP address');return}
   var ips=ip.split(',').map(function(s){return s.trim()}).filter(function(s){return s.length});
-  var btn=document.querySelector('#dns-static-tab .btn.primary');
+  var btn=document.getElementById('staticadd-confirm');
   btn.disabled=true;btn.textContent='Adding...';
   fetch('/dns/static',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:host,ip:ips})}).then(function(r){
     return r.json().then(function(d){
@@ -1575,8 +1585,7 @@ function staticAdd(){
     });
   }).then(function(d){
     staticData=d.records;
-    document.getElementById('static-host').value='';
-    document.getElementById('static-ip').value='';
+    closeStaticAddDialog();
     renderStatic();
   }).catch(function(e){alert('Error: '+e.message)}).finally(function(){btn.disabled=false;btn.textContent='Add'});
 }
@@ -2141,6 +2150,20 @@ es.onmessage=function(e){
     <div class="dialog-actions">
       <button class="btn btn-sm" onclick="closeCachePinDialog()">Cancel</button>
       <button class="btn btn-sm primary" id="cachepin-confirm" onclick="confirmCachePin()">Pin as static record</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="staticadd-overlay" onclick="if(event.target===this)closeStaticAddDialog()">
+  <div class="dialog" onclick="event.stopPropagation()">
+    <div class="dialog-title">Add Static Record</div>
+    <div class="dialog-desc">Pin a hostname to fixed address(es). IP accepts a single address or a comma-separated list.</div>
+    <div class="dialog-label">Host</div>
+    <input class="dialog-input" id="staticadd-host" placeholder="hostname" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter'){event.preventDefault();confirmStaticAdd()}">
+    <div class="dialog-label">IP Address(es)</div>
+    <input class="dialog-input" id="staticadd-ip" placeholder="1.2.3.4 or 1.2.3.4, ::1" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter'){event.preventDefault();confirmStaticAdd()}">
+    <div class="dialog-actions">
+      <button class="btn btn-sm" onclick="closeStaticAddDialog()">Cancel</button>
+      <button class="btn btn-sm primary" id="staticadd-confirm" onclick="confirmStaticAdd()">Add</button>
     </div>
   </div>
 </div>
