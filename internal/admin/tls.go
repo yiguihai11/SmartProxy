@@ -79,10 +79,14 @@ func (s *Server) loadCertificate() (tls.Certificate, error) {
 	return genSelfSigned("", "", s.tlsExtraSANs...)
 }
 
-// genSelfSigned creates an ECDSA P-256 self-signed server certificate (397-day
-// validity, SANs for localhost plus any extraSANs). When certPath/keyPath are
-// non-empty the PEM files are written there best-effort — the in-memory
-// certificate is used regardless.
+// genSelfSigned creates an ECDSA P-256 self-signed CA/server certificate
+// (397-day validity, SANs for localhost plus any extraSANs). IsCA is set so
+// Android's cert installer recognizes it as a CA certificate — otherwise the
+// system treats it as a personal-identity cert and demands the private key to
+// install. The one self-signed cert plays both roles: it is its own root CA and
+// the panel's server cert, so installing it as a CA makes the panel trusted.
+// When certPath/keyPath are non-empty the PEM files are written there
+// best-effort — the in-memory certificate is used regardless.
 func genSelfSigned(certPath, keyPath string, extraSANs ...string) (tls.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -100,9 +104,13 @@ func genSelfSigned(certPath, keyPath string, extraSANs ...string) (tls.Certifica
 		Subject:               pkix.Name{CommonName: "smartproxy"},
 		NotBefore:             notBefore,
 		NotAfter:              notBefore.Add(397 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		// CertSign is mandatory when IsCA is set (x509.CreateCertificate rejects
+		// the combination otherwise); digitalSignature+keyEncipherment keep the
+		// cert usable as a TLS server certificate too.
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageCertSign,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
+		IsCA:                  true,
 		DNSNames:              append([]string{"localhost"}, extraDNS...),
 		IPAddresses:           append([]net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}, extraIPs...),
 	}

@@ -1240,6 +1240,14 @@ func TestGenSelfSigned_ExtraSANs(t *testing.T) {
 	if !hasSANIP(leaf.IPAddresses, "192.168.1.1") {
 		t.Errorf("expected IP SAN 192.168.1.1, got %v", leaf.IPAddresses)
 	}
+	// The cert must be a CA (IsCA + CertSign) so Android's installer accepts it
+	// as a CA certificate without demanding the private key.
+	if !leaf.IsCA {
+		t.Error("generated cert must have IsCA set")
+	}
+	if leaf.KeyUsage&x509.KeyUsageCertSign == 0 {
+		t.Error("generated cert must include KeyUsageCertSign")
+	}
 
 	cert, err = genSelfSigned("", "", "::", "0.0.0.0", "*")
 	if err != nil {
