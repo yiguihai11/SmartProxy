@@ -1299,7 +1299,6 @@ function blKey(e){return e.host+':'+e.type}
 function blSelKey(host,typ){return host+':'+typ}
 function rbl(t){
   blFilter=t;
-  blPage=1;
   var allFl=blGetFiltered();
   var el=document.getElementById('bl-table');
   if(!allFl.length){
@@ -1345,6 +1344,7 @@ function rbl(t){
 }
 function blOnSearch(){
   blSearch=document.getElementById('bl-search').value;
+  blPage=1;
   rbl(blFilter);
 }
 function blGoToPage(d){
