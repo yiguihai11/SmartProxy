@@ -490,6 +490,11 @@ function circuitStat(snap,supports){
   if(!supports)return {c:'na',t:'n/a',m:false};
   if(!snap)return {c:'na',t:'unknown',m:false};
   var m=!!snap.manual;
+  // A manually-pinned circuit displays its pinned availability directly: the pin holds the
+  // state fixed across probe cycles, so "up"/"down" is authoritative even before the first
+  // probe has run (last_attempt still empty). Otherwise clicking enable on a fresh node would
+  // read "unknown" until the next health cycle, looking like the toggle did nothing.
+  if(m)return snap.available?{c:'up',t:'up',m:true}:{c:'down',t:'down',m:true};
   if(snap.state==='open')return {c:'down',t:'down',m:m};
   if(snap.state==='half_open')return {c:'half',t:'half',m:m};
   return snap.last_attempt?{c:'up',t:'up',m:m}:{c:'na',t:'unknown',m:m};
