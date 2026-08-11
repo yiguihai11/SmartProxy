@@ -500,13 +500,16 @@ function circuitStat(snap,supports){
   return snap.last_attempt?{c:'up',t:'up',m:m}:{c:'na',t:'unknown',m:m};
 }
 // Click a badge to flip that circuit: up → disable (force down), down → enable (force up),
-// pinned → release back to automatic. Non-probable circuits (unknown/n/a) are not clickable.
+// manually-up → release back to automatic. A manual-down pin (e.g. the udp_in_tcp TCP default)
+// force-enables: the user's "turn TCP back on" click must take effect immediately, not merely
+// release the pin and read "unknown" until the next health cycle. Non-probable circuits
+// (unknown/n/a) are not clickable.
 async function toggleCircuit(i,c){
   var p=healthD.health.proxies[i];
   if(!p)return;
   var s=c==='udp'?p.udp_health:p.health;
   if(!s||!s.last_attempt&&!s.manual&&s.state==='closed')return;
-  var action=s.manual?'auto':(s.available?'disable':'enable');
+  var action=s.manual?(s.available?'auto':'enable'):(s.available?'disable':'enable');
   await fetch('/health/proxy?alias='+encodeURIComponent(p.alias)+'&circuit='+c+'&action='+action,{method:'POST'});
   loadHealth()
 }
@@ -533,7 +536,7 @@ function lhealth(d){
     var tcClk=tc.c==='na'?'':' onclick="toggleCircuit('+i+',\'tcp\')"';
     var ucClk=uc.c==='na'?'':' onclick="toggleCircuit('+i+',\'udp\')"';
     return '<div class="proxy-card"><div class="top"><div><div class="alias">'+dispName+'</div><div class="url">'+p.url+aliasTxt+' · '+dispMode+capTxt+'</div></div>'+
-      '<div class="circs"><span class="circ '+(tc.c+(tc.m?' manual':''))+'" title="'+(tc.m?'TCP manually pinned — click to restore auto':'Click to toggle TCP')+'"'+tcClk+'><i class="dot"></i>TCP '+tc.t+'</span><span class="circ '+(uc.c+(uc.m?' manual':''))+'" title="'+(uc.m?'UDP manually pinned — click to restore auto':'Click to toggle UDP')+'"'+ucClk+'><i class="dot"></i>UDP '+uc.t+'</span></div></div>'+
+      '<div class="circs"><span class="circ '+(tc.c+(tc.m?' manual':''))+'" title="'+(tc.m?(p.health.available?'TCP manually up — click to restore auto':'TCP manually down — click to force up'):'Click to toggle TCP')+'"'+tcClk+'><i class="dot"></i>TCP '+tc.t+'</span><span class="circ '+(uc.c+(uc.m?' manual':''))+'" title="'+(uc.m?(p.udp_health&&p.udp_health.available?'UDP manually up — click to restore auto':'UDP manually down — click to force up'):'Click to toggle UDP')+'"'+ucClk+'><i class="dot"></i>UDP '+uc.t+'</span></div></div>'+
       '<div class="stats"><span>latency: '+lat+'</span><span>tcp failures: '+(p.health.manual?'manual':p.health.consecutive_failures)+'</span><span>udp failures: '+(p.udp_health?(p.udp_health.manual?'manual':p.udp_health.consecutive_failures):'n/a')+'</span></div>'+
       '<div class="actions">'+
       '<button class="btn btn-sm primary" onclick="openProxyDialog('+i+')">Edit</button>'+
