@@ -60,6 +60,7 @@ SelectProxy(host, port, domain, engine)
 - `IsBlacklisted` 惰性删除过期项；`StartCleanup`（默认每 60s）用 `cleanExpired` 清扫。
 - 容量上限 `blacklistMaxSize = 10000`，超限时淘汰 expiry 最早的一条（`evictOldestLocked`）。
 - `BlacklistSnapshot()` / `RemoveFromBlacklist()` 供 admin 接口查询与手动解除。
+- 面板 Blacklist 页的 **Export** 按钮把当前过滤后的 host 列表导出为纯文本（每行一个、去重），即可作为自制的 "gfwlist"：把行抄进 `acl.txt` 变成 `proxy domain <host> <alias>`（IP 用 `proxy ip <host> <alias>`）即可固化「这些目标直接走代理」，不再依赖动态黑名单。
 
 ## §5 选路策略
 
