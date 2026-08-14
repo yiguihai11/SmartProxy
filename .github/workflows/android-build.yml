@@ -61,15 +61,44 @@ jobs:
           echo '--- patched release block ---'
           grep -n -A2 'release[[:space:]]*{' app/build.gradle.kts
 
-      - name: Build with Gradle
+      - name: Generate debug signing keystore
         working-directory: demo-app
-        run: ./gradlew assembleDebug assembleRelease --no-daemon
+        run: |
+          # Throwaway keystore for the temporary signed release build.
+          # Uses the standard Android debug signing convention so no secrets
+          # are needed. NOTE: signature differs per build — uninstall before
+          # installing a newer one.
+          keytool -genkeypair -v -keystore debug.keystore -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=SmartProxy, OU=Dev, O=SmartProxy, L=Beijing, ST=Beijing, C=CN"
 
-      - name: Upload APKs
+      - name: Inject signing config
+        working-directory: demo-app
+        run: python3 ../scripts/android_sign_patch.py app/build.gradle.kts
+
+      - name: Build signed release APK
+        working-directory: demo-app
+        run: ./gradlew assembleRelease --no-daemon
+        env:
+          KEYSTORE_FILE: ${{ github.workspace }}/demo-app/debug.keystore
+          KEYSTORE_PASSWORD: android
+          KEY_ALIAS: androiddebugkey
+          KEY_PASSWORD: android
+
+      - name: Verify signed APK
+        working-directory: demo-app
+        run: |
+          ls -l app/build/outputs/apk/release/
+          # A signed build outputs `app-release.apk`; unsigned would be
+          # `app-release-unsigned.apk`. Fail loudly if we didn't get the signed one.
+          test -f app/build/outputs/apk/release/app-release.apk \
+            || { echo '::error::expected signed app-release.apk'; exit 1; }
+          echo "Signed release APK OK"
+
+      - name: Upload APK
         uses: actions/upload-artifact@v5
         with:
-          name: demo-app-apks
-          path: |
-            demo-app/app/build/outputs/apk/debug/*.apk
-            demo-app/app/build/outputs/apk/release/*.apk
+          name: demo-app-signed-release-apk
+          path: demo-app/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
