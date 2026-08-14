@@ -48,22 +48,8 @@ jobs:
         run: |
           # The scaffolded template ships release with minify disabled; turn on
           # R8 shrinking so we can measure the real release APK size.
-          if grep -q 'isMinifyEnabled = false' app/build.gradle.kts; then
-            sed -i 's/isMinifyEnabled = false/isMinifyEnabled = true/' app/build.gradle.kts
-          else
-            python3 - <<'PY'
-import re
-p = 'app/build.gradle.kts'
-s = open(p).read()
-s = re.sub(r'minifyEnabled\s+false', 'minifyEnabled true', s)
-if 'isMinifyEnabled' not in s and 'minifyEnabled' not in s:
-    m = re.search(r'release\s*\{', s)
-    assert m, 'release block not found in build.gradle.kts'
-    s = s[:m.end()] + '\n            isMinifyEnabled = true' + s[m.end():]
-open(p, 'w').write(s)
-PY
-          fi
-          grep -n 'minifyEnabled' app/build.gradle.kts
+          sed -i 's/isMinifyEnabled = false/isMinifyEnabled = true/; s/minifyEnabled false/minifyEnabled true/' app/build.gradle.kts
+          grep -n 'minifyEnabled' app/build.gradle.kts || { echo '::error::no minifyEnabled line found in build.gradle.kts'; exit 1; }
 
       - name: Build with Gradle
         working-directory: demo-app
