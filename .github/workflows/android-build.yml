@@ -30,7 +30,7 @@ jobs:
           java-version: '17'
 
       - name: Install Android CLI
-        run: bash ./install-android-cli.sh
+        run: bash ./scripts/install-android-cli.sh
 
       - name: List project templates
         run: android create list
