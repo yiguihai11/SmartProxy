@@ -35,7 +35,8 @@ resp = conn.getresponse()
 | [`/stats`](#stats) | GET | 流量统计、进程资源 |
 | [`/route`](#route) | GET | 路由表信息 |
 | [`/health`](#health) | GET | 上游代理健康状态 |
-| [`/health/proxy`](#health-proxy) | POST | 手动禁用/启用代理 |
+| [`/health/proxy`](#health-proxy) | POST | 手动禁用/启用/释放代理电路 |
+| [`/health/reset-auto`](#health-reset-auto) | POST | 一键恢复因检测异常而自动关闭的电路 |
 | [`/cache`](#cache) | GET | DNS 缓存统计 |
 | [`/cache`](#cache-delete) | DELETE | 删除单条 DNS 缓存 |
 | [`/cache/flush`](#cache-flush) | POST | 清空全部 DNS 缓存 |
@@ -224,7 +225,13 @@ curl -X POST --unix-socket /tmp/admin.sock \
 | 参数 | 必填 | 说明 |
 |---|---|---|
 | `alias` | 是 | 代理别名 |
-| `action` | 是 | `disable` 或 `enable` |
+| `circuit` | 否 | `tcp` / `udp` / `both`（默认 `both`） |
+| `action` | 是 | `disable`、`enable` 或 `auto` |
+
+`circuit` 指定操作哪条电路（TCP / UDP / 两条），`action`：
+- `disable` — 手动钉死为不可用（探测也不再拨号，直到 `enable`/`auto`）；
+- `enable` — 手动钉死为可用（立即生效）；
+- `auto` — 释放手动 pin，交回健康检查自动控制。
 
 ### 响应
 
@@ -236,8 +243,34 @@ curl -X POST --unix-socket /tmp/admin.sock \
 
 | 状态码 | 说明 |
 |---|---|
-| 400 | 缺少 `alias` 或 `action` 参数，或 `action` 不是 `disable/enable` |
+| 400 | 缺少 `alias` 或 `action` 参数，或 `action` 不是 `disable/enable/auto` |
 | 404 | `alias` 不存在 |
+| 405 | 只接受 POST |
+
+---
+
+## `/health/reset-auto` {#health-reset-auto}
+
+**POST** — 一键恢复节点：把所有因健康检查探测失败而**自动 open** 的电路（TCP/UDP）回到 `closed`（立即可用，并由下一次探测重新验证）。**不动任何手动 pin**（用户手动 disable / enable 的电路保持原状），恢复是临时的——再次探测失败仍走正常流程重新 open。
+
+### 请求
+
+```bash
+curl -X POST --unix-socket /tmp/admin.sock http://localhost/health/reset-auto
+```
+
+### 响应
+
+```json
+{"status": "ok", "reset": 2}
+```
+
+`reset` 为本次恢复的电路数（无自动关闭电路时为 0）。
+
+### 错误
+
+| 状态码 | 说明 |
+|---|---|
 | 405 | 只接受 POST |
 
 ---

@@ -112,6 +112,28 @@ func (ph *ProxyHealth) reset() {
 	ph.latency = 0
 }
 
+// resetAutoOpened returns a circuit that the health checker auto-opened (StateOpen /
+// StateHalfOpen with no manual pin) to closed, so it is immediately available again and
+// re-validated by the next probe cycle. It does NOT pin the circuit: on the next probe (or
+// a real traffic) failure the normal recordFailure flow re-opens it exactly as before, so
+// the recovery is deliberately short-lived. Manually pinned circuits — SetManualState(true)
+// force-up or SetManualState(false) force-down — are left untouched: the panel's one-click
+// "recover nodes" must never silently override an explicit user pin (e.g. the udp_in_tcp
+// TCP default). lastAttempt/latency are kept so the badge reads "up" right away instead of
+// "unknown" until the next probe. Returns whether anything was reset.
+func (ph *ProxyHealth) resetAutoOpened() bool {
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+	if ph.manual != nil || ph.state == StateClosed {
+		return false
+	}
+	ph.state = StateClosed
+	ph.consecutiveFailures = 0
+	ph.consecutiveSuccesses = 0
+	ph.openSince = time.Time{}
+	return true
+}
+
 func (ph *ProxyHealth) IsAvailable() bool {
 	ph.mu.RLock()
 	defer ph.mu.RUnlock()

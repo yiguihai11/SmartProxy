@@ -519,6 +519,27 @@ func (m *Manager) SetCircuitHealth(alias, circuit, action string) error {
 	return nil
 }
 
+// ResetAutoOpenedCircuits is the "one-click recover nodes" action: every circuit the
+// health checker auto-opened (probe-failure Open/HalfOpen with no manual pin) is returned
+// to closed, so it is immediately usable again and re-validated by the next probe. Manual
+// pins — force-up or force-down — are never touched, and recovery stays temporary: another
+// probe/traffic failure re-opens the circuit through the normal flow. Returns how many
+// circuits were reset.
+func (m *Manager) ResetAutoOpenedCircuits() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var n int
+	for _, proxy := range m.defaultProxies {
+		if proxy.health.resetAutoOpened() {
+			n++
+		}
+		if proxy.udpHealth.resetAutoOpened() {
+			n++
+		}
+	}
+	return n
+}
+
 func (m *Manager) Strategy() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

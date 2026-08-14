@@ -598,6 +598,40 @@ func TestAdmin_HealthProxyToggle(t *testing.T) {
 	resp3, _ := httpPost(s.sockPath, "/health/proxy?alias=ss-local&action=enable")
 	resp3.Body.Close()
 }
+func TestAdmin_HealthResetAuto(t *testing.T) {
+	s := newTestServer(t)
+	startServer(t, s)
+
+	// Method guard: GET is not allowed.
+	if resp, err := httpGet(s.sockPath, "/health/reset-auto"); err != nil {
+		t.Fatalf("GET /health/reset-auto failed: %v", err)
+	} else {
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("expected 405 for GET, got %d", resp.StatusCode)
+		}
+	}
+
+	// All circuits are fresh/closed in the test server, so nothing is auto-open → reset:0.
+	resp, err := httpPost(s.sockPath, "/health/reset-auto")
+	if err != nil {
+		t.Fatalf("POST /health/reset-auto failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	var data map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if data["status"] != "ok" {
+		t.Errorf("expected status ok, got %v", data["status"])
+	}
+	if n, ok := data["reset"].(float64); !ok || n != 0 {
+		t.Errorf("expected reset=0 with no auto-opened circuits, got %v", data["reset"])
+	}
+}
 func TestAdmin_HealthProxyBadAlias(t *testing.T) {
 	s := newTestServer(t)
 	startServer(t, s)

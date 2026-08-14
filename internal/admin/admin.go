@@ -219,6 +219,7 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/acl", s.handleACL)
 	mux.HandleFunc("/chnroute", s.handleChnroute)
 	mux.HandleFunc("/health/proxy", s.handleHealthProxy)
+	mux.HandleFunc("/health/reset-auto", s.handleHealthResetAuto)
 	mux.HandleFunc("/config", s.handleConfig)
 	mux.HandleFunc("/version", s.handleVersion)
 	mux.HandleFunc("/files", s.handleFiles)
@@ -602,6 +603,20 @@ func (s *Server) handleHealthProxy(w http.ResponseWriter, r *http.Request) {
 	slog.Info("admin: proxy health set", "alias", alias, "circuit", circuit, "action", action)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// handleHealthResetAuto implements the panel's "one-click recover nodes": circuits the
+// health checker auto-opened (probe failures) are returned to closed; manual pins are
+// untouched. Recovery is temporary — another failure re-opens them through the normal flow.
+func (s *Server) handleHealthResetAuto(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	n := s.mgr.ResetAutoOpenedCircuits()
+	slog.Info("admin: reset auto-opened circuits", "count", n)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "reset": n})
 }
 
 // ---- config reload ----

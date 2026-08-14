@@ -69,6 +69,52 @@ func TestSetManualState_Snapshot(t *testing.T) {
 	}
 }
 
+func TestResetAutoOpened(t *testing.T) {
+	// Auto-opened by probe failures (no manual pin) → resets to closed/available.
+	ph := &ProxyHealth{}
+	ph.state = StateOpen
+	ph.consecutiveFailures = 2
+	ph.openSince = time.Now()
+	if !ph.resetAutoOpened() {
+		t.Fatal("expected auto-open circuit to be reported as reset")
+	}
+	if !ph.IsAvailable() {
+		t.Error("expected available after reset")
+	}
+	if s := ph.Snapshot(); s.State != "closed" || s.ConsecutiveFailures != 0 {
+		t.Errorf("expected closed with 0 failures, got state=%s failures=%d", s.State, s.ConsecutiveFailures)
+	}
+	// Second call is a no-op.
+	if ph.resetAutoOpened() {
+		t.Error("closed circuit must not be reported as reset")
+	}
+
+	// Half-open auto → also reset.
+	phHalf := &ProxyHealth{}
+	phHalf.state = StateHalfOpen
+	if !phHalf.resetAutoOpened() || !phHalf.IsAvailable() {
+		t.Error("half-open circuit should reset to available")
+	}
+
+	// Manually pinned circuits are never touched, whichever way they are pinned.
+	manualDown := &ProxyHealth{}
+	manualDown.SetManualState(false) // state=open, manual=false
+	if manualDown.resetAutoOpened() {
+		t.Error("manual-down circuit must not be reset")
+	}
+	if !manualDown.IsManuallyDisabled() || manualDown.IsAvailable() {
+		t.Error("manual-down pin must survive resetAutoOpened")
+	}
+	manualUp := &ProxyHealth{}
+	manualUp.SetManualState(true) // state=closed, manual=true
+	if manualUp.resetAutoOpened() {
+		t.Error("manual-up circuit must not be reset")
+	}
+	if _, pinned := manualUp.ManualPin(); !pinned {
+		t.Error("manual-up pin must survive resetAutoOpened")
+	}
+}
+
 func TestSetManualState_Multiple(t *testing.T) {
 	ph := &ProxyHealth{}
 	ph.SetManualState(false)

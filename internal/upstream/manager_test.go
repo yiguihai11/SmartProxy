@@ -919,6 +919,55 @@ func TestNewManager_AutoMode(t *testing.T) {
 // TestManager_UDPRoutingUsesUDPHealth verifies UDP routing is gated by the independent UDP
 // circuit (IsUDPAvailable), while TCP routing keeps using IsAvailable — so opening only the
 // UDP circuit changes UDP failover but never TCP.
+func TestManager_ResetAutoOpenedCircuits(t *testing.T) {
+	mockAddr, done := startSOCKS5Mock(t)
+	defer done()
+
+	m, err := NewManager(UpstreamConfig{
+		Default: "failover",
+		Proxies: []ProxyEntry{
+			{Alias: "a", URL: "socks5://" + mockAddr},
+			{Alias: "b", URL: "socks5://" + mockAddr},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a, b := m.defaultProxies[0], m.defaultProxies[1]
+
+	// a: TCP auto-opened by probe failures; UDP manually disabled (user pin).
+	a.health.state = StateOpen
+	a.health.consecutiveFailures = 2
+	a.health.openSince = time.Now()
+	a.udpHealth.SetManualState(false)
+
+	// b: UDP auto-opened; TCP manually enabled (user pin).
+	b.udpHealth.state = StateOpen
+	b.udpHealth.openSince = time.Now()
+	b.health.SetManualState(true)
+
+	n := m.ResetAutoOpenedCircuits()
+	if n != 2 {
+		t.Errorf("expected 2 auto-opened circuits reset, got %d", n)
+	}
+
+	// Auto-opened circuits are back to available; the recovery is temporary (no manual pin).
+	if !a.health.IsAvailable() {
+		t.Error("a TCP should be available after reset")
+	}
+	if !b.udpHealth.IsAvailable() {
+		t.Error("b UDP should be available after reset")
+	}
+	// Manual pins survive untouched.
+	if !a.udpHealth.IsManuallyDisabled() {
+		t.Error("a UDP manual-down pin must survive reset")
+	}
+	if _, pinned := b.health.ManualPin(); !pinned {
+		t.Error("b TCP manual-up pin must survive reset")
+	}
+}
+
 func TestManager_UDPRoutingUsesUDPHealth(t *testing.T) {
 	mockAddr, done := startSOCKS5Mock(t)
 	defer done()

@@ -122,6 +122,14 @@ tr:last-child td{border-bottom:none}
 .page-input::-webkit-inner-spin-button,.page-input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
 .page-input:focus{border-color:var(--accent)}
 .toolbar{display:flex;gap:10px;margin-bottom:12px;align-items:center}
+/* Global alert: every proxy node is down (auto-opened circuits), proxied traffic is broken. */
+.health-banner{display:none;align-items:center;gap:14px;margin:0 0 20px;padding:12px 16px;border:1px solid rgba(240,96,96,.45);border-radius:var(--radius);background:var(--red-bg);color:var(--text);cursor:pointer;transition:border-color .15s,background .15s}
+.health-banner:hover{border-color:var(--red);background:rgba(240,96,96,.16)}
+.health-banner .hb-msg{flex:1;display:flex;align-items:center;gap:10px;font-size:.9rem;font-weight:500}
+.health-banner .hb-msg .hb-ico{color:var(--red);font-size:1.05rem;flex-shrink:0}
+.health-banner .hb-go{color:var(--text2);font-size:.78rem;white-space:nowrap}
+.health-banner .btn{flex-shrink:0}
+.toolbar{display:flex;gap:10px;margin-bottom:12px;align-items:center}
 .filter-wrap{position:relative;display:inline-flex}
 .filter-trigger{cursor:pointer;color:var(--text2);font-size:.82rem;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface2);white-space:nowrap;transition:border-color .15s;flex-shrink:0}
 .filter-trigger:hover{border-color:var(--border2)}
@@ -211,6 +219,11 @@ tr:last-child td{border-bottom:none}
 </div>
 
 <div class="main">
+<div class="health-banner" id="health-banner" onclick="navTo('health')" title="Go to Proxies">
+  <div class="hb-msg"><span class="hb-ico">⚠</span><span>所有代理节点不可用，经代理的联网已中断</span></div>
+  <div class="hb-go">点击查看节点状态 →</div>
+  <button class="btn btn-sm primary" onclick="event.stopPropagation();resetAutoCircuits()">一键恢复节点</button>
+</div>
 <div class="view active" id="view-dashboard">
   <div class="view-title">Overview</div>
   <div class="view-meta"><span class="dot"></span>Live <span id="dash-time"></span></div>
@@ -515,6 +528,7 @@ async function toggleCircuit(i,c){
 }
 function lhealth(d){
   healthD=d;
+  updateHealthBanner(d);
   document.getElementById('proxy-cards').innerHTML=d.health.proxies.map(function(p,i){
     var udpScheme=/^(socks5|socks5h|ss)$/.test(p.scheme);
     // Effective availability: the node is "on" if EITHER circuit can carry traffic. A udp_only
@@ -546,6 +560,31 @@ function lhealth(d){
       '</div></div>';
   }).join('');
   st('health-time');
+}
+// Global "all proxies down" banner: shown when every configured node has no usable circuit
+// (TCP down and, for UDP-capable schemes, UDP down too). No proxies configured → nothing to
+// warn about (the restore button would be meaningless). Clicking the banner opens the
+// Proxies page; the button restores only auto-opened circuits, leaving manual pins alone.
+function updateHealthBanner(d){
+  var b=document.getElementById('health-banner');
+  if(!b)return;
+  var proxies=(d&&d.health&&d.health.proxies)||[];
+  var anyUp=proxies.some(function(p){
+    var udpScheme=/^(socks5|socks5h|ss)$/.test(p.scheme);
+    return (p.health&&p.health.available)||(udpScheme&&p.udp_health&&p.udp_health.available);
+  });
+  b.style.display=(proxies.length>0&&!anyUp)?'flex':'none';
+}
+async function resetAutoCircuits(){
+  try{
+    var r=await fetch('/health/reset-auto',{method:'POST'});
+    if(!r.ok){var t=await r.text();throw new Error('Reset failed ('+r.status+'): '+t)}
+    var j=await r.json().catch(function(){return {}});
+    var msg=(j.reset>0)?('已恢复 '+j.reset+' 个电路（临时，再次检测失败将重新关闭）'):'当前没有因检测异常而自动关闭的电路';
+    var toast=document.getElementById('copy-toast');
+    if(toast)showCopyToast(toast,msg);else alert(msg);
+  }catch(e){ alert(e.message) }
+  loadHealth();
 }
 async function loadDashboard(){
   try{
@@ -2215,6 +2254,7 @@ es.onmessage=function(e){
   try{
     var d=JSON.parse(e.data);
     setDot(true);
+    updateHealthBanner(d);
     var v=document.querySelector('.nav-item.active').dataset.view;
     if(v==='dashboard')ldash(d);
     else if(v==='traffic'&&trafficAuto)ltraf(d);
