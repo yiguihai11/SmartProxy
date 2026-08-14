@@ -45,11 +45,13 @@ jobs:
 
       - name: Build with Gradle
         working-directory: demo-app
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleDebug assembleRelease --no-daemon
 
-      - name: Upload APK
+      - name: Upload APKs
         uses: actions/upload-artifact@v5
         with:
-          name: demo-app-debug-apk
-          path: demo-app/app/build/outputs/apk/debug/*.apk
+          name: demo-app-apks
+          path: |
+            demo-app/app/build/outputs/apk/debug/*.apk
+            demo-app/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
