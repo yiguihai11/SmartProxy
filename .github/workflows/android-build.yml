@@ -33,7 +33,7 @@ jobs:
         run: bash ./scripts/install-android-cli.sh
 
       - name: List project templates
-        run: android create list
+        run: android create --list
 
       - name: Scaffold a sample project
         run: |
