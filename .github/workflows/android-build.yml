@@ -46,10 +46,13 @@ jobs:
       - name: Enable R8 for release builds
         working-directory: demo-app
         run: |
-          # The scaffolded template ships release with minify disabled; turn on
-          # R8 shrinking so we can measure the real release APK size.
-          sed -i 's/isMinifyEnabled = false/isMinifyEnabled = true/; s/minifyEnabled false/minifyEnabled true/' app/build.gradle.kts
-          grep -n 'minifyEnabled' app/build.gradle.kts || { echo '::error::no minifyEnabled line found in build.gradle.kts'; exit 1; }
+          # The AGP 9 template ships release WITHOUT an explicit minifyEnabled flag
+          # (defaults to off). Insert `isMinifyEnabled = true` right after `release {`.
+          sed -i '0,/release[[:space:]]*{/s//&\n            isMinifyEnabled = true/' app/build.gradle.kts
+          grep -q 'isMinifyEnabled = true' app/build.gradle.kts \
+            || { echo '::error::no release{} block found — cannot enable R8'; exit 1; }
+          echo '--- patched release block ---'
+          grep -n -A2 'release[[:space:]]*{' app/build.gradle.kts
 
       - name: Build with Gradle
         working-directory: demo-app
