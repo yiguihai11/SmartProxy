@@ -46,11 +46,15 @@ jobs:
       - name: Enable R8 for release builds
         working-directory: demo-app
         run: |
-          # The AGP 9 template ships release WITHOUT an explicit minifyEnabled flag
-          # (defaults to off). Insert `isMinifyEnabled = true` right after `release {`.
-          sed -i '0,/release[[:space:]]*{/s//&\n            isMinifyEnabled = true/' app/build.gradle.kts
-          grep -q 'isMinifyEnabled = true' app/build.gradle.kts \
-            || { echo '::error::no release{} block found — cannot enable R8'; exit 1; }
+          # Template ships `isMinifyEnabled = false` in release{} — flip to true.
+          # Fallback: if the line is absent entirely, insert it after `release {`.
+          # (Do NOT also insert next to the existing flag — the later assignment wins.)
+          sed -i 's/isMinifyEnabled[[:space:]]*=[[:space:]]*false/isMinifyEnabled = true/' app/build.gradle.kts
+          if ! grep -q 'isMinifyEnabled[[:space:]]*=' app/build.gradle.kts; then
+            sed -i '0,/release[[:space:]]*{/s//&\n            isMinifyEnabled = true/' app/build.gradle.kts
+          fi
+          grep -q 'isMinifyEnabled[[:space:]]*=[[:space:]]*true' app/build.gradle.kts \
+            || { echo '::error::failed to enable R8'; exit 1; }
           echo '--- patched release block ---'
           grep -n -A2 'release[[:space:]]*{' app/build.gradle.kts
 
