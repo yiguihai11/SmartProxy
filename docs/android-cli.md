@@ -11,7 +11,8 @@
 | 文件 | 作用 |
 |---|---|
 | `scripts/install-android-cli.sh` | 便携安装脚本:JDK 17(必需)+ Android CLI。Linux/macOS/CI 通用 |
-| `.github/workflows/android-build.yml` | Actions 工作流:装 CLI → 脚手架项目 → Gradle 构建 → 上传 APK |
+| `.github/workflows/android-build.yml` | Actions 工作流:装 CLI → 脚手架 → R8 裁剪 → 临时签名 → 构建 release → 上传 APK |
+| `scripts/android_sign_patch.py` | 给脚手架生成的 `build.gradle.kts` 注入 release 签名配置 |
 
 ## 本地使用
 
@@ -43,7 +44,19 @@ android init --agent=claude-code      # 把官方 Android skills 装进 Claude C
 1. `actions/setup-java` 配 JDK 17
 2. `scripts/install-android-cli.sh` 装 Android CLI
 3. `android create` 脚手架一个 Compose 示例工程(模板需要的 SDK 包由 CLI 自动安装)
-4. `./gradlew assembleDebug`,APK 上传为 workflow artifact
+4. 开 R8(`isMinifyEnabled = true`,补 `proguard-rules.pro`),release 从 ~7.7M 压到 ~1.3M
+5. `scripts/android_sign_patch.py` 注入签名配置 + CI 现生成 debug keystore(**临时签名**)
+6. `./gradlew assembleRelease` 产出**签名** `app-release.apk`,上传为 workflow artifact
+
+> 签名说明:临时调试用,每次构建的 keystore 是**现生成的**(`android`/`androiddebugkey`),
+> 因此**每次签名不同**——覆盖安装新包前要先卸载旧的。以后要做正式更新包再配
+> 持久 keystore + secrets。
+
+下载安装包:
+
+```bash
+gh run download <run-id> --repo yiguihai11/SmartProxy --name demo-app-signed-release-apk
+```
 
 ## Android CLI 常用命令速查
 
