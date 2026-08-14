@@ -43,6 +43,28 @@ jobs:
           # so do NOT try-and-fallback — use the template name from `create --list`.
           android create empty-activity --name="DemoApp" --output=./demo-app
 
+      - name: Enable R8 for release builds
+        working-directory: demo-app
+        run: |
+          # The scaffolded template ships release with minify disabled; turn on
+          # R8 shrinking so we can measure the real release APK size.
+          if grep -q 'isMinifyEnabled = false' app/build.gradle.kts; then
+            sed -i 's/isMinifyEnabled = false/isMinifyEnabled = true/' app/build.gradle.kts
+          else
+            python3 - <<'PY'
+import re
+p = 'app/build.gradle.kts'
+s = open(p).read()
+s = re.sub(r'minifyEnabled\s+false', 'minifyEnabled true', s)
+if 'isMinifyEnabled' not in s and 'minifyEnabled' not in s:
+    m = re.search(r'release\s*\{', s)
+    assert m, 'release block not found in build.gradle.kts'
+    s = s[:m.end()] + '\n            isMinifyEnabled = true' + s[m.end():]
+open(p, 'w').write(s)
+PY
+          fi
+          grep -n 'minifyEnabled' app/build.gradle.kts
+
       - name: Build with Gradle
         working-directory: demo-app
         run: ./gradlew assembleDebug assembleRelease --no-daemon
