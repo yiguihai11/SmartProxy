@@ -20,6 +20,8 @@ SOCKS5 Smart Router（下称"本工程"）是一个基于 Go 的智能分流路�
 | [config.md](config.md) | 配置文件全字段说明与默认值 | 使用者、运维 |
 | [performance.md](performance.md) | 性能特性：低锁竞争、低 GC、万级连接/秒、缓冲复用 | 性能调优者 |
 | [admin-api.md](admin-api.md) | Admin HTTP 接口：/stats /health /config /acl /chnroute 等全部端点 | 运维、后台开发者 |
+| [android-dev-plan.md](android-dev-plan.md) | Android 版开发计划：两层次架构（VpnService 流量模式 + Go 引擎目标分流）、三种流量模式（仅代理/仅绕过/放行自身）、App 选择页（查询/排序/提示）、里程碑 | Android 开发者 |
+| [android-cli.md](android-cli.md) | Android CLI 安装与 CI 构建通道：JDK 17、脚手架、R8 裁剪、临时签名、APK 上传 | Android 开发者 |
 
 ## 第三方依赖版本说明
 
