@@ -1,0 +1,59 @@
+name: android-cli-build
+
+# Offloads the memory-hungry Gradle build to a GitHub-hosted runner
+# (ubuntu-latest: 2-core / 7 GB RAM) instead of a RAM-starved dev box.
+
+on:
+  # 路径过滤:只在 Android 相关的文件变更时自动跑,
+  # 避免每次纯 Go 提交都烧 Actions 分钟。首次添加本文件也会触发一次冒烟构建。
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/android-build.yml'
+      - 'scripts/install-android-cli.sh'
+      - 'android/**'
+      - 'mobile/android/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android CLI
+        run: bash ./install-android-cli.sh
+
+      - name: List project templates
+        run: android create list
+
+      - name: Scaffold a sample project
+        run: |
+          # Creates a Jetpack Compose + AGP 9 project; the CLI auto-installs
+          # the SDK packages the template needs (platforms, build-tools).
+          # Template name varies by CLI version — try both.
+          if android create empty-activity-agp-9 --name="DemoApp" --output=./demo-app 2>/dev/null; then
+            echo "Used template: empty-activity-agp-9"
+          else
+            android create empty-activity --name="DemoApp" --output=./demo-app
+            echo "Used template: empty-activity"
+          fi
+
+      - name: Build with Gradle
+        working-directory: demo-app
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-app-debug-apk
+          path: demo-app/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
