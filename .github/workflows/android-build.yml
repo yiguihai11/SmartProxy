@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -39,13 +39,9 @@ jobs:
         run: |
           # Creates a Jetpack Compose + AGP 9 project; the CLI auto-installs
           # the SDK packages the template needs (platforms, build-tools).
-          # Template name varies by CLI version — try both.
-          if android create empty-activity-agp-9 --name="DemoApp" --output=./demo-app 2>/dev/null; then
-            echo "Used template: empty-activity-agp-9"
-          else
-            android create empty-activity --name="DemoApp" --output=./demo-app
-            echo "Used template: empty-activity"
-          fi
+          # NOTE: unknown template names still exit 0 with only a stderr error,
+          # so do NOT try-and-fallback — use the template name from `create --list`.
+          android create empty-activity --name="DemoApp" --output=./demo-app
 
       - name: Build with Gradle
         working-directory: demo-app
