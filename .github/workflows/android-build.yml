@@ -49,6 +49,9 @@ jobs:
           # Template ships `isMinifyEnabled = false` in release{} — flip to true.
           # Fallback: if the line is absent entirely, insert it after `release {`.
           # (Do NOT also insert next to the existing flag — the later assignment wins.)
+          # The template's release{} references proguard-rules.pro but does not
+          # ship it — R8 fails with "proguard configuration does not exist".
+          touch app/proguard-rules.pro
           sed -i 's/isMinifyEnabled[[:space:]]*=[[:space:]]*false/isMinifyEnabled = true/' app/build.gradle.kts
           if ! grep -q 'isMinifyEnabled[[:space:]]*=' app/build.gradle.kts; then
             sed -i '0,/release[[:space:]]*{/s//&\n            isMinifyEnabled = true/' app/build.gradle.kts
