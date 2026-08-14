@@ -50,11 +50,17 @@ android init --agent=claude-code      # 把官方 Android skills 装进 Claude C
 | 命令 | 说明 |
 |---|---|
 | `android update` | 更新 CLI 自身 |
-| `android create list` | 列出可用的项目模板 |
+| `android create --list` | 列出可用的项目模板 |
 | `android describe` | 输出项目的构建目标 / APK 路径等 JSON 元数据 |
 | `android run --apks=<paths>` | 部署 APK 到已连接的设备/模拟器 |
 | `android sdk install platforms/android-36 build-tools/36.0.0` | 按需装 SDK 包 |
 | `android docs search <query>` | 查 Android 官方知识库 |
+
+> 两点实测教训:
+> - CLI 对**不存在的模板名只打 ERROR 到 stderr 且退出码为 0**,所以不要用
+>   `if … else` 做模板回退,直接用 `android create --list` 查到的名字。
+> - 模板列表命令是 `android create --list`(位置参数写法 `android create list`
+>   会被当成模板名并报 `Missing required option: '--name='`)。
 
 > Android CLI 是 Google 的预览工具(v0.7+),命令形态还在演进,以
 > [官方文档](https://developer.android.com/tools/agents/android-cli) 为准。
