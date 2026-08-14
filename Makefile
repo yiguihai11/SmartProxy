@@ -101,7 +101,10 @@ clean:
 ## android: build Android AAR library
 android:
 	@mkdir -p $(OUTDIR)
-	gomobile bind -tags with_gvisor -target=android -o $(OUTDIR)/smartproxy.aar ./mobile
+	# -javapkg 是"前缀",gomobile 会在后面追加 Go 包名(pkg.Name()=="mobile"),
+	# 所以 -javapkg=smartproxy → Java 包 smartproxy.mobile,类 smartproxy.mobile.Mobile。
+	# 若写 -javapkg=smartproxy.mobile 会得到 smartproxy.mobile.mobile(多一层),别踩。
+	gomobile bind -tags with_gvisor -target=android -javapkg=smartproxy -o $(OUTDIR)/smartproxy.aar ./mobile
 	@echo "=> $(OUTDIR)/smartproxy.aar"
 
 ## ios: build iOS Framework

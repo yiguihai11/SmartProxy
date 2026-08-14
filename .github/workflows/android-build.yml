@@ -1,18 +1,22 @@
-name: android-cli-build
+name: android-build
 
-# Offloads the memory-hungry Gradle build to a GitHub-hosted runner
-# (ubuntu-latest: 2-core / 7 GB RAM) instead of a RAM-starved dev box.
+# Builds the real Android app (android/) with the Go engine embedded as a
+# gomobile AAR. Offloaded to a GitHub-hosted runner (2-core / 7 GB) because the
+# dev box has too little RAM for Gradle.
 
 on:
-  # 路径过滤:只在 Android 相关的文件变更时自动跑,
-  # 避免每次纯 Go 提交都烧 Actions 分钟。首次添加本文件也会触发一次冒烟构建。
+  # 路径过滤:只在 Android / AAR 相关变更时自动跑,避免纯 Go 提交烧 Actions 分钟。
+  # Go 引擎内部改动想出新包,在 Actions 页手动 `Run workflow`。
   push:
     branches: [main]
     paths:
       - '.github/workflows/android-build.yml'
-      - 'scripts/install-android-cli.sh'
+      - 'scripts/**'
+      - 'Makefile'
+      - 'go.mod'
+      - 'go.sum'
+      - 'mobile/**'
       - 'android/**'
-      - 'mobile/android/**'
   workflow_dispatch:
 
 jobs:
@@ -29,69 +33,66 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Android CLI
-        run: bash ./scripts/install-android-cli.sh
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
 
-      - name: List project templates
-        run: android create --list
+      # 锁到 go.mod 里 x/mobile 的版本:与本地核对过的生成语义(方法名 lowerFirst、
+      # JavaPkgName 派生规则)保持一致,避免 @latest 漂移。
+      - name: Install gomobile (pinned to go.mod version)
+        run: go install golang.org/x/mobile/cmd/gomobile@v0.0.0-20260602190626-68735029466e
 
-      - name: Scaffold a sample project
+      # Android SDK 必须先就位:gomobile init 会去找 NDK(build-tools / ndk)。
+      - name: Set up Android SDK
         run: |
-          # Creates a Jetpack Compose + AGP 9 project; the CLI auto-installs
-          # the SDK packages the template needs (platforms, build-tools).
-          # NOTE: unknown template names still exit 0 with only a stderr error,
-          # so do NOT try-and-fallback — use the template name from `create --list`.
-          android create empty-activity --name="DemoApp" --output=./demo-app
+          set -euxo pipefail
+          export ANDROID_HOME="$HOME/android-sdk"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          curl -fsSL -o /tmp/cmdtools.zip \
+            "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+          unzip -q /tmp/cmdtools.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "platforms;android-35" "build-tools;35.0.0" >/dev/null
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
 
-      - name: Enable R8 for release builds
-        working-directory: demo-app
+      - name: Build Go engine AAR
         run: |
-          # Template ships `isMinifyEnabled = false` in release{} — flip to true.
-          # Fallback: if the line is absent entirely, insert it after `release {`.
-          # (Do NOT also insert next to the existing flag — the later assignment wins.)
-          # The template's release{} references proguard-rules.pro but does not
-          # ship it — R8 fails with "proguard configuration does not exist".
-          touch app/proguard-rules.pro
-          sed -i 's/isMinifyEnabled[[:space:]]*=[[:space:]]*false/isMinifyEnabled = true/' app/build.gradle.kts
-          if ! grep -q 'isMinifyEnabled[[:space:]]*=' app/build.gradle.kts; then
-            sed -i '0,/release[[:space:]]*{/s//&\n            isMinifyEnabled = true/' app/build.gradle.kts
-          fi
-          grep -q 'isMinifyEnabled[[:space:]]*=[[:space:]]*true' app/build.gradle.kts \
-            || { echo '::error::failed to enable R8'; exit 1; }
-          echo '--- patched release block ---'
-          grep -n -A2 'release[[:space:]]*{' app/build.gradle.kts
+          set -euxo pipefail
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          # 首次会下载 Android NDK 到 gomobile 缓存(约 1 GB,仅第一次慢)。
+          gomobile init
+          make android
+          mkdir -p android/app/libs
+          cp build/smartproxy.aar android/app/libs/smartproxy.aar
 
       - name: Generate debug signing keystore
-        working-directory: demo-app
         run: |
-          # Throwaway keystore for the temporary signed release build.
-          # Uses the standard Android debug signing convention so no secrets
-          # are needed. NOTE: signature differs per build — uninstall before
-          # installing a newer one.
+          # Throwaway keystore for the temporary signed release build (debug
+          # signing convention, no secrets). Signature differs per build —
+          # uninstall before installing a newer one.
           keytool -genkeypair -v -keystore debug.keystore -alias androiddebugkey \
             -keyalg RSA -keysize 2048 -validity 10000 \
             -storepass android -keypass android \
             -dname "CN=SmartProxy, OU=Dev, O=SmartProxy, L=Beijing, ST=Beijing, C=CN"
 
-      - name: Inject signing config
-        working-directory: demo-app
-        run: python3 ../scripts/android_sign_patch.py app/build.gradle.kts
-
       - name: Build signed release APK
-        working-directory: demo-app
+        working-directory: android
         run: ./gradlew assembleRelease --no-daemon
         env:
-          KEYSTORE_FILE: ${{ github.workspace }}/demo-app/debug.keystore
+          KEYSTORE_FILE: ${{ github.workspace }}/debug.keystore
           KEYSTORE_PASSWORD: android
           KEY_ALIAS: androiddebugkey
           KEY_PASSWORD: android
 
       - name: Verify signed APK
-        working-directory: demo-app
+        working-directory: android
         run: |
           ls -l app/build/outputs/apk/release/
-          # A signed build outputs `app-release.apk`; unsigned would be
-          # `app-release-unsigned.apk`. Fail loudly if we didn't get the signed one.
+          # 签名构建产出 app-release.apk;unsigned 会是 app-release-unsigned.apk。
           test -f app/build/outputs/apk/release/app-release.apk \
             || { echo '::error::expected signed app-release.apk'; exit 1; }
           echo "Signed release APK OK"
@@ -99,6 +100,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v5
         with:
-          name: demo-app-signed-release-apk
-          path: demo-app/app/build/outputs/apk/release/app-release.apk
+          name: smartproxy-signed-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error

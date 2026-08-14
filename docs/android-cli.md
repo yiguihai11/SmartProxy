@@ -1,79 +1,56 @@
-# Android CLI 安装与 CI 构建
+# Android 构建与 CI 安装
 
-本机内存太小,Gradle + Kotlin 构建容易把机器搞宕机,所以:
-
-- **本机**只装轻量的 `android` CLI 二进制(约 20 MB launcher + 首次运行时约 78 MB),
-  不装 Android SDK / 模拟器,也不在本机跑构建。
-- **重活在 CI 里干**:GitHub-hosted runner(2 核 / 7 GB 内存)跑 Gradle 构建并产出 APK。
+本机内存太小,Gradle + Kotlin 构建容易把机器搞宕机,所以**所有 Android/Gradle 构建都在
+GitHub Actions 上跑**(GitHub-hosted runner 2 核 / 7 GB),本机不装 Android SDK、不跑构建。
+本机验证 Kotlin/Gradle 语法用 `git diff` + CI 反馈即可。
 
 ## 相关文件
 
 | 文件 | 作用 |
 |---|---|
-| `scripts/install-android-cli.sh` | 便携安装脚本:JDK 17(必需)+ Android CLI。Linux/macOS/CI 通用 |
-| `.github/workflows/android-build.yml` | Actions 工作流:装 CLI → 脚手架 → R8 裁剪 → 临时签名 → 构建 release → 上传 APK |
-| `scripts/android_sign_patch.py` | 给脚手架生成的 `build.gradle.kts` 注入 release 签名配置 |
+| `android/` | 手写的 Android 工程(Compose + Kotlin + Gradle wrapper 8.9),M1 起逐步成型 |
+| `android/app/src/main/assets/` | 引擎运行资产:config.json(tun 段含 dns_servers)、chnroute.txt、acl.txt |
+| `mobile/` | gomobile bind 的 Go 引擎导出层(bridge.go),产出 `build/smartproxy.aar` |
+| `.github/workflows/android-build.yml` | Actions 工作流:装 SDK/NDK → gomobile 出 AAR → Gradle 签名 release → 上传 APK |
 
-## 本地使用
+## 构建链路
 
-```bash
-bash scripts/install-android-cli.sh   # 装 JDK 17 + android CLI 到 ~/.local/bin
-source ~/.bashrc
-android --version                     # 验证
+```
+Go 引擎(mobile/) --gomobile bind--> build/smartproxy.aar
+android/app/libs/smartproxy.aar --Gradle assembleRelease--> app-release.apk
 ```
 
-接上 Claude Code 技能(可选):
+一次 CI 构建做:
 
-```bash
-android init --agent=claude-code      # 把官方 Android skills 装进 Claude Code
-```
+1. `actions/setup-java` 配 JDK 17 + `actions/setup-go` 配 Go
+2. `go install golang.org/x/mobile/cmd/gomobile` + `sdkmanager` 装 platform-35 / build-tools
+3. `gomobile init` + `make android` → `build/smartproxy.aar`,拷进 `android/app/libs/`
+4. `keytool` 现生成 debug keystore(**临时签名**,`android`/`androiddebugkey`)
+5. `./gradlew assembleRelease`(env 注入签名)→ **签名** `app-release.apk`
+6. 上传为 workflow artifact `smartproxy-signed-release-apk`
+
+> 签名说明:临时调试用,每次构建的 keystore 是**现生成的**,因此**每次签名不同**——
+> 覆盖安装新包前要先卸载旧的。以后要做正式更新包再配持久 keystore + secrets。
+> 签名配置在 `android/app/build.gradle.kts` 里按 env(`KEYSTORE_FILE` 等)条件注入。
 
 ## CI 触发规则
 
-工作流是**按路径触发**的(`on: push: paths:`),只在以下文件变更时才自动跑:
+工作流**按路径触发**(`on: push: paths:`),只在以下文件变更时自动跑:
 
 - `.github/workflows/android-build.yml`
-- `scripts/install-android-cli.sh`
+- `scripts/**`、`Makefile`、`go.mod`、`go.sum`
+- `mobile/**`(引擎导出层)
 - `android/**`
-- `mobile/android/**`
 
-纯 Go 的提交不会触发。也可以随时在 Actions 页手动 `Run workflow`。
+纯 Go 内部改动不触发;想出新包就在 Actions 页手动 `Run workflow`。
 
-一次构建会做:
-
-1. `actions/setup-java` 配 JDK 17
-2. `scripts/install-android-cli.sh` 装 Android CLI
-3. `android create` 脚手架一个 Compose 示例工程(模板需要的 SDK 包由 CLI 自动安装)
-4. 开 R8(`isMinifyEnabled = true`,补 `proguard-rules.pro`),release 从 ~7.7M 压到 ~1.3M
-5. `scripts/android_sign_patch.py` 注入签名配置 + CI 现生成 debug keystore(**临时签名**)
-6. `./gradlew assembleRelease` 产出**签名** `app-release.apk`,上传为 workflow artifact
-
-> 签名说明:临时调试用,每次构建的 keystore 是**现生成的**(`android`/`androiddebugkey`),
-> 因此**每次签名不同**——覆盖安装新包前要先卸载旧的。以后要做正式更新包再配
-> 持久 keystore + secrets。
-
-下载安装包:
+## 下载安装包
 
 ```bash
-gh run download <run-id> --repo yiguihai11/SmartProxy --name demo-app-signed-release-apk
+gh run download <run-id> --repo yiguihai11/SmartProxy --name smartproxy-signed-release-apk
 ```
 
-## Android CLI 常用命令速查
+## 本地(可选)联调引擎
 
-| 命令 | 说明 |
-|---|---|
-| `android update` | 更新 CLI 自身 |
-| `android create --list` | 列出可用的项目模板 |
-| `android describe` | 输出项目的构建目标 / APK 路径等 JSON 元数据 |
-| `android run --apks=<paths>` | 部署 APK 到已连接的设备/模拟器 |
-| `android sdk install platforms/android-36 build-tools/36.0.0` | 按需装 SDK 包 |
-| `android docs search <query>` | 查 Android 官方知识库 |
-
-> 两点实测教训:
-> - CLI 对**不存在的模板名只打 ERROR 到 stderr 且退出码为 0**,所以不要用
->   `if … else` 做模板回退,直接用 `android create --list` 查到的名字。
-> - 模板列表命令是 `android create --list`(位置参数写法 `android create list`
->   会被当成模板名并报 `Missing required option: '--name='`)。
-
-> Android CLI 是 Google 的预览工具(v0.7+),命令形态还在演进,以
-> [官方文档](https://developer.android.com/tools/agents/android-cli) 为准。
+如果只想在桌面验证引擎逻辑(不碰 Android),照常 `make build` / `go test ./...` 即可,
+与本工程 Android 侧无关。

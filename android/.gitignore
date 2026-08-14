@@ -1,0 +1,13 @@
+# Gradle / Android build outputs
+/.gradle/
+/build/
+/app/build/
+/local.properties
+
+# gomobile AAR(CI 构建产物,由 `make android` 产出并拷入 app/libs)
+/app/libs/*.aar
+
+# IDE
+.idea/
+*.iml
+.DS_Store

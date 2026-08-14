@@ -1,0 +1,67 @@
+{
+  "log_level": "INFO",
+  "listen": {
+    "host": "::",
+    "port": 1080,
+    "admin_port": 9090,
+    "admin_auth": {
+      "enabled": true,
+      "username": "admin",
+      "password": "smartproxy"
+    },
+    "admin_https": true,
+    "admin_cert_sans": [
+      "smartproxy.lan"
+    ]
+  },
+  "tun": {
+    "enabled": false,
+    "name": "tun0",
+    "mtu": 1500,
+    "inet4_address": [
+      "172.19.0.1/30"
+    ],
+    "inet6_address": [
+      "fc00::1/64"
+    ],
+    "dns_servers": [
+      "223.5.5.5",
+      "2400:3200::1"
+    ],
+    "auto_route": false,
+    "stack": "gvisor"
+  },
+  "upstream": {
+    "default": "failover",
+    "health_check": {
+      "enabled": false
+    },
+    "proxies": []
+  },
+  "routing": {
+    "chnroute_file": "chnroute.txt",
+    "acl_file": "acl.txt"
+  },
+  "dns": {
+    "enabled": true,
+    "cache": {
+      "size": 10000,
+      "ttl": 86400
+    },
+    "foreign": {
+      "ipv4": "8.8.8.8:53",
+      "ipv6": "[2001:4860:4860::8888]:53"
+    },
+    "query_timeout": 3,
+    "speed_check_mode": "tcp:443"
+  },
+  "smart_proxy": {
+    "enabled": true,
+    "timeout": 2,
+    "ports": [
+      80,
+      443
+    ],
+    "blacklist_ttl": 3600
+  }
+}

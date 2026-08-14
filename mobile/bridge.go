@@ -73,7 +73,9 @@ func IsRunning() bool {
 	return globalEngine != nil
 }
 
-type RouterStatus struct {
+// 不导出:gomobile bind 只绑定导出类型。GetStatus 返回 JSON 串,无需把
+// internal/route.BlacklistEntry 暴露成 Java 类(跨包绑定徒增 AAR 面)。
+type routerStatus struct {
 	IsRunning       bool                   `json:"is_running"`
 	IPBlacklist     []route.BlacklistEntry `json:"ip_blacklist"`
 	DomainBlacklist []route.BlacklistEntry `json:"domain_blacklist"`
@@ -86,7 +88,7 @@ func GetStatus() (string, error) {
 		return `{"is_running":false}`, nil
 	}
 	ipBL, domainBL := globalEngine.Router.BlacklistSnapshot()
-	status := RouterStatus{
+	status := routerStatus{
 		IsRunning:       true,
 		IPBlacklist:     ipBL,
 		DomainBlacklist: domainBL,

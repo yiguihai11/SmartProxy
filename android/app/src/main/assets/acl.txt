@@ -1,0 +1,48 @@
+# ─────────────────────────────────────────
+# 端口控制
+# ─────────────────────────────────────────
+#block port 135                          # 阻止危险端口
+#block port 445
+#allow port 22                           # SSH 端口放行（跳过后续 block/proxy）
+
+# ─────────────────────────────────────────
+# IP / CIDR 控制
+# ─────────────────────────────────────────
+#allow cidr 10.0.0.0/8                  # 内网网段直连
+#allow cidr 192.168.0.0/16
+#block ip 1.2.3.4                       # 阻止特定 IP
+#proxy ip 8.8.8.8 direct                # 指定 IP 强制直连（不走代理）
+#proxy cidr 172.16.0.0/12 internal      # 特定网段走 internal 代理
+
+# ─────────────────────────────────────────
+# 域名控制（广告拦截 / 强制代理）
+# ─────────────────────────────────────────
+#block domain *.adnetwork.com           # 拦截广告域名（含所有子域名）
+#block domain tracker.example.com       # 拦截精确域名
+
+block domain browserconf.vivo.com.cn
+block domain adreq.vivo.com.cn
+block domain adlog.vivo.com.cn
+block domain browsersubscribe.vivo.com.cn
+
+#allow domain internal.corp             # 公司内部域名放行（不拦截、不代理）
+
+# ─────────────────────────────────────────
+# 代理路由（按域名选择上游）
+# ─────────────────────────────────────────
+#proxy domain *.google.com primary      # Google 服务走 primary 代理
+#proxy domain twitter.com jp            # Twitter 走 jp 代理
+#proxy domain *.netflix.com us          # Netflix 走 us 代理
+
+# 特殊值 "direct" 表示强制直连（跳过代理链）
+#proxy port 22 direct                   # SSH 端口强制直连
+
+
+proxy domain api.tripdata.app ss-local
+block domain kernelapi.vivo.com.cn
+
+block domain cdn.wwads.cn
+
+block domain ads.mozilla.org
+
+block domain fuli.vivo.com.cn
