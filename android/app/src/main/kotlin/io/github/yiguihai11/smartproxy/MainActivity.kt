@@ -269,7 +269,7 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
                         restartVpn(context)
                     },
                     modifier = Modifier.weight(1f)
-                ),
+                )
                 Spacer(Modifier.width(8.dp))
                 SwitchCard(
                     title = "IPv6 拦截", subtitle = "接管 IPv6 流量", checked = ipv6,
@@ -279,7 +279,7 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
                         restartVpn(context)
                     },
                     modifier = Modifier.weight(1f)
-                ),
+                )
             }
             SwitchCard(
                 title = "开机自启", subtitle = "开机后自动启动 VPN(需已授权)", checked = bootAuto,
