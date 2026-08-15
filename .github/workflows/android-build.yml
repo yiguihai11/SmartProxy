@@ -54,7 +54,9 @@ jobs:
             "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
           unzip -q /tmp/cmdtools.zip -d "$ANDROID_HOME/cmdline-tools"
           mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          # pipefail 下 `yes | sdkmanager` 会因 yes 收 SIGPIPE(141)而失败,但许可此时已接受,
+          # 所以 `|| true` 吞掉即可;真正拦路的包安装行在后面。
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" "platforms;android-35" "build-tools;35.0.0" >/dev/null
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
