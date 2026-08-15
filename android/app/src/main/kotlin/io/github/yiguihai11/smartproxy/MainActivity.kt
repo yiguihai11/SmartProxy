@@ -21,7 +21,6 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,7 +33,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -54,17 +52,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -161,10 +161,11 @@ private val StatusConnecting = Color(0xFFFF8413) // 连接中
 private val StatusConnected = Color(0xFF2EBD85)  // 已连接
 private val GreyText = Color(0xFF666666)
 private val TrackPurple = Color(0xFFC9AFE0)      // 圆环浅紫轨道
-private val OrbTop = Color(0xFFB38DE6)           // 球体上
-private val OrbBottom = Color(0xFF7952AD)        // 球体下
 private val ArcOrange = Color(0xFFFF8413)
 private val ArcYellow = Color(0xFFFFEB3C)
+
+/** 原版图标字体(assets/fonts/iconfont.ttf,逆向自 Ultimate VPN):电源/菜单/刷新/箭头。 */
+private val IconFont = FontFamily(Font(R.font.iconfont))
 
 @Composable
 private fun HomeLauncher(onToggleVpn: () -> Unit) {
@@ -194,11 +195,22 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
     }
     val connecting = running && sweep.value < 355f
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(Color(0xFFFBF8FF), Color(0xFFCEB4F3))))
-    ) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        // 1:1 原版背景:全屏 bg_main.jpg(淡紫渐变)+ 顶部 280dp bg_home_top 装饰。
+        Image(
+            painter = painterResource(R.drawable.bg_main),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop
+        )
+        Image(
+            painter = painterResource(R.drawable.bg_home_top),
+            contentDescription = null,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(280.dp),
+            contentScale = ContentScale.FillBounds
+        )
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -206,20 +218,28 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // ── 标题栏(紫粗体 + 橙色刷新)────────────────────────────
+            // ── 标题栏(1:1 原版:菜单图标 + 紫粗体标题 + 橙色刷新)──────
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
+                    text = "\ue604",                  // 原版菜单(hanbaobao)
+                    fontFamily = IconFont,
+                    fontSize = 20.sp,
+                    color = PurpleText
+                )
+                Text(
                     text = "SmartProxy",
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
                     color = PurpleText,
+                    textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f)
                 )
                 Text(
-                    text = "⟳",
+                    text = "\ue91b",                       // 原版刷新(shuaxin)→ 重取面板 URL
+                    fontFamily = IconFont,
                     fontSize = 20.sp,
                     color = OrangeAccent,
                     modifier = Modifier.clickable { panelUrl = PanelUrl.url(context) }
@@ -299,44 +319,26 @@ private fun ConnectOrb(running: Boolean, sweep: Float, onToggleVpn: () -> Unit) 
                 )
             }
         }
-        // 中心球体:紫渐变 + 白色电源符号,点按启停。
+        // 中心球体:1:1 原版素材(progress_btn_normal.png,紫渐变高光球)+
+        // 图标字体白色电源符号,点按启停。
         Box(
             modifier = Modifier
-                .size(132.dp)
-                .shadow(12.dp, CircleShape)
-                .clip(CircleShape)
-                .background(Brush.verticalGradient(listOf(OrbTop, OrbBottom)))
+                .size(121.dp)
                 .clickable { onToggleVpn() },
             contentAlignment = Alignment.Center
         ) {
-            PowerIcon(size = 56.dp)
+            Image(
+                painter = painterResource(R.drawable.progress_btn_normal),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize()
+            )
+            Text(
+                text = "\ue640",                     // 原版电源(dianyuan),白色
+                fontFamily = IconFont,
+                fontSize = 40.sp,
+                color = Color.White
+            )
         }
-    }
-}
-
-/** 白色电源符号(Canvas 手绘:带顶部缺口的下半圆 + 中轴竖线)。 */
-@Composable
-private fun PowerIcon(size: androidx.compose.ui.unit.Dp, color: Color = Color.White) {
-    Canvas(Modifier.size(size)) {
-        val stroke = this.size.minDimension * 0.10f
-        val r = this.size.minDimension * 0.27f
-        val c = this.center
-        drawArc(
-            color = color,
-            startAngle = 300f,          // 顶部留 60° 缺口(12 点方向)
-            sweepAngle = 300f,
-            useCenter = false,
-            topLeft = Offset(c.x - r, c.y - r),
-            size = Size(r * 2f, r * 2f),
-            style = Stroke(width = stroke, cap = StrokeCap.Round)
-        )
-        drawLine(
-            color = color,
-            start = Offset(c.x, c.y - this.size.minDimension * 0.40f),
-            end = Offset(c.x, c.y + this.size.minDimension * 0.14f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round
-        )
     }
 }
 
@@ -391,7 +393,12 @@ private fun PanelCard(url: String?, onCopy: (String) -> Unit, onOpen: (String) -
                     color = PurpleDark
                 )
                 Spacer(Modifier.weight(1f))
-                Text("▸", fontSize = 18.sp, color = PurpleSoft)
+                Text(
+                    text = "",                     // 原版右箭头(arrow-right-bold)
+                    fontFamily = IconFont,
+                    fontSize = 16.sp,
+                    color = PurpleSoft
+                )
             }
             if (url != null) {
                 Spacer(Modifier.height(6.dp))
