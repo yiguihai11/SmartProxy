@@ -383,7 +383,15 @@ private fun SwitchCard(
             Switch(
                 checked = checked,
                 onCheckedChange = onCheckedChange,
-                colors = SwitchDefaults.colors(checkedThumbColor = PurpleText)
+                // ON/OFF 对比分明:ON = 实心紫轨道 + 白拇指;OFF = 浅紫灰轨道 + 白拇指。
+                // 此前 ON 轨道用默认浅紫(≈#E8DEF8)+ 中紫拇指,白卡上浅紫对浅紫糊成一团。
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = PurpleText,
+                    uncheckedThumbColor = Color.White,
+                    uncheckedTrackColor = Color(0xFFE2DCE8),
+                    uncheckedBorderColor = Color(0xFFC9C0D4)
+                )
             )
         }
     }

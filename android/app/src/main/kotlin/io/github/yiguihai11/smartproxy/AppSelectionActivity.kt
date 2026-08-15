@@ -33,7 +33,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -212,16 +211,35 @@ private fun AppSelectionScreen(
             }
             Spacer(Modifier.height(8.dp))
 
-            // ── 流量模式 ────────────────────────────────────────
+            // ── 流量模式(横向两选一,说明文字压成一行,省竖向空间)──
             Card(
                 shape = RoundedCornerShape(20.dp),
                 colors = CardDefaults.cardColors(containerColor = Color.White)
             ) {
                 Column(Modifier.padding(16.dp)) {
                     Text("流量模式", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = PurpleText)
-                    Spacer(Modifier.height(2.dp))
-                    RadioRow("仅代理", "只代理下方勾选的应用,其余直连", selected = proxyMode) { onModeChange(false) }
-                    RadioRow("仅绕过", "全局走代理,放行下方勾选的应用", selected = !proxyMode) { onModeChange(true) }
+                    Spacer(Modifier.height(8.dp))
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        SegmentedButton(
+                            selected = proxyMode,
+                            onClick = { onModeChange(false) },
+                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                            label = { Text("仅代理", fontSize = 14.sp) }
+                        )
+                        SegmentedButton(
+                            selected = !proxyMode,
+                            onClick = { onModeChange(true) },
+                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                            label = { Text("仅绕过", fontSize = 14.sp) }
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    // 当前模式的一句说明(替代原 radio 副标题)。
+                    Text(
+                        if (proxyMode) "只代理下方勾选的应用,其余直连" else "全局走代理,放行下方勾选的应用",
+                        fontSize = 12.sp,
+                        color = GreyText
+                    )
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -295,21 +313,6 @@ private fun AppSelectionScreen(
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(Modifier.height(8.dp))
-        }
-    }
-}
-
-/** 流量模式单选项行(radio + 标题 + 说明)。 */
-@Composable
-private fun RadioRow(title: String, sub: String, selected: Boolean, onClick: () -> Unit) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 6.dp)
-    ) {
-        RadioButton(selected = selected, onClick = onClick)
-        Column {
-            Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = TextDark)
-            Text(sub, fontSize = 12.sp, color = GreyText)
         }
     }
 }
