@@ -4,6 +4,18 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// 版本从 git tag 派生(M4,对齐 internal/version 的 Makefile 机制):CI 注入 VERSION =
+// `git describe --tags --match 'v[0-9]*' --always --dirty | sed 's/^v//'`,如
+// "1.0.0" / "1.0.0-105-g7c7ef53";本机无 env 时回退 1.0.0。
+val ciVersion: String = System.getenv("VERSION") ?: "1.0.0"
+
+/** versionCode 取 VERSION 的 semver 段(major*100000 + minor*1000 + patch),解析失败回退 1。 */
+fun deriveVersionCode(version: String): Int {
+    val m = Regex("""(\d+)\.(\d+)\.(\d+)""").find(version) ?: return 1
+    val (major, minor, patch) = m.destructured
+    return major.toInt() * 100000 + minor.toInt() * 1000 + patch.toInt()
+}
+
 android {
     namespace = "io.github.yiguihai11.smartproxy"
     compileSdk = 35
@@ -12,8 +24,8 @@ android {
         applicationId = "io.github.yiguihai11.smartproxy"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = deriveVersionCode(ciVersion)
+        versionName = ciVersion
     }
 
     signingConfigs {

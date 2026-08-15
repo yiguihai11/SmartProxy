@@ -27,6 +27,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      # 版本从 git tag 派生(M4):只认 v[0-9]* 发布 tag,排除 backup-* 备份 tag;
+      # 无 tag 回退到提交哈希。gradle 用它当 versionName,并取 semver 段当 versionCode。
+      - name: Derive version from git tag
+        run: |
+          echo "VERSION=$(git describe --tags --match 'v[0-9]*' --always --dirty | sed 's/^v//')" >> "$GITHUB_ENV"
+
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
