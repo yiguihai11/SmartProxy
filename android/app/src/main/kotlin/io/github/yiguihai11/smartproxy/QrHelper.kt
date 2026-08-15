@@ -3,7 +3,7 @@ package io.github.yiguihai11.smartproxy
 import android.graphics.Bitmap
 import android.graphics.Color
 import com.google.zxing.BarcodeFormat
-import com.google.zxing.QRCodeWriter
+import com.google.zxing.qrcode.QRCodeWriter
 
 /**
  * 面板 URL 二维码(M2,§4.4)。直接调 QRCodeWriter,不走 MultiFormatWriter 的反射,
