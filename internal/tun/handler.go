@@ -611,16 +611,26 @@ func (h *TUNHandler) Start(cfg config.TUNConfig) (singtun.Tun, singtun.Stack, er
 		inet6 = append(inet6, p)
 	}
 
-	// NativeTun.Start() (t.Start() below) internally calls options.InterfaceMonitor.
-	// RegisterMyInterface, which must be non-nil or it will panic with a nil pointer. It is built with sing's default
-	// implementation plus a NOP logger; this project does not register interface-change callbacks, so the monitor stays lazy.
-	networkMonitor, err := singtun.NewNetworkUpdateMonitor(logger.NOP())
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create network monitor: %w", err)
-	}
-	interfaceMonitor, err := singtun.NewDefaultInterfaceMonitor(networkMonitor, logger.NOP(), singtun.DefaultInterfaceMonitorOptions{})
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create interface monitor: %w", err)
+	// fd 模式(Android VpnService)下接口监控全程零消费:NativeTun.Start() 在
+	// FileDescriptor != 0 时直接 return nil,RegisterMyInterface 永不调用;RegisterCallback
+	// 需要 AutoRoute && android 而 fd 模式引擎已强制 AutoRoute=false;Close / UpdateRouteOptions
+	// 也都判 FileDescriptor 短路。而 NewNetworkUpdateMonitor 在 Android 上会先探测 netlink
+	// socket(monitor_linux.go 的 "banned by Google" 检查),SELinux untrusted_app 域不放行
+	// netlink 时直接 ErrNetlinkBanned 让整条隧道起不来(真机实测报错)。所以 fd 模式跳过这两步,
+	// 传 nil——monitor 只在非 fd 模式(t. 开原生 tun0)时按原样创建。
+	var interfaceMonitor singtun.DefaultInterfaceMonitor
+	if !isFdMode {
+		// NativeTun.Start() (t.Start() below) internally calls options.InterfaceMonitor.
+		// RegisterMyInterface, which must be non-nil or it will panic with a nil pointer. It is built with sing's default
+		// implementation plus a NOP logger; this project does not register interface-change callbacks, so the monitor stays lazy.
+		networkMonitor, err := singtun.NewNetworkUpdateMonitor(logger.NOP())
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create network monitor: %w", err)
+		}
+		interfaceMonitor, err = singtun.NewDefaultInterfaceMonitor(networkMonitor, logger.NOP(), singtun.DefaultInterfaceMonitorOptions{})
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create interface monitor: %w", err)
+		}
 	}
 
 	tunOpts := singtun.Options{
