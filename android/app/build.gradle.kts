@@ -75,5 +75,8 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
 
+    // 面板入口二维码(M2):直接用 QRCodeWriter 编码,无反射路径,R8 安全。
+    implementation("com.google.zxing:core:3.5.3")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

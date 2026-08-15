@@ -15,6 +15,7 @@ object AppPrefs {
     private const val KEY_IPV6 = "ipv6"
     private const val KEY_GLOBAL_MODE = "global_mode"
     private const val KEY_SELECTED_APPS = "selected_apps"
+    private const val KEY_BOOT_AUTO_START = "boot_auto_start"
 
     private fun sp(context: Context) =
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -28,6 +29,14 @@ object AppPrefs {
     /** 勾选的应用包名列表(仅代理=白名单 / 仅绕过=黑名单,语义随模式翻转)。 */
     fun selectedApps(context: Context): Set<String> =
         sp(context).getStringSet(KEY_SELECTED_APPS, emptySet()) ?: emptySet()
+
+    /** 开机自启(§4.3):默认关,用户主动开启;BootReceiver 只在开启时起服务。 */
+    fun bootAutoStart(context: Context): Boolean =
+        sp(context).getBoolean(KEY_BOOT_AUTO_START, false)
+
+    fun setBootAutoStart(context: Context, value: Boolean) {
+        sp(context).edit().putBoolean(KEY_BOOT_AUTO_START, value).apply()
+    }
 
     fun setIpv4(context: Context, value: Boolean) {
         sp(context).edit().putBoolean(KEY_IPV4, value).apply()

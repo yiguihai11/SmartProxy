@@ -29,6 +29,16 @@ object ConfigProvider {
         return json.toString()
     }
 
+    /** 面板管理端口:读 assets/config.json 的 listen.admin_port(单一真源)。 */
+    fun adminPort(context: Context): Int {
+        val raw = context.assets.open("config.json").bufferedReader().use { it.readText() }
+        return JSONObject(raw)
+            .optJSONObject("listen")
+            ?.optInt("admin_port", DEFAULT_ADMIN_PORT) ?: DEFAULT_ADMIN_PORT
+    }
+
+    private const val DEFAULT_ADMIN_PORT = 9090
+
     private fun copyAsset(context: Context, name: String, destDir: File) {
         context.assets.open(name).use { input ->
             File(destDir, name).outputStream().use { output ->
