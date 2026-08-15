@@ -17,6 +17,12 @@ import java.io.File
  *    局域网 IP,减浏览器警告。
  *  - 桥接强制项(bridge.go 会强制,这里写实保持一致):tun.enabled=true、auto_route=false。
  *
+ * fd 模式字段纪律:Android 是 fd 模式(引擎从 VpnService.establish 的 fd 读包),tun 段只
+ * 应包含 fd 模式真正消费的字段(mtu / inet4|6_address / dns_servers / stack / auto_route)。
+ * PC-only 的 name、output_mark、route_exclude_ports(ip rule + nftables 全接管自排除)在
+ * fd 模式下零消费(handler.go 的 OutputMark>0 && AutoRoute && !isFdMode 三重门短路),
+ * assets 里刻意不写,防误导。
+ *
  * 引擎侧 dns_servers 仅用于 Android addDnsServer 通告(§4.6),族过滤后 index 布局随开关
  * 变化,所以 Builder 的 DNS 直接读 AppPrefs(同源),不依赖 index 约定(见 TunConfig)。
  */

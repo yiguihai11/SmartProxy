@@ -16,7 +16,6 @@
   },
   "tun": {
     "enabled": false,
-    "name": "tun0",
     "mtu": 1500,
     "inet4_address": [
       "172.19.0.1/30"
