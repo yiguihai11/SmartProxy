@@ -11,8 +11,6 @@ import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -88,7 +86,7 @@ import androidx.lifecycle.LifecycleEventObserver
  * 逆向还原的视觉:淡紫渐变背景 + 大圆环进度 + 中心紫渐变球体(球上白色电源字形)。
  *  - 大圆环球体 = VPN 启停(§4.5,isRunning 驱动);进度弧橙色→黄色,连接时扫一圈
  *  - 状态行:「状态:未连接/连接中/已连接」
- *  - 开关卡:IPv4 / IPv6 拦截(§4.1/§4.2,写 AppPrefs;运行中改 → 重启 VPN)
+ *  - 开关卡:IPv4 / IPv6 拦截(§4.1/§4.2,写 config.json;运行中改 → Go watcher 自动重启)
  *  - 开关卡:开机自启(§4.3)+ Apps 应用选择入口(§5 应用内化)→ AppSelectionActivity
  *  - 管理面板卡:URL + 复制 + 浏览器选择器 + 二维码(§4.4)
  * 流量模式 / 应用选择在应用内(§5),不在首页;DNS 只在 Web 面板(§4.4)。
@@ -142,15 +140,6 @@ class MainActivity : ComponentActivity() {
             notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
-}
-
-/** 正在运行时空翻 v4/v6:停掉旧会话再按新偏好重启(§4.4 改动→重启生效,约 2-3s 断连)。 */
-private fun restartVpn(context: Context) {
-    if (!SmartProxyVpnService.isRunning.value) return
-    SmartProxyVpnService.stop(context)
-    Handler(Looper.getMainLooper()).postDelayed({
-        SmartProxyVpnService.start(context)
-    }, 500)
 }
 
 private fun copyPanelUrl(context: Context, url: String) {
@@ -274,8 +263,10 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
                     title = "IPv4 拦截", subtitle = "接管 IPv4 流量", checked = ipv4,
                     onCheckedChange = { v ->
                         ipv4 = v
-                        ConfigProvider.setIpv4(context, v)   // 写 config.json tun.inet4_address(§4.6)
-                        restartVpn(context)
+                        // 写 config.json tun.inet4_address(§4.6):Go watcher 检测到隧道参数变更会
+                        // 自动重启 VPN(engine 的 configReload → Vpn("restart")),不再手动重启——
+                        // 手动 + watcher 双触发会让服务被起两次,后一次 startRouter 报错把隧道杀掉。
+                        ConfigProvider.setIpv4(context, v)
                     },
                     modifier = Modifier.weight(1f)
                 )
@@ -284,8 +275,8 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
                     title = "IPv6 拦截", subtitle = "接管 IPv6 流量", checked = ipv6,
                     onCheckedChange = { v ->
                         ipv6 = v
-                        ConfigProvider.setIpv6(context, v)   // 写 config.json tun.inet6_address(§4.6)
-                        restartVpn(context)
+                        // 同上 v4:单一触发 = watcher 自动重启,App 侧不手动重启。
+                        ConfigProvider.setIpv6(context, v)
                     },
                     modifier = Modifier.weight(1f)
                 )
