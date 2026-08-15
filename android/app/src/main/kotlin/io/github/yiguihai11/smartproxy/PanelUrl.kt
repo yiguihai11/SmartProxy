@@ -5,10 +5,13 @@ import java.net.Inet4Address
 import java.net.NetworkInterface
 
 /**
- * 管理面板入口 URL(§4.4):https://<手机局域网IP>:admin_port。
+ * 管理面板入口 URL(§4.4):https://smartproxy.lan:admin_port。
  *
- * admin 监听 0.0.0.0 + ::(Go 双栈,常开),手机局域网 IP 就是入口地址。
- * 局域网 IP 变化时首页需刷新 URL 与二维码(§4.4 注意)。
+ * 用固定域名 smartproxy.lan 而非原始局域网 IP:
+ *  - 证书 admin_cert_sans 含它 → 手机浏览器打开无证书告警,换网 IP 变、域名不变;
+ *  - VPN 运行时引擎接管手机 DNS,dns.static_records 把 smartproxy.lan 解析到手机
+ *    自己(ConfigProvider 不变量每次启动刷新 IP),域名不依赖当前 IP。
+ * 拿不到局域网 IP 返回 null(如未连 Wi-Fi)——static record 无从建立,链接不可用。
  */
 object PanelUrl {
 
@@ -25,9 +28,9 @@ object PanelUrl {
         return null
     }
 
-    /** https://<ip>:<port>,拿不到 IP 返回 null(如未连 Wi-Fi)。 */
+    /** https://smartproxy.lan:<port>;未连网/拿不到局域网 IP 返回 null。 */
     fun url(context: Context): String? {
-        val ip = lanIpv4() ?: return null
-        return "https://$ip:${ConfigProvider.adminPort(context)}"
+        if (lanIpv4() == null) return null
+        return "https://smartproxy.lan:${ConfigProvider.adminPort(context)}"
     }
 }
