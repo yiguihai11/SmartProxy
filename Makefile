@@ -38,7 +38,9 @@ GOOS_GOARCH = $(subst -, ,$(subst $(OUTDIR)/$(BINARY)-,,$(subst .exe,,$@)))
 GOOS = $(word 1,$(GOOS_GOARCH))
 GOARCH = $(word 2,$(GOOS_GOARCH))
 
-.PHONY: all build build-all check test test-verbose test-race clean lint fmt mod run help
+# android/ios 必须是 .PHONY:仓库里有同名目录 android/,不声明的话 make 会把目标
+# 当"目录已存在"跳过(gomobile 那步会打出 'android' is up to date 却不产出 AAR)。
+.PHONY: all build build-all check test test-verbose test-race clean lint fmt mod run help android ios
 
 ## all: build for current platform
 all: build
