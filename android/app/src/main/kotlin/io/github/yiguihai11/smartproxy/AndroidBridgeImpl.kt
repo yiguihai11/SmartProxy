@@ -3,7 +3,7 @@ package io.github.yiguihai11.smartproxy
 import android.content.Context
 
 /**
- * M5:gomobile 反向桥实现(§4.4)。Go admin server 的 /api/* 端点经
+ * M5:gomobile 反向桥实现(§4.4)。Go admin server 的 /api/ 桥接端点经
  * `mobile.AndroidBridge`(生成 Java 接口 smartproxy.mobile.AndroidBridge)回调到这里,
  * 读写 SharedPreferences / PackageManager / VpnService。
  *
