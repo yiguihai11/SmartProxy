@@ -15,6 +15,7 @@ import (
 	"smartproxy/internal/config"
 	"smartproxy/internal/dns"
 	"smartproxy/internal/engine"
+	"smartproxy/internal/logbuf"
 	"smartproxy/internal/route"
 	"smartproxy/internal/upstream"
 )
@@ -67,9 +68,13 @@ func StartRouter(configPath string, tunFd int) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	})))
+	// 与桌面 main.go 一致:slog 输出同时进 logbuf.Default 环形缓冲,纯 Go 面板的
+	// Logs 页(GET /logs)才能读到;否则 logbuf 恒空,面板显示 "No logs available"。
+	// 包装会转发到 stdout(logcat GoLog tag 不受影响)。
+	slog.SetDefault(slog.New(logbuf.NewSlogHandlerLevel(
+		slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}),
+		logbuf.Default, slog.LevelInfo,
+	)))
 
 	cfg.TUN.Enabled = true
 	cfg.TUN.FileDescriptor = tunFd
