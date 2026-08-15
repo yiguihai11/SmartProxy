@@ -19,14 +19,10 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -66,7 +62,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
@@ -79,7 +74,6 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import kotlinx.coroutines.isActive
 
 /**
  * 首页 = 纯启动器(§4.4),UI 参考 Ultimate VPN Free(com.open.hotspot.vpn.free)
@@ -303,34 +297,9 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
     }
 }
 
-/** 大圆环:浅紫轨道 + 橙→黄渐变进度弧 + 中心紫渐变球体(球上白色电源字形)。
- *  动效:按下球体缩小回弹(点击反馈)+ 连接中球体呼吸脉动,已连接后静止。 */
+/** 大圆环:浅紫轨道 + 橙→黄渐变进度弧 + 中心紫渐变球体(球上白色电源字形)。 */
 @Composable
 private fun ConnectOrb(running: Boolean, sweep: Float, onToggleVpn: () -> Unit) {
-    val connecting = running && sweep < 355f
-
-    // 点击反馈:按下缩到 0.94,松开弹簧回弹 1.0。
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val pressScale = remember { Animatable(1f) }
-    LaunchedEffect(pressed) {
-        pressScale.animateTo(if (pressed) 0.94f else 1f, spring(dampingRatio = 0.45f, stiffness = 900f))
-    }
-
-    // 连接呼吸:连接中无限 1.0→1.06→1.0;断开/已连接归 1.0 静止。
-    val breath = remember { Animatable(1f) }
-    LaunchedEffect(connecting) {
-        if (connecting) {
-            while (isActive) {
-                breath.animateTo(1.06f, tween(650, easing = FastOutSlowInEasing))
-                breath.animateTo(1f, tween(650, easing = FastOutSlowInEasing))
-            }
-        } else {
-            breath.animateTo(1f, tween(250))
-        }
-    }
-    val scale = pressScale.value * breath.value
-
     Box(contentAlignment = Alignment.Center, modifier = Modifier.size(214.dp)) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val stroke = 12.dp.toPx()
@@ -356,11 +325,7 @@ private fun ConnectOrb(running: Boolean, sweep: Float, onToggleVpn: () -> Unit) 
         Box(
             modifier = Modifier
                 .size(121.dp)
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                }
-                .clickable(interactionSource = interaction, indication = null) { onToggleVpn() },
+                .clickable { onToggleVpn() },
             contentAlignment = Alignment.Center
         ) {
             Image(
