@@ -101,27 +101,30 @@ object ConfigProvider {
         routing.put("acl_file", File(context.cacheDir, "acl.txt").absolutePath)
         base.put("routing", routing)
 
-        // smartproxy.lan → 手机局域网 IP(dns.static_records hosts-override)。首页面板链接
-        // 用 https://smartproxy.lan:port:VPN 运行时引擎接管手机 DNS,static record 把
-        // smartproxy.lan 解析到手机自己(网络/系统 DNS 不认识该域名);证书 SAN 也含它,
-        // 换网后 IP 变、域名不变 → 证书始终有效。每次启动用当前 IP 刷新,不保留旧 IP。
+        // smartproxy.lan → loopback + 手机局域网 IP(dns.static_records hosts-override)。
+        // 首页面板链接用 https://smartproxy.lan:port:VPN 运行时引擎接管手机 DNS,static
+        // record 把 smartproxy.lan 解析到手机自己(网络/系统 DNS 不认识该域名)。
+        // 记录恒建且 loopback 优先(127.0.0.1/::1):本地浏览器直连 admin,loopback 不进
+        // TUN,离线/仅流量也能开面板;LAN IP 排后供其它设备经手机 DNS 解析。证书内置 SAN
+        // 含 127.0.0.1/::1 且不变量追加 LAN IP,换网后 IP 变、域名不变 → 证书始终有效。
+        // 每次启动用当前 IP 刷新,不保留旧 IP。
         val lanIp = PanelUrl.lanIpv4()
-        if (lanIp != null) {
-            val dns = base.optJSONObject("dns") ?: JSONObject().also { base.put("dns", it) }
-            val records = dns.optJSONArray("static_records")
-                ?: JSONArray().also { dns.put("static_records", it) }
-            var found = -1
-            for (i in 0 until records.length()) {
-                if (records.optJSONObject(i)?.optString("host") == "smartproxy.lan") {
-                    found = i
-                    break
-                }
+        val dns = base.optJSONObject("dns") ?: JSONObject().also { base.put("dns", it) }
+        val records = dns.optJSONArray("static_records")
+            ?: JSONArray().also { dns.put("static_records", it) }
+        var found = -1
+        for (i in 0 until records.length()) {
+            if (records.optJSONObject(i)?.optString("host") == "smartproxy.lan") {
+                found = i
+                break
             }
-            val rec = if (found >= 0) records.getJSONObject(found)
-            else JSONObject().put("host", "smartproxy.lan").also { records.put(it) }
-            rec.put("ip", JSONArray().put(lanIp))
-            base.put("dns", dns)
         }
+        val rec = if (found >= 0) records.getJSONObject(found)
+        else JSONObject().put("host", "smartproxy.lan").also { records.put(it) }
+        val ips = JSONArray().put("127.0.0.1").put("::1")
+        lanIp?.let { ips.put(it) }
+        rec.put("ip", ips)
+        base.put("dns", dns)
 
         // admin cert SAN 追加手机局域网 IP,减浏览器警告(证书随 SAN 变化重新自签)。
         val listen = base.optJSONObject("listen") ?: JSONObject().also { base.put("listen", it) }

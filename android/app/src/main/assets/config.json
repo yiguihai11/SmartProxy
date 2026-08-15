@@ -52,7 +52,16 @@
       "ipv6": "[2001:4860:4860::8888]:53"
     },
     "query_timeout": 3,
-    "speed_check_mode": "tcp:443"
+    "speed_check_mode": "tcp:443",
+    "static_records": [
+      {
+        "host": "smartproxy.lan",
+        "ip": [
+          "127.0.0.1",
+          "::1"
+        ]
+      }
+    ]
   },
   "smart_proxy": {
     "enabled": true,
