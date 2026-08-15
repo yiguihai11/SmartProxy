@@ -5,7 +5,7 @@ import android.content.Context
 /**
  * 首页与面板共用的偏好(§4.4"唯一偏好")。M1 只提供默认值:
  *  - IPv4/IPv6 拦截默认全开(M2 首页开关接管)
- *  - 流量模式默认"仅绕过(global)"(M5 面板接管 + 应用列表)
+ *  - 流量模式默认"仅绕过(global)"(M5 应用内 AppSelectionActivity 接管 + 应用列表)
  *  - DNS 默认 223.5.5.5 / 2400:3200::1(M3 配置生成器读取,M5 面板可改)
  */
 object AppPrefs {

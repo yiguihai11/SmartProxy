@@ -37,7 +37,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -80,9 +83,10 @@ import androidx.lifecycle.LifecycleEventObserver
  * 逆向还原的视觉:淡紫渐变背景 + 大圆环进度 + 中心紫渐变球体(球上白色电源字形)。
  *  - 大圆环球体 = VPN 启停(§4.5,isRunning 驱动);进度弧橙色→黄色,连接时扫一圈
  *  - 状态行:「状态:未连接/连接中/已连接」
- *  - 开关卡:IPv4 / IPv6 拦截 + 开机自启(§4.1/§4.3,写 AppPrefs;运行中改 → 重启 VPN)
+ *  - 开关卡:IPv4 / IPv6 拦截(§4.1/§4.2,写 AppPrefs;运行中改 → 重启 VPN)
+ *  - 开关卡:开机自启(§4.3)+ Apps 应用选择入口(§5 应用内化)→ AppSelectionActivity
  *  - 管理面板卡:URL + 复制 + 浏览器选择器 + 二维码(§4.4)
- * 流量模式 / 应用选择 / DNS 不在首页,只在 Web 面板(§4.4)。
+ * 流量模式 / 应用选择在应用内(§5),不在首页;DNS 只在 Web 面板(§4.4)。
  */
 class MainActivity : ComponentActivity() {
 
@@ -259,7 +263,7 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
             ConnectOrb(running = running, sweep = sweep.value, onToggleVpn = onToggleVpn)
             Spacer(Modifier.height(30.dp))
 
-            // ── 开关卡(自适应宫格:v4 / v6 左右各半,开机自启整行)──────
+            // ── 开关卡(自适应宫格:v4 / v6 左右各半,开机自启 + Apps 左右各半)──
             Row(modifier = Modifier.fillMaxWidth()) {
                 SwitchCard(
                     title = "IPv4 拦截", subtitle = "接管 IPv4 流量", checked = ipv4,
@@ -281,13 +285,22 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
                     modifier = Modifier.weight(1f)
                 )
             }
-            SwitchCard(
-                title = "开机自启", subtitle = "开机后自动启动 VPN(需已授权)", checked = bootAuto,
-                onCheckedChange = { v ->
-                    bootAuto = v
-                    AppPrefs.setBootAutoStart(context, v)
-                }
-            )
+            Row(modifier = Modifier.fillMaxWidth()) {
+                SwitchCard(
+                    title = "开机自启", subtitle = "开机后自动启动 VPN(需已授权)", checked = bootAuto,
+                    onCheckedChange = { v ->
+                        bootAuto = v
+                        AppPrefs.setBootAutoStart(context, v)
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(8.dp))
+                AppsCard(
+                    title = "Apps", subtitle = "选择代理应用",
+                    onClick = { context.startActivity(Intent(context, AppSelectionActivity::class.java)) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
             Spacer(Modifier.height(24.dp))
 
             // ── 管理面板卡(URL + 复制 + 浏览器选择器 + 二维码)────────
@@ -371,6 +384,35 @@ private fun SwitchCard(
                 checked = checked,
                 onCheckedChange = onCheckedChange,
                 colors = SwitchDefaults.colors(checkedThumbColor = PurpleText)
+            )
+        }
+    }
+}
+
+/** 应用选择入口卡(§5 应用内化):整卡可点,进 AppSelectionActivity。 */
+@Composable
+private fun AppsCard(title: String, subtitle: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = Color.White.copy(alpha = 0.90f),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 16.sp, color = PurpleDark, fontWeight = FontWeight.Medium)
+                Text(subtitle, fontSize = 12.sp, color = GreyText)
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = PurpleSoft,
+                modifier = Modifier.size(20.dp)
             )
         }
     }

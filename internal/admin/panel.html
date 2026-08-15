@@ -8,8 +8,6 @@
   :root {
     --accent: #7850AA;
     --accent-dark: #613D8D;
-    --green: #4CAF50;
-    --red: #FF6B6B;
     --bg: #F3F0F8;
     --card: #FFFFFF;
     --text: #222222;
@@ -42,43 +40,11 @@
     margin-bottom: 14px; box-shadow: 0 1px 3px rgba(120,80,170,.10);
   }
   .card h2 { margin: 0 0 12px; font-size: 14px; color: var(--accent-dark); letter-spacing: .02em; }
-  .radio { display: flex; align-items: flex-start; gap: 10px; padding: 8px 4px; cursor: pointer; }
-  .radio input { margin-top: 3px; accent-color: var(--accent); }
-  .radio .sub { display: block; color: var(--muted); font-size: 12px; }
-  .tabs { display: flex; gap: 8px; margin-bottom: 10px; }
-  .tab {
-    flex: 1; border: 1px solid var(--border); background: #fff; color: var(--muted);
-    border-radius: 10px; padding: 7px 0; font-size: 13px; cursor: pointer;
-  }
-  .tab.active { border-color: var(--accent); color: var(--accent); background: #F1EAF9; font-weight: 600; }
-  input[type=search], input[type=text] {
+  input[type=text] {
     width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px;
     font-size: 14px; background: #FAF9FC; color: var(--text); outline: none;
   }
   input:focus { border-color: var(--accent); }
-  #appList { list-style: none; margin: 10px 0 0; padding: 0; max-height: 46vh; overflow-y: auto; }
-  #appList li {
-    display: flex; align-items: center; gap: 10px; padding: 7px 4px;
-    border-bottom: 1px solid var(--border);
-  }
-  #appList li:last-child { border-bottom: none; }
-  .app-icon {
-    width: 34px; height: 34px; border-radius: 8px; flex-shrink: 0;
-    background: #EEEAF6; display: flex; align-items: center; justify-content: center;
-    font-size: 16px; color: var(--muted); overflow: hidden;
-  }
-  .app-icon img { width: 100%; height: 100%; }
-  .app-main { flex: 1; min-width: 0; }
-  .app-label { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .app-sub { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .app-badge {
-    font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; color: #fff;
-  }
-  .app-badge.proxy { background: var(--green); }
-  .app-badge.exclude { background: var(--red); }
-  .app-check { width: 20px; height: 20px; accent-color: var(--accent); flex-shrink: 0; }
-  .stats { margin-top: 8px; font-size: 12px; color: var(--muted); }
-  .empty { padding: 18px 0; text-align: center; color: var(--muted); font-size: 13px; }
   .switch-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 4px; cursor: pointer; }
   .switch { width: 44px; height: 26px; accent-color: var(--accent); }
   .hint { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
@@ -109,30 +75,6 @@
 </header>
 
 <main>
-  <!-- 流量模式 -->
-  <section class="card">
-    <h2>流量模式</h2>
-    <label class="radio"><input type="radio" name="mode" value="proxy" id="modeProxy">
-      <span>仅代理<span class="sub">只代理下方勾选的应用,其余直连</span></span>
-    </label>
-    <label class="radio"><input type="radio" name="mode" value="bypass" id="modeBypass">
-      <span>仅绕过<span class="sub">全局走代理,放行下方勾选的应用</span></span>
-    </label>
-  </section>
-
-  <!-- 应用选择 -->
-  <section class="card">
-    <h2>应用选择</h2>
-    <div class="tabs">
-      <button class="tab active" data-tab="all">全部</button>
-      <button class="tab" data-tab="user">用户</button>
-      <button class="tab" data-tab="system">系统</button>
-    </div>
-    <input type="search" id="search" placeholder="搜索应用…" autocomplete="off">
-    <ul id="appList"></ul>
-    <div class="stats" id="appStats">加载中…</div>
-  </section>
-
   <!-- DNS -->
   <section class="card">
     <h2>DNS 服务器</h2>
@@ -164,14 +106,6 @@
 
 const $ = (id) => document.getElementById(id);
 
-const state = {
-  apps: [],        // [{pkg,label,uid,selected,system}] 全量(仅代理=勾选)
-  selected: new Set(),
-  mode: false,     // global_mode:false=仅代理, true=仅绕过
-  tab: "all",
-  query: "",
-};
-
 let toastTimer = 0;
 function toast(msg) {
   const t = $("toast");
@@ -198,114 +132,21 @@ async function pollStatus() {
 }
 setInterval(pollStatus, 3000);
 
-/* ---------------- 应用列表渲染 ---------------- */
-function modeLabel() { return state.mode ? "仅绕过" : "仅代理"; }
-
-function renderApps() {
-  const list = $("appList");
-  const q = state.query.trim().toLowerCase();
-  const apps = state.apps.filter(a =>
-    (state.tab === "all" ||
-     (state.tab === "user" && !a.system) ||
-     (state.tab === "system" && a.system)) &&
-    (!q || a.label.toLowerCase().includes(q) || a.pkg.toLowerCase().includes(q))
-  );
-
-  if (!apps.length) {
-    list.innerHTML = '<li class="empty">没有匹配的应用</li>';
-  } else {
-    list.innerHTML = apps.map(a => {
-      const sel = state.selected.has(a.pkg);
-      // 角标:仅代理下勾选=绿(走代理),仅绕过下勾选=红(被排除)。
-      const badge = sel
-        ? (state.mode
-            ? '<span class="app-badge exclude">已排除</span>'
-            : '<span class="app-badge proxy">仅代理</span>')
-        : "";
-      return `<li>
-        <span class="app-icon"><img src="/api/apps/icon?pkg=${encodeURIComponent(a.pkg)}" alt="" loading="lazy" onerror="this.style.display='none'"></span>
-        <span class="app-main">
-          <span class="app-label">${escapeHtml(a.label)}</span>
-          <span class="app-sub">${escapeHtml(a.pkg)} · uid ${a.uid}</span>
-        </span>
-        ${badge}
-        <input type="checkbox" class="app-check" data-pkg="${escapeAttr(a.pkg)}" ${sel ? "checked" : ""}>
-      </li>`;
-    }).join("");
-    list.querySelectorAll(".app-check").forEach(cb => {
-      cb.addEventListener("change", () => {
-        const pkg = cb.dataset.pkg;
-        if (cb.checked) state.selected.add(pkg); else state.selected.delete(pkg);
-        // 仅当前行角标就地刷新,不重建整个列表(保持滚动位置)。
-        const row = cb.closest("li");
-        const old = row.querySelector(".app-badge");
-        if (old) old.remove();
-        const sel = cb.checked;
-        if (sel) {
-          const b = document.createElement("span");
-          b.className = "app-badge " + (state.mode ? "exclude" : "proxy");
-          b.textContent = state.mode ? "已排除" : "仅代理";
-          row.insertBefore(b, cb);
-        }
-        renderStats();
-      });
-    });
-  }
-  renderStats();
-}
-
-function renderStats() {
-  const total = state.apps.length;
-  const q = state.query.trim().toLowerCase();
-  const shown = state.apps.filter(a =>
-    (state.tab === "all" ||
-     (state.tab === "user" && !a.system) ||
-     (state.tab === "system" && a.system)) &&
-    (!q || a.label.toLowerCase().includes(q) || a.pkg.toLowerCase().includes(q))).length;
-  $("appStats").textContent =
-    `共 ${total} · 显示 ${shown} · 已选 ${state.selected.size}` +
-    `（${modeLabel()}）`;
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => (
-    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
-  ));
-}
-function escapeAttr(s) { return escapeHtml(s); }
-
 /* ---------------- 加载初始数据 ---------------- */
 async function load() {
   try {
-    const [prefsRes, appsRes] = await Promise.all([
-      fetch("/api/prefs", { cache: "no-store" }),
-      fetch("/api/apps", { cache: "no-store" }),
-    ]);
-    if (!prefsRes.ok || !appsRes.ok) throw new Error("load failed");
-    const [prefs, apps] = await Promise.all([prefsRes.json(), appsRes.json()]);
-
-    // 偏好
-    state.mode = !!prefs.global_mode;
-    $("modeBypass").checked = state.mode;
-    $("modeProxy").checked = !state.mode;
+    const res = await fetch("/api/prefs", { cache: "no-store" });
+    if (!res.ok) throw new Error("load failed");
+    const prefs = await res.json();
     $("dnsV4").value = prefs.dns_v4 || "";
     $("dnsV6").value = prefs.dns_v6 || "";
     $("ipv4").checked = !!prefs.ipv4;
     $("ipv6").checked = !!prefs.ipv6;
     $("bootAutoStart").checked = !!prefs.boot_auto_start;
     $("adminPassword").value = prefs.admin_password || "";
-    if (Array.isArray(prefs.selected_apps)) state.selected = new Set(prefs.selected_apps);
-
-    // 应用列表(服务端 selected 可能与本地 selected 集合一致,以服务端为准)
-    if (Array.isArray(apps.apps)) {
-      state.apps = apps.apps;
-      const serverSelected = new Set(apps.apps.filter(a => a.selected).map(a => a.pkg));
-      if (serverSelected.size) state.selected = serverSelected;
-    }
   } catch (e) {
-    $("appStats").textContent = "面板数据加载失败,请刷新重试";
+    toast("面板数据加载失败,请刷新重试");
   }
-  renderApps();
 }
 
 /* ---------------- 保存并重启 ---------------- */
@@ -322,8 +163,6 @@ async function save() {
   if (dnsV6 && !ipv6Re.test(dnsV6)) return fail("IPv6 DNS 格式不正确");
 
   const body = {
-    global_mode: state.mode,
-    selected_apps: Array.from(state.selected),
     dns_v4: dnsV4,
     dns_v6: dnsV6,
     ipv4: $("ipv4").checked,
@@ -366,7 +205,7 @@ async function save() {
     };
     tick();
   }).then(ok => {
-    if (ok) { toast("已保存,配置生效"); renderApps(); }
+    if (ok) { toast("已保存,配置生效"); }
     else { toast("保存成功,但 VPN 重启未恢复"); }
   });
 
@@ -382,22 +221,6 @@ async function save() {
 }
 
 /* ---------------- 事件绑定 ---------------- */
-["modeProxy", "modeBypass"].forEach(id => {
-  $(id).addEventListener("change", e => {
-    if (!e.target.checked) return;
-    state.mode = (id === "modeBypass");
-    renderApps(); // 角标语义随模式翻转
-  });
-});
-document.querySelectorAll(".tab").forEach(t => {
-  t.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
-    t.classList.add("active");
-    state.tab = t.dataset.tab;
-    renderApps();
-  });
-});
-$("search").addEventListener("input", e => { state.query = e.target.value; renderApps(); });
 $("saveBtn").addEventListener("click", save);
 
 load();

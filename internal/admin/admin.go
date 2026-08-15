@@ -246,8 +246,8 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/events", s.handleEvents)
 
 	// M5 管理面板桥接端点:只在移动端(androidBridge 非 nil)有意义,否则 503。
-	mux.HandleFunc("/api/apps", s.handleAPIApps)
-	mux.HandleFunc("/api/apps/icon", s.handleAPIAppIcon)
+	// §5 应用内化后,应用列表/图标已移入 App 内(不再经面板),此处只保留
+	// 偏好与 VPN 启停。流量模式 + 应用选择由 AppSelectionActivity 直写 AppPrefs。
 	mux.HandleFunc("/api/prefs", s.handleAPIPrefs)
 	mux.HandleFunc("/api/prefs/set", s.handleAPIPrefsSet)
 	mux.HandleFunc("/api/vpn", s.handleAPIVpn)

@@ -236,28 +236,27 @@ v6 `2400:3200::1`。系统解析器被指到该地址 → 查询被 `0.0.0.0/0`
 │                    └ Admin Server 0.0.0.0:port │
 │                      ├ 静态 Web UI(go:embed)   │
 │                      ├ /stats /config /acl …   │
-│                      └ /api/apps /api/vpn …    │
+│                      └ /api/prefs /api/vpn …   │
 └────────────────────────────────────────────────┘
      LAN 浏览器 → https://<手机IP>:port/(Basic Auth)
 ```
 
-**产品形态:安卓 = 纯启动器,面板 = 完整管理**:
-- 安卓首页**只留启动相关**:VPN 启停按钮、IPv4/IPv6 拦截开关、开机自启、面板入口
-  (URL+复制+二维码)。**不再包含**流量模式、应用选择、DNS——这些全部只在 Web 面板。
-- 面板是**唯一的管理界面**:流量模式、应用选择(§5)、DNS v4/v6、v4/v6、开机自启、上游等
-  都在这里改;勾选写回 SharedPreferences(唯一偏好),首页启动时只读。
-- 改动保存后统一触发 VPN 重启;启停只能(也只需)在安卓端按。
+**产品形态:安卓 = 主管理,面板 = 网络偏好**:
+- 安卓首页:VPN 启停按钮、IPv4/IPv6 拦截开关、开机自启、**Apps(应用选择入口,§5)**、
+  面板入口(URL+复制+二维码)。流量模式 + 应用选择**已应用内化**进 AppSelectionActivity。
+- 面板**只留网络偏好**:DNS v4/v6、v4/v6、开机自启、管理密码;**不再含**流量模式/应用选择。
+  面板与首页都读写 AppPrefs(唯一偏好),首页启动时只读。
+- 面板改动保存后统一触发 VPN 重启;应用选择页按 §5 返回自动保存(不重启,下次连接生效);
+  启停只能(也只需)在安卓端按。
 
 **Web UI(SPA)规格**:
 - 嵌入 Go 二进制(`go:embed`),admin server 静态服务 `/`。
-- App 选择页**复用 §5 设计**:图标(懒加载 `/api/apps/icon?pkg=`)、label、uid、包名;
-  状态角标随 `mode` 翻转(仅代理=绿 / 绕过=红);搜索 + `Intl.Collator('zh-CN')` 拼音
-  排序 + 统计条。
-- 数据契约 `/api/apps`:`{mode, apps:[{pkg,label,uid,selected,system}]}`。
+- 面板只含:DNS v4/v6、网络开关(v4/v6、开机自启)、管理密码、保存并重启。
+  **已不含**流量模式 + 应用选择(§5 应用内化,App 内 AppSelectionActivity)。
 
 **Android 桥接端点**(经 gomobile 接口回调 Kotlin):
-- `/api/apps`(枚举已装 app + 勾选)、`/api/apps/icon`(PNG)
-- `/api/vpn`(启停 / 重启)、`/api/prefs`(v4/v6 / 模式 / 开机自启 / **DNS v4/v6**)
+- `/api/vpn`(启停 / 重启)、`/api/prefs`(v4/v6 / 开机自启 / **DNS v4/v6** / 管理密码)
+- 应用枚举 / 图标不再经桥(§5 应用内,AppEnumerator 直供 Compose 列表)。
 
 **配置生成**:`admin_port` / `admin_auth`(用户设)/ `admin_https` / `AdminCertSANs=[手机IP]`;
 `dnsV4` / `dnsV6`(默认 `223.5.5.5` / `2400:3200::1`,面板可改)喂给 `addDnsServer` 与引擎
@@ -356,7 +355,8 @@ StartRouter(configJson, fd)
   重载",Android 无配置文件、`reloadFn` 未接(`engine.go` 里三个 Set* 都包在
   `if e.reloadFn != nil`,mobile 从不调 `SetReloadFn`),GET/PUT 均不可用。面板 DNS 输入
   → `/api/prefs` 桥接 → SharedPreferences → 配置生成器重生成 config.json(含
-  `tun.dns_servers`)→ VPN 重启(§4.4 生效方式)。与 v4/v6 / 模式 / app 列表同一条流程。
+  `tun.dns_servers`)→ VPN 重启(§4.4 生效方式)。与 v4/v6 / 开机自启同一条流程;
+  流量模式 / app 列表改由应用内页直写 AppPrefs(§5),不走桥。
 - 桥接层提供 `BuildVpnConfig() → (builderParams, configJson)`:同一份配置同时喂
   `VpnService.Builder` 和 `StartRouter`,两侧同源,不可能跑偏。
 - 引擎侧 DNS 拦截仍按"拦全部 UDP:53"(`internal/tun/handler.go` `port == 53`),
@@ -364,60 +364,62 @@ StartRouter(configJson, fd)
 
 ## 5. App 选择页设计(查询 / 排序 / 提示)
 
-**定位:只在 Web 面板(§4.4),安卓原生不再有该页面**。安卓端只作为数据源:枚举已装 app、
-提供图标,经 bridge 端点(`/api/apps`、`/api/apps/icon`)喂给面板;勾选结果写回
-SharedPreferences,首页启动时只读。列表可能上百个 app,还要承载搜索框 + 全部/用户/系统
-tab + 底部统计条,浏览器全屏页才放得下。
-
-沿用 `sockstun/AppListActivity.java` 的布局设计,SPA 里实现为单页组件:
+**定位:应用内原生页(§4.4 应用内化),不再在 Web 面板**。首页「Apps」卡 →
+`AppSelectionActivity`(Kotlin + Compose)。安卓端 AppEnumerator 枚举已装 app + 缓存图标
+直供 Compose 列表;勾选结果 onDestroy 批写 SharedPreferences(返回自动保存,sockstun 式),
+首页/引擎启动时只读。设计沿用 `sockstun/AppListActivity.java` 的布局:
 
 ```
-AppList(SPA 页面,单页)
-├─ tab [全部 | 用户 | 系统]
-├─ 搜索框 —— 按 label 实时过滤(label.contains,大小写不敏感)
-├─ 列表(items = filtered,key = packageName)
+AppSelectionActivity(Compose,单 Activity)
+├─ 流量模式:仅代理 / 仅绕过(radio)
+├─ 搜索框 —— 按 label / pkg 实时过滤(label.contains,大小写不敏感)
+├─ tab [全部 | 用户 | 系统](SegmentedButton 行内)
+├─ 列表(LazyColumn,key = packageName)
 │   └─ 行
-│       ├─ 图标(lazy 加载 /api/apps/icon?pkg=) / 标题 label
+│       ├─ 方形图标(AppEnumerator.iconBitmap 96px,缓存) / 标题 label
 │       ├─ 副标题 packageName + uid
 │       ├─ 状态角标:随 mode 翻转 —— 仅代理=绿"仅代理" / 仅绕过=红"已排除"
-│       └─ Checkbox(点击翻转)
-└─ 底部 stats bar:共 X · 显示 Y · 已选 Z
+│       └─ Checkbox(整行可点翻转)
+└─ 底部 stats bar:共 X · 显示 Y · 已选 Z(仅代理/仅绕过)
 ```
 
 ### 5.1 查询
 
-- 搜索框实时过滤,`label.contains(query)`,大小写不敏感。
+- 搜索框实时过滤,`label.contains(query)`,大小写不敏感(兼查 pkg)。
 - 与类型 tab(全部/用户/系统)叠加过滤。
 
 ### 5.2 排序
 
-- **已选优先**,其次按名称排序。
-- sockstun 用 `label.compareTo()`(Unicode 码点),中文是乱序 → 建议用拼音 Collator(见 §8)。
-- **勾选后不实时重排**(沿用 sockstun):避免列表跳动打断连续勾选;如需要可做成开关,默认关(见 §8)。
+- **已选优先**,其次按名称排序;`Collator.getInstance(Locale.CHINA)` 拼音(§8#1)。
+- **勾选后不实时重排**(§8#2,sockstun):排序基准 = 进入页面时的勾选态,避免列表跳动
+  打断连续勾选。
 
 ### 5.3 提示
 
 | 位置 | 内容 |
 |---|---|
 | 底部统计条 | 共 X 个应用 / 显示 Y 个 / 已选 Z 个,过滤和勾选时刷新 |
-| 每行状态角标 | 仅代理模式:勾选=**仅代理**(绿 `#4CAF50`);仅绕过模式:勾选=**已排除**(红 `#FF6B6B`)。Web 端用 chip / 小 badge 样式呈现,视觉与 §4.4 规格一致 |
+| 每行状态角标 | 仅代理模式:勾选=**仅代理**(绿 `#4CAF50`);仅绕过模式:勾选=**已排除**(红 `#FF6B6B`) |
+| 底部保存提示 | 「退出即保存 · 改动在下次连接时生效」(返回自动保存,不自动重启) |
 | 筛选 tab | 全部 / 用户应用 / 系统应用(`FLAG_SYSTEM` 区分) |
 
 ### 5.4 细节约束
 
-- 列表只收录**声明了 INTERNET 权限**的 app,并跳过本包名(枚举逻辑在安卓侧,面板只显示)。
-- **显式提交**:勾选是本地态,点"保存"才写回 SharedPreferences(与"仅代理空名单禁止启动"的
-  校验同一次提交做),避免实时持久化打断连续勾选。
+- 列表只收录**声明了 INTERNET 权限**的 app,并跳过本包名(AppEnumerator)。
+- **返回自动保存**:onDestroy 批写模式 + 应用列表(§4.4 唯一偏好),不自动重启;
+  改动在下次连接时生效(与面板"保存并重启"语义区分)。
+- **§8#6 空名单校验在应用内**:切到仅代理时空名单、或仅代理下取消最后一个 → 阻止 + Toast
+  「仅代理模式至少勾选 1 个应用」。
 
 ## 6. 需要开发的模块清单
 
 1. **Android app 工程脚手架**(Kotlin + Compose + Material 3,minSdk ≥ 26)
 2. **VpnService + 前台服务**:`prepare()` → `establish()` → fd → `StartRouter`;含放行自身防回环、`onRevoke`/`onDestroy` 断连检测与状态同步(§4.5)
 3. **配置生成器**:UI 状态(upstream / DNS / smart_proxy 规则)→ Go engine JSON;`cfg.TUN.*` 由 bridge 强制;admin 配置(`admin_port`/`admin_auth`/`admin_https`/`AdminCertSANs`,§4.4)
-4. **首页(纯启动器)**:VPN 启停按钮(§4.5 状态机)+ IPv4/IPv6 拦截开关(§4.1)+ 开机自启(§4.3)+ 面板入口 URL+复制+二维码(§4.4)。**不再含**模式 UI、应用选择、DNS——均只在面板
+4. **首页**:VPN 启停按钮(§4.5 状态机)+ IPv4/IPv6 拦截开关(§4.1)+ 开机自启(§4.3)+ **Apps 应用选择入口(§5)**+ 面板入口 URL+复制+二维码(§4.4)。DNS 只在面板
 5. **通知栏 / 保活**:前台服务保活强化(§4.3:ongoing 通知、`stopWithTask=false`、OEM 电池白名单引导);通知**极简只显"正在运行"**;`GetStatus()` 黑名单命中可喂主界面状态(可选)
 6. **AAR 集成 + CI 改造**(见 §7)
-7. **管理控制面板**(§4.4):Web UI(SPA,`go:embed` 进引擎)——流量模式、**应用选择页(§5)**、DNS v4/v6、v4/v6、开机自启等完整管理;Android 桥接端点(`/api/apps`、`/api/apps/icon`、`/api/vpn`、`/api/prefs`);安卓侧 app 枚举与图标仅供面板调用;首页入口与二维码
+7. **管理控制面板**(§4.4):Web UI(SPA,`go:embed` 进引擎)——DNS v4/v6、v4/v6、开机自启、管理密码、保存并重启;Android 桥接端点(`/api/vpn`、`/api/prefs`);流量模式 / 应用选择已应用内化(§5,AppSelectionActivity);首页入口与二维码
 
 ## 7. 构建与 CI 策略
 
@@ -432,16 +434,16 @@ AppList(SPA 页面,单页)
 
 | # | 问题 | 建议 | 备注 |
 |---|---|---|---|
-| 1 | App 中文名排序 | **拼音 Collator**(`Collator.getInstance(Locale.CHINA)`),已选优先 | sockstun 按码点,中文乱序 |
+| 1 | App 中文名排序 | **拼音 Collator**(`Collator.getInstance(Locale.CHINA)`),已选优先 ✓已实现 | sockstun 按码点,中文乱序 |
 | 2 | 勾选后是否实时置顶 | **否**,沿用 sockstun(避免列表跳动打断连续勾选) | 可做开关,默认关 |
 | 3 | 包名 / 应用名 | 待定(如 `io.github.yiguihai11.smartproxy`) | 正式名需查包占用 |
 | 4 | minSdk / targetSdk | minSdk 26,targetSdk 最新 | — |
 | 5 | 签名 | 临时 debug 签名(现状),正式版再定 | — |
-| 6 | 仅代理空白名单语义 | 仅代理模式**至少勾选 1 个 app**,空名单禁止启动/给提示 | 否则 `allowed==null` 退化为"除 self 外全局代理" |
+| 6 | 仅代理空白名单语义 | 仅代理模式**至少勾选 1 个 app**,空名单禁止启动/给提示 ✓应用内校验 | 否则 `allowed==null` 退化为"除 self 外全局代理" |
 | 7 | 开机自启默认值 | **默认关**,用户主动开启 | 避免装完被系统托管,突兀 |
 | 8 | 管理面板监听地址 | **常开 0.0.0.0 + ::(Go 双栈)**,无局域网开关 | `net.Listen("tcp", ":port")` 天然双栈;安全靠 admin_auth |
 | 9 | 管理面板凭据 | **用户自行设置**(非随机),面板内可改 | 0.0.0.0 常开下别用弱密码;改后热重载 |
-| 10 | 首页定位 | **纯启动器**:启停 + IPv4/IPv6 + 开机自启 + 面板入口;模式 / 应用选择 / DNS 只在面板 | 用户已定;§4.4「产品形态」 |
+| 10 | 首页定位 | **主管理**:启停 + IPv4/IPv6 + 开机自启 + **Apps(应用选择入口)**+ 面板入口;模式 / 应用选择已应用内化(§5),DNS 只在面板 | 用户已定;§4.4「产品形态」 |
 
 ## 9. 里程碑
 

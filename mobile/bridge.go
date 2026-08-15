@@ -20,15 +20,14 @@ var (
 )
 
 // AndroidBridge 在 Kotlin 侧实现并于 App 启动时注册(M5,§4.4):
-// admin 面板端点(/api/apps、/api/apps/icon、/api/prefs、/api/vpn)经它回调
-// Android 运行时——枚举已装 app、取图标、读写 SharedPreferences、启停 VPN。
+// admin 面板端点(/api/prefs、/api/vpn)经它回调 Android 运行时——读写
+// SharedPreferences、启停 VPN。
 //
-// 仅用 string / []byte / bool,gobind 双向编组支持;接口必须在本 bound 包内。
+// §5 应用内化后,应用枚举/图标已移入 App 内(不再经面板),故桥只保留偏好与启停。
+// 仅用 string / bool,gobind 双向编组支持;接口必须在本 bound 包内。
 // internal/admin 定义结构等价的未导出 interface(admin 不能 import mobile 防环),
 // 由 StartRouter 把本接口实例赋给它(方法集相同,编译期检查)。
 type AndroidBridge interface {
-	ListApps() string
-	AppIcon(pkg string) []byte
 	GetPrefs() string
 	SetPrefs(json string) string
 	IsRunning() bool

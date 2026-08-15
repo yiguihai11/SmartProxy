@@ -5,12 +5,12 @@ import android.content.Context
 /**
  * M5:gomobile 反向桥实现(§4.4)。Go admin server 的 /api/ 桥接端点经
  * `mobile.AndroidBridge`(生成 Java 接口 smartproxy.mobile.AndroidBridge)回调到这里,
- * 读写 SharedPreferences / PackageManager / VpnService。
+ * 读写 SharedPreferences / VpnService。
  *
  * 注册时机:SmartProxyApp.onCreate()(任何入口——Activity/BootReceiver——之前),
  * 保证 StartRouter 取 currentBridge() 时桥已就位。
  *
- * 线程:listApps/appIcon/getPrefs/isRunning 是纯读,在 Go 回调线程直接执行;
+ * 线程:getPrefs/isRunning 是纯读,在 Go 回调线程直接执行;
  * setPrefs/vpn 会触发启停,统一走 VpnControl 主线程派发(Go 线程无 Looper)。
  */
 object AndroidBridgeImpl : smartproxy.mobile.AndroidBridge {
@@ -27,10 +27,6 @@ object AndroidBridgeImpl : smartproxy.mobile.AndroidBridge {
 
     private fun ctx(): Context = appContext
         ?: throw IllegalStateException("AndroidBridgeImpl 未注册(缺少 Application 初始化?)")
-
-    override fun listApps(): String = AppEnumerator.listJson(ctx())
-
-    override fun appIcon(pkg: String): ByteArray = AppEnumerator.iconPng(ctx(), pkg)
 
     override fun getPrefs(): String = PrefsService.getJson(ctx())
 

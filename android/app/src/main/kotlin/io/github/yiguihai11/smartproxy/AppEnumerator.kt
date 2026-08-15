@@ -3,58 +3,57 @@ package io.github.yiguihai11.smartproxy
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
+import android.graphics.drawable.Drawable
 import android.util.LruCache
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.drawable.toBitmap
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * M5 应用枚举(§5)。Get /api/apps → JSON:
- *   {"mode": bool, "apps":[{pkg,label,uid,selected,system}]}
- * mode = 流量模式(global_mode),供面板翻转角标语义(仅代理=绿 / 已排除=红)。
+ * 应用选择页(§5 应用内化)枚举:data class AppInfo 供 Compose 列表直接用。
  *
  * 过滤:只列声明了 INTERNET 权限的应用(没有网络能力的勾了没意义)+ 跳过自身;
  * QUERY_ALL_PACKAGES(manifest)使 API 30+ 能枚举全部已装应用。
  *
- * 线程:方法被 Go 回调线程调用(PackageManager/SharedPreferences 读是线程安全的),
- * 权限判断与图标结果做了内存缓存(LruCache / ConcurrentHashMap)防面板刷新打爆 I/O。
+ * 线程:list() 在 IO 线程执行(PackageManager 枚举慢);图标解码做了内存缓存
+ * (LruCache)防列表滚动反复解码;入口页在 IO 阶段预热图标,主线程只读缓存。
  */
 object AppEnumerator {
 
     private const val INTERNET = "android.permission.INTERNET"
 
+    data class AppInfo(
+        val pkg: String,
+        val label: String,
+        val uid: Int,
+        val selected: Boolean,
+        val system: Boolean
+    )
+
     /** pkg → 是否有 INTERNET 权限(枚举一次全列表会重复问,缓存避免二次查询)。 */
     private val hasInternetCache = ConcurrentHashMap<String, Boolean>()
 
-    /** pkg → PNG 字节。上限 2MB,超出逐出最久未用;图标尺寸小,足够存全部。 */
-    private val iconCache = object : LruCache<String, ByteArray>(2 * 1024 * 1024) {
-        override fun sizeOf(key: String, value: ByteArray): Int = value.size
-    }
+    /** pkg → ImageBitmap 图标。上限 64 个,超出逐出最久未用。 */
+    private val iconCache = object : LruCache<String, ImageBitmap>(64) {}
 
-    fun listJson(context: Context): String {
+    fun list(context: Context): List<AppInfo> {
         val pm = context.packageManager
         val selected = AppPrefs.selectedApps(context)
         val self = context.packageName
-        val apps = pm.getInstalledApplications(0)
+        return pm.getInstalledApplications(0)
             .asSequence()
             .filter { it.packageName != self && hasInternet(pm, it.packageName) }
             .map { ai ->
-                JSONObject().apply {
-                    put("pkg", ai.packageName)
-                    put("label", pm.getApplicationLabel(ai)?.toString() ?: ai.packageName)
-                    put("uid", ai.uid)
-                    put("selected", selected.contains(ai.packageName))
-                    put("system", (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0)
-                }
+                AppInfo(
+                    pkg = ai.packageName,
+                    label = pm.getApplicationLabel(ai)?.toString() ?: ai.packageName,
+                    uid = ai.uid,
+                    selected = selected.contains(ai.packageName),
+                    system = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+                )
             }
             .toList()
-        return JSONObject().apply {
-            put("mode", AppPrefs.globalMode(context))
-            put("apps", JSONArray().also { arr -> apps.forEach { arr.put(it) } })
-        }.toString()
     }
 
     private fun hasInternet(pm: PackageManager, pkg: String): Boolean {
@@ -69,19 +68,16 @@ object AppEnumerator {
         return has
     }
 
-    /** 应用图标 PNG;不存在/解析失败返回空(admin 侧据此回 404,面板隐藏图标位)。 */
-    fun iconPng(context: Context, pkg: String): ByteArray {
+    /** 应用图标(96px);解析失败返回 null(UI 显示占位)。缓存防重复解码。 */
+    fun iconBitmap(context: Context, pkg: String): ImageBitmap? {
         iconCache.get(pkg)?.let { return it }
-        val bytes = try {
-            val icon = context.packageManager.getApplicationIcon(pkg)
-            val bmp = icon.toBitmap()
-            val out = ByteArrayOutputStream()
-            bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
-            out.toByteArray()
+        val bmp = try {
+            val icon: Drawable = context.packageManager.getApplicationIcon(pkg)
+            icon.toBitmap(96, 96).asImageBitmap()
         } catch (_: Exception) {
-            ByteArray(0)
+            null
         }
-        if (bytes.isNotEmpty()) iconCache.put(pkg, bytes)
-        return bytes
+        if (bmp != null) iconCache.put(pkg, bmp)
+        return bmp
     }
 }

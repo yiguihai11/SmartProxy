@@ -11,16 +11,13 @@ import (
 // 经 SetAndroidBridge 赋值(接口到接口,编译期检查)——admin 不能 import mobile
 // 会成环(mobile→engine→admin),所以这里定义本地结构。
 //
-// 契约(全部由 Kotlin AndroidBridgeImpl 实现,string/[]byte/bool 经 gobind 编组):
-//   - ListApps() 返回 JSON 串:{"mode":bool,"apps":[{pkg,label,uid,selected,system}]}
-//   - AppIcon(pkg) 返回 PNG 字节,无图标返回空;空 = 不存在 → 404
+// 契约(全部由 Kotlin AndroidBridgeImpl 实现,string/bool 经 gobind 编组):
+// §5 应用内化后,应用列表/图标已移入 App 内,不再经此桥。
 //   - GetPrefs() 返回偏好 JSON 串(见 PrefsService.getJson)
 //   - SetPrefs(json) 空串 = 成功,非空 = 错误描述
 //   - IsRunning() 引擎/VpnService 是否在跑
 //   - Vpn(action) "start"/"stop"/"restart",空串 = 成功,非空 = 错误描述
 type androidBridge interface {
-	ListApps() string
-	AppIcon(pkg string) []byte
 	GetPrefs() string
 	SetPrefs(json string) string
 	IsRunning() bool
@@ -40,45 +37,6 @@ func (s *Server) requireBridge(w http.ResponseWriter) androidBridge {
 		w.Write([]byte(`{"error":"桥接未注册"}`))
 	}
 	return b
-}
-
-// GET /api/apps — 应用选择列表(§5)。透传 Kotlin 组好的 JSON,保持原样。
-func (s *Server) handleAPIApps(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	b := s.requireBridge(w)
-	if b == nil {
-		return
-	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Write([]byte(b.ListApps()))
-}
-
-// GET /api/apps/icon?pkg=X — 单个应用图标 PNG;无图标 → 404。
-func (s *Server) handleAPIAppIcon(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	b := s.requireBridge(w)
-	if b == nil {
-		return
-	}
-	pkg := r.URL.Query().Get("pkg")
-	if pkg == "" {
-		http.Error(w, "missing pkg", http.StatusBadRequest)
-		return
-	}
-	png := b.AppIcon(pkg)
-	if len(png) == 0 {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	w.Write(png)
 }
 
 // GET /api/prefs — 当前偏好 JSON(面板渲染用)。
