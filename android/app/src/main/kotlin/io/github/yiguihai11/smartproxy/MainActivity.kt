@@ -431,7 +431,7 @@ private fun AppsCard(title: String, subtitle: String, onClick: () -> Unit, modif
     }
 }
 
-/** 管理面板入口卡:URL + 复制 + 浏览器选择器;二维码默认折叠,点右上箭头展开(§4.4)。 */
+/** 管理面板入口卡:URL + 复制 + 浏览器选择器;二维码默认折叠,点卡片底部居中箭头展开(§4.4)。 */
 @Composable
 private fun PanelCard(url: String?, onCopy: (String) -> Unit, onOpen: (String) -> Unit) {
     Surface(
@@ -442,35 +442,18 @@ private fun PanelCard(url: String?, onCopy: (String) -> Unit, onOpen: (String) -
             .padding(vertical = 4.dp)
     ) {
         Column(Modifier.padding(16.dp)) {
-            // 二维码太占版面:默认收起,右上箭头展开/收起;箭头随状态旋转 180°。
+            // 二维码太占版面:默认收起,卡片底部居中箭头展开/收起;箭头随状态旋转 180°。
             var showQr by remember { mutableStateOf(false) }
             val rotation by animateFloatAsState(
                 targetValue = if (showQr) 180f else 0f,
                 label = "qrArrow"
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "管理面板",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = PurpleDark
-                )
-                Spacer(Modifier.weight(1f))
-                // 只有拿到局域网地址(url != null)才有二维码可展,箭头此时才显示。
-                if (url != null) {
-                    IconButton(
-                        onClick = { showQr = !showQr },
-                        modifier = Modifier.size(28.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.KeyboardArrowDown,
-                            contentDescription = if (showQr) "收起二维码" else "展开二维码",
-                            tint = PurpleSoft,
-                            modifier = Modifier.size(22.dp).rotate(rotation)
-                        )
-                    }
-                }
-            }
+            Text(
+                text = "管理面板",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = PurpleDark
+            )
             if (url != null) {
                 Spacer(Modifier.height(6.dp))
                 Text(url, fontSize = 13.sp, color = GreyText)
@@ -488,8 +471,12 @@ private fun PanelCard(url: String?, onCopy: (String) -> Unit, onOpen: (String) -
                 val qr = remember(url) { QrHelper.generate(url, 512) }
                 // QR 块整体折叠:AnimatedVisibility 包住图片+提示,展开/收起平滑;
                 // qr 照常生成(不为 null 才渲染),退出动画期间图片不会提前消失。
+                // 内层 Column fillMaxWidth + CenterHorizontally:180dp 图在卡片内真正居中。
                 AnimatedVisibility(visible = showQr) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         if (qr != null) {
                             Image(
                                 bitmap = qr.asImageBitmap(),
@@ -506,6 +493,20 @@ private fun PanelCard(url: String?, onCopy: (String) -> Unit, onOpen: (String) -
                             )
                         }
                     }
+                }
+                // 卡片底部居中的展开/收起箭头;仅在有二维码可展时显示。
+                IconButton(
+                    onClick = { showQr = !showQr },
+                    modifier = Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.KeyboardArrowDown,
+                        contentDescription = if (showQr) "收起二维码" else "展开二维码",
+                        tint = PurpleSoft,
+                        modifier = Modifier.size(22.dp).rotate(rotation)
+                    )
                 }
             } else {
                 Text(
