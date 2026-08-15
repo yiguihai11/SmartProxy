@@ -5,6 +5,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -41,6 +43,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -191,6 +194,15 @@ private fun AppSelectionScreen(
     val proxyMode = !mode
     val modeLabel = if (proxyMode) "仅代理" else "仅绕过"
 
+    // 流量模式卡随列表滚动收起:滚离顶部(>48px)隐藏,回到顶部再显示(§5 UX)。
+    // 搜索 / tab / 统计条保持固定,过滤随时可用;只有模式卡让出屏幕空间。
+    val listState = rememberLazyListState()
+    val modeCardVisible by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset <= 48
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(SoftBg)) {
         Column(
             modifier = Modifier
@@ -212,37 +224,43 @@ private fun AppSelectionScreen(
             Spacer(Modifier.height(8.dp))
 
             // ── 流量模式(横向两选一,说明文字压成一行,省竖向空间)──
-            Card(
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White)
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("流量模式", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = PurpleText)
-                    Spacer(Modifier.height(8.dp))
-                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                        SegmentedButton(
-                            selected = proxyMode,
-                            onClick = { onModeChange(false) },
-                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                            label = { Text("仅代理", fontSize = 14.sp) }
-                        )
-                        SegmentedButton(
-                            selected = !proxyMode,
-                            onClick = { onModeChange(true) },
-                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                            label = { Text("仅绕过", fontSize = 14.sp) }
-                        )
+            // 滚动收起:AnimatedVisibility 包住整卡+下方间距,滚离顶部平滑收掉,
+            // 回到顶部再展开(默认动画 = 高度收缩 + 淡出,与列表滚动同向,不突兀)。
+            AnimatedVisibility(visible = modeCardVisible) {
+                Column {
+                    Card(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.White)
+                    ) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text("流量模式", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = PurpleText)
+                            Spacer(Modifier.height(8.dp))
+                            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                                SegmentedButton(
+                                    selected = proxyMode,
+                                    onClick = { onModeChange(false) },
+                                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                                    label = { Text("仅代理", fontSize = 14.sp) }
+                                )
+                                SegmentedButton(
+                                    selected = !proxyMode,
+                                    onClick = { onModeChange(true) },
+                                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                                    label = { Text("仅绕过", fontSize = 14.sp) }
+                                )
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            // 当前模式的一句说明(替代原 radio 副标题)。
+                            Text(
+                                if (proxyMode) "只代理下方勾选的应用,其余直连" else "全局走代理,放行下方勾选的应用",
+                                fontSize = 12.sp,
+                                color = GreyText
+                            )
+                        }
                     }
-                    Spacer(Modifier.height(8.dp))
-                    // 当前模式的一句说明(替代原 radio 副标题)。
-                    Text(
-                        if (proxyMode) "只代理下方勾选的应用,其余直连" else "全局走代理,放行下方勾选的应用",
-                        fontSize = 12.sp,
-                        color = GreyText
-                    )
+                    Spacer(Modifier.height(12.dp))
                 }
             }
-            Spacer(Modifier.height(12.dp))
 
             // ── 搜索 ────────────────────────────────────────────
             OutlinedTextField(
@@ -291,7 +309,7 @@ private fun AppSelectionScreen(
                 ) {
                     Text("没有匹配的应用", fontSize = 13.sp, color = GreyText)
                 }
-                else -> LazyColumn(Modifier.weight(1f)) {
+                else -> LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
                     items(visible, key = { it.pkg }) { app ->
                         AppRow(
                             app = app,

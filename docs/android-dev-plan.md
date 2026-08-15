@@ -371,9 +371,9 @@ StartRouter(configJson, fd)
 
 ```
 AppSelectionActivity(Compose,单 Activity)
-├─ 流量模式:仅代理 / 仅绕过(radio)
+├─ 流量模式:仅代理 / 仅绕过(SegmentedButton 横向;随列表滚动收起,回顶展开)
 ├─ 搜索框 —— 按 label / pkg 实时过滤(label.contains,大小写不敏感)
-├─ tab [全部 | 用户 | 系统](SegmentedButton 行内)
+├─ tab [全部 | 用户 | 系统](SegmentedButton 行内,固定)
 ├─ 列表(LazyColumn,key = packageName)
 │   └─ 行
 │       ├─ 方形图标(AppEnumerator.iconBitmap 96px,缓存) / 标题 label
@@ -401,6 +401,7 @@ AppSelectionActivity(Compose,单 Activity)
 | 底部统计条 | 共 X 个应用 / 显示 Y 个 / 已选 Z 个,过滤和勾选时刷新 |
 | 每行状态角标 | 仅代理模式:勾选=**仅代理**(绿 `#4CAF50`);仅绕过模式:勾选=**已排除**(红 `#FF6B6B`) |
 | 底部保存提示 | 「退出即保存 · 改动在下次连接时生效」(返回自动保存,不自动重启) |
+| 滚动行为 | 滚离顶部 >48px 时流量模式卡收起(AnimatedVisibility,搜索/tab/统计固定);回顶部自动展开 |
 | 筛选 tab | 全部 / 用户应用 / 系统应用(`FLAG_SYSTEM` 区分) |
 
 ### 5.4 细节约束
