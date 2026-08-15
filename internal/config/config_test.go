@@ -68,6 +68,48 @@ func TestValidate_AdminCertKeyPair(t *testing.T) {
 	}
 }
 
+func TestValidate_PortZero(t *testing.T) {
+	cfg := DefaultConfig()
+	// port 0 = socks5 disabled (Android fd-mode default): valid
+	cfg.Listen.Port = 0
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("listen.port=0 should validate, got: %v", err)
+	}
+	// negative: invalid
+	cfg.Listen.Port = -1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("listen.port=-1 should fail validation")
+	}
+}
+
+func TestLoad_PortZero(t *testing.T) {
+	dir := t.TempDir()
+	// explicit "port": 0 must survive Load (socks5 disabled)
+	p := filepath.Join(dir, "port0.json")
+	if err := os.WriteFile(p, []byte(`{"listen":{"port":0}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Listen.Port != 0 {
+		t.Fatalf("explicit port=0 must stay 0, got %d", cfg.Listen.Port)
+	}
+	// absent "port" falls back to DefaultConfig's 1080
+	p2 := filepath.Join(dir, "noport.json")
+	if err := os.WriteFile(p2, []byte(`{"listen":{"host":"::"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg2, err := Load(p2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg2.Listen.Port != 1080 {
+		t.Fatalf("absent port should default to 1080, got %d", cfg2.Listen.Port)
+	}
+}
+
 func TestValidate_AdminCertSans(t *testing.T) {
 	cfg := DefaultConfig()
 	// no SANs: valid
@@ -327,8 +369,10 @@ func TestApplyDefaults_EmptyFields(t *testing.T) {
 	if cfg.Listen.Host != "::" {
 		t.Errorf("Listen.Host: got %s", cfg.Listen.Host)
 	}
-	if cfg.Listen.Port != 1080 {
-		t.Errorf("Listen.Port: got %d", cfg.Listen.Port)
+	// Port is intentionally NOT defaulted by applyDefaults (0 = socks5 disabled;
+	// the 1080 default comes from DefaultConfig, which Load() always starts from).
+	if cfg.Listen.Port != 0 {
+		t.Errorf("Listen.Port: got %d, want 0 (applyDefaults must not touch port)", cfg.Listen.Port)
 	}
 	if cfg.Upstream.Default != "failover" {
 		t.Errorf("Upstream.Default: got %s", cfg.Upstream.Default)

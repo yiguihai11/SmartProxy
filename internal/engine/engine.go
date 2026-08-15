@@ -130,8 +130,12 @@ func (e *Engine) Start(ctx context.Context) error {
 		e.tunStack = tunStack
 	}
 
-	if !isFdMode {
-		listenAddr := net.JoinHostPort(e.Config.Load().Listen.Host, strconv.Itoa(e.Config.Load().Listen.Port))
+	// SOCKS5 listener is gated solely by listen.port: 0 disables it in any mode
+	// (Android fd-mode default). >0 binds regardless of fd/desktop — enabling a
+	// LAN-shared proxy on the phone. Empty listen.auth (=null or blank creds)
+	// means the listener requires no client authentication.
+	if lc := e.Config.Load().Listen; lc.Port > 0 {
+		listenAddr := net.JoinHostPort(lc.Host, strconv.Itoa(lc.Port))
 		ln, err := net.Listen("tcp", listenAddr)
 		if err != nil {
 			if e.tunStack != nil {
@@ -156,7 +160,7 @@ func (e *Engine) Start(ctx context.Context) error {
 		slog.Info("SOCKS5 server listening", "addr", ln.Addr())
 		safego.Go("engine.serve", func() { e.serve(ctx) })
 	} else {
-		slog.Info("fd mode: skipping SOCKS5 listener, TUN is the only entry point")
+		slog.Info("SOCKS5 listener disabled (listen.port=0)")
 	}
 
 	lc := e.Config.Load().Listen

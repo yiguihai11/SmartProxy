@@ -25,9 +25,10 @@ func (c *Config) applyDefaults() {
 	if c.Listen.Host == "" {
 		c.Listen.Host = "::"
 	}
-	if c.Listen.Port == 0 {
-		c.Listen.Port = 1080
-	}
+	// NOTE: listen.port is intentionally NOT defaulted here. DefaultConfig() already
+	// sets 1080, so an absent "port" keeps 1080 after Unmarshal; an explicit
+	// "port": 0 must survive as "socks5 disabled" (Android fd-mode default).
+	// Filling 0→1080 here would defeat that.
 	if c.Upstream.Default == "" {
 		c.Upstream.Default = "failover"
 	}

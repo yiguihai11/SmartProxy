@@ -187,8 +187,8 @@ type SmartProxyConf struct {
 func (c *Config) Validate() error {
 	var errs []string
 
-	if c.Listen.Port <= 0 || c.Listen.Port > 65535 {
-		errs = append(errs, "listen.port must be between 1 and 65535")
+	if c.Listen.Port < 0 || c.Listen.Port > 65535 {
+		errs = append(errs, "listen.port must be 0 (socks5 disabled) or between 1 and 65535")
 	}
 	if c.DNS.QueryTimeout <= 0 {
 		errs = append(errs, "dns.query_timeout must be positive")

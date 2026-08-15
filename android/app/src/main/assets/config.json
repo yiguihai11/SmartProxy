@@ -2,7 +2,7 @@
   "log_level": "INFO",
   "listen": {
     "host": "::",
-    "port": 1080,
+    "port": 0,
     "admin_port": 9090,
     "admin_auth": {
       "enabled": true,
