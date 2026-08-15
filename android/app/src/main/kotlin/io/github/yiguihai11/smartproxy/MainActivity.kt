@@ -75,7 +75,7 @@ import androidx.lifecycle.LifecycleEventObserver
 
 /**
  * 首页 = 纯启动器(§4.4),UI 参考 Ultimate VPN Free(com.open.hotspot.vpn.free)
- * 逆向还原的视觉:淡紫渐变背景 + 大圆环进度 + 中心紫渐变球体(纯球无符号)。
+ * 逆向还原的视觉:淡紫渐变背景 + 大圆环进度 + 中心紫渐变球体(球上白色电源字形)。
  *  - 大圆环球体 = VPN 启停(§4.5,isRunning 驱动);进度弧橙色→黄色,连接时扫一圈
  *  - 状态行:「状态:未连接/连接中/已连接」
  *  - 开关卡:IPv4 / IPv6 拦截 + 开机自启(§4.1/§4.3,写 AppPrefs;运行中改 → 重启 VPN)
@@ -268,7 +268,7 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
             }
             Spacer(Modifier.height(24.dp))
 
-            // ── 大圆环 + 中心紫渐变球体(纯球) ─────────────────────────
+            // ── 大圆环 + 中心紫渐变球体(带白色电源字形) ────────────────
             ConnectOrb(running = running, sweep = sweep.value, onToggleVpn = onToggleVpn)
             Spacer(Modifier.height(30.dp))
 
@@ -296,7 +296,7 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
     }
 }
 
-/** 大圆环:浅紫轨道 + 橙→黄渐变进度弧 + 中心紫渐变球体(纯球,无符号)。 */
+/** 大圆环:浅紫轨道 + 橙→黄渐变进度弧 + 中心紫渐变球体(球上白色电源字形)。 */
 @Composable
 private fun ConnectOrb(running: Boolean, sweep: Float, onToggleVpn: () -> Unit) {
     Box(contentAlignment = Alignment.Center, modifier = Modifier.size(214.dp)) {
@@ -319,14 +319,26 @@ private fun ConnectOrb(running: Boolean, sweep: Float, onToggleVpn: () -> Unit) 
                 )
             }
         }
-        // 中心球体:1:1 原版素材(progress_btn_normal.png),纯球无符号,点按启停。
-        Image(
-            painter = painterResource(R.drawable.progress_btn_normal),
-            contentDescription = null,
+        // 中心球体:1:1 原版素材(progress_btn_normal.png,紫渐变高光球)+
+        // 图标字体白色电源字形(原版 @dimen/x40=40sp、@color/white),点按启停。
+        Box(
             modifier = Modifier
                 .size(121.dp)
-                .clickable { onToggleVpn() }
-        )
+                .clickable { onToggleVpn() },
+            contentAlignment = Alignment.Center
+        ) {
+            Image(
+                painter = painterResource(R.drawable.progress_btn_normal),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize()
+            )
+            Text(
+                text = "\ue640",                     // 原版电源(dianyuan),白色
+                fontFamily = IconFont,
+                fontSize = 40.sp,
+                color = Color.White
+            )
+        }
     }
 }
 
