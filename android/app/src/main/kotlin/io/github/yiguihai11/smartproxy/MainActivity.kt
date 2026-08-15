@@ -16,6 +16,7 @@ import android.os.Looper
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -30,6 +31,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -98,6 +100,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 统一 edge-to-edge(含 Android 15+ 强制生效):背景通铺到系统栏后,
+        // 内容列用 safeDrawingPadding 让出状态栏/导航栏,避免顶部与状态栏重叠。
+        enableEdgeToEdge()
         setContent {
             MaterialTheme {
                 HomeLauncher(onToggleVpn = { onToggleClicked() })
@@ -155,7 +160,6 @@ private fun openPanel(context: Context, url: String) {
 private val PurpleText = Color(0xFF7850AA)       // 标题/强调
 private val PurpleDark = Color(0xFF613D8D)       // 面板文字
 private val PurpleSoft = Color(0xFF9A80BA)       // 弱化箭头
-private val OrangeAccent = Color(0xFFFFAC56)     // 标题右刷新
 private val StatusIdle = Color(0xFFE87C7C)       // 未连接
 private val StatusConnecting = Color(0xFFFF8413) // 连接中
 private val StatusConnected = Color(0xFF2EBD85)  // 已连接
@@ -214,37 +218,20 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .safeDrawingPadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // ── 标题栏(1:1 原版:菜单图标 + 紫粗体标题 + 橙色刷新)──────
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "\ue604",                  // 原版菜单(hanbaobao)
-                    fontFamily = IconFont,
-                    fontSize = 20.sp,
-                    color = PurpleText
-                )
-                Text(
-                    text = "SmartProxy",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = PurpleText,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = "\ue91b",                       // 原版刷新(shuaxin)→ 重取面板 URL
-                    fontFamily = IconFont,
-                    fontSize = 20.sp,
-                    color = OrangeAccent,
-                    modifier = Modifier.clickable { panelUrl = PanelUrl.url(context) }
-                )
-            }
+            // ── 标题栏(居中标题;原版左菜单/右刷新仅装饰,无功能,已移除)──
+            Text(
+                text = "SmartProxy",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                color = PurpleText,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
             Spacer(Modifier.height(18.dp))
 
             // ── 状态行:「状态: 未连接/连接中/已连接」────────────────
@@ -272,21 +259,35 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
             ConnectOrb(running = running, sweep = sweep.value, onToggleVpn = onToggleVpn)
             Spacer(Modifier.height(30.dp))
 
-            // ── 开关卡(IPv4 / IPv6 / 开机自启)────────────────────────
-            SwitchCard("IPv4 拦截", "接管 IPv4 流量", ipv4) { v ->
-                ipv4 = v
-                AppPrefs.setIpv4(context, v)
-                restartVpn(context)
+            // ── 开关卡(自适应宫格:v4 / v6 左右各半,开机自启整行)──────
+            Row(modifier = Modifier.fillMaxWidth()) {
+                SwitchCard(
+                    title = "IPv4 拦截", subtitle = "接管 IPv4 流量", checked = ipv4,
+                    onCheckedChange = { v ->
+                        ipv4 = v
+                        AppPrefs.setIpv4(context, v)
+                        restartVpn(context)
+                    },
+                    modifier = Modifier.weight(1f)
+                ),
+                Spacer(Modifier.width(8.dp))
+                SwitchCard(
+                    title = "IPv6 拦截", subtitle = "接管 IPv6 流量", checked = ipv6,
+                    onCheckedChange = { v ->
+                        ipv6 = v
+                        AppPrefs.setIpv6(context, v)
+                        restartVpn(context)
+                    },
+                    modifier = Modifier.weight(1f)
+                ),
             }
-            SwitchCard("IPv6 拦截", "接管 IPv6 流量", ipv6) { v ->
-                ipv6 = v
-                AppPrefs.setIpv6(context, v)
-                restartVpn(context)
-            }
-            SwitchCard("开机自启", "开机后自动启动 VPN(需已授权)", bootAuto) { v ->
-                bootAuto = v
-                AppPrefs.setBootAutoStart(context, v)
-            }
+            SwitchCard(
+                title = "开机自启", subtitle = "开机后自动启动 VPN(需已授权)", checked = bootAuto,
+                onCheckedChange = { v ->
+                    bootAuto = v
+                    AppPrefs.setBootAutoStart(context, v)
+                }
+            )
             Spacer(Modifier.height(24.dp))
 
             // ── 管理面板卡(URL + 复制 + 浏览器选择器 + 二维码)────────
@@ -348,12 +349,13 @@ private fun SwitchCard(
     title: String,
     subtitle: String,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Surface(
         shape = RoundedCornerShape(20.dp),
         color = Color.White.copy(alpha = 0.90f),
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
     ) {
