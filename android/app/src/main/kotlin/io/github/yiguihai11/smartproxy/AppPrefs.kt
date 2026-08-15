@@ -6,7 +6,7 @@ import android.content.Context
  * 首页与面板共用的偏好(§4.4"唯一偏好")。M1 只提供默认值:
  *  - IPv4/IPv6 拦截默认全开(M2 首页开关接管)
  *  - 流量模式默认"仅绕过(global)"(M5 面板接管 + 应用列表)
- *  - DNS 默认 223.5.5.5 / 2400:3200::1(在 config.json 资产里,M5 面板可改)
+ *  - DNS 默认 223.5.5.5 / 2400:3200::1(M3 配置生成器读取,M5 面板可改)
  */
 object AppPrefs {
 
@@ -16,6 +16,10 @@ object AppPrefs {
     private const val KEY_GLOBAL_MODE = "global_mode"
     private const val KEY_SELECTED_APPS = "selected_apps"
     private const val KEY_BOOT_AUTO_START = "boot_auto_start"
+    private const val KEY_DNS_V4 = "dns_v4"
+    private const val KEY_DNS_V6 = "dns_v6"
+    private const val DEFAULT_DNS_V4 = "223.5.5.5"
+    private const val DEFAULT_DNS_V6 = "2400:3200::1"
 
     private fun sp(context: Context) =
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -44,6 +48,20 @@ object AppPrefs {
 
     fun setIpv6(context: Context, value: Boolean) {
         sp(context).edit().putBoolean(KEY_IPV6, value).apply()
+    }
+
+    /** §4.2 DNS(面板可改,默认阿里 223.5.5.5):喂 addDnsServer 与生成器 dns_servers。 */
+    fun dnsV4(context: Context): String = sp(context).getString(KEY_DNS_V4, DEFAULT_DNS_V4)!!
+
+    /** §4.2 DNS v6(面板可改,默认阿里 2400:3200::1)。 */
+    fun dnsV6(context: Context): String = sp(context).getString(KEY_DNS_V6, DEFAULT_DNS_V6)!!
+
+    fun setDnsV4(context: Context, value: String) {
+        sp(context).edit().putString(KEY_DNS_V4, value).apply()
+    }
+
+    fun setDnsV6(context: Context, value: String) {
+        sp(context).edit().putString(KEY_DNS_V6, value).apply()
     }
 
     fun setGlobalMode(context: Context, value: Boolean) {

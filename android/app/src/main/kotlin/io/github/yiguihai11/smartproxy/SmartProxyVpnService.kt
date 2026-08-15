@@ -8,9 +8,11 @@ import kotlinx.coroutines.flow.StateFlow
 
 /**
  * VPN 入口服务(§4 / §4.5 / §4.6):
- *  - 读 config.json 的 tun 段(§4.6)建 VpnService.Builder → establish → fd → StartRouter
+ *  - ConfigGenerator 产出 config.json(§4.6 单一真源),其 tun 段建 VpnService.Builder
+ *    → establish → fd → StartRouter
  *  - 前台服务保活通知(§4.3)
- *  - onRevoke 断连检测:被其它 VPN 抢占 / 系统设置断开 → 停引擎、停服务、状态落 false
+ *  - onRevoke 断连检测:被其它 VPN 抢占 / 系统设置断开 → 停引擎、停服务、状态落 false;
+ *    被动断开弹一次性通知(§4.5),用户主动停止则静默。
  *
  * 生命周期 = Go 引擎生命周期(§4.6 启停联动),无独立开关。
  */
@@ -30,7 +32,7 @@ class SmartProxyVpnService : VpnService() {
             )
         }
 
-        /** 用户主动停止(§4.5 userInitiatedStop 语义:M1 直接停,后续区分通知提示)。 */
+        /** 用户主动停止(§4.5 userInitiatedStop:静默,不弹"已被断开")。 */
         fun stop(context: android.content.Context) {
             context.startService(
                 Intent(context, SmartProxyVpnService::class.java)
@@ -41,15 +43,21 @@ class SmartProxyVpnService : VpnService() {
 
     private var startedEngine = false
 
+    /** §4.5 区分主动/被动停止:ACTION_STOP 置 true;正常启动置 false。主线程回调间切换。 */
+    private var userInitiatedStop = false
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         if (action == NotificationHelper.ACTION_STOP) {
+            // 通知栏"停止"按钮 / 首页停止按钮:用户主动 → 静默停,后续 onRevoke 不误报被动。
+            userInitiatedStop = true
             shutdown()
             stopSelf()
             return START_NOT_STICKY
         }
 
-        // 启动流程:M1 家族开关默认全开;M2 从 AppPrefs 读取。
+        // 正常启动:之后的 onRevoke 一律视为被动断连(被抢占 / 系统设置断开)。
+        userInitiatedStop = false
         NotificationHelper.startForeground(this)
         if (establishVpn()) {
             startedEngine = true
@@ -62,11 +70,11 @@ class SmartProxyVpnService : VpnService() {
         return START_NOT_STICKY
     }
 
-    /** 按 §4.6 从 config.json tun 段建 Builder → establish → StartRouter。 */
+    /** 按 §4.6 用同一份 config.json 建 Builder → establish → StartRouter(单一真源)。 */
     private fun establishVpn(): Boolean {
         return try {
             ConfigProvider.ensureRuntimeFiles(this)
-            val configJson = ConfigProvider.loadConfig(this)
+            val configJson = ConfigGenerator.build(this)
             val tun = TunConfig.parse(org.json.JSONObject(configJson))
 
             // VpnService.Builder 是 VpnService 的内部类,不能写成 VpnService.Builder():
@@ -79,12 +87,12 @@ class SmartProxyVpnService : VpnService() {
             if (ipv4 && tun.inet4 != null) {
                 builder.addAddress(tun.inet4.ip, tun.inet4.prefix)   // "172.19.0.1/30" → addAddress(172.19.0.1, 30)
                     .addRoute("0.0.0.0", 0)                          // §4.1:族开才加该族默认路由
-                    .addDnsServer(tun.dnsV4)                         // 默认 223.5.5.5
+                    .addDnsServer(AppPrefs.dnsV4(this))              // §4.2 默认 223.5.5.5
             }
             if (ipv6 && tun.inet6 != null) {
                 builder.addAddress(tun.inet6.ip, tun.inet6.prefix)
                     .addRoute("::", 0)
-                    .addDnsServer(tun.dnsV6)                         // 默认 2400:3200::1
+                    .addDnsServer(AppPrefs.dnsV6(this))              // §4.2 默认 2400:3200::1
             }
 
             // 流量模式(§4):M1 默认"仅绕过(global)",M2/M5 从 AppPrefs 喂选中列表。
@@ -126,8 +134,11 @@ class SmartProxyVpnService : VpnService() {
     /** 被其它 VPN 抢占 / 系统设置断开:系统调此,隧道即刻失效(§4.5 主信号)。 */
     override fun onRevoke() {
         super.onRevoke()
+        val passive = !userInitiatedStop   // 用户主动停止流程不会触发 onRevoke,此处必为被动
         shutdown()
         stopSelf()
+        // §4.5:被动断开弹一次性通知(仅提示,不违背保活通知极简原则);主动停止则静默。
+        if (passive) NotificationHelper.notifyDisconnected(this)
     }
 
     override fun onDestroy() {
