@@ -65,8 +65,14 @@ object ConfigGenerator {
         routing.put("acl_file", File(context.filesDir, "acl.txt").absolutePath)
         base.put("routing", routing)
 
-        // §4.4 admin cert SAN 追加手机局域网 IP,减浏览器警告(证书随 SAN 变化重新自签)。
+        // §4.4 admin:管理密码面板可改(M5),随 VPN 重启生效;username/enabled 沿用资产。
         val listen = base.optJSONObject("listen") ?: JSONObject().also { base.put("listen", it) }
+        val auth = listen.optJSONObject("admin_auth")
+            ?: JSONObject().also { listen.put("admin_auth", it) }
+        auth.put("password", AppPrefs.adminPassword(context))
+        listen.put("admin_auth", auth)
+
+        // §4.4 admin cert SAN 追加手机局域网 IP,减浏览器警告(证书随 SAN 变化重新自签)。
         val sans = listen.optJSONArray("admin_cert_sans")
             ?: JSONArray().also { listen.put("admin_cert_sans", it) }
         PanelUrl.lanIpv4()?.let { ip ->

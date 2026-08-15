@@ -19,6 +19,40 @@ var (
 	cancelFunc   context.CancelFunc
 )
 
+// AndroidBridge 在 Kotlin 侧实现并于 App 启动时注册(M5,§4.4):
+// admin 面板端点(/api/apps、/api/apps/icon、/api/prefs、/api/vpn)经它回调
+// Android 运行时——枚举已装 app、取图标、读写 SharedPreferences、启停 VPN。
+//
+// 仅用 string / []byte / bool,gobind 双向编组支持;接口必须在本 bound 包内。
+// internal/admin 定义结构等价的未导出 interface(admin 不能 import mobile 防环),
+// 由 StartRouter 把本接口实例赋给它(方法集相同,编译期检查)。
+type AndroidBridge interface {
+	ListApps() string
+	AppIcon(pkg string) []byte
+	GetPrefs() string
+	SetPrefs(json string) string
+	IsRunning() bool
+	Vpn(action string) string
+}
+
+var (
+	bridge   AndroidBridge
+	bridgeMu sync.RWMutex
+)
+
+// SetAndroidBridge 注册 Kotlin 实现(Kotlin 线程设置,StartRouter/HTTP 线程读取,加锁)。
+func SetAndroidBridge(b AndroidBridge) {
+	bridgeMu.Lock()
+	bridge = b
+	bridgeMu.Unlock()
+}
+
+func currentBridge() AndroidBridge {
+	bridgeMu.RLock()
+	defer bridgeMu.RUnlock()
+	return bridge
+}
+
 func StartRouter(configJson string, tunFd int) error {
 	engineMu.Lock()
 	defer engineMu.Unlock()
@@ -53,6 +87,13 @@ func StartRouter(configJson string, tunFd int) error {
 
 	globalEngine = eng
 	cancelFunc = cancel
+
+	// M5:把 Kotlin 注册的 bridge 挂到 admin server,面板端点经它回调 Android。
+	// admin server 在 eng.Start 内创建,此刻已可取得;admin 的结构 interface
+	// 与本接口方法集相同,接口赋值编译期检查,无 any/断言。
+	if srv := eng.AdminServer(); srv != nil {
+		srv.SetAndroidBridge(currentBridge())
+	}
 	return nil
 }
 
@@ -60,6 +101,10 @@ func StopRouter() {
 	engineMu.Lock()
 	defer engineMu.Unlock()
 	if globalEngine != nil {
+		// 拆桥:引擎停止后 admin server 关闭,面板不可达;先摘 bridge 防悬空调用。
+		if srv := globalEngine.AdminServer(); srv != nil {
+			srv.SetAndroidBridge(nil)
+		}
 		cancelFunc()
 		globalEngine.Stop()
 		globalEngine = nil

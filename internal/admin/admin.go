@@ -63,6 +63,10 @@ type Server struct {
 	// certPEM is the public certificate in use (auto-generated or custom), captured at
 	// buildTLSConfig for the /admin.crt download. Empty when HTTPS is not in use.
 	certPEM []byte
+
+	// androidBridge 是 Android 运行时桥(M5):nil = 非移动端/未注册,面板 /api/* 端点
+	// 全部经它回调 Kotlin(枚举应用/图标/偏好/启停)。见 android.go。
+	androidBridge androidBridge
 }
 
 type cachedStats struct {
@@ -240,6 +244,14 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/admin.crt", s.handleAdminCert)
 	mux.HandleFunc("/", s.handleRoot)
 	mux.HandleFunc("/events", s.handleEvents)
+
+	// M5 管理面板桥接端点:只在移动端(androidBridge 非 nil)有意义,否则 503。
+	mux.HandleFunc("/api/apps", s.handleAPIApps)
+	mux.HandleFunc("/api/apps/icon", s.handleAPIAppIcon)
+	mux.HandleFunc("/api/prefs", s.handleAPIPrefs)
+	mux.HandleFunc("/api/prefs/set", s.handleAPIPrefsSet)
+	mux.HandleFunc("/api/vpn", s.handleAPIVpn)
+	mux.HandleFunc("/api/vpn/set", s.handleAPIVpnSet)
 	return mux
 }
 
@@ -1287,7 +1299,8 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	http.Redirect(w, r, "/dashboard", http.StatusFound)
+	// M5:手机浏览器落点在 /,服务聚焦管理面板;桌面版 /dashboard 保留。
+	s.handlePanel(w, r)
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {

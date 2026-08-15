@@ -18,8 +18,10 @@ object AppPrefs {
     private const val KEY_BOOT_AUTO_START = "boot_auto_start"
     private const val KEY_DNS_V4 = "dns_v4"
     private const val KEY_DNS_V6 = "dns_v6"
+    private const val KEY_ADMIN_PASSWORD = "admin_password"
     private const val DEFAULT_DNS_V4 = "223.5.5.5"
     private const val DEFAULT_DNS_V6 = "2400:3200::1"
+    private const val DEFAULT_ADMIN_PASSWORD = "smartproxy"
 
     private fun sp(context: Context) =
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -70,5 +72,13 @@ object AppPrefs {
 
     fun setSelectedApps(context: Context, apps: Set<String>) {
         sp(context).edit().putStringSet(KEY_SELECTED_APPS, apps).apply()
+    }
+
+    /** M5:面板管理密码(默认 smartproxy,与资产 config 一致)。保存后随 VPN 重启生效。 */
+    fun adminPassword(context: Context): String =
+        sp(context).getString(KEY_ADMIN_PASSWORD, DEFAULT_ADMIN_PASSWORD)!!
+
+    fun setAdminPassword(context: Context, value: String) {
+        sp(context).edit().putString(KEY_ADMIN_PASSWORD, value).apply()
     }
 }
