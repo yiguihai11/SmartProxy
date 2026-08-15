@@ -52,7 +52,7 @@ func currentBridge() AndroidBridge {
 	return bridge
 }
 
-func StartRouter(configJson string, tunFd int) error {
+func StartRouter(configPath string, tunFd int) error {
 	engineMu.Lock()
 	defer engineMu.Unlock()
 
@@ -60,9 +60,11 @@ func StartRouter(configJson string, tunFd int) error {
 		return fmt.Errorf("router is already running")
 	}
 
-	var cfg config.Config
-	if err := json.Unmarshal([]byte(configJson), &cfg); err != nil {
-		return fmt.Errorf("failed to parse config: %v", err)
+	// 从文件加载配置(与桌面端 config.Load 同路径):Kotlin 侧把最终 config 落到
+	// filesDir/config.json 再传路径,引擎不再收 JSON 串;config.Load 会补默认值。
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
 	}
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -73,7 +75,7 @@ func StartRouter(configJson string, tunFd int) error {
 	cfg.TUN.FileDescriptor = tunFd
 	cfg.TUN.AutoRoute = false
 
-	eng, err := engine.New(&cfg, "")
+	eng, err := engine.New(cfg, "")
 	if err != nil {
 		return err
 	}

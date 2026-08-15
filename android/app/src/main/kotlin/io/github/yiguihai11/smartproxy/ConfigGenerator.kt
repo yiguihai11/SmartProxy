@@ -65,10 +65,11 @@ object ConfigGenerator {
         tun.put("auto_route", false)
         base.put("tun", tun)
 
-        // routing 文件绝对路径:Android 上引擎 cfgDir 为空,相对路径会解析到 CWD 而失败。
+        // routing 文件绝对路径:Android 上引擎 cfgDir 为空,相对路径会解析到 CWD 而失败;
+        // 路由数据可再生,放 cacheDir(ConfigProvider.ensureRuntimeFiles 每次启动重拷)。
         val routing = base.optJSONObject("routing") ?: JSONObject().also { base.put("routing", it) }
-        routing.put("chnroute_file", File(context.filesDir, "chnroute.txt").absolutePath)
-        routing.put("acl_file", File(context.filesDir, "acl.txt").absolutePath)
+        routing.put("chnroute_file", File(context.cacheDir, "chnroute.txt").absolutePath)
+        routing.put("acl_file", File(context.cacheDir, "acl.txt").absolutePath)
         base.put("routing", routing)
 
         // §4.4 admin:管理密码面板可改(M5),随 VPN 重启生效;username/enabled 沿用资产。

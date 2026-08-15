@@ -75,6 +75,9 @@ class SmartProxyVpnService : VpnService() {
         return try {
             ConfigProvider.ensureRuntimeFiles(this)
             val configJson = ConfigGenerator.build(this)
+            // config 落 filesDir 持久文件,引擎按路径加载(StartRouter(configPath, fd),
+            // 与桌面 config.Load 同路);configJson 仍喂 Builder 保证两侧同源。
+            val configPath = ConfigProvider.persistConfig(this, configJson)
             val tun = TunConfig.parse(org.json.JSONObject(configJson))
 
             // VpnService.Builder 是 VpnService 的内部类,不能写成 VpnService.Builder():
@@ -124,7 +127,7 @@ class SmartProxyVpnService : VpnService() {
             val pfd = builder.establish() ?: return false
             try {
                 // Go 的 int 参数在 Java 侧是 long,getFd()(Int)要转 Long。
-                smartproxy.mobile.Mobile.startRouter(configJson, pfd.getFd().toLong())
+                smartproxy.mobile.Mobile.startRouter(configPath, pfd.getFd().toLong())
                 pfd.detachFd()
             } catch (e: Exception) {
                 pfd.close()

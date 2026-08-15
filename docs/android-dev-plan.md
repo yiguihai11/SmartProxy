@@ -19,7 +19,7 @@ UI 用 **Kotlin + Jetpack Compose + Material 3**。流量模式设计沿袭 sock
 
 | 部分 | 位置 | 说明 |
 |---|---|---|
-| gomobile 桥 | `mobile/bridge.go` | `StartRouter(configJson, tunFd)` / `StopRouter` / `IsRunning` / `GetStatus`(回传 IP/域名黑名单命中) |
+| gomobile 桥 | `mobile/bridge.go` | `StartRouter(configPath, tunFd)`(引擎按路径加载 config 文件,与桌面 `config.Load` 同路)/ `StopRouter` / `IsRunning` / `GetStatus`(回传 IP/域名黑名单命中) |
 | 引擎 TUN fd 模式 | `mobile/bridge.go:39-41` | 强制 `TUN.Enabled=true`、`FileDescriptor=tunFd`、`AutoRoute=false`(路由交给 Android) |
 | AAR 构建 | `Makefile: android` | `gomobile bind -tags with_gvisor -target=android -o build/smartproxy.aar ./mobile` |
 | CI 构建通道 | `.github/workflows/android-build.yml` | 已跑通"脚手架 → R8 → 临时签名 → assembleRelease → 上传 APK" |
@@ -108,7 +108,7 @@ if (globalMode) {                       // 仅绕过
 builder.addDisallowedApplication(packageName)  // 放行自身:无条件强制,防回环
 
 val fd = builder.establish()!!.getFd()
-StartRouter(configJson, fd)
+StartRouter(configPath, fd)   // config 落盘 filesDir/config.json 后按路径传(§4.6)
 ```
 
 > AppListActivity 中同一个勾选列表的语义随模式翻转:global 模式勾选=已排除(红),
@@ -306,13 +306,15 @@ DNS 配置(§4.1 / §4.2)。
 
 **启停 VPN = 开关核心引擎(成对,不独立)**:
 
-- 启动:`onStartCommand` → 读配置 → 建 Builder → `establish()` → fd + configJson →
-  `StartRouter`。引擎随 VPN 起而启动;**没有"只开引擎不开 VPN"或反之的状态**。
+- 启动:`onStartCommand` → 读配置 → 建 Builder → `establish()` → fd + configPath
+  (config 已落盘 filesDir/config.json)→ `StartRouter`。引擎随 VPN 起而启动;**没有
+  "只开引擎不开 VPN"或反之的状态**。
 - 停止:用户点停 / `onRevoke` / `onDestroy` → `StopRouter()` + `stopForeground` +
   `stopSelf`。引擎随 VPN 停而停;fd 是引擎唯一输入,引擎停 = VPN 失效(§4.5)。
 
 **Builder 参数直接读 config.json 的 `tun` 段(单一真源)**:安卓启动 VPN 时解析**同一份
-交给 `StartRouter` 的 config.json**,逐字段喂 Builder,**不硬编码**。config.json 的 tun 段形态:
+落盘到 filesDir/config.json、按路径交给 `StartRouter` 的 config**,逐字段喂 Builder,
+**不硬编码**。config.json 的 tun 段形态:
 
 ```json
 "tun": {
@@ -345,7 +347,8 @@ if (ipv6) {
   builder.addDnsServer(cfg.tun.dns_servers[1])             // 2400:3200::1
 }
 val fd = builder.establish()!!.getFd()
-StartRouter(configJson, fd)
+// config 落盘 filesDir(config 生成后 ConfigProvider.persistConfig),引擎按路径加载
+StartRouter(configPath, fd)
 ```
 
 - **`tun.dns_servers []string` 已入核心配置**(`internal/config/config.go` 的 `TUNConfig`):
@@ -353,13 +356,17 @@ StartRouter(configJson, fd)
   `["223.5.5.5","2400:3200::1"]`(DefaultConfig 注入),`Validate()` 校验每项是合法 IP。
   桌面端不读,无害。
 - **面板改 DNS 的落点:不走 admin `/config`**——那套是桌面端"写文件 + fsnotify watcher
-  重载",Android 无配置文件、`reloadFn` 未接(`engine.go` 里三个 Set* 都包在
-  `if e.reloadFn != nil`,mobile 从不调 `SetReloadFn`),GET/PUT 均不可用。面板 DNS 输入
-  → `/api/prefs` 桥接 → SharedPreferences → 配置生成器重生成 config.json(含
-  `tun.dns_servers`)→ VPN 重启(§4.4 生效方式)。与 v4/v6 / 开机自启同一条流程;
-  流量模式 / app 列表改由应用内页直写 AppPrefs(§5),不走桥。
-- 桥接层提供 `BuildVpnConfig() → (builderParams, configJson)`:同一份配置同时喂
-  `VpnService.Builder` 和 `StartRouter`,两侧同源,不可能跑偏。
+  重载";Android 上 config 虽是文件(filesDir/config.json),仍**不接 reload 热重载**
+  (`engine.go` 里三个 Set* 都包在 `if e.reloadFn != nil`,mobile 从不调 `SetReloadFn`),
+  GET/PUT 均不可用。面板 DNS 输入 → `/api/prefs` 桥接 → SharedPreferences → 配置生成器
+  重生成并**重写 filesDir/config.json**(含 `tun.dns_servers`)→ VPN 重启(§4.4 生效方式)。
+  与 v4/v6 / 开机自启同一条流程;流量模式 / app 列表改由应用内页直写 AppPrefs(§5),不走桥。
+- 桥接层提供 `BuildVpnConfig() → (builderParams, configPath)`:同一份配置同时喂
+  `VpnService.Builder`(按 JSON 串解析)和 `StartRouter`(按落盘路径加载),两侧同源,
+  不可能跑偏。
+- **文件分布**:chnroute.txt / acl.txt 每次启动从 assets 拷到 **cacheDir**(可再生数据,
+  系统可清、重拷即回,引擎启动时已载入内存),config 里 routing 路径指向 cacheDir;
+  config.json 落 **filesDir** 持久文件,引擎按路径读。
 - 引擎侧 DNS 拦截仍按"拦全部 UDP:53"(`internal/tun/handler.go` `port == 53`),
   `dns_servers` 仅用于 Android `addDnsServer` 通告;引擎转发目标取配置的 DNS 设置(§4.2)。
 
