@@ -23,10 +23,6 @@
     "inet6_address": [
       "fc00::1/64"
     ],
-    "dns_servers": [
-      "223.5.5.5",
-      "2400:3200::1"
-    ],
     "auto_route": false,
     "stack": "gvisor"
   },
