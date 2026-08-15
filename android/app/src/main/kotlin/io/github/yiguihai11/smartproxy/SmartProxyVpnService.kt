@@ -98,8 +98,9 @@ class SmartProxyVpnService : VpnService() {
 
             val fd = builder.establish()?.fd ?: return false
             // Go engine AAR:gomobile bind(mobile 包)→ smartproxy.mobile.Mobile。
-            // 注意 gomobile 导出方法首字母小写(lowerFirst),StartRouter → startRouter。
-            smartproxy.mobile.Mobile.startRouter(configJson, fd)
+            // 注意 gomobile 导出方法首字母小写(lowerFirst),StartRouter → startRouter;
+            // Go 的 int 参数在 Java 侧是 long,fd(Int)要转 Long。
+            smartproxy.mobile.Mobile.startRouter(configJson, fd.toLong())
             true
         } catch (e: Exception) {
             // config 解析 / Builder 参数 / establish / StartRouter 任一失败都走这。
