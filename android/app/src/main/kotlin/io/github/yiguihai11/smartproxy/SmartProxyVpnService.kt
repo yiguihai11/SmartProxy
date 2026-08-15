@@ -112,15 +112,24 @@ class SmartProxyVpnService : VpnService() {
                     .forEach { builder.addAllowedApplication(it) }
             }
 
-            // 关键:用 detachFd() 取裸 fd 并把所有权交给 Go。sing-tun 用 os.NewFile(fd)
-            // 接管该 fd,引擎 Stop 时关闭;若用 .fd 而不 detach,ParcelFileDescriptor 被
-            // GC 回收时会把 fd 一起关掉 → 隧道中途莫名死亡(读 EBADF)。
+            // fd 所有权契约(单所有者,杜绝泄漏/误关):
+            //  - establish() 返回的 PFD 是隧道 fd 的 Java 侧唯一所有者。
+            //  - startRouter 成功 = Go 引擎已 os.NewFile 接管 → detachFd() 交出 Java
+            //    所有权,防 GC 回收 PFD 时把 fd 一起关掉(隧道中途 EBADF 死亡)。
+            //  - startRouter 抛错 = 引擎没接管(错误在 NewTUN 之前,如 netlink monitor
+            //    失败)→ PFD 仍持所有权,close() 归还。若不关,OS 以为隧道还活着 →
+            //    状态栏 VPN 图标常驻(真机实测 ErrNetlinkBanned 后图标仍在),且无人
+            //    读包,成僵尸隧道。注:NewTUN 之后失败(如 gvisor 栈)Go 会自己 t.Close(),
+            //    PFD.close 对其幂等,异常同步回抛的窗口内无并发 fd 复用,安全。
             val pfd = builder.establish() ?: return false
-            val fd = pfd.detachFd()
-            // Go engine AAR:gomobile bind(mobile 包)→ smartproxy.mobile.Mobile。
-            // 注意 gomobile 导出方法首字母小写(lowerFirst),StartRouter → startRouter;
-            // Go 的 int 参数在 Java 侧是 long,fd(Int)要转 Long。
-            smartproxy.mobile.Mobile.startRouter(configJson, fd.toLong())
+            try {
+                // Go 的 int 参数在 Java 侧是 long,getFd()(Int)要转 Long。
+                smartproxy.mobile.Mobile.startRouter(configJson, pfd.getFd().toLong())
+                pfd.detachFd()
+            } catch (e: Exception) {
+                pfd.close()
+                throw e
+            }
             true
         } catch (e: Exception) {
             // config 解析 / Builder 参数 / establish / StartRouter 任一失败都走这。
