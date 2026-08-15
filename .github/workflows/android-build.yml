@@ -60,6 +60,9 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" "platforms;android-35" "build-tools;35.0.0" >/dev/null
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          # runner 预置 ANDROID_SDK_ROOT=/usr/local/lib/android/sdk,与我们的 SDK 不同,
+          # AGP 会报 "different paths to the SDK" 而拒绝构建。对齐成同一个。
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
 
       - name: Build Go engine AAR
         run: |
