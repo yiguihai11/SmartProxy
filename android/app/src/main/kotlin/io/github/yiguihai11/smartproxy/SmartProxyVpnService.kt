@@ -97,14 +97,26 @@ class SmartProxyVpnService : VpnService() {
 
             // 流量模式(§4):M1 默认"仅绕过(global)",M2/M5 从 AppPrefs 喂选中列表。
             if (AppPrefs.globalMode(this)) {
+                // 仅绕过(黑名单):全接管,唯独放行选中 + 自身。
                 AppPrefs.selectedApps(this).forEach { builder.addDisallowedApplication(it) }
+                // 自身 uid 无条件排除,防回环:引擎的出站直连/上游连接出自本进程 uid,
+                // 不排除就会灌回 TUN → gvisor 处理自己的出站包 → 死循环。
+                builder.addDisallowedApplication(packageName)
             } else {
-                AppPrefs.selectedApps(this).forEach { builder.addAllowedApplication(it) }
+                // 仅代理(白名单):只放行选中。自身 uid 天然不在白名单里(面板枚举已滤掉
+                // 自己),且 Android 不允许白名单/黑名单混用(混加抛 UnsupportedOperationException),
+                // 所以这里既不能也不需加 addDisallowedApplication(self)。防御性滤掉自身,
+                // 防陈旧偏好里残留本包名导致回环。
+                AppPrefs.selectedApps(this)
+                    .filter { it != packageName }
+                    .forEach { builder.addAllowedApplication(it) }
             }
-            // 放行自身:无条件强制,防回环(§4)。
-            builder.addDisallowedApplication(packageName)
 
-            val fd = builder.establish()?.fd ?: return false
+            // 关键:用 detachFd() 取裸 fd 并把所有权交给 Go。sing-tun 用 os.NewFile(fd)
+            // 接管该 fd,引擎 Stop 时关闭;若用 .fd 而不 detach,ParcelFileDescriptor 被
+            // GC 回收时会把 fd 一起关掉 → 隧道中途莫名死亡(读 EBADF)。
+            val pfd = builder.establish() ?: return false
+            val fd = pfd.detachFd()
             // Go engine AAR:gomobile bind(mobile 包)→ smartproxy.mobile.Mobile。
             // 注意 gomobile 导出方法首字母小写(lowerFirst),StartRouter → startRouter;
             // Go 的 int 参数在 Java 侧是 long,fd(Int)要转 Long。
