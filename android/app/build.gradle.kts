@@ -44,6 +44,18 @@ android {
         }
     }
 
+    splits {
+        abi {
+            // 每 ABI 一个 APK,不产 universal:fat 包 64MB 几乎全是 4 个 ABI 的
+            // Go 引擎 .so(各 ~16MB),分包后单个 ~16MB,用户按设备选一个装。
+            // 对齐 sockstun(hev.sockstun):armeabi-v7a / arm64-v8a / x86 / x86_64。
+            isEnable = true
+            reset()
+            include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+            isUniversalApk = false
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -56,8 +68,9 @@ android {
     }
     packaging {
         jniLibs {
-            // gomobile AAR ships per-ABI .so libs; keep them all.
-            useLegacyPackaging = false
+            // useLegacyPackaging=true → APK 里 .so 压缩存储(install 时解压),体积大幅缩小。
+            // 代价是安装略慢、安装后多占一份磁盘;对个人分发的小 app,体积优先。
+            useLegacyPackaging = true
         }
     }
 }

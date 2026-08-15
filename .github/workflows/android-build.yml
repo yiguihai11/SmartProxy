@@ -93,18 +93,20 @@ jobs:
           KEY_ALIAS: androiddebugkey
           KEY_PASSWORD: android
 
-      - name: Verify signed APK
+      - name: Verify signed APKs (per-ABI)
         working-directory: android
         run: |
           ls -l app/build/outputs/apk/release/
-          # 签名构建产出 app-release.apk;unsigned 会是 app-release-unsigned.apk。
-          test -f app/build/outputs/apk/release/app-release.apk \
-            || { echo '::error::expected signed app-release.apk'; exit 1; }
-          echo "Signed release APK OK"
+          # ABI 分包(对齐 sockstun):每个 ABI 一个签名 APK,无 universal。
+          for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+            test -f "app/build/outputs/apk/release/app-${abi}-release.apk" \
+              || { echo "::error::missing per-ABI APK: ${abi}"; exit 1; }
+          done
+          echo "All 4 per-ABI signed release APKs OK"
 
-      - name: Upload APK
+      - name: Upload APKs
         uses: actions/upload-artifact@v5
         with:
           name: smartproxy-signed-release-apk
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: android/app/build/outputs/apk/release/*-release.apk
           if-no-files-found: error
