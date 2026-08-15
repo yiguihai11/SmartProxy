@@ -63,8 +63,9 @@ object VpnControl {
         }
     }
 
-    /** 串行化重启请求:调用线程不定(Go 回调线程 / 主线程补跑),状态变更全上锁。 */
-    private fun requestRestart(context: Context) = synchronized(lock) {
+    /** 串行化重启请求:调用线程不定(Go 回调线程 / 主线程补跑),状态变更全上锁。
+     *  显式 Unit:表达式体 + 块内自调用会让 Kotlin 推断返回类型时撞上递归问题。 */
+    private fun requestRestart(context: Context): Unit = synchronized(lock) {
         val now = SystemClock.elapsedRealtime()
         if (now - lastRestartAt < DEBOUNCE_MS) {
             return@synchronized   // 同一次写入的多发事件 → 本轮 start 已会重读最新 config
