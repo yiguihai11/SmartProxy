@@ -92,7 +92,7 @@ class AppSelectionActivity : ComponentActivity() {
                 AppSelectionScreen(
                     mode = mode,
                     selected = selected,
-                    onModeChange = { newMode -> setMode(newMode) },
+                    onModeChange = { newMode -> changeMode(newMode) },
                     onToggle = { pkg, checked -> toggle(pkg, checked) },
                     onBack = { finish() }
                 )
@@ -100,8 +100,9 @@ class AppSelectionActivity : ComponentActivity() {
         }
     }
 
-    /** 切模式;仅代理 + 空名单阻止(§8#6,防"全部直连"裸奔)。 */
-    private fun setMode(newMode: Boolean) {
+    /** 切模式;仅代理 + 空名单阻止(§8#6,防"全部直连"裸奔)。
+     *  命名 changeMode 而非 setMode:避免与 mode 属性生成的 JVM setter(setMode(Z)V)冲突。 */
+    private fun changeMode(newMode: Boolean) {
         if (!newMode && selected.isEmpty()) {
             Toast.makeText(this, "仅代理模式至少勾选 1 个应用", Toast.LENGTH_SHORT).show()
             return
