@@ -15,13 +15,18 @@ import java.io.File
  * ensureConfig:每次启动幂等应用「不变量」——routing 文件绝对化到 cacheDir、
  * tun.enabled/auto_route 按 fd 模式写死、admin_cert_sans 追加手机局域网 IP。
  * DNS 保持 assets 硬编码默认(223.5.5.5 / 2400:3200::1),应用内不再提供 DNS 配置 UI。
+ *
+ * 持久化规则:config.json / acl.txt / chnroute.txt 三者在 filesDir 或 cacheDir 落盘后
+ * 均为真源(面板可改、watcher 监控),assets 只在目标「缺失或空」时种入,绝不覆盖已
+ * 落盘内容——否则面板编辑会在下次启动/起 VPN 时被默认版冲掉。
  */
 object ConfigProvider {
 
-    /** 引擎启动前调用:把路由数据文件就位(拷到 cacheDir)。 */
+    /** 引擎启动前调用:把路由数据文件就位。面板可经 /acl、/chnroute 编辑(需持久化),
+     *  与 config.json 同规则——仅当目标缺失或大小为 0 才从 assets 种入,已有内容不覆盖。 */
     fun ensureRuntimeFiles(context: Context) {
-        copyAsset(context, "chnroute.txt", context.cacheDir)
-        copyAsset(context, "acl.txt", context.cacheDir)
+        copyAssetIfMissing(context, "chnroute.txt", context.cacheDir)
+        copyAssetIfMissing(context, "acl.txt", context.cacheDir)
     }
 
     /** 幂等:确保 filesDir/config.json 存在且应用不变量(App 启动 + 引擎启动前都调)。 */
@@ -90,7 +95,7 @@ object ConfigProvider {
         base.put("tun", tun)
 
         // routing 文件绝对路径:引擎 cfgDir 为空,相对路径会解析到 CWD 而失败;
-        // 路由数据可再生,放 cacheDir(ensureRuntimeFiles 每次启动重拷)。
+        // 放 cacheDir 作持久化(面板可改),ensureRuntimeFiles 仅缺失/空才种入,已落盘保留。
         val routing = base.optJSONObject("routing") ?: JSONObject().also { base.put("routing", it) }
         routing.put("chnroute_file", File(context.cacheDir, "chnroute.txt").absolutePath)
         routing.put("acl_file", File(context.cacheDir, "acl.txt").absolutePath)
@@ -133,6 +138,13 @@ object ConfigProvider {
                 input.copyTo(output)
             }
         }
+    }
+
+    /** 仅当目标缺失或空才从 assets 拷贝(种子);已落盘内容(含面板改动)保留。 */
+    private fun copyAssetIfMissing(context: Context, name: String, destDir: File) {
+        val dest = File(destDir, name)
+        if (dest.exists() && dest.length() > 0L) return
+        copyAsset(context, name, destDir)
     }
 
     private const val CONFIG_NAME = "config.json"
