@@ -69,7 +69,9 @@ class SmartProxyVpnService : VpnService() {
             val configJson = ConfigProvider.loadConfig(this)
             val tun = TunConfig.parse(org.json.JSONObject(configJson))
 
-            val builder = VpnService.Builder().setMtu(tun.mtu)
+            // VpnService.Builder 是 VpnService 的内部类,不能写成 VpnService.Builder():
+            // 本类继承 VpnService,裸 Builder() 会用 this 当外部接收者。
+            val builder = Builder().setMtu(tun.mtu)
 
             val ipv4 = AppPrefs.ipv4(this)   // M1 默认 true,M2 接首页开关
             val ipv6 = AppPrefs.ipv6(this)

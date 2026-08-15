@@ -40,7 +40,7 @@ object TunConfig {
     fun parseCidr(value: String): Cidr {
         val slash = value.indexOf('/')
         val ip = if (slash >= 0) value.substring(0, slash) else value
-        val prefix = if (slash >= 0) value.substring(slash + 1).toIntOrNull() else null
+        val prefix = (if (slash >= 0) value.substring(slash + 1).toIntOrNull() else null)
             ?: defaultPrefix(ip)
         return Cidr(ip, prefix)
     }
