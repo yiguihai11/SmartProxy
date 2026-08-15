@@ -29,6 +29,9 @@ class SmartProxyVpnService : VpnService() {
 
         private const val ACTION_START = "io.github.yiguihai11.smartproxy.START_VPN"
 
+        /** VpnControl 重启循环的内部 stop 标记:这类 stop 不算用户停止,不递增重启世代。 */
+        const val EXTRA_INTERNAL_STOP = "io.github.yiguihai11.smartproxy.INTERNAL_STOP"
+
         /** 启动 VPN(外部调用,如 MainActivity 的启动按钮)。 */
         fun start(context: android.content.Context) {
             context.startForegroundService(
@@ -43,6 +46,16 @@ class SmartProxyVpnService : VpnService() {
                     .setAction(NotificationHelper.ACTION_STOP)
             )
         }
+
+        /** 重启循环内部 stop(过渡性,随后立即 start):带 EXTRA_INTERNAL_STOP 标记,
+         *  ACTION_STOP 处理时不算用户停止,不递增重启世代(否则会取消重启自己)。 */
+        fun stopInternal(context: android.content.Context) {
+            context.startService(
+                Intent(context, SmartProxyVpnService::class.java)
+                    .setAction(NotificationHelper.ACTION_STOP)
+                    .putExtra(EXTRA_INTERNAL_STOP, true)
+            )
+        }
     }
 
     private var startedEngine = false
@@ -53,6 +66,12 @@ class SmartProxyVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         if (action == NotificationHelper.ACTION_STOP) {
+            // 圆球 / 通知停止 = 用户显式停止 → 递增 VpnControl 重启世代,使在途/挂起的
+            // 重启在 delayed start 时取消(否则关掉后隧道又被拉起,状态栏图标不消失)。
+            // VpnControl 重启循环的内部 stop 带 EXTRA_INTERNAL_STOP,不算用户停止。
+            if (intent?.getBooleanExtra(EXTRA_INTERNAL_STOP, false) != true) {
+                VpnControl.noteUserStop()
+            }
             // 通知栏"停止"按钮 / 首页停止按钮:用户主动 → 静默停,后续 onRevoke 不误报被动。
             userInitiatedStop = true
             shutdown()

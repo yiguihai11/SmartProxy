@@ -23,6 +23,9 @@ import android.os.SystemClock
  *    窄窗口,把新请求记 pending,本轮 start 落地后(宽松持有)补跑一轮。
  *  - 任何时刻只允许一轮 stop→start 在飞,杜绝双 start(第二个 establishVpn 的
  *    startRouter 报 "router is already running" → stopSelf 会把第一个隧道一起杀掉)。
+ *  - 用户显式停止(圆球/通知)会递增世代号:重启循环的 delayed start 与收尾补跑前比对
+ *    世代,用户在此期间停过就放弃——保证"关闭后隧道不被重新拉起,图标不残留";
+ *    VPN 未在跑时的配置变更只落盘,不自动把 VPN 拉起来。
  */
 object VpnControl {
 
@@ -40,6 +43,17 @@ object VpnControl {
     private var restartInFlight = false
     private var restartPending = false
     private var lastRestartAt = 0L   // SystemClock.elapsedRealtime()
+
+    /** 用户显式停止的世代号:圆球 / 通知停止时由 SmartProxyVpnService 递增(restart 的
+     *  内部 stop 带 EXTRA_INTERNAL_STOP,不算)。重启循环在 delayed start 与收尾补跑前
+     *  比对它——用户在这期间停过,就放弃本轮重启。否则隧道被关后又被拉起来,状态栏
+     *  VPN 图标不消失(正是"关闭后图标还在")。 */
+    private var userStopEpoch = 0L
+
+    /** 仅用户路径调用(SmartProxyVpnService 的 ACTION_STOP 处理;restart 内部 stop 不经过)。 */
+    fun noteUserStop() {
+        synchronized(lock) { userStopEpoch++ }
+    }
 
     fun dispatch(context: Context, action: String): String {
         when (action) {
@@ -79,11 +93,33 @@ object VpnControl {
         restartInFlight = true
         restartPending = false
 
+        val epoch = userStopEpoch
         main.post {
-            if (SmartProxyVpnService.isRunning.value) {
-                SmartProxyVpnService.stop(context)
+            // VPN 没在跑:配置变更只落盘,不把用户已停掉的 VPN 拉起来。
+            if (!SmartProxyVpnService.isRunning.value) {
+                synchronized(lock) { restartInFlight = false }
+                return@post
             }
+            SmartProxyVpnService.stopInternal(context)
             main.postDelayed({
+                // 窗口内用户显式停止 → 放弃本轮重启,清空残余状态(否则隧道被关后又被拉起,
+                // 状态栏图标不消失)。stopInternal 不递增世代,重启循环自身的 stop 不触发此分支。
+                val cancelled = synchronized(lock) {
+                    if (userStopEpoch != epoch) {
+                        restartInFlight = false
+                        restartPending = false
+                        true
+                    } else {
+                        false
+                    }
+                }
+                if (cancelled) return@postDelayed
+                // 窗口内已被用户 / 其它路径启动(如看到"未连接"又点了圆球)→ 不再重复起,
+                // 否则双 start,后一次 startRouter 报 "router is already running" 把隧道杀掉。
+                if (SmartProxyVpnService.isRunning.value) {
+                    synchronized(lock) { restartInFlight = false }
+                    return@postDelayed
+                }
                 SmartProxyVpnService.start(context)
                 // 宽松持有后收尾:放开重启锁;持有期间有新请求则补跑一轮(重读最新 config)。
                 main.postDelayed({
@@ -91,7 +127,8 @@ object VpnControl {
                         restartInFlight = false
                         if (restartPending) {
                             restartPending = false
-                            requestRestart(context)
+                            // 用户没在窗口内停过才补跑;停过则放弃,由下次手动启动读最新配置。
+                            if (userStopEpoch == epoch) requestRestart(context)
                         }
                     }
                 }, LATCH_HOLD_MS)
