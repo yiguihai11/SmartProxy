@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 
 /**
  * VPN 入口服务(§4 / §4.5 / §4.6):
- *  - ConfigGenerator 产出 config.json(§4.6 单一真源),其 tun 段建 VpnService.Builder
+ *  - 读 filesDir/config.json(§4.6 单一真源,Go 面板与首页开关共写)建 VpnService.Builder
  *    → establish → fd → StartRouter
  *  - 前台服务保活通知(§4.3)
  *  - onRevoke 断连检测:被其它 VPN 抢占 / 系统设置断开 → 停引擎、停服务、状态落 false;
@@ -22,6 +22,10 @@ class SmartProxyVpnService : VpnService() {
         /** 唯一真实状态源(§4.5):Compose 首页 collect 它。 */
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning
+
+        /** DNS 硬编码默认(§6 用户要求应用内不提供 DNS UI):config.json dns_servers 缺省时回退。 */
+        private const val DEFAULT_DNS_V4 = "223.5.5.5"
+        private const val DEFAULT_DNS_V6 = "2400:3200::1"
 
         private const val ACTION_START = "io.github.yiguihai11.smartproxy.START_VPN"
 
@@ -70,32 +74,34 @@ class SmartProxyVpnService : VpnService() {
         return START_NOT_STICKY
     }
 
-    /** 按 §4.6 用同一份 config.json 建 Builder → establish → StartRouter(单一真源)。 */
+    /** 按 §4.6 用同一份 filesDir/config.json 建 Builder → establish → StartRouter(单一真源)。 */
     private fun establishVpn(): Boolean {
         return try {
             ConfigProvider.ensureRuntimeFiles(this)
-            val configJson = ConfigGenerator.build(this)
-            // config 落 filesDir 持久文件,引擎按路径加载(StartRouter(configPath, fd),
-            // 与桌面 config.Load 同路);configJson 仍喂 Builder 保证两侧同源。
-            val configPath = ConfigProvider.persistConfig(this, configJson)
-            val tun = TunConfig.parse(org.json.JSONObject(configJson))
+            ConfigProvider.ensureConfig(this)
+            // config.json 是唯一真源(Go 面板经 /config 写它、首页开关写它、引擎 watcher
+            // 监控它):不再由 AppPrefs 重新合成。Builder 与 StartRouter 读同一份。
+            val configJson = ConfigProvider.readConfig(this)
+            val configPath = ConfigProvider.configPath(this)
+            val tun = TunConfig.parse(configJson)
 
             // VpnService.Builder 是 VpnService 的内部类,不能写成 VpnService.Builder():
             // 本类继承 VpnService,裸 Builder() 会用 this 当外部接收者。
             val builder = Builder().setMtu(tun.mtu)
 
-            val ipv4 = AppPrefs.ipv4(this)   // M1 默认 true,M2 接首页开关
-            val ipv6 = AppPrefs.ipv6(this)
-
-            if (ipv4 && tun.inet4 != null) {
-                builder.addAddress(tun.inet4.ip, tun.inet4.prefix)   // "172.19.0.1/30" → addAddress(172.19.0.1, 30)
-                    .addRoute("0.0.0.0", 0)                          // §4.1:族开才加该族默认路由
-                    .addDnsServer(AppPrefs.dnsV4(this))              // §4.2 默认 223.5.5.5
+            // IPv4/IPv6 拦截 = tun.inet4/6_address 存在(首页开关读写同一字段);
+            // DNS 走 dns_servers 固定双元素索引(§4.6),缺省回退硬编码默认(§6)。
+            val inet4 = tun.inet4
+            if (inet4 != null) {
+                builder.addAddress(inet4.ip, inet4.prefix)   // "172.19.0.1/30" → addAddress(172.19.0.1, 30)
+                    .addRoute("0.0.0.0", 0)                  // §4.1:族开才加该族默认路由
+                    .addDnsServer(tun.dnsV4 ?: DEFAULT_DNS_V4) // §4.2 默认 223.5.5.5
             }
-            if (ipv6 && tun.inet6 != null) {
-                builder.addAddress(tun.inet6.ip, tun.inet6.prefix)
+            val inet6 = tun.inet6
+            if (inet6 != null) {
+                builder.addAddress(inet6.ip, inet6.prefix)
                     .addRoute("::", 0)
-                    .addDnsServer(AppPrefs.dnsV6(this))              // §4.2 默认 2400:3200::1
+                    .addDnsServer(tun.dnsV6 ?: DEFAULT_DNS_V6) // §4.2 默认 2400:3200::1
             }
 
             // 流量模式(§4):M1 默认"仅绕过(global)",M2/M5 从 AppPrefs 喂选中列表。

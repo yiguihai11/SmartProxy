@@ -3,15 +3,14 @@ package io.github.yiguihai11.smartproxy
 import android.content.Context
 
 /**
- * M5:gomobile 反向桥实现(§4.4)。Go admin server 的 /api/ 桥接端点经
- * `mobile.AndroidBridge`(生成 Java 接口 smartproxy.mobile.AndroidBridge)回调到这里,
- * 读写 SharedPreferences / VpnService。
+ * gomobile 反向桥实现(§4.4)。纯 Go 面板还原后,/api/prefs、/api/vpn 桥接端点已删除,
+ * 桥只保留 Vpn(action):mobile/bridge.go 的 configReload 检测到隧道参数变更时经它触发
+ * Android 侧 VPN 重启(重建 VpnService 才生效的字段)。
  *
  * 注册时机:SmartProxyApp.onCreate()(任何入口——Activity/BootReceiver——之前),
- * 保证 StartRouter 取 currentBridge() 时桥已就位。
+ * 保证 configReload 取 currentBridge() 时桥已就位。
  *
- * 线程:getPrefs/isRunning 是纯读,在 Go 回调线程直接执行;
- * setPrefs/vpn 会触发启停,统一走 VpnControl 主线程派发(Go 线程无 Looper)。
+ * 线程:vpn 会触发启停,统一走 VpnControl 主线程派发(Go 回调线程无 Looper)。
  */
 object AndroidBridgeImpl : smartproxy.mobile.AndroidBridge {
 
@@ -20,25 +19,13 @@ object AndroidBridgeImpl : smartproxy.mobile.AndroidBridge {
 
     fun register(context: Context) {
         appContext = context.applicationContext
-        // 反向桥注册:把本对象交给 gobind → mobile.SetAndroidBridge(...),StartRouter
-        // 启动引擎后再挂到 admin server。必须在任何 VpnService 启动之前执行。
+        // 反向桥注册:把本对象交给 gobind → mobile.SetAndroidBridge(...)。必须在任何
+        // VpnService 启动之前执行(引擎 watcher 可能在引擎启动后立刻触发重载)。
         smartproxy.mobile.Mobile.setAndroidBridge(this)
     }
 
     private fun ctx(): Context = appContext
         ?: throw IllegalStateException("AndroidBridgeImpl 未注册(缺少 Application 初始化?)")
-
-    override fun getPrefs(): String = PrefsService.getJson(ctx())
-
-    /**
-     * 保存偏好。返回非空 = 错误(admin 回 400);空 = 成功。
-     * 重启由面板显式 POST /api/vpn/set {action:restart} 触发——重启会把当前 admin
-     * server 一并带走,若在 setPrefs 里自动重启,HTTP 响应可能被切断,面板的
-     * "保存成功→重启中→恢复"状态机就会乱。所以这里只落盘,不重启。
-     */
-    override fun setPrefs(json: String): String = PrefsService.set(ctx(), json)
-
-    override fun isRunning(): Boolean = SmartProxyVpnService.isRunning.value
 
     override fun vpn(action: String): String = VpnControl.dispatch(ctx(), action)
 }

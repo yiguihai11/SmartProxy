@@ -185,9 +185,9 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
     val context = LocalContext.current
     val running by SmartProxyVpnService.isRunning.collectAsState()
 
-    // v4/v6 / 开机自启:AppPrefs 为唯一偏好,首页只读/写。
-    var ipv4 by remember { mutableStateOf(AppPrefs.ipv4(context)) }
-    var ipv6 by remember { mutableStateOf(AppPrefs.ipv6(context)) }
+    // v4/v6 拦截:config.json 真源(§4.6,Go 面板与首页共写同一文件);开机自启仍是 AppPrefs。
+    var ipv4 by remember { mutableStateOf(ConfigProvider.ipv4(context)) }
+    var ipv6 by remember { mutableStateOf(ConfigProvider.ipv6(context)) }
     var bootAuto by remember { mutableStateOf(AppPrefs.bootAutoStart(context)) }
 
     // 面板 URL:局域网 IP 变化时在 onResume 刷新(§4.4 注意)。
@@ -274,7 +274,7 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
                     title = "IPv4 拦截", subtitle = "接管 IPv4 流量", checked = ipv4,
                     onCheckedChange = { v ->
                         ipv4 = v
-                        AppPrefs.setIpv4(context, v)
+                        ConfigProvider.setIpv4(context, v)   // 写 config.json tun.inet4_address(§4.6)
                         restartVpn(context)
                     },
                     modifier = Modifier.weight(1f)
@@ -284,7 +284,7 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
                     title = "IPv6 拦截", subtitle = "接管 IPv6 流量", checked = ipv6,
                     onCheckedChange = { v ->
                         ipv6 = v
-                        AppPrefs.setIpv6(context, v)
+                        ConfigProvider.setIpv6(context, v)   // 写 config.json tun.inet6_address(§4.6)
                         restartVpn(context)
                     },
                     modifier = Modifier.weight(1f)

@@ -236,34 +236,36 @@ v6 `2400:3200::1`。系统解析器被指到该地址 → 查询被 `0.0.0.0/0`
 │  VpnService ─ fd ─ Go engine(AAR)              │
 │                    └ Admin Server 0.0.0.0:port │
 │                      ├ 静态 Web UI(go:embed)   │
-│                      ├ /stats /config /acl …   │
-│                      └ /api/prefs /api/vpn …   │
+│                      └ /stats /config /acl …(纯 Go 端点 + fsnotify watcher)│
 └────────────────────────────────────────────────┘
      LAN 浏览器 → https://<手机IP>:port/(Basic Auth)
 ```
 
-**产品形态:安卓 = 主管理,面板 = 网络偏好**:
+**产品形态:安卓 = 主管理,面板 = 纯 Go 完整配置编辑器**:
 - 安卓首页:VPN 启停按钮、IPv4/IPv6 拦截开关、开机自启、**Apps(应用选择入口,§5)**、
   面板入口(URL+复制+二维码)。流量模式 + 应用选择**已应用内化**进 AppSelectionActivity。
-- 面板**只留网络偏好**:DNS v4/v6、v4/v6、开机自启、管理密码;**不再含**流量模式/应用选择。
-  面板与首页都读写 AppPrefs(唯一偏好),首页启动时只读。
-- 面板改动保存后统一触发 VPN 重启;应用选择页按 §5 返回自动保存(不重启,下次连接生效);
-  启停只能(也只需)在安卓端按。
+- 手机精简面板 panel.html **已删除**:DNS 应用内硬编码(223.5.5.5 / 2400:3200::1,无 UI)、
+  IPv4/IPv6/开机自启开关首页已有、管理密码在 dashboard 配置文件 tab 里改。
+- `/` 与 `/dashboard` 都服务**完整纯 Go 面板 dashboard.html**。
 
 **Web UI(SPA)规格**:
-- 嵌入 Go 二进制(`go:embed`),admin server 静态服务 `/`。
-- 面板只含:DNS v4/v6、网络开关(v4/v6、开机自启)、管理密码、保存并重启。
-  **已不含**流量模式 + 应用选择(§5 应用内化,App 内 AppSelectionActivity)。
+- 嵌入 Go 二进制(`go:embed`),admin server 静态服务 `/` = **完整桌面面板 dashboard.html**
+  (纯 Go 端点 /config /acl /chnroute /dns/static 等)。
+- 流量模式 + 应用选择不含在面板(§5 应用内化,App 内 AppSelectionActivity)。
 
-**Android 桥接端点**(经 gomobile 接口回调 Kotlin):
-- `/api/vpn`(启停 / 重启)、`/api/prefs`(v4/v6 / 开机自启 / **DNS v4/v6** / 管理密码)
-- 应用枚举 / 图标不再经桥(§5 应用内,AppEnumerator 直供 Compose 列表)。
+**Android 桥接端点已全部删除(纯 Go 还原)**:dashboard.html 走纯 Go `/config` PUT 写
+filesDir/config.json,引擎 watcher 热重载。桥只保留 gomobile 接口 `Vpn(action)`——
+configReload 检测到隧道参数变更时触发 Android 侧 VPN 重启。应用枚举/图标从不过桥
+(§5 应用内,AppEnumerator 直供 Compose 列表)。
 
-**配置生成**:`admin_port` / `admin_auth`(用户设)/ `admin_https` / `AdminCertSANs=[手机IP]`;
-`dnsV4` / `dnsV6`(默认 `223.5.5.5` / `2400:3200::1`,面板可改)喂给 `addDnsServer` 与引擎
-DNS 配置(§4.1 / §4.2)。
+**配置生成**:ConfigProvider.ensureConfig 每次启动幂等应用不变量——routing 路径绝对化到
+cacheDir、`tun.enabled=true`/`auto_route=false`(fd 模式写死)、`AdminCertSANs` 追加手机 IP。
+`admin_auth` / DNS 由 dashboard 在配置文件 tab 里改(写 config.json,引擎 watcher 热重载)。
 
-**生效方式**:web 改配置(v4/v6 / 模式 / app 列表)→ 保存 → VPN 重启(2-3s 断连)。
+**生效方式**:面板改配置 → `PUT /config` 写 filesDir/config.json → fsnotify watcher →
+configReload 热重载(admin_auth、dns.foreign、smart_proxy 等即时生效,不断连);TUN 隧道参数
+(mtu / inet4|6_address / dns_servers / admin 端口证书)变 → `needsRestart` 自动经桥重启
+VPN(2-3s 断连)。
 
 **注意**:手机局域网 IP 变化时首页 URL/二维码需刷新,`AdminCertSANs` 同步更新(证书 SAN
 变化会重新触发一次浏览器警告)。
@@ -347,7 +349,7 @@ if (ipv6) {
   builder.addDnsServer(cfg.tun.dns_servers[1])             // 2400:3200::1
 }
 val fd = builder.establish()!!.getFd()
-// config 落盘 filesDir(config 生成后 ConfigProvider.persistConfig),引擎按路径加载
+// config.json 是唯一真源(filesDir,Go 面板与首页开关共写),引擎按路径加载(§4.6)
 StartRouter(configPath, fd)
 ```
 
@@ -355,15 +357,17 @@ StartRouter(configPath, fd)
   TUN 通告给系统解析器的 DNS 地址,顺序定死 index 0 = IPv4、index 1 = IPv6;默认
   `["223.5.5.5","2400:3200::1"]`(DefaultConfig 注入),`Validate()` 校验每项是合法 IP。
   桌面端不读,无害。
-- **面板改 DNS 的落点:不走 admin `/config`**——那套是桌面端"写文件 + fsnotify watcher
-  重载";Android 上 config 虽是文件(filesDir/config.json),仍**不接 reload 热重载**
-  (`engine.go` 里三个 Set* 都包在 `if e.reloadFn != nil`,mobile 从不调 `SetReloadFn`),
-  GET/PUT 均不可用。面板 DNS 输入 → `/api/prefs` 桥接 → SharedPreferences → 配置生成器
-  重生成并**重写 filesDir/config.json**(含 `tun.dns_servers`)→ VPN 重启(§4.4 生效方式)。
-  与 v4/v6 / 开机自启同一条流程;流量模式 / app 列表改由应用内页直写 AppPrefs(§5),不走桥。
-- 桥接层提供 `BuildVpnConfig() → (builderParams, configPath)`:同一份配置同时喂
-  `VpnService.Builder`(按 JSON 串解析)和 `StartRouter`(按落盘路径加载),两侧同源,
-  不可能跑偏。
+- **面板改配置 = 纯 Go 机制(mobile/bridge.go StartRouter 已装配)**:复制桌面
+  cmd/smartproxy/main.go L138-233——config.NewWatcher 监听 config/acl/chnroute,
+  SetReloadFn + SetConfigPath + watcher.Start,`/config` GET/PUT 在 Android 端可用。
+  面板写 filesDir/config.json → fsnotify 触发 configReload 热重载(admin_auth、dns.foreign、
+  smart_proxy、upstream、acl/chnroute 路径变更即时生效);`needsRestart()` 检测到 TUN
+  隧道参数(mtu / inet4|6_address / dns_servers / stack)或 admin 端口/证书变更 → 经桥
+  `currentBridge().Vpn("restart")` 触发 Android 侧 VPN 重启。
+- **首页开关与面板共写同一份 config.json**:IPv4/IPv6 拦截 = tun.inet4/6_address 存在性
+  (首页开关直接增删该数组,§4.1);DNS 走 `tun.dns_servers` 固定双元素 index 契约
+  (index 0 = v4 / 1 = v6,ConfigGenerator 删除后不再族过滤),Builder 缺省回退硬编码默认。
+  config.json 单一真源,无 AppPrefs 生成器(§4.4)。
 - **文件分布**:chnroute.txt / acl.txt 每次启动从 assets 拷到 **cacheDir**(可再生数据,
   系统可清、重拷即回,引擎启动时已载入内存),config 里 routing 路径指向 cacheDir;
   config.json 落 **filesDir** 持久文件,引擎按路径读。
@@ -424,11 +428,11 @@ AppSelectionActivity(Compose,单 Activity)
 
 1. **Android app 工程脚手架**(Kotlin + Compose + Material 3,minSdk ≥ 26)
 2. **VpnService + 前台服务**:`prepare()` → `establish()` → fd → `StartRouter`;含放行自身防回环、`onRevoke`/`onDestroy` 断连检测与状态同步(§4.5)
-3. **配置生成器**:UI 状态(upstream / DNS / smart_proxy 规则)→ Go engine JSON;`cfg.TUN.*` 由 bridge 强制;admin 配置(`admin_port`/`admin_auth`/`admin_https`/`AdminCertSANs`,§4.4)
-4. **首页**:VPN 启停按钮(§4.5 状态机)+ IPv4/IPv6 拦截开关(§4.1)+ 开机自启(§4.3)+ **Apps 应用选择入口(§5)**+ 面板入口 URL+复制+二维码(§4.4)。DNS 只在面板
+3. **ConfigProvider(config.json 文件访问层)**:ensureConfig 幂等应用不变量(routing 绝对化 / tun.enabled / SAN 追加);`cfg.TUN.*` 由 bridge 强制;admin 配置(`admin_port`/`admin_auth`/`admin_https`/`AdminCertSANs`,§4.4)在 dashboard 配置 tab 里改
+4. **首页**:VPN 启停按钮(§4.5 状态机)+ IPv4/IPv6 拦截开关(读写 config.json tun.inet4/6_address,§4.1)+ 开机自启(§4.3)+ **Apps 应用选择入口(§5)**+ 面板入口 URL+复制+二维码(§4.4)。DNS 应用内硬编码(§6)
 5. **通知栏 / 保活**:前台服务保活强化(§4.3:ongoing 通知、`stopWithTask=false`、OEM 电池白名单引导);通知**极简只显"正在运行"**;`GetStatus()` 黑名单命中可喂主界面状态(可选)
 6. **AAR 集成 + CI 改造**(见 §7)
-7. **管理控制面板**(§4.4):Web UI(SPA,`go:embed` 进引擎)——DNS v4/v6、v4/v6、开机自启、管理密码、保存并重启;Android 桥接端点(`/api/vpn`、`/api/prefs`);流量模式 / 应用选择已应用内化(§5,AppSelectionActivity);首页入口与二维码
+7. **纯 Go 控制面板还原**(§4.4):手机精简面板 panel.html 已删除,`/` 服务完整 dashboard.html;mobile/bridge.go 装配 watcher + configReload + needsRestart(自动重启);桥只留 `Vpn(action)`;流量模式 / 应用选择已应用内化(§5,AppSelectionActivity);首页入口与二维码
 
 ## 7. 构建与 CI 策略
 
