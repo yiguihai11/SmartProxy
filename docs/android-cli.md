@@ -27,7 +27,7 @@ android/app/libs/smartproxy.aar --Gradle assembleRelease--> app-release.apk
 3. `gomobile init` + `make android` → `build/smartproxy.aar`,拷进 `android/app/libs/`
 4. `keytool` 现生成 debug keystore(**临时签名**,`android`/`androiddebugkey`)
 5. `./gradlew assembleRelease`(env 注入签名)→ **签名** `app-release.apk`
-6. 上传为 workflow artifact `smartproxy-signed-release-apk`
+6. 上传为 workflow artifact,**每个 ABI 一个独立 artifact**(`smartproxy-<abi>-release-apk`)
 
 > 签名说明:临时调试用,每次构建的 keystore 是**现生成的**,因此**每次签名不同**——
 > 覆盖安装新包前要先卸载旧的。以后要做正式更新包再配持久 keystore + secrets。
@@ -46,8 +46,13 @@ android/app/libs/smartproxy.aar --Gradle assembleRelease--> app-release.apk
 
 ## 下载安装包
 
+每个 ABI 一个 artifact,按设备只下对应的那个(真机一般 `arm64-v8a`):
+
 ```bash
-gh run download <run-id> --repo yiguihai11/SmartProxy --name smartproxy-signed-release-apk
+# 真机(主流 arm64)示例:
+gh run download <run-id> --repo yiguihai11/SmartProxy --name smartproxy-arm64-v8a-release-apk
+# 32 位老机:smartproxy-armeabi-v7a-release-apk
+# 模拟器(arm64/x86 宿主):smartproxy-x86_64-release-apk 或 smartproxy-x86-release-apk
 ```
 
 ## 本地(可选)联调引擎

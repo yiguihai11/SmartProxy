@@ -104,9 +104,29 @@ jobs:
           done
           echo "All 4 per-ABI signed release APKs OK"
 
-      - name: Upload APKs
+      # 每个 ABI 一个独立 artifact:Artifacts 页 4 条,用户按设备只下对应那个
+      # (~9MB),不用像打成一个 zip 那样为 arm64 也把全量 38MB 拖下来。
+      - name: Upload APK (arm64-v8a)
         uses: actions/upload-artifact@v5
         with:
-          name: smartproxy-signed-release-apk
-          path: android/app/build/outputs/apk/release/*-release.apk
+          name: smartproxy-arm64-v8a-release-apk
+          path: android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
+          if-no-files-found: error
+      - name: Upload APK (armeabi-v7a)
+        uses: actions/upload-artifact@v5
+        with:
+          name: smartproxy-armeabi-v7a-release-apk
+          path: android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk
+          if-no-files-found: error
+      - name: Upload APK (x86_64)
+        uses: actions/upload-artifact@v5
+        with:
+          name: smartproxy-x86_64-release-apk
+          path: android/app/build/outputs/apk/release/app-x86_64-release.apk
+          if-no-files-found: error
+      - name: Upload APK (x86)
+        uses: actions/upload-artifact@v5
+        with:
+          name: smartproxy-x86-release-apk
+          path: android/app/build/outputs/apk/release/app-x86-release.apk
           if-no-files-found: error
