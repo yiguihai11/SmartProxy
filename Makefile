@@ -106,7 +106,9 @@ android:
 	# -javapkg 是"前缀",gomobile 会在后面追加 Go 包名(pkg.Name()=="mobile"),
 	# 所以 -javapkg=smartproxy → Java 包 smartproxy.mobile,类 smartproxy.mobile.Mobile。
 	# 若写 -javapkg=smartproxy.mobile 会得到 smartproxy.mobile.mobile(多一层),别踩。
-	gomobile bind -tags with_gvisor -target=android -javapkg=smartproxy -o $(OUTDIR)/smartproxy.aar ./mobile
+	# -androidapi:gomobile 默认 16,而 CI runner 预装 NDK 27 只支持 21..35,
+	# 必须 >=21;用 35 与 app compileSdk 对齐,且要求 platforms;android-35 已装(CI 装了)。
+	gomobile bind -tags with_gvisor -target=android -androidapi=35 -javapkg=smartproxy -o $(OUTDIR)/smartproxy.aar ./mobile
 	@echo "=> $(OUTDIR)/smartproxy.aar"
 
 ## ios: build iOS Framework
