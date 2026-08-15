@@ -18,7 +18,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -39,8 +41,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -59,6 +63,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Color
@@ -426,7 +431,7 @@ private fun AppsCard(title: String, subtitle: String, onClick: () -> Unit, modif
     }
 }
 
-/** 管理面板入口卡:URL + 复制 + 浏览器选择器 + 二维码(§4.4)。 */
+/** 管理面板入口卡:URL + 复制 + 浏览器选择器;二维码默认折叠,点右上箭头展开(§4.4)。 */
 @Composable
 private fun PanelCard(url: String?, onCopy: (String) -> Unit, onOpen: (String) -> Unit) {
     Surface(
@@ -437,6 +442,12 @@ private fun PanelCard(url: String?, onCopy: (String) -> Unit, onOpen: (String) -
             .padding(vertical = 4.dp)
     ) {
         Column(Modifier.padding(16.dp)) {
+            // 二维码太占版面:默认收起,右上箭头展开/收起;箭头随状态旋转 180°。
+            var showQr by remember { mutableStateOf(false) }
+            val rotation by animateFloatAsState(
+                targetValue = if (showQr) 180f else 0f,
+                label = "qrArrow"
+            )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "管理面板",
@@ -445,12 +456,20 @@ private fun PanelCard(url: String?, onCopy: (String) -> Unit, onOpen: (String) -
                     color = PurpleDark
                 )
                 Spacer(Modifier.weight(1f))
-                Text(
-                    text = "",                     // 原版右箭头(arrow-right-bold)
-                    fontFamily = IconFont,
-                    fontSize = 16.sp,
-                    color = PurpleSoft
-                )
+                // 只有拿到局域网地址(url != null)才有二维码可展,箭头此时才显示。
+                if (url != null) {
+                    IconButton(
+                        onClick = { showQr = !showQr },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.KeyboardArrowDown,
+                            contentDescription = if (showQr) "收起二维码" else "展开二维码",
+                            tint = PurpleSoft,
+                            modifier = Modifier.size(22.dp).rotate(rotation)
+                        )
+                    }
+                }
             }
             if (url != null) {
                 Spacer(Modifier.height(6.dp))
@@ -467,22 +486,26 @@ private fun PanelCard(url: String?, onCopy: (String) -> Unit, onOpen: (String) -
                 }
                 Spacer(Modifier.height(12.dp))
                 val qr = remember(url) { QrHelper.generate(url, 512) }
-                if (qr != null) {
-                    Image(
-                        bitmap = qr.asImageBitmap(),
-                        contentDescription = "管理面板二维码",
-                        modifier = Modifier
-                            .size(180.dp)
-                            .align(Alignment.CenterHorizontally)
-                            .clickable { onOpen(url) }
-                    )
-                    Text(
-                        text = "扫码打开,或点击上方用浏览器",
-                        fontSize = 12.sp,
-                        color = GreyText,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
-                    )
+                // QR 块整体折叠:AnimatedVisibility 包住图片+提示,展开/收起平滑;
+                // qr 照常生成(不为 null 才渲染),退出动画期间图片不会提前消失。
+                AnimatedVisibility(visible = showQr) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        if (qr != null) {
+                            Image(
+                                bitmap = qr.asImageBitmap(),
+                                contentDescription = "管理面板二维码",
+                                modifier = Modifier
+                                    .size(180.dp)
+                                    .clickable { onOpen(url) }
+                            )
+                            Text(
+                                text = "扫码打开,或点击上方用浏览器",
+                                fontSize = 12.sp,
+                                color = GreyText,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
                 }
             } else {
                 Text(
