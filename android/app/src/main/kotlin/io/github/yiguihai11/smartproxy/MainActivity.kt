@@ -380,7 +380,7 @@ private fun AppDrawerContent(
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "单一真源模式 · Go 路由核心",
+                text = "Go 内核 · 轻量高效",
                 fontSize = 11.sp,
                 color = GreyText.copy(alpha = 0.7f),
                 textAlign = TextAlign.Center,
