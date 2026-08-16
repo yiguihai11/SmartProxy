@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -67,11 +66,13 @@ type Server struct {
 }
 
 type cachedStats struct {
-	allocMB    string
-	cpuPercent float64
-	gcCount    uint32
-	gcPause    string
-	updatedAt  time.Time
+	allocMB      string
+	cpuPercent   float64
+	gcCount      uint32
+	gcPause      string
+	updatedAt    time.Time
+	prevCPUTime  time.Duration
+	prevSampleAt time.Time
 }
 
 func New(sockPath string, router *route.Router, mgr *upstream.Manager, dnsHandler *dns.Handler, ct *chnroute.Trie) *Server {
@@ -273,14 +274,60 @@ func (s *Server) SetRefreshInterval(sec int) {
 func (s *Server) refreshStats() {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	uptimeSec := time.Since(s.startTime).Seconds()
+
+	now := time.Now()
 	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+
 	s.stats.allocMB = formatMB(m.Alloc)
-	s.stats.cpuPercent = getCPUPercent(uptimeSec)
 	s.stats.gcCount = m.NumGC
-	s.stats.gcPause = formatDuration(time.Duration(m.PauseNs[(m.NumGC-1)&255]))
-	s.stats.updatedAt = time.Now()
-	s.statsMu.Unlock()
+	if m.NumGC > 0 {
+		s.stats.gcPause = formatDuration(time.Duration(m.PauseNs[(m.NumGC-1)&255]))
+	} else {
+		s.stats.gcPause = "0"
+	}
+	s.stats.updatedAt = now
+
+	// Calculate CPU usage based on delta sampling
+	currCPUTime, err := getProcessCPUTime()
+	if err == nil {
+		if !s.stats.prevSampleAt.IsZero() {
+			deltaWall := now.Sub(s.stats.prevSampleAt).Seconds()
+			deltaCPU := (currCPUTime - s.stats.prevCPUTime).Seconds()
+			if deltaWall > 0.1 && deltaCPU >= 0 {
+				numCPU := float64(runtime.NumCPU())
+				if numCPU < 1 {
+					numCPU = 1
+				}
+				pct := (deltaCPU / (deltaWall * numCPU)) * 100.0
+				if pct < 0 {
+					pct = 0
+				} else if pct > 100.0 {
+					pct = 100.0
+				}
+				s.stats.cpuPercent = pct
+			}
+		} else {
+			uptime := now.Sub(s.startTime).Seconds()
+			if uptime > 0.5 {
+				numCPU := float64(runtime.NumCPU())
+				if numCPU < 1 {
+					numCPU = 1
+				}
+				pct := (currCPUTime.Seconds() / (uptime * numCPU)) * 100.0
+				if pct < 0 {
+					pct = 0
+				} else if pct > 100.0 {
+					pct = 100.0
+				}
+				s.stats.cpuPercent = pct
+			} else {
+				s.stats.cpuPercent = 0.0
+			}
+		}
+		s.stats.prevCPUTime = currCPUTime
+		s.stats.prevSampleAt = now
+	}
 }
 
 func (s *Server) getStatsSnapshot() (allocMB string, cpuPercent float64, gcCount uint32, gcPause string) {
@@ -336,6 +383,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
+	allocMB, cpuPercent, gcCount, gcPause := s.getStatsSnapshot()
 	json.NewEncoder(w).Encode(StatsResponse{
 		TCP: TCPStats{
 			ProxyBytesUp:    relay.ProxyBytesUp.Load(),
@@ -354,11 +402,11 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		Process: ProcessStats{
 			Goroutines:   runtime.NumGoroutine(),
 			GoMaxProcs:   runtime.GOMAXPROCS(0),
-			AllocMB:      formatMB(m.Alloc),
+			AllocMB:      allocMB,
 			TotalAllocMB: formatMB(m.TotalAlloc),
-			NumGC:        m.NumGC,
-			LastGCPause:  formatDuration(time.Duration(m.PauseNs[(m.NumGC-1)&255])),
-			CPUPercent:   getCPUPercent(time.Since(s.startTime).Seconds()),
+			NumGC:        gcCount,
+			LastGCPause:  gcPause,
+			CPUPercent:   cpuPercent,
 			Uptime:       formatUptime(time.Since(s.startTime)),
 		},
 	})
@@ -1376,10 +1424,7 @@ func formatMB(b uint64) string {
 	if b == 0 {
 		return "0"
 	}
-	if b < mb*10 {
-		return fmt.Sprintf("%.1f", float64(b)/float64(mb))
-	}
-	return fmt.Sprintf("%d", b/mb)
+	return fmt.Sprintf("%.1f", float64(b)/float64(mb))
 }
 
 func formatDuration(d time.Duration) string {
@@ -1413,44 +1458,6 @@ func formatUptime(d time.Duration) string {
 	return fmt.Sprintf("%dh%dm", hours, mins)
 }
 
-// getCPUPercent returns the approximate CPU usage percentage since process start.
-// elapsedSec should come from Go's time.Since(startTime) for cross-platform compat.
-// Falls back to reading /proc/self/stat for cumulative CPU ticks; non-Linux returns 0.
-func getCPUPercent(elapsedSec float64) float64 {
-	const clkTck = 100 // sysconf(_SC_CLK_TCK) on most Linux
-
-	data, err := os.ReadFile("/proc/self/stat")
-	if err != nil {
-		return 0
-	}
-
-	space := []byte(" ")
-	fields := bytes.Split(data, space)
-	if len(fields) < 22 {
-		return 0
-	}
-
-	// fields[11] = utime (index 0-based), fields[12] = stime
-	utime := parseUint64(fields[11])
-	stime := parseUint64(fields[12])
-	if elapsedSec <= 0 {
-		return 0
-	}
-
-	totalTicks := utime + stime
-	return float64(totalTicks) / clkTck / elapsedSec * 100
-}
-
-func parseUint64(b []byte) uint64 {
-	var v uint64
-	for _, c := range b {
-		if c < '0' || c > '9' {
-			break
-		}
-		v = v*10 + uint64(c-'0')
-	}
-	return v
-}
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
