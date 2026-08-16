@@ -3,6 +3,7 @@ package io.github.yiguihai11.smartproxy
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -66,6 +67,11 @@ class SmartProxyVpnService : VpnService() {
     }
 
     private var startedEngine = false
+
+    /** §4.6 establish 保留的 PFD:shutdown 时显式 close 通知系统拆 VPN(状态栏图标即刻
+     *  消失)。不用 detachFd——detach 只把原始 fd 所有权转给 Go、不触发系统的关闭回调,
+     *  实测图标会赖到 onDestroy(~20s)才清(系统不拆 VPN 就拖着服务不销毁)。 */
+    private var tunPfd: ParcelFileDescriptor? = null
 
     /** §4.5 区分主动/被动停止:ACTION_STOP 置 true;正常启动置 false。主线程回调间切换。 */
     private var userInitiatedStop = false
@@ -206,12 +212,14 @@ class SmartProxyVpnService : VpnService() {
                 val t0 = System.currentTimeMillis()
                 smartproxy.mobile.Mobile.startRouter(configPath, pfd.getFd().toLong())
                 Log.i(TAG, "[establishVpn] Mobile.startRouter() returned successfully in ${System.currentTimeMillis() - t0} ms.")
-                Log.i(TAG, "[establishVpn] Step 4: Detaching PFD fd ownership to Go...")
-                pfd.detachFd()
-                Log.i(TAG, "[establishVpn] PFD detached successfully. VPN established.")
+                // 不 detach:PFD 保留在 tunPfd,shutdown 时显式 close() 通知系统拆 VPN
+                // (状态栏图标即刻消失)。Go 侧 os.NewFile 直接包同一 fd,引擎读循环随之报错退出。
+                tunPfd = pfd
+                Log.i(TAG, "[establishVpn] Step 4: VPN established. tunPfd retained for shutdown close.")
             } catch (e: Exception) {
                 Log.e(TAG, "[establishVpn] Mobile.startRouter threw exception! Closing PFD...", e)
                 pfd.close()
+                tunPfd = null
                 throw e
             }
             true
@@ -222,31 +230,44 @@ class SmartProxyVpnService : VpnService() {
         }
     }
 
-    /** 停引擎 + 收前台服务 + 状态落 false(§4.5)。 */
+    /** 停引擎 + 收前台服务 + 状态落 false(§4.5)。
+     *  先关 tunPfd:close() 通知系统拆 VPN → 状态栏图标即刻消失;fd 随之关闭,引擎
+     *  读循环立即报错退出,剩余 drain 更快。比引擎侧先关 fd 更可靠:detachFd 不触发
+     *  系统回调,图标会赖到 onDestroy(~20s)才清。shutdown 幂等(重复进入 tunPfd 已置 null)。 */
     private fun shutdown() {
         Log.i(TAG, "[shutdown] Step 0: Enter shutdown(). startedEngine=$startedEngine, _isRunning=${_isRunning.value}")
+        tunPfd?.let { pfd ->
+            try {
+                Log.i(TAG, "[shutdown] Step 1/4: Closing tun PFD (tear down VPN)...")
+                pfd.close()
+                Log.i(TAG, "[shutdown] Step 1/4: tun PFD closed.")
+            } catch (e: Exception) {
+                Log.e(TAG, "[shutdown] Step 1/4: tun PFD close failed", e)
+            }
+            tunPfd = null
+        }
         if (startedEngine) {
             try {
-                Log.i(TAG, "[shutdown] Step 1/3: Invoking Go Mobile.stopRouter()...")
+                Log.i(TAG, "[shutdown] Step 2/4: Invoking Go Mobile.stopRouter()...")
                 val t0 = System.currentTimeMillis()
                 smartproxy.mobile.Mobile.stopRouter()
                 val duration = System.currentTimeMillis() - t0
-                Log.i(TAG, "[shutdown] Step 1/3: Mobile.stopRouter() completed in ${duration} ms.")
+                Log.i(TAG, "[shutdown] Step 2/4: Mobile.stopRouter() completed in ${duration} ms.")
             } catch (e: Exception) {
-                Log.e(TAG, "[shutdown] Step 1/3: Mobile.stopRouter() threw exception", e)
+                Log.e(TAG, "[shutdown] Step 2/4: Mobile.stopRouter() threw exception", e)
             }
             startedEngine = false
         } else {
-            Log.i(TAG, "[shutdown] Step 1/3: startedEngine is false, skipping Mobile.stopRouter().")
+            Log.i(TAG, "[shutdown] Step 2/4: startedEngine is false, skipping Mobile.stopRouter().")
         }
 
-        Log.i(TAG, "[shutdown] Step 2/3: Calling ServiceCompat.stopForeground(STOP_FOREGROUND_REMOVE)...")
+        Log.i(TAG, "[shutdown] Step 3/4: Calling ServiceCompat.stopForeground(STOP_FOREGROUND_REMOVE)...")
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-        Log.i(TAG, "[shutdown] Step 2/3: stopForeground completed.")
+        Log.i(TAG, "[shutdown] Step 3/4: stopForeground completed.")
 
-        Log.i(TAG, "[shutdown] Step 3/3: Updating state _isRunning.value = false...")
+        Log.i(TAG, "[shutdown] Step 4/4: Updating state _isRunning.value = false...")
         _isRunning.value = false
-        Log.i(TAG, "[shutdown] Step 4/3: shutdown() completed. _isRunning is now false.")
+        Log.i(TAG, "[shutdown] Step 5/4: shutdown() completed. _isRunning is now false.")
     }
 
     /** 被其它 VPN 抢占 / 系统设置断开:系统调此,隧道即刻失效(§4.5 主信号)。 */
