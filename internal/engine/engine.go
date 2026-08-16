@@ -576,13 +576,17 @@ func (e *Engine) Stop() {
 		if e.listener != nil {
 			e.listener.Close()
 		}
-		if e.tunStack != nil {
-			if closer, ok := e.tunStack.(interface{ Close() error }); ok {
+		// 先关 tunDev(即 fd 模式下的 establish fd / 桌面 tun0)再关 gvisor 栈:
+		// VPN 连接第一时间终止 → Android 状态栏图标立刻消失;fd 先关也让栈的读循环
+		// 立即出错退出,剩余 drain 更快,避免"点击关闭后好几秒图标才消失"。连接直接
+		// RST 而非 FIN,主动停止/重启可接受(重启路径 500ms 留白后重建)。
+		if e.tunDev != nil {
+			if closer, ok := e.tunDev.(interface{ Close() error }); ok {
 				closer.Close()
 			}
 		}
-		if e.tunDev != nil {
-			if closer, ok := e.tunDev.(interface{ Close() error }); ok {
+		if e.tunStack != nil {
+			if closer, ok := e.tunStack.(interface{ Close() error }); ok {
 				closer.Close()
 			}
 		}
