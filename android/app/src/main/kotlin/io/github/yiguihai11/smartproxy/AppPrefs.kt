@@ -10,6 +10,7 @@ import android.content.Context
  *  - 开机自启(BootReceiver 消费)
  *  - 自定义启动注入 DNS(IPv4 / IPv6)
  *  - 排除路由列表(excludeRoute, API 33+)
+ *  - 服务模式(VPN 隧道 / 仅代理 SOCKS5,§8)
  */
 object AppPrefs {
 
@@ -24,6 +25,7 @@ object AppPrefs {
     private const val KEY_DNS_V6 = "custom_dns_v6"
     private const val KEY_EXCLUDED_ROUTES = "excluded_routes"
     private const val KEY_THEME_MODE = "theme_mode"
+    private const val KEY_SERVICE_MODE = "service_mode"
 
     private fun sp(context: Context) =
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -85,6 +87,18 @@ object AppPrefs {
 
     fun setThemeMode(context: Context, mode: String) {
         sp(context).edit().putString(KEY_THEME_MODE, mode).apply()
+    }
+
+    /** 服务模式(§8):vpn = VPN 隧道(默认);socks5 = 仅代理,不启动 VPN 模式,
+     *  仅跑引擎 SOCKS5(127.0.0.1:1080)。 */
+    const val MODE_VPN = "vpn"
+    const val MODE_SOCKS5 = "socks5"
+
+    fun serviceMode(context: Context): String =
+        sp(context).getString(KEY_SERVICE_MODE, MODE_VPN) ?: MODE_VPN
+
+    fun setServiceMode(context: Context, mode: String) {
+        sp(context).edit().putString(KEY_SERVICE_MODE, mode).apply()
     }
 }
 

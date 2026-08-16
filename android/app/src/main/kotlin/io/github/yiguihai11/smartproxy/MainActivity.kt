@@ -45,6 +45,11 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -95,7 +100,7 @@ import kotlinx.coroutines.launch
 /**
  * 首页 = 纯启动器(§4.4),UI 参考 Ultimate VPN Free(com.open.hotspot.vpn.free)
  * 逆向还原的视觉:淡紫渐变背景 + 大圆环进度 + 中心紫渐变球体(球上白色电源字形)。
- *  - 顶部左侧侧边栏按钮:弹出功能抽屉(Apps 应用选择入口、DNS 服务器、排除路由)
+ *  - 顶部左侧侧边栏按钮:弹出功能抽屉(Apps 应用选择、DNS 服务器、排除路由、服务模式)
  *  - 大圆环球体 = VPN 启停(§4.5,isRunning 驱动);进度弧橙色→黄色,连接时扫一圈
  *  - 状态行:「状态:未连接/连接中/已连接」
  *  - 开关卡:IPv4 / IPv6 拦截(§4.1/§4.2,写 config.json;运行中改 → Go watcher 自动重启)
@@ -148,6 +153,13 @@ class MainActivity : ComponentActivity() {
             SmartProxyVpnService.stop(this)
             return
         }
+        // 仅代理(SOCKS5)模式(§8 服务模式)不建 VpnService,无需系统授权。
+        if (AppPrefs.serviceMode(this) == AppPrefs.MODE_SOCKS5) {
+            android.util.Log.i("SmartProxyVpn", "[MainActivity] serviceMode=SOCKS5, skipping VPN consent. Starting service directly...")
+            ensureNotifyPermission()
+            SmartProxyVpnService.start(this)
+            return
+        }
         // 首次或授权失效:弹系统授权框;成功后由回调启动服务。
         val intent = VpnService.prepare(this)
         if (intent != null) {
@@ -185,6 +197,13 @@ private fun openPanel(context: Context, url: String) {
 /** 抽屉底部「SmartProxy for Android」点击跳转项目主页。 */
 private fun openProjectUrl(context: Context) {
     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PROJECT_URL)))
+}
+
+/** 服务模式名(抽屉副标题 / 对话框下拉项)。注意与流量模式(AppSelectionActivity 的
+ *  「仅代理」白名单)区分:这里指引擎运行形态——VPN 隧道 vs 纯 SOCKS5。 */
+private fun serviceModeLabel(mode: String): String = when (mode) {
+    AppPrefs.MODE_SOCKS5 -> "仅代理 (SOCKS5)"
+    else -> "VPN 隧道"
 }
 
 // ── 主题色(逆向自 Ultimate VPN Free 的 colors.xml)──────────────────────
@@ -228,9 +247,10 @@ private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme:
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // DNS / 排除路由设置对话框开关(侧边栏菜单打开,§6)。
+    // DNS / 排除路由 / 服务模式设置对话框开关(侧边栏菜单打开,§6 / §8)。
     var showDnsDialog by remember { mutableStateOf(false) }
     var showExcludeDialog by remember { mutableStateOf(false) }
+    var showServiceModeDialog by remember { mutableStateOf(false) }
 
     // DNS / 排除路由在 establish() 时固化(读 AppPrefs),改了要重建 VpnService 才生效;
     // 两者是 App 层设置,Go watcher 不感知,不能像 IPv4/IPv6 那样靠 config.json 热重载自动
@@ -256,6 +276,10 @@ private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme:
                 onOpenExclude = {
                     scope.launch { drawerState.close() }
                     showExcludeDialog = true
+                },
+                onOpenServiceMode = {
+                    scope.launch { drawerState.close() }
+                    showServiceModeDialog = true
                 }
             )
         }
@@ -293,6 +317,17 @@ private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme:
             }
         )
     }
+    if (showServiceModeDialog) {
+        ServiceModeDialog(
+            initial = AppPrefs.serviceMode(context),
+            onDismiss = { showServiceModeDialog = false },
+            onSave = { mode ->
+                showServiceModeDialog = false
+                AppPrefs.setServiceMode(context, mode)
+                applyVpnSettings()
+            }
+        )
+    }
 }
 
 /** 侧边栏抽屉菜单内容 */
@@ -300,7 +335,8 @@ private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme:
 private fun AppDrawerContent(
     onOpenApps: () -> Unit,
     onOpenDns: () -> Unit,
-    onOpenExclude: () -> Unit
+    onOpenExclude: () -> Unit,
+    onOpenServiceMode: () -> Unit
 ) {
     val context = LocalContext.current
     ModalDrawerSheet(
@@ -381,6 +417,13 @@ private fun AppDrawerContent(
                     onClick = onOpenExclude
                 )
             }
+
+            // 侧边栏菜单项：服务模式(VPN 隧道 / 仅代理 SOCKS5,§8)。副标题实时显示当前模式。
+            DrawerMenuItem(
+                title = "服务模式",
+                subtitle = "当前: ${serviceModeLabel(AppPrefs.serviceMode(context))}",
+                onClick = onOpenServiceMode
+            )
 
             Spacer(Modifier.weight(1f))
 
@@ -700,6 +743,66 @@ private fun ExcludeRoutesDialog(
                 onSave(text.lines().map { it.trim() }.filter { it.isNotBlank() }.toSet())
             }) { Text("保存") }
         },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
+}
+
+/** 服务模式设置对话框(§8):模态下拉选 VPN 隧道 / 仅代理(SOCKS5)。仅代理 = 不启动
+ *  VPN 模式,仅用引擎 SOCKS5(127.0.0.1:1080)。改动由调用方落盘,运行中切换自动重启生效。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ServiceModeDialog(
+    initial: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var selected by remember { mutableStateOf(initial) }
+    var expanded by remember { mutableStateOf(false) }
+    val options = listOf(AppPrefs.MODE_VPN, AppPrefs.MODE_SOCKS5)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("服务模式") },
+        text = {
+            Column {
+                // 下拉:readOnly 文本框 + 弹出选项(ExposedDropdownMenuBox)。点击即展/收。
+                ExposedDropdownMenuBox(
+                    expanded = expanded,
+                    onExpandedChange = { expanded = it }
+                ) {
+                    OutlinedTextField(
+                        value = serviceModeLabel(selected),
+                        onValueChange = {},
+                        readOnly = true,
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false }
+                    ) {
+                        options.forEach { mode ->
+                            DropdownMenuItem(
+                                text = { Text(serviceModeLabel(mode)) },
+                                onClick = {
+                                    selected = mode
+                                    expanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = "VPN 隧道:接管系统流量智能分流(默认)。\n仅代理:不启动 VPN 模式,仅运行引擎 SOCKS5 代理(127.0.0.1:1080)。\n运行中切换将自动重启生效。",
+                    fontSize = 12.sp,
+                    color = GreyText
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(selected) }) { Text("保存") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
 }

@@ -28,8 +28,13 @@ object PanelUrl {
         return null
     }
 
-    /** https://smartproxy.lan:<port>;未连网/拿不到局域网 IP 返回 null。 */
+    /** https://smartproxy.lan:<port>;未连网/拿不到局域网 IP 返回 null。
+     *  仅代理(SOCKS5)模式(§8)无 VPN DNS 接管:smartproxy.lan 手机系统 DNS 解析不了,
+     *  回退 127.0.0.1(admin 绑 ":AdminPort",证书内置 SAN 127.0.0.1,本机可开面板)。 */
     fun url(context: Context): String? {
+        if (AppPrefs.serviceMode(context) == AppPrefs.MODE_SOCKS5) {
+            return "https://127.0.0.1:${ConfigProvider.adminPort(context)}"
+        }
         if (lanIpv4() == null) return null
         return "https://smartproxy.lan:${ConfigProvider.adminPort(context)}"
     }

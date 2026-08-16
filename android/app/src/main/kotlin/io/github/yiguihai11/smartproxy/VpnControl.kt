@@ -66,7 +66,10 @@ object VpnControl {
         when (action) {
             "start" -> {
                 // prepare() 非空 = 用户撤销过 VPN 授权,必须先回 App 重新授权,面板办不到。
-                if (VpnService.prepare(context) != null) {
+                // 仅代理(SOCKS5)模式(§8)不建 VpnService,无需该授权,跳过检查。
+                if (AppPrefs.serviceMode(context) != AppPrefs.MODE_SOCKS5 &&
+                    VpnService.prepare(context) != null
+                ) {
                     Log.w(TAG, "[VpnControl] dispatch start: VPN permission not granted.")
                     return "未授权 VPN,请先在 App 首页启动一次"
                 }

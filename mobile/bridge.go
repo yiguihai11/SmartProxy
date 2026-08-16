@@ -53,8 +53,8 @@ func currentBridge() AndroidBridge {
 	return bridge
 }
 
-func StartRouter(configPath string, tunFd int) error {
-	slog.Info("[Go-Bridge] StartRouter called", "configPath", configPath, "tunFd", tunFd)
+func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
+	slog.Info("[Go-Bridge] StartRouter called", "configPath", configPath, "tunFd", tunFd, "tunEnabled", tunEnabled)
 	engineMu.Lock()
 	defer engineMu.Unlock()
 
@@ -79,9 +79,19 @@ func StartRouter(configPath string, tunFd int) error {
 		logbuf.Default, slog.LevelInfo,
 	)))
 
-	cfg.TUN.Enabled = true
+	// 服务模式(Android §8):tunEnabled=false = 仅代理(SOCKS5)——不建 TUN 隧道,只跑
+	// 引擎 SOCKS5。config.json 的 listen.port 默认 0(隧道模式禁 SOCKS5,避免 LAN 代理),
+	// 这里补默认 1080;host 强制 127.0.0.1,防无鉴权 SOCKS5 暴露到局域网。admin 不受影响:
+	// 管理面板固定绑 ":AdminPort"(不读 Listen.Host),局域网扫码照常可达。
+	cfg.TUN.Enabled = tunEnabled
 	cfg.TUN.FileDescriptor = tunFd
 	cfg.TUN.AutoRoute = false
+	if !tunEnabled {
+		cfg.Listen.Host = "127.0.0.1"
+		if cfg.Listen.Port == 0 {
+			cfg.Listen.Port = 1080
+		}
+	}
 
 	eng, err := engine.New(cfg, "")
 	if err != nil {

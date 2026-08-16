@@ -11,8 +11,10 @@ import kotlinx.coroutines.flow.StateFlow
 
 /**
  * VPN 入口服务(§4 / §4.5 / §4.6):
- *  - 读 filesDir/config.json(§4.6 单一真源,Go 面板与首页开关共写)建 VpnService.Builder
- *    → establish → fd → StartRouter
+ *  - VPN 模式(默认):读 filesDir/config.json(§4.6 单一真源,Go 面板与首页开关共写)建
+ *    VpnService.Builder → establish → fd → StartRouter
+ *  - 仅代理模式(§8 服务模式):不建 VpnService,直接 StartRouter(fd=0, tunEnabled=false),
+ *    只跑引擎 SOCKS5(127.0.0.1:1080)
  *  - 前台服务保活通知(§4.3)
  *  - onRevoke 断连检测:被其它 VPN 抢占 / 系统设置断开 → 停引擎、停服务、状态落 false;
  *    被动断开弹一次性通知(§4.5),用户主动停止则静默。
@@ -106,15 +108,18 @@ class SmartProxyVpnService : VpnService() {
         userInitiatedStop = false
         Log.i(TAG, "[onStartCommand] Calling NotificationHelper.startForeground()...")
         NotificationHelper.startForeground(this)
-        Log.i(TAG, "[onStartCommand] Calling establishVpn()...")
-        if (establishVpn()) {
+        // 服务模式(§8):仅代理(SOCKS5)不建 VpnService,直接起引擎 SOCKS5;VPN 模式走 establishVpn。
+        val socksOnly = AppPrefs.serviceMode(this) == AppPrefs.MODE_SOCKS5
+        Log.i(TAG, "[onStartCommand] serviceMode=${AppPrefs.serviceMode(this)}, socksOnly=$socksOnly. Calling ${if (socksOnly) "startSocksOnly()" else "establishVpn()"}...")
+        val started = if (socksOnly) startSocksOnly() else establishVpn()
+        if (started) {
             startedEngine = true
             _isRunning.value = true
-            Log.i(TAG, "[onStartCommand] establishVpn SUCCESS! startedEngine=true, _isRunning=true. Returning START_STICKY.")
+            Log.i(TAG, "[onStartCommand] Start SUCCESS (socks=$socksOnly)! startedEngine=true, _isRunning=true. Returning START_STICKY.")
             return START_STICKY
         }
-        // establish/StartRouter 失败:前台服务已起,立即收掉避免空转。
-        Log.e(TAG, "[onStartCommand] establishVpn FAILED! Stopping foreground notification and service.")
+        // start 失败:前台服务已起,立即收掉避免空转。
+        Log.e(TAG, "[onStartCommand] Start FAILED (socks=$socksOnly)! Stopping foreground notification and service.")
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
         return START_NOT_STICKY
@@ -208,9 +213,9 @@ class SmartProxyVpnService : VpnService() {
             Log.i(TAG, "[establishVpn] Builder.establish() SUCCESS. PFD fd=${pfd.fd}")
 
             try {
-                Log.i(TAG, "[establishVpn] Step 3: Calling Go Mobile.startRouter(configPath, fd=${pfd.fd})...")
+                Log.i(TAG, "[establishVpn] Step 3: Calling Go Mobile.startRouter(configPath, fd=${pfd.fd}, tunEnabled=true)...")
                 val t0 = System.currentTimeMillis()
-                smartproxy.mobile.Mobile.startRouter(configPath, pfd.getFd().toLong())
+                smartproxy.mobile.Mobile.startRouter(configPath, pfd.getFd().toLong(), true)
                 Log.i(TAG, "[establishVpn] Mobile.startRouter() returned successfully in ${System.currentTimeMillis() - t0} ms.")
                 // 不 detach:PFD 保留在 tunPfd,shutdown 时显式 close() 通知系统拆 VPN
                 // (状态栏图标即刻消失)。Go 侧 os.NewFile 直接包同一 fd,引擎读循环随之报错退出。
@@ -226,6 +231,26 @@ class SmartProxyVpnService : VpnService() {
         } catch (e: Exception) {
             // config 解析 / Builder 参数 / establish / StartRouter 任一失败都走这。
             Log.e(TAG, "[establishVpn] establishVpn failed with exception: ${e.message}", e)
+            false
+        }
+    }
+
+    /** 仅代理(SOCKS5)模式(§8 服务模式):不建 VpnService / 不 establish,直接 StartRouter
+     *  (fd=0, tunEnabled=false)。bridge 侧强制 Listen.Host=127.0.0.1、缺省端口 1080。
+     *  startedEngine 语义不变:shutdown 里 stopRouter 统一收尾。 */
+    private fun startSocksOnly(): Boolean {
+        return try {
+            Log.i(TAG, "[startSocksOnly] Step 1: Ensuring config files...")
+            ConfigProvider.ensureRuntimeFiles(this)
+            ConfigProvider.ensureConfig(this)
+            val configPath = ConfigProvider.configPath(this)
+            Log.i(TAG, "[startSocksOnly] Step 2: Calling Go Mobile.startRouter(configPath, fd=0, tunEnabled=false)...")
+            val t0 = System.currentTimeMillis()
+            smartproxy.mobile.Mobile.startRouter(configPath, 0L, false)
+            Log.i(TAG, "[startSocksOnly] Mobile.startRouter() returned successfully in ${System.currentTimeMillis() - t0} ms.")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "[startSocksOnly] Mobile.startRouter() threw exception", e)
             false
         }
     }
