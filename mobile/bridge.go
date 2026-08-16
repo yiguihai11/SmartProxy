@@ -54,10 +54,12 @@ func currentBridge() AndroidBridge {
 }
 
 func StartRouter(configPath string, tunFd int) error {
+	slog.Info("[Go-Bridge] StartRouter called", "configPath", configPath, "tunFd", tunFd)
 	engineMu.Lock()
 	defer engineMu.Unlock()
 
 	if globalEngine != nil {
+		slog.Warn("[Go-Bridge] StartRouter failed: router is already running")
 		return fmt.Errorf("router is already running")
 	}
 
@@ -65,6 +67,7 @@ func StartRouter(configPath string, tunFd int) error {
 	// filesDir/config.json 再传路径,引擎不再收 JSON 串;config.Load 会补默认值。
 	cfg, err := config.Load(configPath)
 	if err != nil {
+		slog.Error("[Go-Bridge] StartRouter failed to load config", "error", err)
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
@@ -82,6 +85,7 @@ func StartRouter(configPath string, tunFd int) error {
 
 	eng, err := engine.New(cfg, "")
 	if err != nil {
+		slog.Error("[Go-Bridge] StartRouter failed to create engine", "error", err)
 		return err
 	}
 
@@ -204,30 +208,44 @@ func StartRouter(configPath string, tunFd int) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := eng.Start(ctx); err != nil {
+		slog.Error("[Go-Bridge] StartRouter eng.Start failed", "error", err)
 		cancel()
 		return err
 	}
 
 	globalEngine = eng
 	cancelFunc = cancel
+	slog.Info("[Go-Bridge] StartRouter completed successfully")
 	return nil
 }
 
 func StopRouter() {
+	slog.Info("[Go-Bridge] StopRouter called, waiting for engineMu lock...")
 	engineMu.Lock()
 	defer engineMu.Unlock()
+	slog.Info("[Go-Bridge] Acquired engineMu lock")
 	// 先停 watcher:Stop 会等其 goroutine(含在途 configReload)退出,再停引擎,
 	// 避免 configReload 闭包引用已停止的 engine。
 	if routerWatcher != nil {
+		slog.Info("[Go-Bridge] Stopping routerWatcher...")
 		routerWatcher.Stop()
 		routerWatcher = nil
+		slog.Info("[Go-Bridge] routerWatcher stopped")
+	} else {
+		slog.Info("[Go-Bridge] routerWatcher is nil, skipping")
 	}
+
 	if globalEngine != nil {
+		slog.Info("[Go-Bridge] Cancelling context & stopping globalEngine...")
 		cancelFunc()
 		globalEngine.Stop()
 		globalEngine = nil
 		cancelFunc = nil
+		slog.Info("[Go-Bridge] globalEngine stopped successfully")
+	} else {
+		slog.Info("[Go-Bridge] globalEngine is nil, skipping")
 	}
+	slog.Info("[Go-Bridge] StopRouter completed")
 }
 
 func IsRunning() bool {

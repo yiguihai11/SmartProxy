@@ -118,15 +118,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun onToggleClicked() {
-        if (SmartProxyVpnService.isRunning.value) {
+        val currentRunning = SmartProxyVpnService.isRunning.value
+        android.util.Log.i("SmartProxyVpn", "[MainActivity] onToggleClicked() called. Current isRunning=$currentRunning")
+        if (currentRunning) {
+            android.util.Log.i("SmartProxyVpn", "[MainActivity] User requested STOP. Calling SmartProxyVpnService.stop(this)...")
             SmartProxyVpnService.stop(this)
             return
         }
         // 首次或授权失效:弹系统授权框;成功后由回调启动服务。
         val intent = VpnService.prepare(this)
         if (intent != null) {
+            android.util.Log.i("SmartProxyVpn", "[MainActivity] User requested START. VpnService.prepare() non-null, launching consent dialog...")
             vpnConsent.launch(intent)
         } else {
+            android.util.Log.i("SmartProxyVpn", "[MainActivity] User requested START. VpnService.prepare() is null, starting service directly...")
             ensureNotifyPermission()
             SmartProxyVpnService.start(this)
         }

@@ -5,6 +5,7 @@ import android.net.VpnService
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 
 /**
  * M5:面板启停控制。Go admin 的 HTTP goroutine 回调 bridge 时,当前线程没有 Looper
@@ -29,6 +30,8 @@ import android.os.SystemClock
  */
 object VpnControl {
 
+    private const val TAG = "SmartProxyVpn"
+
     private val main = Handler(Looper.getMainLooper())
     private val lock = Any()
 
@@ -52,14 +55,19 @@ object VpnControl {
 
     /** 仅用户路径调用(SmartProxyVpnService 的 ACTION_STOP 处理;restart 内部 stop 不经过)。 */
     fun noteUserStop() {
-        synchronized(lock) { userStopEpoch++ }
+        synchronized(lock) {
+            userStopEpoch++
+            Log.i(TAG, "[VpnControl] noteUserStop() called. New userStopEpoch=$userStopEpoch")
+        }
     }
 
     fun dispatch(context: Context, action: String): String {
+        Log.i(TAG, "[VpnControl] dispatch() called with action=$action")
         when (action) {
             "start" -> {
                 // prepare() 非空 = 用户撤销过 VPN 授权,必须先回 App 重新授权,面板办不到。
                 if (VpnService.prepare(context) != null) {
+                    Log.w(TAG, "[VpnControl] dispatch start: VPN permission not granted.")
                     return "未授权 VPN,请先在 App 首页启动一次"
                 }
                 main.post { SmartProxyVpnService.start(context) }
@@ -73,7 +81,10 @@ object VpnControl {
                 requestRestart(context)
                 return ""
             }
-            else -> return "未知动作: $action"
+            else -> {
+                Log.w(TAG, "[VpnControl] dispatch unknown action: $action")
+                return "未知动作: $action"
+            }
         }
     }
 
@@ -82,11 +93,13 @@ object VpnControl {
     private fun requestRestart(context: Context): Unit = synchronized(lock) {
         val now = SystemClock.elapsedRealtime()
         if (now - lastRestartAt < DEBOUNCE_MS) {
+            Log.i(TAG, "[VpnControl] requestRestart: debounced (${now - lastRestartAt} ms < $DEBOUNCE_MS ms)")
             return@synchronized   // 同一次写入的多发事件 → 本轮 start 已会重读最新 config
         }
         lastRestartAt = now
 
         if (restartInFlight) {
+            Log.i(TAG, "[VpnControl] requestRestart: restart already in flight. Setting restartPending=true")
             restartPending = true   // 上一轮在飞;必要时由该轮收尾补跑
             return@synchronized
         }
@@ -94,18 +107,22 @@ object VpnControl {
         restartPending = false
 
         val epoch = userStopEpoch
+        Log.i(TAG, "[VpnControl] requestRestart: starting restart flow. userStopEpoch=$epoch")
         main.post {
             // VPN 没在跑:配置变更只落盘,不把用户已停掉的 VPN 拉起来。
             if (!SmartProxyVpnService.isRunning.value) {
+                Log.i(TAG, "[VpnControl] requestRestart: VPN is not running, skipping restart.")
                 synchronized(lock) { restartInFlight = false }
                 return@post
             }
+            Log.i(TAG, "[VpnControl] requestRestart: calling SmartProxyVpnService.stopInternal(context)...")
             SmartProxyVpnService.stopInternal(context)
             main.postDelayed({
                 // 窗口内用户显式停止 → 放弃本轮重启,清空残余状态(否则隧道被关后又被拉起,
                 // 状态栏图标不消失)。stopInternal 不递增世代,重启循环自身的 stop 不触发此分支。
                 val cancelled = synchronized(lock) {
                     if (userStopEpoch != epoch) {
+                        Log.i(TAG, "[VpnControl] requestRestart: user stopped VPN during lead window! (epoch changed $epoch -> $userStopEpoch). Cancelling restart.")
                         restartInFlight = false
                         restartPending = false
                         true
@@ -117,9 +134,11 @@ object VpnControl {
                 // 窗口内已被用户 / 其它路径启动(如看到"未连接"又点了圆球)→ 不再重复起,
                 // 否则双 start,后一次 startRouter 报 "router is already running" 把隧道杀掉。
                 if (SmartProxyVpnService.isRunning.value) {
+                    Log.i(TAG, "[VpnControl] requestRestart: VPN is already running. Skipping duplicate start.")
                     synchronized(lock) { restartInFlight = false }
                     return@postDelayed
                 }
+                Log.i(TAG, "[VpnControl] requestRestart: starting VPN now...")
                 SmartProxyVpnService.start(context)
                 // 宽松持有后收尾:放开重启锁;持有期间有新请求则补跑一轮(重读最新 config)。
                 main.postDelayed({
@@ -128,7 +147,12 @@ object VpnControl {
                         if (restartPending) {
                             restartPending = false
                             // 用户没在窗口内停过才补跑;停过则放弃,由下次手动启动读最新配置。
-                            if (userStopEpoch == epoch) requestRestart(context)
+                            if (userStopEpoch == epoch) {
+                                Log.i(TAG, "[VpnControl] requestRestart: pending restart found, re-triggering requestRestart.")
+                                requestRestart(context)
+                            } else {
+                                Log.i(TAG, "[VpnControl] requestRestart: pending restart ignored due to user stop.")
+                            }
                         }
                     }
                 }, LATCH_HOLD_MS)
@@ -136,3 +160,4 @@ object VpnControl {
         }
     }
 }
+

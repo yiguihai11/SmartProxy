@@ -567,13 +567,17 @@ func (e *Engine) handleUDPAssociate(ctx context.Context, conn net.Conn, clientIP
 
 func (e *Engine) Stop() {
 	e.stopOnce.Do(func() {
+		slog.Info("[Go-Engine] Engine.Stop() entered")
 		if e.cancel != nil {
+			slog.Info("[Go-Engine] Cancelling context...")
 			e.cancel()
 		}
 		if e.Router != nil {
+			slog.Info("[Go-Engine] Stopping Router cleanup...")
 			e.Router.StopCleanup()
 		}
 		if e.listener != nil {
+			slog.Info("[Go-Engine] Closing listener...")
 			e.listener.Close()
 		}
 		// 先关 tunDev(即 fd 模式下的 establish fd / 桌面 tun0)再关 gvisor 栈:
@@ -582,23 +586,32 @@ func (e *Engine) Stop() {
 		// RST 而非 FIN,主动停止/重启可接受(重启路径 500ms 留白后重建)。
 		if e.tunDev != nil {
 			if closer, ok := e.tunDev.(interface{ Close() error }); ok {
+				slog.Info("[Go-Engine] Closing tunDev file descriptor...")
 				closer.Close()
+				slog.Info("[Go-Engine] tunDev file descriptor closed")
 			}
 		}
 		if e.tunStack != nil {
 			if closer, ok := e.tunStack.(interface{ Close() error }); ok {
+				slog.Info("[Go-Engine] Closing tunStack...")
 				closer.Close()
+				slog.Info("[Go-Engine] tunStack closed")
 			}
 		}
 		if e.TUNHandler != nil {
+			slog.Info("[Go-Engine] Closing TUNHandler...")
 			e.TUNHandler.Close()
 		}
 		if e.DNSHandler != nil {
+			slog.Info("[Go-Engine] Closing DNSHandler...")
 			e.DNSHandler.Close()
 		}
 		if e.adminServer != nil {
+			slog.Info("[Go-Engine] Stopping adminServer...")
 			e.adminServer.Stop()
+			slog.Info("[Go-Engine] adminServer stopped")
 		}
+		slog.Info("[Go-Engine] Engine.Stop() completed")
 	})
 }
 func (e *Engine) relayTCP(ctx context.Context, client, remote net.Conn, isProxy bool, prefix []byte) {
