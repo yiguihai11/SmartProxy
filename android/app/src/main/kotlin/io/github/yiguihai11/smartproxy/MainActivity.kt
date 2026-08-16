@@ -95,13 +95,13 @@ import kotlinx.coroutines.launch
 /**
  * 首页 = 纯启动器(§4.4),UI 参考 Ultimate VPN Free(com.open.hotspot.vpn.free)
  * 逆向还原的视觉:淡紫渐变背景 + 大圆环进度 + 中心紫渐变球体(球上白色电源字形)。
- *  - 顶部左侧侧边栏按钮:弹出功能抽屉(Apps 应用选择入口、Web 管理面板等)
+ *  - 顶部左侧侧边栏按钮:弹出功能抽屉(Apps 应用选择入口、DNS 服务器、排除路由)
  *  - 大圆环球体 = VPN 启停(§4.5,isRunning 驱动);进度弧橙色→黄色,连接时扫一圈
  *  - 状态行:「状态:未连接/连接中/已连接」
  *  - 开关卡:IPv4 / IPv6 拦截(§4.1/§4.2,写 config.json;运行中改 → Go watcher 自动重启)
  *  - 开关卡:开机自启(§4.3)
- *  - 管理面板卡:URL + 复制 + 浏览器选择器 + 二维码(§4.4)
- * 流量模式 / 应用选择已整合至侧边栏菜单(§5),DNS 只在 Web 面板(§4.4)。
+ *  - 管理面板卡:URL + 复制 + 浏览器选择器 + 二维码(§4.4,仅 VPN 运行时显示)
+ * 流量模式 / 应用选择、DNS 服务器 / 排除路由均在侧边栏菜单(§5/§6)。
  */
 class MainActivity : ComponentActivity() {
 
@@ -220,14 +220,9 @@ private fun HomeScreen(onToggleVpn: () -> Unit) {
         drawerState = drawerState,
         drawerContent = {
             AppDrawerContent(
-                panelUrl = panelUrl,
                 onOpenApps = {
                     scope.launch { drawerState.close() }
                     context.startActivity(Intent(context, AppSelectionActivity::class.java))
-                },
-                onOpenPanel = {
-                    scope.launch { drawerState.close() }
-                    if (panelUrl != null) openPanel(context, panelUrl!!)
                 },
                 onOpenDns = {
                     scope.launch { drawerState.close() }
@@ -276,9 +271,7 @@ private fun HomeScreen(onToggleVpn: () -> Unit) {
 /** 侧边栏抽屉菜单内容 */
 @Composable
 private fun AppDrawerContent(
-    panelUrl: String?,
     onOpenApps: () -> Unit,
-    onOpenPanel: () -> Unit,
     onOpenDns: () -> Unit,
     onOpenExclude: () -> Unit
 ) {
@@ -343,13 +336,6 @@ private fun AppDrawerContent(
                 title = "代理应用 (Apps)",
                 subtitle = "选择各应用的代理 / 绕过规则",
                 onClick = onOpenApps
-            )
-
-            // 侧边栏菜单项：Web 管理面板
-            DrawerMenuItem(
-                title = "Web 管理面板",
-                subtitle = if (panelUrl != null) "打开配置与监控后台" else "请连接 Wi-Fi 后打开",
-                onClick = onOpenPanel
             )
 
             // 侧边栏菜单项：DNS 服务器(启动时 addDnsServer 注入的 v4/v6)
@@ -425,7 +411,7 @@ private fun DrawerMenuItem(
 
 
 /** 首页主体内容(抽屉 HomeScreen 的内层):背景 + 标题栏(左菜单按钮开抽屉)+ 状态行 +
- *  圆环 + 开关卡 + 面板卡。侧边栏功能(Apps / 面板 / DNS / 排除路由)在 HomeScreen 抽屉。 */
+ *  圆环 + 开关卡 + 面板卡(仅 VPN 运行时显示)。侧边栏功能(Apps / DNS / 排除路由)在 HomeScreen 抽屉。 */
 @Composable
 private fun HomeLauncher(
     panelUrl: String?,
@@ -549,9 +535,11 @@ private fun HomeLauncher(
             )
             Spacer(Modifier.height(24.dp))
 
-            // ── 管理面板卡(URL + 复制 + 浏览器选择器 + 二维码)────────
-            PanelCard(url = panelUrl, onCopy = { url -> copyPanelUrl(context, url) }, onOpen = { url -> openPanel(context, url) })
-            Spacer(Modifier.height(8.dp))
+            // ── 管理面板卡(仅 VPN 运行时显示:连接后才有可扫的 QR 面板)────────
+            if (running) {
+                PanelCard(url = panelUrl, onCopy = { url -> copyPanelUrl(context, url) }, onOpen = { url -> openPanel(context, url) })
+                Spacer(Modifier.height(8.dp))
+            }
         }
     }
 }
