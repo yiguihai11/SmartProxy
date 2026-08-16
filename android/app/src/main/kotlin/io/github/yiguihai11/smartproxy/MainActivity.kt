@@ -22,6 +22,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,7 +48,6 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedButton
@@ -79,7 +79,6 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -90,6 +89,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.launch
 
 /**
@@ -123,8 +123,19 @@ class MainActivity : ComponentActivity() {
         // 内容列用 safeDrawingPadding 让出状态栏/导航栏,避免顶部与状态栏重叠。
         enableEdgeToEdge()
         setContent {
-            MaterialTheme {
-                HomeScreen(onToggleVpn = { onToggleClicked() })
+            // 主题(§7):auto/light/dark,首页右上角切换,持久化 AppPrefs。
+            var themeMode by remember { mutableStateOf(AppPrefs.themeMode(this)) }
+            // 切换后重设系统条栏图标色(手动深色 + 系统浅色时状态栏图标需变浅)。
+            AutoSystemBarStyle(themeMode)
+            SmartProxyTheme(mode = themeMode) {
+                HomeScreen(
+                    onToggleVpn = { onToggleClicked() },
+                    themeMode = themeMode,
+                    onCycleTheme = {
+                        themeMode = cycleThemeMode(themeMode)
+                        AppPrefs.setThemeMode(this, themeMode)
+                    }
+                )
             }
         }
     }
@@ -177,16 +188,22 @@ private fun openProjectUrl(context: Context) {
 }
 
 // ── 主题色(逆向自 Ultimate VPN Free 的 colors.xml)──────────────────────
-private val PurpleText = Color(0xFF7850AA)       // 标题/强调
-private val PurpleDark = Color(0xFF613D8D)       // 面板文字
-private val PurpleSoft = Color(0xFF9A80BA)       // 弱化箭头
-private val StatusIdle = Color(0xFFE87C7C)       // 未连接
+// 浅/深两套(§7):getter 读 ThemeState.isDark 响应式切换,引用处零改动。
+private val PurpleText get() = if (ThemeState.isDark) Color(0xFFC9A9E8) else Color(0xFF7850AA) // 标题/强调
+private val PurpleDark get() = if (ThemeState.isDark) Color(0xFFD7C3EE) else Color(0xFF613D8D) // 面板文字
+private val PurpleSoft get() = if (ThemeState.isDark) Color(0xFFAA92CC) else Color(0xFF9A80BA) // 弱化箭头
+private val StatusIdle = Color(0xFFE87C7C)       // 未连接(状态语义色,两主题一致)
 private val StatusConnecting = Color(0xFFFF8413) // 连接中
 private val StatusConnected = Color(0xFF2EBD85)  // 已连接
-private val GreyText = Color(0xFF666666)
-private val TrackPurple = Color(0xFFC9AFE0)      // 圆环浅紫轨道
+private val GreyText get() = if (ThemeState.isDark) Color(0xFFB3A9C0) else Color(0xFF666666)
+private val TrackPurple = Color(0xFFC9AFE0)      // 圆环浅紫轨道(圆环底,两主题一致)
 private val ArcOrange = Color(0xFFFF8413)
 private val ArcYellow = Color(0xFFFFEB3C)
+// 表面/分隔/开关轨道:深色模式换深色变体,保证卡片与抽屉不刺眼。
+private val CardSurface get() = if (ThemeState.isDark) Color(0xFF2B2436).copy(alpha = 0.90f) else Color.White.copy(alpha = 0.90f)
+private val DrawerSurface get() = if (ThemeState.isDark) Color(0xFF241D2E) else Color(0xFFF9F7FC)
+private val DividerLine get() = if (ThemeState.isDark) Color(0xFF3A3146) else Color(0xFFE2DCE8)
+private val SwitchBorder get() = if (ThemeState.isDark) Color(0xFF4A4254) else Color(0xFFC9C0D4)
 
 /** 原版图标字体(assets/fonts/iconfont.ttf,逆向自 Ultimate VPN):电源/菜单/刷新/箭头。 */
 private val IconFont = FontFamily(Font(R.font.iconfont))
@@ -195,7 +212,7 @@ private val IconFont = FontFamily(Font(R.font.iconfont))
 private const val PROJECT_URL = "https://github.com/yiguihai11/SmartProxy"
 
 @Composable
-private fun HomeScreen(onToggleVpn: () -> Unit) {
+private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme: () -> Unit) {
     val context = LocalContext.current
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -246,7 +263,9 @@ private fun HomeScreen(onToggleVpn: () -> Unit) {
         HomeLauncher(
             panelUrl = panelUrl,
             onToggleVpn = onToggleVpn,
-            onOpenDrawer = { scope.launch { drawerState.open() } }
+            onOpenDrawer = { scope.launch { drawerState.open() } },
+            themeMode = themeMode,
+            onCycleTheme = onCycleTheme
         )
     }
 
@@ -285,7 +304,7 @@ private fun AppDrawerContent(
 ) {
     val context = LocalContext.current
     ModalDrawerSheet(
-        drawerContainerColor = Color(0xFFF9F7FC),
+        drawerContainerColor = DrawerSurface,
         drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
         modifier = Modifier.width(300.dp)
     ) {
@@ -328,7 +347,7 @@ private fun AppDrawerContent(
             }
 
             Spacer(Modifier.height(20.dp))
-            HorizontalDivider(color = Color(0xFFE2DCE8), thickness = 1.dp)
+            HorizontalDivider(color = DividerLine, thickness = 1.dp)
             Spacer(Modifier.height(16.dp))
 
             Text(
@@ -399,7 +418,7 @@ private fun DrawerMenuItem(
 ) {
     Surface(
         shape = RoundedCornerShape(16.dp),
-        color = Color.White,
+        color = CardSurface,
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 5.dp)
@@ -430,7 +449,9 @@ private fun DrawerMenuItem(
 private fun HomeLauncher(
     panelUrl: String?,
     onToggleVpn: () -> Unit,
-    onOpenDrawer: () -> Unit
+    onOpenDrawer: () -> Unit,
+    themeMode: String,
+    onCycleTheme: () -> Unit
 ) {
     val context = LocalContext.current
     val running by SmartProxyVpnService.isRunning.collectAsState()
@@ -448,21 +469,32 @@ private fun HomeLauncher(
     val connecting = running && sweep.value < 355f
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // 1:1 原版背景:全屏 bg_main.jpg(淡紫渐变)+ 顶部 280dp bg_home_top 装饰。
-        Image(
-            painter = painterResource(R.drawable.bg_main),
-            contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop
-        )
-        Image(
-            painter = painterResource(R.drawable.bg_home_top),
-            contentDescription = null,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(280.dp),
-            contentScale = ContentScale.FillBounds
-        )
+        if (ThemeState.isDark) {
+            // 深色模式(§7):浅紫渐变图换深色渐变,夜间不刺眼。
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(listOf(Color(0xFF1B1426), Color(0xFF2E213E)))
+                    )
+            )
+        } else {
+            // 1:1 原版背景:全屏 bg_main.jpg(淡紫渐变)+ 顶部 280dp bg_home_top 装饰。
+            Image(
+                painter = painterResource(R.drawable.bg_main),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+            Image(
+                painter = painterResource(R.drawable.bg_home_top),
+                contentDescription = null,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(280.dp),
+                contentScale = ContentScale.FillBounds
+            )
+        }
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -471,7 +503,7 @@ private fun HomeLauncher(
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // ── 标题栏:左侧菜单按钮(开侧边栏抽屉)+ 居中标题 ──────────
+            // ── 标题栏:左侧菜单按钮(开侧边栏抽屉)+ 居中标题 + 右上主题切换(§7) ──
             Box(Modifier.fillMaxWidth()) {
                 IconButton(
                     onClick = onOpenDrawer,
@@ -487,6 +519,27 @@ private fun HomeLauncher(
                     textAlign = TextAlign.Center,
                     modifier = Modifier.align(Alignment.Center)
                 )
+                // 主题切换钮:显示当前模式名(自动/浅色/深色),点击循环切换。
+                Surface(
+                    onClick = onCycleTheme,
+                    shape = RoundedCornerShape(14.dp),
+                    color = CardSurface,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .height(30.dp),
+                    contentColor = PurpleText
+                ) {
+                    Box(
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = themeModeLabel(themeMode),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
             }
             Spacer(Modifier.height(18.dp))
 
@@ -725,7 +778,7 @@ private fun SwitchCard(
 ) {
     Surface(
         shape = RoundedCornerShape(20.dp),
-        color = Color.White.copy(alpha = 0.90f),
+        color = CardSurface,
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
@@ -747,8 +800,8 @@ private fun SwitchCard(
                     checkedThumbColor = Color.White,
                     checkedTrackColor = PurpleText,
                     uncheckedThumbColor = Color.White,
-                    uncheckedTrackColor = Color(0xFFE2DCE8),
-                    uncheckedBorderColor = Color(0xFFC9C0D4)
+                    uncheckedTrackColor = DividerLine,
+                    uncheckedBorderColor = SwitchBorder
                 )
             )
         }
@@ -761,7 +814,7 @@ private fun SwitchCard(
 private fun PanelCard(url: String?, onCopy: (String) -> Unit, onOpen: (String) -> Unit) {
     Surface(
         shape = RoundedCornerShape(24.dp),
-        color = Color.White.copy(alpha = 0.90f),
+        color = CardSurface,
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)

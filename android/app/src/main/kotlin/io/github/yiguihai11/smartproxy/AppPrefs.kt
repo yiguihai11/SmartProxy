@@ -23,6 +23,7 @@ object AppPrefs {
     private const val KEY_DNS_V4 = "custom_dns_v4"
     private const val KEY_DNS_V6 = "custom_dns_v6"
     private const val KEY_EXCLUDED_ROUTES = "excluded_routes"
+    private const val KEY_THEME_MODE = "theme_mode"
 
     private fun sp(context: Context) =
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -72,6 +73,18 @@ object AppPrefs {
 
     fun setExcludedRoutes(context: Context, routes: Set<String>) {
         sp(context).edit().putStringSet(KEY_EXCLUDED_ROUTES, routes).apply()
+    }
+
+    /** 主题模式:auto = 跟随系统(深色/浅色),light / dark = 手动锁定。默认 auto。 */
+    const val THEME_AUTO = "auto"
+    const val THEME_LIGHT = "light"
+    const val THEME_DARK = "dark"
+
+    fun themeMode(context: Context): String =
+        sp(context).getString(KEY_THEME_MODE, THEME_AUTO) ?: THEME_AUTO
+
+    fun setThemeMode(context: Context, mode: String) {
+        sp(context).edit().putString(KEY_THEME_MODE, mode).apply()
     }
 }
 

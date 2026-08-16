@@ -40,6 +40,7 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -90,14 +91,18 @@ class AppSelectionActivity : ComponentActivity() {
         selected = AppPrefs.selectedApps(this)
         enableEdgeToEdge()
         setContent {
-            MaterialTheme(colorScheme = AppSelectionColors) {
-                AppSelectionScreen(
-                    mode = mode,
-                    selected = selected,
-                    onModeChange = { newMode -> changeMode(newMode) },
-                    onToggle = { pkg, checked -> toggle(pkg, checked) },
-                    onBack = { finish() }
-                )
+            // 主题(§7):与首页同源(同一份 AppPrefs.themeMode + 深色色板)。
+            AutoSystemBarStyle(AppPrefs.themeMode(this))
+            SmartProxyTheme(mode = AppPrefs.themeMode(this)) {
+                MaterialTheme(colorScheme = AppSelectionColors) {
+                    AppSelectionScreen(
+                        mode = mode,
+                        selected = selected,
+                        onModeChange = { newMode -> changeMode(newMode) },
+                        onToggle = { pkg, checked -> toggle(pkg, checked) },
+                        onBack = { finish() }
+                    )
+                }
             }
         }
     }
@@ -130,15 +135,19 @@ class AppSelectionActivity : ComponentActivity() {
 }
 
 // ── 主题色(对齐首页紫色系;主色喂 radio/checkbox/tab 高亮)─────────────
-private val PurpleText = Color(0xFF7850AA)
-private val GreyText = Color(0xFF666666)
-private val TextDark = Color(0xFF222222)
-private val SoftBg = Color(0xFFF3F0F8)
-private val PlaceholderBg = Color(0xFFEEEAF6)
+// 浅/深两套(§7):getter 读 ThemeState.isDark,色板与首页同源。
+private val PurpleText get() = if (ThemeState.isDark) Color(0xFFC9A9E8) else Color(0xFF7850AA)
+private val GreyText get() = if (ThemeState.isDark) Color(0xFFB3A9C0) else Color(0xFF666666)
+private val TextDark get() = if (ThemeState.isDark) Color(0xFFE6E2EC) else Color(0xFF222222)
+private val SoftBg get() = if (ThemeState.isDark) Color(0xFF16111E) else Color(0xFFF3F0F8)
+private val PlaceholderBg get() = if (ThemeState.isDark) Color(0xFF2A2234) else Color(0xFFEEEAF6)
+private val CardBg get() = if (ThemeState.isDark) Color(0xFF2B2436) else Color.White
 private val ProxyGreen = Color(0xFF4CAF50)
 private val ExcludeRed = Color(0xFFFF6B6B)
 
-private val AppSelectionColors = lightColorScheme(primary = PurpleText)
+private val AppSelectionColors get() =
+    if (ThemeState.isDark) darkColorScheme(primary = PurpleText)
+    else lightColorScheme(primary = PurpleText)
 
 @Composable
 private fun AppSelectionScreen(
@@ -230,7 +239,7 @@ private fun AppSelectionScreen(
                 Column {
                     Card(
                         shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color.White)
+                        colors = CardDefaults.cardColors(containerColor = CardBg)
                     ) {
                         Column(Modifier.padding(16.dp)) {
                             Text("流量模式", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = PurpleText)

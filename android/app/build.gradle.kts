@@ -100,6 +100,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6") // LocalLifecycleOwner 新归宿(compose.ui.platform 版已弃用)
 
     // 面板入口二维码(M2):直接用 QRCodeWriter 编码,无反射路径,R8 安全。
     implementation("com.google.zxing:core:3.5.3")
