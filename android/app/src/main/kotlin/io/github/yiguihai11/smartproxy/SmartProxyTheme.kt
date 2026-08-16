@@ -61,7 +61,9 @@ fun AutoSystemBarStyle(mode: String) {
         if (context is ComponentActivity) {
             val style = if (dark) SystemBarStyle.dark(0x00000000)
             else SystemBarStyle.light(0x00000000, 0x00000000)
-            enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+            // enableEdgeToEdge 是 ComponentActivity 的扩展函数:context 已智能转成
+            // ComponentActivity,但要显式带接收者调用,裸调用找不到 receiver。
+            context.enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
         }
     }
 }
