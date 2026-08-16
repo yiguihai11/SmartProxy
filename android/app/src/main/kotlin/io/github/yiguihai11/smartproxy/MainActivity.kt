@@ -40,15 +40,24 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -56,18 +65,19 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.painterResource
@@ -80,16 +90,18 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.launch
 
 /**
  * 首页 = 纯启动器(§4.4),UI 参考 Ultimate VPN Free(com.open.hotspot.vpn.free)
  * 逆向还原的视觉:淡紫渐变背景 + 大圆环进度 + 中心紫渐变球体(球上白色电源字形)。
+ *  - 顶部左侧侧边栏按钮:弹出功能抽屉(Apps 应用选择入口、Web 管理面板等)
  *  - 大圆环球体 = VPN 启停(§4.5,isRunning 驱动);进度弧橙色→黄色,连接时扫一圈
  *  - 状态行:「状态:未连接/连接中/已连接」
  *  - 开关卡:IPv4 / IPv6 拦截(§4.1/§4.2,写 config.json;运行中改 → Go watcher 自动重启)
- *  - 开关卡:开机自启(§4.3)+ Apps 应用选择入口(§5 应用内化)→ AppSelectionActivity
+ *  - 开关卡:开机自启(§4.3)
  *  - 管理面板卡:URL + 复制 + 浏览器选择器 + 二维码(§4.4)
- * 流量模式 / 应用选择在应用内(§5),不在首页;DNS 只在 Web 面板(§4.4)。
+ * 流量模式 / 应用选择已整合至侧边栏菜单(§5),DNS 只在 Web 面板(§4.4)。
  */
 class MainActivity : ComponentActivity() {
 
@@ -112,7 +124,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MaterialTheme {
-                HomeLauncher(onToggleVpn = { onToggleClicked() })
+                HomeScreen(onToggleVpn = { onToggleClicked() })
             }
         }
     }
@@ -175,14 +187,10 @@ private val ArcYellow = Color(0xFFFFEB3C)
 private val IconFont = FontFamily(Font(R.font.iconfont))
 
 @Composable
-private fun HomeLauncher(onToggleVpn: () -> Unit) {
+private fun HomeScreen(onToggleVpn: () -> Unit) {
     val context = LocalContext.current
-    val running by SmartProxyVpnService.isRunning.collectAsState()
-
-    // v4/v6 拦截:config.json 真源(§4.6,Go 面板与首页共写同一文件);开机自启仍是 AppPrefs。
-    var ipv4 by remember { mutableStateOf(ConfigProvider.ipv4(context)) }
-    var ipv6 by remember { mutableStateOf(ConfigProvider.ipv6(context)) }
-    var bootAuto by remember { mutableStateOf(AppPrefs.bootAutoStart(context)) }
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
 
     // 面板 URL:局域网 IP 变化时在 onResume 刷新(§4.4 注意)。
     var panelUrl by remember { mutableStateOf(PanelUrl.url(context)) }
@@ -194,6 +202,243 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+
+    // DNS / 排除路由设置对话框开关(侧边栏菜单打开,§6)。
+    var showDnsDialog by remember { mutableStateOf(false) }
+    var showExcludeDialog by remember { mutableStateOf(false) }
+
+    // DNS / 排除路由在 establish() 时固化(读 AppPrefs),改了要重建 VpnService 才生效;
+    // 两者是 App 层设置,Go watcher 不感知,不能像 IPv4/IPv6 那样靠 config.json 热重载自动
+    // 重启——VPN 在跑则显式走 VpnControl 串行化重启。未在跑时只落盘,下次启动自然生效。
+    fun applyVpnSettings() {
+        if (SmartProxyVpnService.isRunning.value) {
+            VpnControl.dispatch(context, "restart")
+        }
+    }
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            AppDrawerContent(
+                panelUrl = panelUrl,
+                onOpenApps = {
+                    scope.launch { drawerState.close() }
+                    context.startActivity(Intent(context, AppSelectionActivity::class.java))
+                },
+                onOpenPanel = {
+                    scope.launch { drawerState.close() }
+                    if (panelUrl != null) openPanel(context, panelUrl!!)
+                },
+                onOpenDns = {
+                    scope.launch { drawerState.close() }
+                    showDnsDialog = true
+                },
+                onOpenExclude = {
+                    scope.launch { drawerState.close() }
+                    showExcludeDialog = true
+                }
+            )
+        }
+    ) {
+        HomeLauncher(
+            panelUrl = panelUrl,
+            onToggleVpn = onToggleVpn,
+            onOpenDrawer = { scope.launch { drawerState.open() } }
+        )
+    }
+
+    if (showDnsDialog) {
+        DnsDialog(
+            initialV4 = AppPrefs.dnsV4(context),
+            initialV6 = AppPrefs.dnsV6(context),
+            onDismiss = { showDnsDialog = false },
+            onSave = { v4, v6 ->
+                showDnsDialog = false
+                AppPrefs.setDnsV4(context, v4)
+                AppPrefs.setDnsV6(context, v6)
+                applyVpnSettings()
+            }
+        )
+    }
+    if (showExcludeDialog) {
+        ExcludeRoutesDialog(
+            initialRoutes = AppPrefs.excludedRoutes(context).sorted(),
+            onDismiss = { showExcludeDialog = false },
+            onSave = { routes ->
+                showExcludeDialog = false
+                AppPrefs.setExcludedRoutes(context, routes)
+                applyVpnSettings()
+            }
+        )
+    }
+}
+
+/** 侧边栏抽屉菜单内容 */
+@Composable
+private fun AppDrawerContent(
+    panelUrl: String?,
+    onOpenApps: () -> Unit,
+    onOpenPanel: () -> Unit,
+    onOpenDns: () -> Unit,
+    onOpenExclude: () -> Unit
+) {
+    ModalDrawerSheet(
+        drawerContainerColor = Color(0xFFF9F7FC),
+        drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
+        modifier = Modifier.width(300.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .safeDrawingPadding()
+                .padding(20.dp)
+        ) {
+            // 抽屉头部品牌区
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = PurpleText,
+                    modifier = Modifier.size(46.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "\ue640", // 电源/VPN 图形
+                            fontFamily = IconFont,
+                            fontSize = 24.sp,
+                            color = Color.White
+                        )
+                    }
+                }
+                Spacer(Modifier.width(14.dp))
+                Column {
+                    Text(
+                        text = "SmartProxy",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = PurpleDark
+                    )
+                    Text(
+                        text = "智能分流代理",
+                        fontSize = 12.sp,
+                        color = GreyText
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(20.dp))
+            HorizontalDivider(color = Color(0xFFE2DCE8), thickness = 1.dp)
+            Spacer(Modifier.height(16.dp))
+
+            Text(
+                text = "功能菜单",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = PurpleSoft,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+            )
+            Spacer(Modifier.height(6.dp))
+
+            // 侧边栏菜单项：代理应用 (Apps)
+            DrawerMenuItem(
+                title = "代理应用 (Apps)",
+                subtitle = "选择各应用的代理 / 绕过规则",
+                onClick = onOpenApps
+            )
+
+            // 侧边栏菜单项：Web 管理面板
+            DrawerMenuItem(
+                title = "Web 管理面板",
+                subtitle = if (panelUrl != null) "打开配置与监控后台" else "请连接 Wi-Fi 后打开",
+                onClick = onOpenPanel
+            )
+
+            // 侧边栏菜单项：DNS 服务器(启动时 addDnsServer 注入的 v4/v6)
+            DrawerMenuItem(
+                title = "DNS 服务器",
+                subtitle = "启动时注入的 IPv4 / IPv6 DNS",
+                onClick = onOpenDns
+            )
+
+            // 侧边栏菜单项：排除路由(builder.excludeRoute,API 33+ 特性,低版本不显示)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                DrawerMenuItem(
+                    title = "排除路由",
+                    subtitle = "不走 VPN 隧道直连的网段 (API 33+)",
+                    onClick = onOpenExclude
+                )
+            }
+
+            Spacer(Modifier.weight(1f))
+
+            // 底部版本与架构信息
+            Text(
+                text = "SmartProxy for Android",
+                fontSize = 12.sp,
+                color = PurpleSoft,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "单一真源模式 · Go 路由核心",
+                fontSize = 11.sp,
+                color = GreyText.copy(alpha = 0.7f),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+/** 侧边栏菜单按钮项 */
+@Composable
+private fun DrawerMenuItem(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = Color.White,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 5.dp)
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 15.sp, color = PurpleDark, fontWeight = FontWeight.Medium)
+                Text(subtitle, fontSize = 12.sp, color = GreyText)
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = PurpleSoft,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+
+/** 首页主体内容(抽屉 HomeScreen 的内层):背景 + 标题栏(左菜单按钮开抽屉)+ 状态行 +
+ *  圆环 + 开关卡 + 面板卡。侧边栏功能(Apps / 面板 / DNS / 排除路由)在 HomeScreen 抽屉。 */
+@Composable
+private fun HomeLauncher(
+    panelUrl: String?,
+    onToggleVpn: () -> Unit,
+    onOpenDrawer: () -> Unit
+) {
+    val context = LocalContext.current
+    val running by SmartProxyVpnService.isRunning.collectAsState()
+
+    // v4/v6 拦截:config.json 真源(§4.6,Go 面板与首页共写同一文件);开机自启仍是 AppPrefs。
+    var ipv4 by remember { mutableStateOf(ConfigProvider.ipv4(context)) }
+    var ipv6 by remember { mutableStateOf(ConfigProvider.ipv6(context)) }
+    var bootAuto by remember { mutableStateOf(AppPrefs.bootAutoStart(context)) }
 
     // 连接进度弧:运行中扫 0→360°,扫完前状态显示"连接中"。
     val sweep = remember { Animatable(0f) }
@@ -226,15 +471,23 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // ── 标题栏(居中标题;原版左菜单/右刷新仅装饰,无功能,已移除)──
-            Text(
-                text = "SmartProxy",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = PurpleText,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
+            // ── 标题栏:左侧菜单按钮(开侧边栏抽屉)+ 居中标题 ──────────
+            Box(Modifier.fillMaxWidth()) {
+                IconButton(
+                    onClick = onOpenDrawer,
+                    modifier = Modifier.align(Alignment.CenterStart)
+                ) {
+                    Icon(Icons.Filled.Menu, contentDescription = "打开菜单", tint = PurpleText)
+                }
+                Text(
+                    text = "SmartProxy",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = PurpleText,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.align(Alignment.Center)
+                )
+            }
             Spacer(Modifier.height(18.dp))
 
             // ── 状态行:「状态: 未连接/连接中/已连接」────────────────
@@ -262,7 +515,7 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
             ConnectOrb(running = running, sweep = sweep.value, onToggleVpn = onToggleVpn)
             Spacer(Modifier.height(30.dp))
 
-            // ── 开关卡(自适应宫格:v4 / v6 左右各半,开机自启 + Apps 左右各半)──
+            // ── 开关卡:IPv4 / IPv6 左右各半;开机自启(Apps 已移至侧边栏菜单)──
             Row(modifier = Modifier.fillMaxWidth()) {
                 SwitchCard(
                     title = "IPv4 拦截", subtitle = "接管 IPv4 流量", checked = ipv4,
@@ -286,22 +539,14 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
                     modifier = Modifier.weight(1f)
                 )
             }
-            Row(modifier = Modifier.fillMaxWidth()) {
-                SwitchCard(
-                    title = "开机自启", subtitle = "开机后自动启动 VPN(需已授权)", checked = bootAuto,
-                    onCheckedChange = { v ->
-                        bootAuto = v
-                        AppPrefs.setBootAutoStart(context, v)
-                    },
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(8.dp))
-                AppsCard(
-                    title = "Apps", subtitle = "选择代理应用",
-                    onClick = { context.startActivity(Intent(context, AppSelectionActivity::class.java)) },
-                    modifier = Modifier.weight(1f)
-                )
-            }
+            SwitchCard(
+                title = "开机自启", subtitle = "开机后自动启动 VPN(需已授权)", checked = bootAuto,
+                onCheckedChange = { v ->
+                    bootAuto = v
+                    AppPrefs.setBootAutoStart(context, v)
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
             Spacer(Modifier.height(24.dp))
 
             // ── 管理面板卡(URL + 复制 + 浏览器选择器 + 二维码)────────
@@ -310,6 +555,101 @@ private fun HomeLauncher(onToggleVpn: () -> Unit) {
         }
     }
 }
+
+/** DNS 服务器设置对话框(§6):启动 VPN 时 addDnsServer 注入的 IPv4 / IPv6,留空 = 默认。 */
+@Composable
+private fun DnsDialog(
+    initialV4: String,
+    initialV6: String,
+    onDismiss: () -> Unit,
+    onSave: (v4: String, v6: String) -> Unit
+) {
+    var v4 by remember { mutableStateOf(initialV4) }
+    var v6 by remember { mutableStateOf(initialV6) }
+    val context = LocalContext.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("DNS 服务器") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = v4,
+                    onValueChange = { v4 = it },
+                    label = { Text("IPv4") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = v6,
+                    onValueChange = { v6 = it },
+                    label = { Text("IPv6") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "启动 VPN 时注入的 DNS(addDnsServer),留空 = 默认\n(223.5.5.5 / 2400:3200::1);修改后需重启 VPN 生效。",
+                    fontSize = 12.sp,
+                    color = GreyText
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                // 非法地址会让 establish 阶段 addDnsServer 抛异常 → VPN 起不来,保存前拦掉。
+                if (v4.isBlank() || isValidIpLiteral(v4)) {
+                    if (v6.isBlank() || isValidIpLiteral(v6)) {
+                        onSave(v4.trim(), v6.trim())
+                        return@TextButton
+                    }
+                }
+                Toast.makeText(context, "DNS 地址格式不正确", Toast.LENGTH_SHORT).show()
+            }) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
+}
+
+/** 排除路由设置对话框(API 33+ builder.excludeRoute):每行一个 CIDR,不走 VPN 隧道直连。 */
+@Composable
+private fun ExcludeRoutesDialog(
+    initialRoutes: List<String>,
+    onDismiss: () -> Unit,
+    onSave: (Set<String>) -> Unit
+) {
+    var text by remember { mutableStateOf(initialRoutes.joinToString("\n")) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("排除路由 (API 33+)") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text("每行一个 CIDR,如 192.168.1.0/24") },
+                    modifier = Modifier.fillMaxWidth().height(160.dp)
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "这些网段不走 VPN 隧道(分隧道直连);修改后需重启 VPN 生效。",
+                    fontSize = 12.sp,
+                    color = GreyText
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onSave(text.lines().map { it.trim() }.filter { it.isNotBlank() }.toSet())
+            }) { Text("保存") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
+}
+
+/** DNS 必须是数字字面量(仅语法校验,不触发 DNS 解析;非法 → addDnsServer 会让 VPN 起不来)。 */
+private fun isValidIpLiteral(s: String): Boolean =
+    runCatching { java.net.InetAddress.parseNumericAddress(s.trim()) }.isSuccess
 
 /** 大圆环:浅紫轨道 + 橙→黄渐变进度弧 + 中心紫渐变球体(球上白色电源字形)。 */
 @Composable
@@ -398,34 +738,6 @@ private fun SwitchCard(
     }
 }
 
-/** 应用选择入口卡(§5 应用内化):整卡可点,进 AppSelectionActivity。 */
-@Composable
-private fun AppsCard(title: String, subtitle: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = Color.White.copy(alpha = 0.90f),
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp)
-            .clickable(onClick = onClick)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(title, fontSize = 16.sp, color = PurpleDark, fontWeight = FontWeight.Medium)
-                Text(subtitle, fontSize = 12.sp, color = GreyText)
-            }
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                tint = PurpleSoft,
-                modifier = Modifier.size(20.dp)
-            )
-        }
-    }
-}
 
 /** 管理面板入口卡:URL + 复制 + 浏览器选择器;二维码默认折叠,点卡片底部居中箭头展开(§4.4)。 */
 @Composable

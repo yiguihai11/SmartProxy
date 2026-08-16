@@ -131,18 +131,46 @@ class SmartProxyVpnService : VpnService() {
             val builder = Builder().setMtu(tun.mtu)
 
             // IPv4/IPv6 拦截 = tun.inet4/6_address 存在(首页开关读写同一字段);
-            // DNS 走 dns_servers 固定双元素索引(§4.6),缺省回退硬编码默认(§6)。
+            // DNS 优先读 AppPrefs 用户自定义配置,缺省回退 config.json / 硬编码默认(§6)。
             val inet4 = tun.inet4
+            val customDnsV4 = AppPrefs.dnsV4(this)
+            val effectiveDnsV4 = if (customDnsV4.isNotBlank()) customDnsV4 else (tun.dnsV4 ?: DEFAULT_DNS_V4)
             if (inet4 != null) {
                 builder.addAddress(inet4.ip, inet4.prefix)   // "172.19.0.1/30" → addAddress(172.19.0.1, 30)
                     .addRoute("0.0.0.0", 0)                  // §4.1:族开才加该族默认路由
-                    .addDnsServer(tun.dnsV4 ?: DEFAULT_DNS_V4) // §4.2 默认 223.5.5.5
+                    .addDnsServer(effectiveDnsV4)
+                Log.i(TAG, "[establishVpn] IPv4 address=${inet4.ip}/${inet4.prefix}, route=0.0.0.0/0, DNS=$effectiveDnsV4")
             }
             val inet6 = tun.inet6
+            val customDnsV6 = AppPrefs.dnsV6(this)
+            val effectiveDnsV6 = if (customDnsV6.isNotBlank()) customDnsV6 else (tun.dnsV6 ?: DEFAULT_DNS_V6)
             if (inet6 != null) {
                 builder.addAddress(inet6.ip, inet6.prefix)
                     .addRoute("::", 0)
-                    .addDnsServer(tun.dnsV6 ?: DEFAULT_DNS_V6) // §4.2 默认 2400:3200::1
+                    .addDnsServer(effectiveDnsV6)
+                Log.i(TAG, "[establishVpn] IPv6 address=${inet6.ip}/${inet6.prefix}, route=::/0, DNS=$effectiveDnsV6")
+            }
+
+            // 排除路由 (excludeRoute, 仅限 Android 13+ / API 33+ 特性)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val excluded = AppPrefs.excludedRoutes(this)
+                if (excluded.isNotEmpty()) {
+                    Log.i(TAG, "[establishVpn] Applying ${excluded.size} excludeRoute rules (API 33+)...")
+                    excluded.forEach { cidrStr ->
+                        if (cidrStr.isNotBlank()) {
+                            try {
+                                val cidr = TunConfig.parseCidr(cidrStr.trim())
+                                val inetAddr = java.net.InetAddress.getByName(cidr.ip)
+                                builder.excludeRoute(android.net.IpPrefix(inetAddr, cidr.prefix))
+                                Log.i(TAG, "[establishVpn] Excluded route: ${cidr.ip}/${cidr.prefix}")
+                            } catch (e: Exception) {
+                                Log.w(TAG, "[establishVpn] Failed to parse excludeRoute '$cidrStr': ${e.message}")
+                            }
+                        }
+                    }
+                }
+            } else {
+                Log.i(TAG, "[establishVpn] Current SDK ${Build.VERSION.SDK_INT} < 33, excludeRoute skipped.")
             }
 
             // 流量模式(§4):M1 默认"仅绕过(global)",M2/M5 从 AppPrefs 喂选中列表。
