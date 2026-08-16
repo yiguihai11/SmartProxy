@@ -647,9 +647,22 @@ private fun ExcludeRoutesDialog(
     )
 }
 
-/** DNS 必须是数字字面量(仅语法校验,不触发 DNS 解析;非法 → addDnsServer 会让 VPN 起不来)。 */
-private fun isValidIpLiteral(s: String): Boolean =
-    runCatching { java.net.InetAddress.parseNumericAddress(s.trim()) }.isSuccess
+/** DNS 必须是数字字面量(纯语法校验,不触发 DNS 解析)。拦在保存前:非法地址会让
+ *  establish 阶段 addDnsServer 抛异常 → VPN 起不来。格式仍宽松,真正严格解析在 Builder。 */
+private fun isValidIpLiteral(s: String): Boolean {
+    val v = s.trim()
+    if (v.isEmpty()) return true
+    return if (':' in v) {
+        // IPv6:1-7 个冒号、仅十六进制字符,允许 :: 压缩(粗校验)
+        v.count { it == ':' } in 1..7 &&
+            v.all { it.isDigit() || it == ':' || it in 'a'..'f' || it in 'A'..'F' }
+    } else {
+        // IPv4:4 段点分十进制,每段 0-255
+        val octets = v.split('.')
+        octets.size == 4 &&
+            octets.all { o -> o.isNotEmpty() && o.length <= 3 && o.all(Char::isDigit) && o.toInt() <= 255 }
+    }
+}
 
 /** 大圆环:浅紫轨道 + 橙→黄渐变进度弧 + 中心紫渐变球体(球上白色电源字形)。 */
 @Composable

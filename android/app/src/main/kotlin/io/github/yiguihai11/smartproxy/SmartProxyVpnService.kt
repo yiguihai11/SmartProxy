@@ -2,6 +2,7 @@ package io.github.yiguihai11.smartproxy
 
 import android.content.Intent
 import android.net.VpnService
+import android.os.Build
 import android.util.Log
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.flow.MutableStateFlow
