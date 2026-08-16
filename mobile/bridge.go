@@ -81,13 +81,13 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 
 	// 服务模式(Android §8):tunEnabled=false = 仅代理(SOCKS5)——不建 TUN 隧道,只跑
 	// 引擎 SOCKS5。config.json 的 listen.port 默认 0(隧道模式禁 SOCKS5,避免 LAN 代理),
-	// 这里补默认 1080;host 强制 127.0.0.1,防无鉴权 SOCKS5 暴露到局域网。admin 不受影响:
-	// 管理面板固定绑 ":AdminPort"(不读 Listen.Host),局域网扫码照常可达。
+	// 这里补默认 1080;host 沿用 config.json(默认 "::" = 全接口双栈,局域网可达——无鉴权
+	// SOCKS5 暴露给 LAN 是用户对仅代理模式的显式选择)。listen.auth 缺省为空 = 无鉴权。
+	// admin 不受影响:管理面板固定绑 ":AdminPort"(不读 Listen.Host)。
 	cfg.TUN.Enabled = tunEnabled
 	cfg.TUN.FileDescriptor = tunFd
 	cfg.TUN.AutoRoute = false
 	if !tunEnabled {
-		cfg.Listen.Host = "127.0.0.1"
 		if cfg.Listen.Port == 0 {
 			cfg.Listen.Port = 1080
 		}

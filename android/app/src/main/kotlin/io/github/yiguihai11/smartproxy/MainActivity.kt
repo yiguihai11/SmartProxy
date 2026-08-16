@@ -748,7 +748,8 @@ private fun ExcludeRoutesDialog(
 }
 
 /** 服务模式设置对话框(§8):模态下拉选 VPN 隧道 / 仅代理(SOCKS5)。仅代理 = 不启动
- *  VPN 模式,仅用引擎 SOCKS5(127.0.0.1:1080)。改动由调用方落盘,运行中切换自动重启生效。 */
+ *  VPN 模式,仅用引擎 SOCKS5(:1080,全接口双栈,局域网可访问)。改动由调用方落盘,
+ *  运行中切换自动重启生效。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ServiceModeDialog(
@@ -796,7 +797,7 @@ private fun ServiceModeDialog(
                 }
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    text = "VPN 隧道:接管系统流量智能分流(默认)。\n仅代理:不启动 VPN 模式,仅运行引擎 SOCKS5 代理(127.0.0.1:1080)。\n运行中切换将自动重启生效。",
+                    text = "VPN 隧道:接管系统流量智能分流(默认)。\n仅代理:不启动 VPN 模式,仅运行引擎 SOCKS5 代理(:1080,局域网可访问)。\n运行中切换将自动重启生效。",
                     fontSize = 12.sp,
                     color = GreyText
                 )

@@ -14,7 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
  *  - VPN 模式(默认):读 filesDir/config.json(§4.6 单一真源,Go 面板与首页开关共写)建
  *    VpnService.Builder → establish → fd → StartRouter
  *  - 仅代理模式(§8 服务模式):不建 VpnService,直接 StartRouter(fd=0, tunEnabled=false),
- *    只跑引擎 SOCKS5(127.0.0.1:1080)
+ *    只跑引擎 SOCKS5(:1080,全接口双栈)
  *  - 前台服务保活通知(§4.3)
  *  - onRevoke 断连检测:被其它 VPN 抢占 / 系统设置断开 → 停引擎、停服务、状态落 false;
  *    被动断开弹一次性通知(§4.5),用户主动停止则静默。
@@ -236,7 +236,7 @@ class SmartProxyVpnService : VpnService() {
     }
 
     /** 仅代理(SOCKS5)模式(§8 服务模式):不建 VpnService / 不 establish,直接 StartRouter
-     *  (fd=0, tunEnabled=false)。bridge 侧强制 Listen.Host=127.0.0.1、缺省端口 1080。
+     *  (fd=0, tunEnabled=false)。bridge 侧补缺省端口 1080、host 沿用 config(默认 :: 全接口)。
      *  startedEngine 语义不变:shutdown 里 stopRouter 统一收尾。 */
     private fun startSocksOnly(): Boolean {
         return try {

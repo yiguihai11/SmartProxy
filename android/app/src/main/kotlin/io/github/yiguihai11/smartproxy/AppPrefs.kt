@@ -90,7 +90,7 @@ object AppPrefs {
     }
 
     /** 服务模式(§8):vpn = VPN 隧道(默认);socks5 = 仅代理,不启动 VPN 模式,
-     *  仅跑引擎 SOCKS5(127.0.0.1:1080)。 */
+     *  仅跑引擎 SOCKS5(:1080,全接口双栈)。 */
     const val MODE_VPN = "vpn"
     const val MODE_SOCKS5 = "socks5"
 
