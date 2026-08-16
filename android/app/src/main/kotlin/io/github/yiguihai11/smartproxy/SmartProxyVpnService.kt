@@ -30,7 +30,7 @@ class SmartProxyVpnService : VpnService() {
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning
 
-        /** DNS 硬编码默认(§6 用户要求应用内不提供 DNS UI):config.json dns_servers 缺省时回退。 */
+        /** DNS 硬编码默认(§6 用户要求应用内不提供 DNS UI):AppPrefs 自定义留空时回退。 */
         private const val DEFAULT_DNS_V4 = "223.5.5.5"
         private const val DEFAULT_DNS_V6 = "2400:3200::1"
 
@@ -136,17 +136,18 @@ class SmartProxyVpnService : VpnService() {
             val configJson = ConfigProvider.readConfig(this)
             val configPath = ConfigProvider.configPath(this)
             val tun = TunConfig.parse(configJson)
-            Log.i(TAG, "[establishVpn] Parsed TUN config: mtu=${tun.mtu}, inet4=${tun.inet4}, inet6=${tun.inet6}, dnsV4=${tun.dnsV4}, dnsV6=${tun.dnsV6}")
+            Log.i(TAG, "[establishVpn] Parsed TUN config: mtu=${tun.mtu}, inet4=${tun.inet4}, inet6=${tun.inet6}")
 
             // VpnService.Builder 是 VpnService 的内部类,不能写成 VpnService.Builder():
             // 本类继承 VpnService,裸 Builder() 会用 this 当外部接收者。
             val builder = Builder().setMtu(tun.mtu)
 
             // IPv4/IPv6 拦截 = tun.inet4/6_address 存在(首页开关读写同一字段);
-            // DNS 优先读 AppPrefs 用户自定义配置,缺省回退 config.json / 硬编码默认(§6)。
+            // DNS 只走 AppPrefs(§6 应用内设置):tun.dns_servers 引擎不消费、config.json
+            // 无此字段,缺省回退硬编码默认。
             val inet4 = tun.inet4
             val customDnsV4 = AppPrefs.dnsV4(this)
-            val effectiveDnsV4 = if (customDnsV4.isNotBlank()) customDnsV4 else (tun.dnsV4 ?: DEFAULT_DNS_V4)
+            val effectiveDnsV4 = if (customDnsV4.isNotBlank()) customDnsV4 else DEFAULT_DNS_V4
             if (inet4 != null) {
                 builder.addAddress(inet4.ip, inet4.prefix)   // "172.19.0.1/30" → addAddress(172.19.0.1, 30)
                     .addRoute("0.0.0.0", 0)                  // §4.1:族开才加该族默认路由
@@ -155,7 +156,7 @@ class SmartProxyVpnService : VpnService() {
             }
             val inet6 = tun.inet6
             val customDnsV6 = AppPrefs.dnsV6(this)
-            val effectiveDnsV6 = if (customDnsV6.isNotBlank()) customDnsV6 else (tun.dnsV6 ?: DEFAULT_DNS_V6)
+            val effectiveDnsV6 = if (customDnsV6.isNotBlank()) customDnsV6 else DEFAULT_DNS_V6
             if (inet6 != null) {
                 builder.addAddress(inet6.ip, inet6.prefix)
                     .addRoute("::", 0)
