@@ -558,7 +558,9 @@ private fun HomeLauncher(
     }
 }
 
-/** DNS 服务器设置对话框(§6):启动 VPN 时 addDnsServer 注入的 IPv4 / IPv6,留空 = 默认。 */
+/** DNS 服务器设置对话框(§6):启动 VPN 时 addDnsServer 注入的 IPv4 / IPv6,留空 = 默认。
+ *  必须填国内 DNS:引擎截获 DNS 查询做国内外域名检测/分流,国外 DNS 截不到且报错
+ *  (no default UDP proxy available)。 */
 @Composable
 private fun DnsDialog(
     initialV4: String,
@@ -591,7 +593,7 @@ private fun DnsDialog(
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "启动 VPN 时注入的 DNS(addDnsServer),留空 = 默认\n(223.5.5.5 / 2400:3200::1);修改后需重启 VPN 生效。",
+                    text = "启动 VPN 时注入的 DNS(addDnsServer),留空 = 默认。\n须填国内 DNS(默认 223.5.5.5 / 2400:3200::1):引擎要截获\nDNS 查询做国内外域名检测分流,国外 DNS 截不到且报错。\n修改后需重启 VPN 生效。",
                     fontSize = 12.sp,
                     color = GreyText
                 )
