@@ -20,6 +20,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -45,11 +46,8 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuAnchorType
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -750,7 +748,6 @@ private fun ExcludeRoutesDialog(
 /** 服务模式设置对话框(§8):模态下拉选 VPN 隧道 / 仅代理(SOCKS5)。仅代理 = 不启动
  *  VPN 模式,仅用引擎 SOCKS5(:1080,全接口双栈,局域网可访问)。改动由调用方落盘,
  *  运行中切换自动重启生效。 */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ServiceModeDialog(
     initial: String,
@@ -765,25 +762,36 @@ private fun ServiceModeDialog(
         title = { Text("服务模式") },
         text = {
             Column {
-                // 下拉:readOnly 文本框 + 弹出选项(ExposedDropdownMenuBox)。点击即展/收。
-                ExposedDropdownMenuBox(
-                    expanded = expanded,
-                    onExpandedChange = { expanded = it }
-                ) {
-                    OutlinedTextField(
-                        value = serviceModeLabel(selected),
-                        onValueChange = {},
-                        readOnly = true,
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                // 下拉:点击 Surface 展开稳定版 DropdownMenu。不用 ExposedDropdownMenuBox——
+                // 其 ExposedDropdownMenuAnchorType 在低版本 material3 没有(CI 实测 BOM 解析
+                // 的版本即缺),稳定版 DropdownMenu 全版本兼容。
+                Box {
+                    Surface(
+                        onClick = { expanded = !expanded },
                         shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
-                    )
-                    ExposedDropdownMenu(
-                        expanded = expanded,
-                        onDismissRequest = { expanded = false }
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        border = BorderStroke(1.dp, DividerLine),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                serviceModeLabel(selected),
+                                fontSize = 14.sp,
+                                color = PurpleDark,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Icon(
+                                Icons.Filled.KeyboardArrowDown,
+                                contentDescription = "选择服务模式",
+                                tint = PurpleSoft,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                         options.forEach { mode ->
                             DropdownMenuItem(
                                 text = { Text(serviceModeLabel(mode)) },
