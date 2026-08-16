@@ -171,6 +171,11 @@ private fun openPanel(context: Context, url: String) {
     context.startActivity(Intent.createChooser(intent, "选择浏览器打开管理面板"))
 }
 
+/** 抽屉底部「SmartProxy for Android」点击跳转项目主页。 */
+private fun openProjectUrl(context: Context) {
+    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PROJECT_URL)))
+}
+
 // ── 主题色(逆向自 Ultimate VPN Free 的 colors.xml)──────────────────────
 private val PurpleText = Color(0xFF7850AA)       // 标题/强调
 private val PurpleDark = Color(0xFF613D8D)       // 面板文字
@@ -185,6 +190,9 @@ private val ArcYellow = Color(0xFFFFEB3C)
 
 /** 原版图标字体(assets/fonts/iconfont.ttf,逆向自 Ultimate VPN):电源/菜单/刷新/箭头。 */
 private val IconFont = FontFamily(Font(R.font.iconfont))
+
+/** 项目主页(抽屉底部版本行点击跳转)。 */
+private const val PROJECT_URL = "https://github.com/yiguihai11/SmartProxy"
 
 @Composable
 private fun HomeScreen(onToggleVpn: () -> Unit) {
@@ -275,6 +283,7 @@ private fun AppDrawerContent(
     onOpenDns: () -> Unit,
     onOpenExclude: () -> Unit
 ) {
+    val context = LocalContext.current
     ModalDrawerSheet(
         drawerContainerColor = Color(0xFFF9F7FC),
         drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
@@ -356,14 +365,19 @@ private fun AppDrawerContent(
 
             Spacer(Modifier.weight(1f))
 
-            // 底部版本与架构信息
-            Text(
-                text = "SmartProxy for Android",
-                fontSize = 12.sp,
-                color = PurpleSoft,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
+            // 底部版本与架构信息(版本行可点击打开项目主页)
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "SmartProxy for Android",
+                    fontSize = 12.sp,
+                    color = PurpleSoft,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.clickable { openProjectUrl(context) }
+                )
+            }
             Spacer(Modifier.height(4.dp))
             Text(
                 text = "单一真源模式 · Go 路由核心",
