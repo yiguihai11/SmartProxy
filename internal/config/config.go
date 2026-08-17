@@ -453,7 +453,7 @@ func DefaultConfig() *Config {
 			Default: "failover",
 			HealthCheck: HealthCheckConf{
 				Enabled:            false,
-				URL:                "http://wifi.vivo.com.cn/generate_204",
+				URL:                "http://cp.cloudflare.com/generate_204",
 				Interval:           60,
 				Timeout:            5,
 				FailuresThreshold:  2,

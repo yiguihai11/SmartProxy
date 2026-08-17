@@ -33,7 +33,8 @@
   "upstream": {
     "default": "failover",
     "health_check": {
-      "enabled": false
+      "enabled": false,
+      "url": "http://cp.cloudflare.com/generate_204"
     },
     "proxies": []
   },
