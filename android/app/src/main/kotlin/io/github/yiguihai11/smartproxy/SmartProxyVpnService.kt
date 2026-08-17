@@ -34,6 +34,12 @@ class SmartProxyVpnService : VpnService() {
         private const val DEFAULT_DNS_V4 = "223.5.5.5"
         private const val DEFAULT_DNS_V6 = "2400:3200::1"
 
+        /** 停止时 stopSelf() 之后、关 tun fd 之前的留白(ms),等系统异步拆 VPN 网络
+         *  (注销 NetworkAgent / 移除路由 → 应用活跃连接的 dst 引用释放)。对齐 v2rayNG
+         *  stopAllService 的 Thread.sleep(100),防止"先关 fd 网络还挂着 → 图标赖着不掉"。
+         *  留白太小或 vivo 拆网更慢时调大。 */
+        private const val TEARDOWN_SETTLE_MS = 100L
+
         private const val ACTION_START = "io.github.yiguihai11.smartproxy.START_VPN"
 
         /** 设置变更重建(§6 应用层设置 / 首页 IPv4 / IPv6 开关):停旧会话 → 立即按新配置
@@ -101,11 +107,10 @@ class SmartProxyVpnService : VpnService() {
 
         if (action == NotificationHelper.ACTION_STOP) {
             // 圆球 / 通知停止 = 用户显式停止:静默停,后续 onRevoke 不误报被动。
+            // stopSelf() 在 shutdown(fullTeardown=true) 内部先于关 fd 调用(v2rayNG 顺序)。
             userInitiatedStop = true
-            Log.i(TAG, "[onStartCommand] ACTION_STOP is user stop. Step 1/2: Executing shutdown()...")
+            Log.i(TAG, "[onStartCommand] ACTION_STOP is user stop. shutdown() will call stopSelf() BEFORE closing tun fd...")
             shutdown()
-            Log.i(TAG, "[onStartCommand] ACTION_STOP Step 2/2: Executing stopSelf()...")
-            stopSelf()
             Log.i(TAG, "[onStartCommand] ACTION_STOP handling completed. Returning START_NOT_STICKY.")
             return START_NOT_STICKY
         }
@@ -114,8 +119,10 @@ class SmartProxyVpnService : VpnService() {
         // shutdown + startInternal 在同一主线程回调内顺序执行,原子完成——不会再像旧的
         // 异步重启循环那样,在用户停止后靠 delayed start 把隧道重新拉起。
         if (action == ACTION_RESTART) {
-            Log.i(TAG, "[onStartCommand] ACTION_RESTART: shutting down then rebuilding VPN...")
-            shutdown()
+            // 重建(§6 设置变更 / 首页 IPv4 / IPv6 开关):服务需存活,不能 stopSelf。
+            // fullTeardown=false → 跳过"stopSelf + 留白",停引擎 + 关 fd 后立即重建。
+            Log.i(TAG, "[onStartCommand] ACTION_RESTART: shutting down (fullTeardown=false, keep service alive) then rebuilding VPN...")
+            shutdown(fullTeardown = false)
             Log.i(TAG, "[onStartCommand] ACTION_RESTART: re-establishing with new settings...")
             return startInternal()
         }
@@ -311,61 +318,102 @@ class SmartProxyVpnService : VpnService() {
     }
 
     /** 停引擎 + 收前台服务 + 状态落 false(§4.5)。
-     *  先停 Go 引擎、再关原始 PFD:Go 那份是 establishVpn 里 dup + detach 出的独立 fd,
-     *  stopRouter 先关它;随后对 tunPfd 的 close 是 tun 设备的最后一次引用释放,单事件触发
-     *  内核删 tun0 → 系统 netd interfaceRemoved 拆 VPN、解绑服务、清状态栏图标。若先关
-     *  PFD,Go 那份 fd 仍开着,tun0 未删,系统按 fd-close 查设备状态时看到"还在"即跳过、
-     *  不再复查(实测 stopSelf→onDestroy 间歇性拖到 128s,图标赖到服务销毁)。shutdown
-     *  幂等(重复进入 startedEngine=false、tunPfd 已置 null)。 */
-    private fun shutdown() {
-        Log.i(TAG, "[shutdown] Step 0: Enter shutdown(). startedEngine=$startedEngine, _isRunning=${_isRunning.value}, tunFds=${tunFdCount()}")
+     *
+     *  ## 停止顺序:对齐 v2rayNG stopAllService(2026-08 图标赖着不掉排查)
+     *
+     *  关 tun fd 之前,必须**先让系统拆掉 VPN 网络**,再关最后一个 fd:
+     *
+     *  ```
+     *  1. stopRouter()     停 Go 引擎,关掉 establishVpn 里 dup 出的那份独立 fd(goFd)
+     *  2. stopSelf()       触发系统拆 VPN 网络:注销 NetworkAgent / 移除路由
+     *  3. sleep(100ms)     等异步拆网完成(应用活跃连接拿到 NetworkLost,释放 dst 引用)
+     *  4. tunPfd.close()   关原始 PFD —— tun 设备的最后一次引用,此时已无外部引用,秒删
+     *  ```
+     *
+     *  **为什么不能先关 fd**:tun 设备的两个 fd(goFd + PFD)都关掉、内核开始删 tun0 时,
+     *  若 VPN 网络还挂着(路由仍指向 tun0),曾经走过流量的应用 TCP 连接会 hold 住 tun0 的
+     *  dev refcount(连接 socket 的 dst 持有 dev 引用),内核 `netdev_wait_allrefs` 会一直等
+     *  到这些连接自然超时关闭(实测数十秒)才真正删掉 tun0;`interfaceRemoved` 事件不触发,
+     *  状态栏钥匙图标就赖着不掉。**没流量 = 没有活跃连接 = 没有 dst 引用 = 秒删**——正是
+     *  用户观察到的现象。v2rayNG 用"stopSelf 先行 + 100ms 留白再关 fd"解决同一问题
+     *  (CoreVpnService.stopAllService:"a race condition that can leave the VPN icon in
+     *  the status bar")。先关 goFd 保留 PFD 的含义不变:PFD 是系统追踪的唯一 fd,close 它
+     *  就是拆 VPN 的唯一干净信号;先关 PFD 而 goFd 还开着时,系统按 fd-close 查设备状态
+     *  看到"还在"即跳过、不再复查(实测 stopSelf→onDestroy 间歇性拖到 128s)。
+     *
+     *  ## fullTeardown 参数
+     *
+     *  - `true`(默认):用户停止 / onRevoke / onDestroy,完整拆机,内含 stopSelf + 留白。
+     *  - `false`:仅 ACTION_RESTART 重建——服务需存活,不能 stopSelf,停引擎 + 关 fd 后
+     *    立即按新配置重建,旧 tun0 残留等连接关闭即可(不影响新会话图标)。
+     *
+     *  幂等:重复进入 startedEngine=false、tunPfd 已置 null;stopSelf() 本身也是幂等的。
+     */
+    private fun shutdown(fullTeardown: Boolean = true) {
+        Log.i(TAG, "[shutdown] Step 0: Enter shutdown(). startedEngine=$startedEngine, _isRunning=${_isRunning.value}, tunFds=${tunFdCount()}, fullTeardown=$fullTeardown")
         if (startedEngine) {
             try {
-                Log.i(TAG, "[shutdown] Step 1/4: Invoking Go Mobile.stopRouter()... (tunFds before=${tunFdCount()})")
+                Log.i(TAG, "[shutdown] Step 1/6: Invoking Go Mobile.stopRouter()... (tunFds before=${tunFdCount()})")
                 val t0 = System.currentTimeMillis()
                 smartproxy.mobile.Mobile.stopRouter()
                 val duration = System.currentTimeMillis() - t0
-                Log.i(TAG, "[shutdown] Step 1/4: Mobile.stopRouter() completed in ${duration} ms. tunFds after=${tunFdCount()}")
+                Log.i(TAG, "[shutdown] Step 1/6: Mobile.stopRouter() completed in ${duration} ms. tunFds after=${tunFdCount()}")
             } catch (e: Exception) {
-                Log.e(TAG, "[shutdown] Step 1/4: Mobile.stopRouter() threw exception", e)
+                Log.e(TAG, "[shutdown] Step 1/6: Mobile.stopRouter() threw exception", e)
             }
             startedEngine = false
         } else {
-            Log.i(TAG, "[shutdown] Step 1/4: startedEngine is false, skipping Mobile.stopRouter().")
+            Log.i(TAG, "[shutdown] Step 1/6: startedEngine is false, skipping Mobile.stopRouter().")
         }
+
+        if (fullTeardown) {
+            // v2rayNG 顺序:先 stopSelf 拆网络,再关最后一个 fd。留白给系统异步拆网
+            // (注销 NetworkAgent / 移除路由 → 活跃连接的 dst 引用释放),否则关 fd 时
+            // 网络还挂着,活跃连接 hold 住 tun0 → netdev_wait_allrefs 等连接超时,图标赖着。
+            Log.i(TAG, "[shutdown] Step 2/6: Calling stopSelf() to tear down VPN network BEFORE closing tun fd...")
+            stopSelf()
+            try {
+                Thread.sleep(TEARDOWN_SETTLE_MS)
+            } catch (e: InterruptedException) {
+                Log.w(TAG, "[shutdown] Step 2/6: Sleep interrupted", e)
+            }
+            Log.i(TAG, "[shutdown] Step 2/6: stopSelf() settle delay done. tunFds=${tunFdCount()}")
+        } else {
+            Log.i(TAG, "[shutdown] Step 2/6: fullTeardown=false (restart rebuild), skipping stopSelf()/settle.")
+        }
+
         // 注意:不对 Go 那份 fd 做 Java 侧兜底强关——它已 detach 归 Go 独占,从 Java 抢关
         // (或让该 fd 号被复用)会触发 fdsan 所有权冲突 SIGABRT(实测闪退)。stopRouter 后是否
         // 真关干净,由下面各步 tunFds 判定:若仍 >0,说明 Go 引擎没关掉它的 fd,修复应放在
         // Go 侧(StopRouter 关 fd),而不是 Java 侧。
         tunPfd?.let { pfd ->
             try {
-                Log.i(TAG, "[shutdown] Step 2/4: Closing tun PFD (last fd to tun device, tear down VPN)...")
+                Log.i(TAG, "[shutdown] Step 3/6: Closing tun PFD (last fd to tun device, tear down VPN)...")
                 pfd.close()
-                Log.i(TAG, "[shutdown] Step 2/4: tun PFD closed. tunFds=${tunFdCount()}")
+                Log.i(TAG, "[shutdown] Step 3/6: tun PFD closed. tunFds=${tunFdCount()}")
             } catch (e: Exception) {
-                Log.e(TAG, "[shutdown] Step 2/4: tun PFD close failed", e)
+                Log.e(TAG, "[shutdown] Step 3/6: tun PFD close failed", e)
             }
             tunPfd = null
         }
 
-        Log.i(TAG, "[shutdown] Step 3/4: Calling ServiceCompat.stopForeground(STOP_FOREGROUND_REMOVE)...")
+        Log.i(TAG, "[shutdown] Step 4/6: Calling ServiceCompat.stopForeground(STOP_FOREGROUND_REMOVE)...")
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-        Log.i(TAG, "[shutdown] Step 3/4: stopForeground completed.")
+        Log.i(TAG, "[shutdown] Step 4/6: stopForeground completed.")
 
-        Log.i(TAG, "[shutdown] Step 4/4: Updating state _isRunning.value = false...")
+        Log.i(TAG, "[shutdown] Step 5/6: Updating state _isRunning.value = false...")
         _isRunning.value = false
-        Log.i(TAG, "[shutdown] Step 5/4: shutdown() completed. _isRunning is now false. tunFds=${tunFdCount()}")
+        Log.i(TAG, "[shutdown] Step 6/6: shutdown() completed. _isRunning is now false. tunFds=${tunFdCount()}")
     }
 
-    /** 被其它 VPN 抢占 / 系统设置断开:系统调此,隧道即刻失效(§4.5 主信号)。 */
+    /** 被其它 VPN 抢占 / 系统设置断开:系统调此,隧道即刻失效(§4.5 主信号)。
+     *  shutdown(fullTeardown=true) 内部已含 stopSelf(),不再单独调。 */
     override fun onRevoke() {
         super.onRevoke()
         val passive = !userInitiatedStop
         Log.w(TAG, "[onRevoke] Triggered by system! userInitiatedStop=$userInitiatedStop, passive=$passive")
         Log.i(TAG, "[onRevoke] Executing shutdown()...")
         shutdown()
-        Log.i(TAG, "[onRevoke] Executing stopSelf()...")
-        stopSelf()
         // §4.5:被动断开弹一次性通知(仅提示,不违背保活通知极简原则);主动停止则静默。
         if (passive) {
             Log.i(TAG, "[onRevoke] Passive disconnect. Displaying notification...")

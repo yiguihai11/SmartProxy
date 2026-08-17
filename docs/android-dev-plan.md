@@ -279,10 +279,9 @@ VPN(2-3s 断连)。
 
 1. **`onRevoke()`(主信号,免轮询)**:系统在"另一个 VPN 成功 `establish()` 抢占"
    或"用户在系统设置里断开 VPN"时**主动回调本服务的 onRevoke**,隧道即刻失效。
-   无需任何探测逻辑,系统保证回调。处理(必做,不可省):
-   - `StopRouter()`(mobile/bridge 释放 Go 引擎与 TUN fd)
-   - `stopForeground(STOP_FOREGROUND_REMOVE)` + `stopSelf()`
-   - 共享状态 `isRunning=false`(见下)
+   无需任何探测逻辑,系统保证回调。处理(必做,不可省):统一走 `shutdown()`
+   (fullTeardown=true:停 Go 引擎 → `stopSelf()` 先拆网络 → 100ms 留白 → 关 TUN fd →
+   `stopForeground(STOP_FOREGROUND_REMOVE)`),共享状态 `isRunning=false`(见下)。
 2. **`onDestroy()`(兜底)**:任何原因服务被销毁都走这里,统一清理 + 状态落 `false`。
 3. **引擎侧(不依赖,只说明)**:TUN fd 失效时引擎读循环报错自停,但 `mobile.IsRunning()`
    看的是 `globalEngine != nil`,**不会自动归零**——所以第 1 步的 `StopRouter()` 是唯一
@@ -311,8 +310,20 @@ VPN(2-3s 断连)。
 - 启动:`onStartCommand` → 读配置 → 建 Builder → `establish()` → fd + configPath
   (config 已落盘 filesDir/config.json)→ `StartRouter`。引擎随 VPN 起而启动;**没有
   "只开引擎不开 VPN"或反之的状态**。
-- 停止:用户点停 / `onRevoke` / `onDestroy` → `StopRouter()` + `stopForeground` +
-  `stopSelf`。引擎随 VPN 停而停;fd 是引擎唯一输入,引擎停 = VPN 失效(§4.5)。
+- 停止:用户点停 / `onRevoke` / `onDestroy` → `shutdown()`,顺序对齐 v2rayNG
+  `stopAllService`(2026-08 图标赖着不掉排查,见下方「停止顺序」):引擎随 VPN 停而停;
+  fd 是引擎唯一输入,引擎停 = VPN 失效(§4.5)。
+
+**停止顺序(关 fd 之前必须先让系统拆 VPN 网络)**:`SmartProxyVpnService.shutdown()`
+四步——`Mobile.stopRouter()`(关 dup 出的 goFd)→ `stopSelf()`(触发系统注销
+NetworkAgent / 移除路由)→ `Thread.sleep(TEARDOWN_SETTLE_MS=100ms)` → `tunPfd.close()`
+(关原始 PFD,最后一个 fd)。**为什么不能先关 fd**:两个 fd 都关掉、内核开始删 tun0 时,
+若 VPN 网络还挂着(路由仍指向 tun0),曾经走过流量的应用 TCP 连接会 hold 住 tun0 的
+dev refcount(连接 socket 的 dst 持有 dev 引用),内核 `netdev_wait_allrefs` 一直等这些
+连接自然超时(数十秒)才真正删 tun0,`interfaceRemoved` 不触发,状态栏钥匙图标赖着
+不掉;**没流量 = 没活跃连接 = 秒删**。v2rayNG 用「stopSelf 先行 + 100ms 留白再关 fd」
+解决同一问题。重启路径(`ACTION_RESTART`)服务需存活,`shutdown(fullTeardown=false)`
+跳过 stopSelf / 留白,直接关 fd 后重建。
 
 **Builder 参数直接读 config.json 的 `tun` 段(单一真源)**:安卓启动 VPN 时解析**同一份
 落盘到 filesDir/config.json、按路径交给 `StartRouter` 的 config**,逐字段喂 Builder,
