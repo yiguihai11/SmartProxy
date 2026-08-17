@@ -97,6 +97,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core") // 首页 Apps 卡 / 应用选择页导航图标
+    implementation("androidx.compose.material:material-icons-extended") // 主题切换太阳/月亮/自动图标(release 有 R8 裁剪,不涨包)
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")

@@ -43,6 +43,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.outlined.BrightnessAuto
+import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DrawerValue
@@ -80,6 +83,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -203,6 +207,14 @@ private fun openProjectUrl(context: Context) {
 private fun serviceModeLabel(mode: String): String = when (mode) {
     AppPrefs.MODE_SOCKS5 -> "仅代理 (SOCKS5)"
     else -> "VPN 隧道"
+}
+
+/** 主题切换图标(§7):auto = 自动(brightness-auto 半亮半暗),light = 太阳,dark = 月亮。
+ *  图标随模式变化,标题栏右上钮一眼可见当前主题。 */
+private fun themeIcon(mode: String): ImageVector = when (mode) {
+    AppPrefs.THEME_LIGHT -> Icons.Outlined.LightMode
+    AppPrefs.THEME_DARK -> Icons.Outlined.DarkMode
+    else -> Icons.Outlined.BrightnessAuto
 }
 
 // ── 主题色(逆向自 Ultimate VPN Free 的 colors.xml)──────────────────────
@@ -561,26 +573,18 @@ private fun HomeLauncher(
                     textAlign = TextAlign.Center,
                     modifier = Modifier.align(Alignment.Center)
                 )
-                // 主题切换钮:显示当前模式名(自动/浅色/深色),点击循环切换。
-                Surface(
+                // 主题切换钮(§7):按模式显太阳/月亮/自动图标,点击循环切换(auto→浅→深),
+                // 图标随模式变化,状态一目了然。
+                IconButton(
                     onClick = onCycleTheme,
-                    shape = RoundedCornerShape(14.dp),
-                    color = CardSurface,
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .height(30.dp),
-                    contentColor = PurpleText
+                    modifier = Modifier.align(Alignment.CenterEnd)
                 ) {
-                    Box(
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = themeModeLabel(themeMode),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
+                    Icon(
+                        imageVector = themeIcon(themeMode),
+                        contentDescription = "主题模式:${themeModeLabel(themeMode)}",
+                        tint = PurpleText,
+                        modifier = Modifier.size(22.dp)
+                    )
                 }
             }
             Spacer(Modifier.height(18.dp))
