@@ -57,22 +57,22 @@ object ConfigProvider {
         File(context.filesDir, CONFIG_NAME).writeText(json.toString())
     }
 
-    /** IPv4 拦截 = tun.inet4_address 存在。 */
+    /** IPv4 拦截 = tun.inet4_address 非空数组(空 [] 或缺失都算关)。 */
     fun ipv4(context: Context): Boolean =
-        readConfig(context).optJSONObject("tun")?.has("inet4_address") == true
+        (readConfig(context).optJSONObject("tun")?.optJSONArray("inet4_address")?.length() ?: 0) > 0
 
-    /** IPv6 拦截 = tun.inet6_address 存在。 */
+    /** IPv6 拦截 = tun.inet6_address 非空数组。 */
     fun ipv6(context: Context): Boolean =
-        readConfig(context).optJSONObject("tun")?.has("inet6_address") == true
+        (readConfig(context).optJSONObject("tun")?.optJSONArray("inet6_address")?.length() ?: 0) > 0
 
-    /** 开关 IPv4 拦截:摘/补 tun.inet4_address(运行中改由调用方重启 VPN)。 */
+    /** 开关 IPv4 拦截:关写空数组 []、开补默认值(运行中改由调用方重启 VPN)。 */
     fun setIpv4(context: Context, on: Boolean) {
         val json = readConfig(context)
         setAddress(json, "inet4_address", on, DEFAULT_TUN_V4)
         writeConfig(context, json)
     }
 
-    /** 开关 IPv6 拦截:摘/补 tun.inet6_address。 */
+    /** 开关 IPv6 拦截:关写空数组 []、开补默认值。 */
     fun setIpv6(context: Context, on: Boolean) {
         val json = readConfig(context)
         setAddress(json, "inet6_address", on, DEFAULT_TUN_V6)
@@ -149,9 +149,14 @@ object ConfigProvider {
     private fun setAddress(json: JSONObject, key: String, on: Boolean, default: String) {
         val tun = json.optJSONObject("tun") ?: JSONObject().also { json.put("tun", it) }
         if (on) {
-            if (!tun.has(key)) tun.put(key, JSONArray().put(default))
+            // 开:数组非空则保留(面板改过的自定义值),空/缺失才补默认。
+            val arr = tun.optJSONArray(key)
+            if (arr == null || arr.length() == 0) tun.put(key, JSONArray().put(default))
         } else {
-            tun.remove(key)
+            // 关:写空数组 [] 而非删 key——保留字段让 config.json 自文档化。
+            // 删 key 后 Go 侧 nil slice 序列化成 null,编辑 config 的新手看不懂;
+            // [] 语义明确(空 = 该族未启用),与引擎 len()==0 行为完全一致。
+            tun.put(key, JSONArray())
         }
         json.put("tun", tun)
     }

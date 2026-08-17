@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
 	"net"
 	"os"
 	"path/filepath"
@@ -651,5 +653,25 @@ func TestStaticRecords_JSONForms(t *testing.T) {
 	m := cfg.DNS.StaticRecordsMap()
 	if len(m["smartproxy.lan"]) != 2 {
 		t.Errorf("expected 2 IPs for smartproxy.lan, got %v", m["smartproxy.lan"])
+	}
+}
+
+func TestMarshal_NilSlicesRenderEmptyArray(t *testing.T) {
+	// A config with the IPv6/address slices left nil (e.g. the key removed from
+	// the file) must serialize as [] — never JSON null — so the panel /config
+	// view and raw config.json stay self-documenting for hand-editing.
+	var cfg Config
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"inet4_address", "inet6_address", "dns_servers", "route_exclude_ports"} {
+		want := `"` + key + `":[]`
+		if !bytes.Contains(b, []byte(want)) {
+			t.Errorf("%s rendered as null, want %s; full json: %s", key, want, b)
+		}
+	}
+	if bytes.Contains(b, []byte(`"inet6_address":null`)) {
+		t.Errorf("inet6_address serialized as null, want []")
 	}
 }

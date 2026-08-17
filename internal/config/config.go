@@ -44,6 +44,28 @@ type TUNConfig struct {
 	RouteExcludePorts []int `json:"route_exclude_ports"`
 }
 
+// MarshalJSON renders a TUNConfig with nil slice fields as empty arrays ("[]")
+// instead of JSON null. A config with no IPv6 address (feature off) then reads
+// as "inet6_address": [] — self-documenting for someone editing the raw config —
+// rather than null, which Go emits for nil slices and reads as an opaque error.
+// Behaviorally nil and [] are identical (len() == 0), so this is lossless.
+func (t TUNConfig) MarshalJSON() ([]byte, error) {
+	type alias TUNConfig
+	if t.Inet4Address == nil {
+		t.Inet4Address = []string{}
+	}
+	if t.Inet6Address == nil {
+		t.Inet6Address = []string{}
+	}
+	if t.DNSServers == nil {
+		t.DNSServers = []string{}
+	}
+	if t.RouteExcludePorts == nil {
+		t.RouteExcludePorts = []int{}
+	}
+	return json.Marshal(alias(t))
+}
+
 type ListenConfig struct {
 	Host                    string         `json:"host"`
 	Port                    int            `json:"port"`
