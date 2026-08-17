@@ -122,9 +122,15 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-    /** Android 13+:VPN 保活通知展示需 POST_NOTIFICATIONS,启动前申请一次(§4.3)。 */
+    /** Android 13+:VPN 保活通知展示需 POST_NOTIFICATIONS,启动前申请一次(§4.3)。
+     *  授权可能晚于 startForeground(首次安装弹框是异步的,FGS 先起、系统压住通知),
+     *  授权落定且 VPN 在跑时补刷一次前台通知,让保活通知显示出来。 */
     private val notifyPermission =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted && SmartProxyVpnService.isRunning.value) {
+                SmartProxyVpnService.refreshForeground(this)
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

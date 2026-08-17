@@ -66,6 +66,16 @@ class SmartProxyVpnService : VpnService() {
                     .putExtra(EXTRA_INTERNAL_STOP, true)
             )
         }
+
+        /** 通知授权补发(§4.3):仅重刷前台通知,不碰引擎。首次安装时 POST_NOTIFICATIONS
+         *  授权可能晚于 startForeground,系统压住通知;授权落定后由 MainActivity 调本方法。 */
+        fun refreshForeground(context: android.content.Context) {
+            Log.i(TAG, "[Companion] refreshForeground() requested (notification permission granted late)")
+            context.startService(
+                Intent(context, SmartProxyVpnService::class.java)
+                    .setAction(NotificationHelper.ACTION_REFRESH_FOREGROUND)
+            )
+        }
     }
 
     private var startedEngine = false
@@ -102,6 +112,16 @@ class SmartProxyVpnService : VpnService() {
             Log.i(TAG, "[onStartCommand] Step 2/2: Executing stopSelf()...")
             stopSelf()
             Log.i(TAG, "[onStartCommand] ACTION_STOP handling completed. Returning START_NOT_STICKY.")
+            return START_NOT_STICKY
+        }
+
+        // 通知授权补发:只重刷前台通知,不动引擎。已在跑保持,没在跑不拉起。
+        if (action == NotificationHelper.ACTION_REFRESH_FOREGROUND) {
+            Log.i(TAG, "[onStartCommand] REFRESH_FOREGROUND: re-calling startForeground() (engine running=$startedEngine)")
+            if (startedEngine) {
+                NotificationHelper.startForeground(this)
+                return START_STICKY
+            }
             return START_NOT_STICKY
         }
 

@@ -22,6 +22,10 @@ object NotificationHelper {
 
     const val ACTION_STOP = "io.github.yiguihai11.smartproxy.STOP_VPN"
 
+    /** 通知授权补发(§4.3):startForeground 先于 POST_NOTIFICATIONS 授权执行时,系统压住
+     *  通知;授权落定后重发本 action,让 FGS 只重刷通知、不动引擎。 */
+    const val ACTION_REFRESH_FOREGROUND = "io.github.yiguihai11.smartproxy.REFRESH_FOREGROUND"
+
     fun ensureChannel(context: Context) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channel = NotificationChannel(
