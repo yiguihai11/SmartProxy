@@ -287,34 +287,37 @@ class SmartProxyVpnService : VpnService() {
     }
 
     /** 停引擎 + 收前台服务 + 状态落 false(§4.5)。
-     *  先关 tunPfd:close() 通知系统拆 VPN → 状态栏图标即刻消失。Go 引擎持有的是
-     *  establishVpn 里 dup + detach 出的独立 fd,不受此 close 影响,由随后的
-     *  stopRouter 收尾。shutdown 幂等(重复进入 tunPfd 已置 null)。 */
+     *  先停 Go 引擎、再关原始 PFD:Go 那份是 establishVpn 里 dup + detach 出的独立 fd,
+     *  stopRouter 先关它;随后对 tunPfd 的 close 是 tun 设备的最后一次引用释放,单事件触发
+     *  内核删 tun0 → 系统 netd interfaceRemoved 拆 VPN、解绑服务、清状态栏图标。若先关
+     *  PFD,Go 那份 fd 仍开着,tun0 未删,系统按 fd-close 查设备状态时看到"还在"即跳过、
+     *  不再复查(实测 stopSelf→onDestroy 间歇性拖到 128s,图标赖到服务销毁)。shutdown
+     *  幂等(重复进入 startedEngine=false、tunPfd 已置 null)。 */
     private fun shutdown() {
         Log.i(TAG, "[shutdown] Step 0: Enter shutdown(). startedEngine=$startedEngine, _isRunning=${_isRunning.value}")
-        tunPfd?.let { pfd ->
-            try {
-                Log.i(TAG, "[shutdown] Step 1/4: Closing tun PFD (tear down VPN)...")
-                pfd.close()
-                Log.i(TAG, "[shutdown] Step 1/4: tun PFD closed.")
-            } catch (e: Exception) {
-                Log.e(TAG, "[shutdown] Step 1/4: tun PFD close failed", e)
-            }
-            tunPfd = null
-        }
         if (startedEngine) {
             try {
-                Log.i(TAG, "[shutdown] Step 2/4: Invoking Go Mobile.stopRouter()...")
+                Log.i(TAG, "[shutdown] Step 1/4: Invoking Go Mobile.stopRouter()...")
                 val t0 = System.currentTimeMillis()
                 smartproxy.mobile.Mobile.stopRouter()
                 val duration = System.currentTimeMillis() - t0
-                Log.i(TAG, "[shutdown] Step 2/4: Mobile.stopRouter() completed in ${duration} ms.")
+                Log.i(TAG, "[shutdown] Step 1/4: Mobile.stopRouter() completed in ${duration} ms.")
             } catch (e: Exception) {
-                Log.e(TAG, "[shutdown] Step 2/4: Mobile.stopRouter() threw exception", e)
+                Log.e(TAG, "[shutdown] Step 1/4: Mobile.stopRouter() threw exception", e)
             }
             startedEngine = false
         } else {
-            Log.i(TAG, "[shutdown] Step 2/4: startedEngine is false, skipping Mobile.stopRouter().")
+            Log.i(TAG, "[shutdown] Step 1/4: startedEngine is false, skipping Mobile.stopRouter().")
+        }
+        tunPfd?.let { pfd ->
+            try {
+                Log.i(TAG, "[shutdown] Step 2/4: Closing tun PFD (last fd to tun device, tear down VPN)...")
+                pfd.close()
+                Log.i(TAG, "[shutdown] Step 2/4: tun PFD closed.")
+            } catch (e: Exception) {
+                Log.e(TAG, "[shutdown] Step 2/4: tun PFD close failed", e)
+            }
+            tunPfd = null
         }
 
         Log.i(TAG, "[shutdown] Step 3/4: Calling ServiceCompat.stopForeground(STOP_FOREGROUND_REMOVE)...")
