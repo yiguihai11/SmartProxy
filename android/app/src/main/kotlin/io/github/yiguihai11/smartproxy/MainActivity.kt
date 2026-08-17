@@ -118,6 +118,7 @@ class MainActivity : ComponentActivity() {
             if (result.resultCode == Activity.RESULT_OK) {
                 ensureNotifyPermission()
                 SmartProxyVpnService.start(this)
+                warnNoUpstream()
             }
         }
 
@@ -161,6 +162,7 @@ class MainActivity : ComponentActivity() {
             android.util.Log.i("SmartProxyVpn", "[MainActivity] serviceMode=SOCKS5, skipping VPN consent. Starting service directly...")
             ensureNotifyPermission()
             SmartProxyVpnService.start(this)
+            warnNoUpstream()
             return
         }
         // 首次或授权失效:弹系统授权框;成功后由回调启动服务。
@@ -172,7 +174,16 @@ class MainActivity : ComponentActivity() {
             android.util.Log.i("SmartProxyVpn", "[MainActivity] User requested START. VpnService.prepare() is null, starting service directly...")
             ensureNotifyPermission()
             SmartProxyVpnService.start(this)
+            warnNoUpstream()
         }
+    }
+
+    /** 首页开启后(§8):config.json 无上游代理节点则 Toast 提示去管理面板配置。面板的管理
+     *  服务随引擎起、绑定 ":AdminPort",要引擎跑起来才可达,所以这里只提示不拦截启动。 */
+    private fun warnNoUpstream() {
+        if (ConfigProvider.hasUpstreamProxy(this)) return
+        android.util.Log.w("SmartProxyVpn", "[MainActivity] No upstream proxy configured, prompting user to configure in panel.")
+        Toast.makeText(this, "未配置上游代理节点,流量无法转发,请到管理面板配置", Toast.LENGTH_LONG).show()
     }
 
     private fun ensureNotifyPermission() {

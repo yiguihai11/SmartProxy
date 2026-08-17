@@ -77,6 +77,14 @@ object ConfigProvider {
         writeConfig(context, json)
     }
 
+    /** 上游代理节点是否已配置:upstream.proxies 非空(面板经 /config 写它)。首页开启前
+     *  检查,无节点时引擎能起但所有流量报 "no default proxy available"(§8 提示去面板配置)。 */
+    fun hasUpstreamProxy(context: Context): Boolean {
+        val proxies = readConfig(context)
+            .optJSONObject("upstream")?.optJSONArray("proxies")
+        return proxies != null && proxies.length() > 0
+    }
+
     /** 面板管理端口:读 assets/config.json 的 listen.admin_port(单一真源)。 */
     fun adminPort(context: Context): Int {
         val raw = context.assets.open("config.json").bufferedReader().use { it.readText() }
