@@ -42,7 +42,8 @@ func (s *Server) buildTLSConfig() (*tls.Config, error) {
 		return nil, err
 	}
 	// Keep the public certificate available for the panel's /admin.crt download
-	// (handleAdminCert). Only the leaf cert PEM is kept — never the private key.
+	// (handleAdminCert). With a baked CA this is the CA cert PEM — the thing devices
+	// must install as a trusted root — not the runtime leaf. Never the private key.
 	s.certPEM = certPEM
 	return &tls.Config{
 		MinVersion:   tls.VersionTLS12,
@@ -61,13 +62,21 @@ func (s *Server) loadCertificate() (tls.Certificate, []byte, error) {
 		}
 		return cert, pemLeaf(cert), nil
 	}
-	// Auto-generated self-signed pair, persisted so restarts reuse the same
-	// certificate (the browser only warns once instead of on every start).
+	// Auto-generated pair, persisted so restarts reuse the same certificate (the
+	// browser only warns once instead of on every start). When a baked CA
+	// (admin_ca.crt/admin_ca.key, e.g. extracted from Android assets into filesDir)
+	// is present, a short-lived leaf signed by that CA is used: the CA never changes,
+	// so devices that installed it as a trusted root keep validating even after the
+	// app is reinstalled, and an admin_cert_sans edit only re-signs the leaf.
 	dir := ""
 	if s.configPath != "" {
 		dir = filepath.Dir(s.configPath)
 	}
 	if dir != "" {
+		caPath, caKeyPath := filepath.Join(dir, "admin_ca.crt"), filepath.Join(dir, "admin_ca.key")
+		if caCert, err := tls.LoadX509KeyPair(caPath, caKeyPath); err == nil {
+			return s.loadCAIssuedLeaf(caCert, dir)
+		}
 		certPath, keyPath := filepath.Join(dir, "admin.crt"), filepath.Join(dir, "admin.key")
 		if cert, err := tls.LoadX509KeyPair(certPath, keyPath); err == nil {
 			// Reuse a persisted cert only while it still covers the requested SANs;
@@ -82,6 +91,21 @@ func (s *Server) loadCertificate() (tls.Certificate, []byte, error) {
 	}
 	cert, err := genSelfSigned("", "", s.tlsExtraSANs...)
 	return cert, pemLeaf(cert), err
+}
+
+// loadCAIssuedLeaf loads the leaf signed by the baked CA, re-signing when the
+// persisted one no longer covers the requested SANs, is expired, or was signed by a
+// different CA. The download PEM returned is the CA certificate itself, so /admin.crt
+// installs the stable trust anchor rather than the ephemeral leaf.
+func (s *Server) loadCAIssuedLeaf(ca tls.Certificate, dir string) (tls.Certificate, []byte, error) {
+	certPath, keyPath := filepath.Join(dir, "admin.crt"), filepath.Join(dir, "admin.key")
+	if cert, err := tls.LoadX509KeyPair(certPath, keyPath); err == nil {
+		if certCoversSANs(cert, s.tlsExtraSANs) && leafSignedBy(cert, ca) {
+			return cert, pemLeaf(ca), nil
+		}
+	}
+	cert, err := genCAIssuedLeaf(ca, certPath, keyPath, s.tlsExtraSANs...)
+	return cert, pemLeaf(ca), err
 }
 
 // pemLeaf re-encodes the leaf certificate's DER bytes as PEM, for serving admin.crt.
@@ -151,6 +175,84 @@ func genSelfSigned(certPath, keyPath string, extraSANs ...string) (tls.Certifica
 	return tls.X509KeyPair(certPEM, keyPEM)
 }
 
+// genCAIssuedLeaf creates an ECDSA P-256 server leaf signed by the baked CA
+// (397-day validity, SANs for localhost/loopback plus any extraSANs) and persists
+// it to certPath/keyPath best-effort. The CA stays untouched, so re-signing after a
+// SAN edit does not invalidate devices that already trust the CA. Unlike
+// genSelfSigned the leaf is not itself a CA (IsCA=false): only the CA is installed
+// as a trusted root on devices.
+func genCAIssuedLeaf(ca tls.Certificate, certPath, keyPath string, extraSANs ...string) (tls.Certificate, error) {
+	caCert, err := x509.ParseCertificate(ca.Certificate[0])
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	caKey, ok := ca.PrivateKey.(*ecdsa.PrivateKey)
+	if !ok {
+		return tls.Certificate{}, fmt.Errorf("admin CA private key is not an ECDSA key")
+	}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	serialLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serial, err := rand.Int(rand.Reader, serialLimit)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	notBefore := time.Now().Add(-time.Hour)
+	extraDNS, extraIPs := splitSANs(extraSANs)
+	tmpl := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "smartproxy"},
+		NotBefore:             notBefore,
+		NotAfter:              notBefore.Add(397 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              append([]string{"localhost"}, extraDNS...),
+		IPAddresses:           append([]net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}, extraIPs...),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, caKey)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+
+	if certPath != "" && keyPath != "" {
+		if err := os.MkdirAll(filepath.Dir(certPath), 0o755); err != nil {
+			slog.Warn("admin CA-issued leaf dir create failed", "dir", filepath.Dir(certPath), "error", err)
+		} else {
+			if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
+				slog.Warn("admin CA-issued leaf cert write failed", "path", certPath, "error", err)
+			} else if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+				slog.Warn("admin CA-issued leaf key write failed", "path", keyPath, "error", err)
+			} else {
+				slog.Info("admin CA-issued leaf certificate generated", "cert", certPath, "key", keyPath)
+			}
+		}
+	}
+	return tls.X509KeyPair(certPEM, keyPEM)
+}
+
+// leafSignedBy reports whether cert's leaf was signed by ca, so a persisted leaf
+// produced by a previous (possibly different) CA is not reused after the CA changed.
+func leafSignedBy(cert tls.Certificate, ca tls.Certificate) bool {
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return false
+	}
+	caLeaf, err := x509.ParseCertificate(ca.Certificate[0])
+	if err != nil {
+		return false
+	}
+	return leaf.CheckSignatureFrom(caLeaf) == nil
+}
+
 // splitSANs classifies SAN entries into DNS names and IP addresses, dropping
 // wildcards and wildcard-ish bind addresses ("*", "::", "0.0.0.0") that are not
 // valid as a concrete certificate SAN.
@@ -170,11 +272,17 @@ func splitSANs(entries []string) (dns []string, ips []net.IP) {
 }
 
 // certCoversSANs reports whether the leaf certificate still covers the built-in
-// localhost SANs plus every requested extra SAN, so a persisted admin.crt is only
-// reused while it is valid for the addresses the panel is served on.
+// localhost SANs plus every requested extra SAN, and is not about to expire, so a
+// persisted admin.crt is only reused while it is valid for the addresses the panel
+// is served on.
 func certCoversSANs(cert tls.Certificate, extraSANs []string) bool {
 	leaf, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
+		return false
+	}
+	// Expiring within the hour is treated as not covered so the caller regenerates
+	// instead of serving a certificate that is about to be rejected by clients.
+	if !leaf.NotAfter.After(time.Now().Add(time.Hour)) {
 		return false
 	}
 	haveDNS := make(map[string]bool, len(leaf.DNSNames))

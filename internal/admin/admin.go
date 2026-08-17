@@ -941,11 +941,12 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(version.Info())
 }
 
-// handleAdminCert serves the current admin leaf certificate as PEM for download, so a device
-// that reaches the panel can install it as a trusted CA (Android / iOS / desktop) to clear
-// the "untrusted" warning. Only the public certificate is served — never the private key.
-// Available whenever HTTPS is in use (auto-generated or custom cert files); 404 with a hint
-// when HTTPS is off (buildTLSConfig never ran) so the panel stays plain HTTP.
+// handleAdminCert serves the certificate a device must install as a trusted CA, as PEM for
+// download (Android / iOS / desktop). With a baked CA present this is the CA certificate
+// itself — the stable trust anchor; otherwise the self-signed admin cert. Only the public
+// certificate is served — never the private key. Available whenever HTTPS is in use
+// (auto-generated or custom cert files); 404 with a hint when HTTPS is off (buildTLSConfig
+// never ran) so the panel stays plain HTTP.
 func (s *Server) handleAdminCert(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
