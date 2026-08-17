@@ -63,20 +63,19 @@ func (s *Server) loadCertificate() (tls.Certificate, []byte, error) {
 		return cert, pemLeaf(cert), nil
 	}
 	// Auto-generated pair, persisted so restarts reuse the same certificate (the
-	// browser only warns once instead of on every start). When a baked CA
-	// (admin_ca.crt/admin_ca.key, e.g. extracted from Android assets into filesDir)
-	// is present, a short-lived leaf signed by that CA is used: the CA never changes,
-	// so devices that installed it as a trusted root keep validating even after the
-	// app is reinstalled, and an admin_cert_sans edit only re-signs the leaf.
+	// browser only warns once instead of on every start). A baked CA — embedded in
+	// the binary (shared by Android and desktop) or a user-supplied admin_ca.* next
+	// to the config file — signs a short-lived leaf: the CA never changes, so devices
+	// that installed it as a trusted root keep validating across app reinstalls, and
+	// an admin_cert_sans edit only re-signs the leaf.
 	dir := ""
 	if s.configPath != "" {
 		dir = filepath.Dir(s.configPath)
 	}
+	if caCert, ok := bakedCA(dir); ok {
+		return s.loadCAIssuedLeaf(caCert, dir)
+	}
 	if dir != "" {
-		caPath, caKeyPath := filepath.Join(dir, "admin_ca.crt"), filepath.Join(dir, "admin_ca.key")
-		if caCert, err := tls.LoadX509KeyPair(caPath, caKeyPath); err == nil {
-			return s.loadCAIssuedLeaf(caCert, dir)
-		}
 		certPath, keyPath := filepath.Join(dir, "admin.crt"), filepath.Join(dir, "admin.key")
 		if cert, err := tls.LoadX509KeyPair(certPath, keyPath); err == nil {
 			// Reuse a persisted cert only while it still covers the requested SANs;
@@ -93,15 +92,41 @@ func (s *Server) loadCertificate() (tls.Certificate, []byte, error) {
 	return cert, pemLeaf(cert), err
 }
 
+// bakedCA returns the CA certificate used to sign admin leaves: a user-supplied
+// admin_ca.{crt,key} next to the config file (dir) takes precedence, otherwise the
+// CA embedded in the binary. ok is false only when neither is available (a binary
+// built without the embedded certs), leaving the self-signed fallback.
+func bakedCA(dir string) (tls.Certificate, bool) {
+	if dir != "" {
+		if cert, err := tls.LoadX509KeyPair(filepath.Join(dir, "admin_ca.crt"), filepath.Join(dir, "admin_ca.key")); err == nil {
+			return cert, true
+		}
+	}
+	certPEM, err1 := embeddedCA.ReadFile("certs/admin_ca.crt")
+	keyPEM, err2 := embeddedCA.ReadFile("certs/admin_ca.key")
+	if err1 != nil || err2 != nil {
+		return tls.Certificate{}, false
+	}
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return tls.Certificate{}, false
+	}
+	return cert, true
+}
+
 // loadCAIssuedLeaf loads the leaf signed by the baked CA, re-signing when the
 // persisted one no longer covers the requested SANs, is expired, or was signed by a
 // different CA. The download PEM returned is the CA certificate itself, so /admin.crt
 // installs the stable trust anchor rather than the ephemeral leaf.
 func (s *Server) loadCAIssuedLeaf(ca tls.Certificate, dir string) (tls.Certificate, []byte, error) {
-	certPath, keyPath := filepath.Join(dir, "admin.crt"), filepath.Join(dir, "admin.key")
-	if cert, err := tls.LoadX509KeyPair(certPath, keyPath); err == nil {
-		if certCoversSANs(cert, s.tlsExtraSANs) && leafSignedBy(cert, ca) {
-			return cert, pemLeaf(ca), nil
+	// dir is "" when no config path is known (rare): keep the leaf in memory only.
+	certPath, keyPath := "", ""
+	if dir != "" {
+		certPath, keyPath = filepath.Join(dir, "admin.crt"), filepath.Join(dir, "admin.key")
+		if cert, err := tls.LoadX509KeyPair(certPath, keyPath); err == nil {
+			if certCoversSANs(cert, s.tlsExtraSANs) && leafSignedBy(cert, ca) {
+				return cert, pemLeaf(ca), nil
+			}
 		}
 	}
 	cert, err := genCAIssuedLeaf(ca, certPath, keyPath, s.tlsExtraSANs...)

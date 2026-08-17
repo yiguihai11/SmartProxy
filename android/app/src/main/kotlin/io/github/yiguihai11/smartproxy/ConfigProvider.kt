@@ -24,17 +24,11 @@ object ConfigProvider {
 
     /** 引擎启动前调用:把路由数据文件就位。面板可经 /acl、/chnroute 编辑(需持久化),
      *  与 config.json 同规则——仅当目标缺失或大小为 0 才从 assets 种入,已有内容不覆盖。
-     *
-     *  管理员 CA(admin_ca.crt/admin_ca.key)则不同:它是固化在 APK 里的根证书,每次启动
-     *  都从 assets 覆盖解压到 filesDir(Go 侧按 config.json 同目录找它,给面板叶子证书
-     *  签名)。这样重装应用后 filesDir 被清也不影响——CA 重解压即恢复,设备上已安装的
-     *  CA 依然有效,不用重新装。CA 出厂后不再更换(换了=所有已装 CA 失效的破坏性变更),
-     *  覆盖语义恒等于发货版本。 */
+     *  管理员 CA 不在此列:它内嵌在 Go 引擎里(go:embed,Android AAR 与桌面共享同一张),
+     *  不再需要 assets 解压。 */
     fun ensureRuntimeFiles(context: Context) {
         copyAssetIfMissing(context, "chnroute.txt", context.cacheDir)
         copyAssetIfMissing(context, "acl.txt", context.cacheDir)
-        copyAsset(context, "admin_ca.crt", context.filesDir)
-        copyAsset(context, "admin_ca.key", context.filesDir)
     }
 
     /** 幂等:确保 filesDir/config.json 存在且应用不变量(App 启动 + 引擎启动前都调)。 */

@@ -168,3 +168,45 @@ func TestAdmin_CAIssuedLeaf(t *testing.T) {
 		t.Errorf("leaf signed by old CA was reused after CA change: %v", err)
 	}
 }
+
+// TestAdmin_EmbeddedCA verifies the binary-embedded CA is used when no local
+// admin_ca.* override exists (the default for both the Android AAR and desktop), so
+// both builds serve leaves from the same trust anchor.
+func TestAdmin_EmbeddedCA(t *testing.T) {
+	dir := t.TempDir() // no admin_ca.* written → embedded CA is used
+	caPEM, err := embeddedCA.ReadFile("certs/admin_ca.crt")
+	if err != nil {
+		t.Fatalf("embedded CA missing: %v", err)
+	}
+	block, _ := pem.Decode(caPEM)
+	if block == nil {
+		t.Fatal("no PEM block in embedded CA")
+	}
+	caCert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !caCert.IsCA {
+		t.Error("embedded CA must be a CA certificate")
+	}
+
+	s := &Server{configPath: filepath.Join(dir, "config.json")}
+	s.SetTLS("", "", true, "smartproxy.lan")
+	cert, download, err := s.loadCertificate()
+	if err != nil {
+		t.Fatalf("loadCertificate: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(leaf.DNSNames, "smartproxy.lan") {
+		t.Errorf("leaf missing smartproxy.lan, got %v", leaf.DNSNames)
+	}
+	if err := leaf.CheckSignatureFrom(caCert); err != nil {
+		t.Errorf("leaf not signed by embedded CA: %v", err)
+	}
+	if !bytes.Equal(download, caPEM) {
+		t.Error("download PEM should be the embedded CA certificate")
+	}
+}
