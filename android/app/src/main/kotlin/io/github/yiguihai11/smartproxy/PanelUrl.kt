@@ -5,7 +5,8 @@ import java.net.Inet4Address
 import java.net.NetworkInterface
 
 /**
- * 管理面板入口 URL(§4.4):https://smartproxy.lan:admin_port。
+ * 管理面板入口 URL(§4.4):scheme 跟随 listen.admin_https(默认 https),
+ * https://smartproxy.lan:admin_port;admin_https=false 时是 http://。
  *
  * 用固定域名 smartproxy.lan 而非原始局域网 IP:
  *  - 证书 admin_cert_sans 含它 → 手机浏览器打开无证书告警,换网 IP 变、域名不变;
@@ -28,16 +29,18 @@ object PanelUrl {
         return null
     }
 
-    /** https://smartproxy.lan:<port>;未连网/拿不到局域网 IP 返回 null。
-     *  仅代理(SOCKS5)模式(§8)无 VPN DNS 接管:smartproxy.lan 手机系统 DNS 解析不了,
-     *  改用 loopback 127.0.0.1(admin 绑 ":AdminPort",证书内置 SAN 127.0.0.1,本机开
-     *  面板无告警)。LAN IP 不进证书(用户取消 SAN 自动追加,§8),不再给局域网设备
-     *  提供 App 链接;需要者可自行加 admin_cert_sans 或放行自签告警。 */
+    /** <scheme>://smartproxy.lan:<port>;未连网/拿不到局域网 IP 返回 null。
+     *  scheme 读 admin_https(默认 https)。仅代理(SOCKS5)模式(§8)无 VPN DNS 接管:
+     *  smartproxy.lan 手机系统 DNS 解析不了,改用 loopback 127.0.0.1(admin 绑
+     *  ":AdminPort",证书内置 SAN 127.0.0.1,本机开面板无告警)。LAN IP 不进证书
+     *  (用户取消 SAN 自动追加,§8),不再给局域网设备提供 App 链接;需要者可自行加
+     *  admin_cert_sans 或放行自签告警。 */
     fun url(context: Context): String? {
+        val scheme = if (ConfigProvider.adminHttps(context)) "https" else "http"
         if (AppPrefs.serviceMode(context) == AppPrefs.MODE_SOCKS5) {
-            return "https://127.0.0.1:${ConfigProvider.adminPort(context)}"
+            return "$scheme://127.0.0.1:${ConfigProvider.adminPort(context)}"
         }
         if (lanIpv4() == null) return null
-        return "https://smartproxy.lan:${ConfigProvider.adminPort(context)}"
+        return "$scheme://smartproxy.lan:${ConfigProvider.adminPort(context)}"
     }
 }

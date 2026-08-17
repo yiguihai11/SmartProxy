@@ -87,13 +87,17 @@ object ConfigProvider {
         return proxies != null && proxies.length() > 0
     }
 
-    /** 面板管理端口:读 assets/config.json 的 listen.admin_port(单一真源)。 */
-    fun adminPort(context: Context): Int {
-        val raw = context.assets.open("config.json").bufferedReader().use { it.readText() }
-        return JSONObject(raw)
-            .optJSONObject("listen")
+    /** 面板管理端口:读 filesDir/config.json(运行时真源,面板可改、引擎实际绑定它)。
+     *  动态跟随面板编辑;首页链接 ON_RESUME 重算即取到最新值。 */
+    fun adminPort(context: Context): Int =
+        readConfig(context).optJSONObject("listen")
             ?.optInt("admin_port", DEFAULT_ADMIN_PORT) ?: DEFAULT_ADMIN_PORT
-    }
+
+    /** 面板是否 HTTPS:读 filesDir/config.json 的 listen.admin_https(默认 true),
+     *  首页链接据此决定 http/https 前缀。 */
+    fun adminHttps(context: Context): Boolean =
+        readConfig(context).optJSONObject("listen")
+            ?.optBoolean("admin_https", true) ?: true
 
     // ── 不变量(ensureConfig 每次应用,与 ConfigGenerator 的强制项一致)──────
 
