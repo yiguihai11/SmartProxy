@@ -70,9 +70,11 @@ class SmartProxyVpnService : VpnService() {
 
     private var startedEngine = false
 
-    /** §4.6 establish 保留的 PFD:shutdown 时显式 close 通知系统拆 VPN(状态栏图标即刻
-     *  消失)。不用 detachFd——detach 只把原始 fd 所有权转给 Go、不触发系统的关闭回调,
-     *  实测图标会赖到 onDestroy(~20s)才清(系统不拆 VPN 就拖着服务不销毁)。 */
+    /** §4.6 establish 保留的原始 PFD:shutdown 时显式 close() 通知系统拆 VPN(状态栏图标
+     *  即刻消失)。传给 Go 的 fd 是它 dup + detachFd 出的独立拷贝(见 establishVpn),Go
+     *  引擎独占那份;原始 PFD 从不过手,close 它就是系统拆 VPN 的唯一干净信号。不可
+     *  detach 原始 PFD——fd 所有权转给 Go 后系统收不到关闭回调,实测图标赖到 onDestroy
+     *  (~20s+)才清(系统不拆 VPN 就拖着服务不销毁)。 */
     private var tunPfd: ParcelFileDescriptor? = null
 
     /** §4.5 区分主动/被动停止:ACTION_STOP 置 true;正常启动置 false。主线程回调间切换。 */
@@ -216,16 +218,24 @@ class SmartProxyVpnService : VpnService() {
             try {
                 Log.i(TAG, "[establishVpn] Step 3: Calling Go Mobile.startRouter(configPath, fd=${pfd.fd}, tunEnabled=true)...")
                 val t0 = System.currentTimeMillis()
-                smartproxy.mobile.Mobile.startRouter(configPath, pfd.getFd().toLong(), true)
-                Log.i(TAG, "[establishVpn] Mobile.startRouter() returned successfully in ${System.currentTimeMillis() - t0} ms.")
-                // 不 detach:PFD 保留在 tunPfd,shutdown 时显式 close() 通知系统拆 VPN
-                // (状态栏图标即刻消失)。Go 侧 os.NewFile 直接包同一 fd,引擎读循环随之报错退出。
+                // Go 侧 sing-tun 用 os.NewFile(uintptr(fd)) 直接包传入的 fd 号(不 dup)。
+                // 直接把 PFD 的 fd 号交给 Go,两边就共享同一 fd:shutdown 时 pfd.close() 的
+                // 系统拆 VPN 信号会被这份共享所有权搅浑(实测停止后状态栏图标赖 42s+ 才清,
+                // stopSelf→onDestroy 间隔 42s)。改为 dup → detachFd 把独立 fd 交给 Go 独占;
+                // 原始 PFD 留在 Kotlin(系统关闭回调挂在它身上),shutdown 对它的 close 就是
+                // 拆 VPN 的唯一干净信号,图标即刻消失。
+                val dupPfd = pfd.dup()
+                val goFd = dupPfd.detachFd()
+                smartproxy.mobile.Mobile.startRouter(configPath, goFd.toLong(), true)
+                Log.i(TAG, "[establishVpn] Mobile.startRouter() returned successfully in ${System.currentTimeMillis() - t0} ms. (goFd=$goFd, kotlinPfd=${pfd.fd})")
                 tunPfd = pfd
                 Log.i(TAG, "[establishVpn] Step 4: VPN established. tunPfd retained for shutdown close.")
             } catch (e: Exception) {
                 Log.e(TAG, "[establishVpn] Mobile.startRouter threw exception! Closing PFD...", e)
                 pfd.close()
                 tunPfd = null
+                // goFd 所有权已交 Go:若其已 os.NewFile 包装,Go 的失败清理会关它;此处不关,
+                // 避免与 Go 清理路径 double-close(EBADF 或 fd 号被复用后误关)。
                 throw e
             }
             true
@@ -257,9 +267,9 @@ class SmartProxyVpnService : VpnService() {
     }
 
     /** 停引擎 + 收前台服务 + 状态落 false(§4.5)。
-     *  先关 tunPfd:close() 通知系统拆 VPN → 状态栏图标即刻消失;fd 随之关闭,引擎
-     *  读循环立即报错退出,剩余 drain 更快。比引擎侧先关 fd 更可靠:detachFd 不触发
-     *  系统回调,图标会赖到 onDestroy(~20s)才清。shutdown 幂等(重复进入 tunPfd 已置 null)。 */
+     *  先关 tunPfd:close() 通知系统拆 VPN → 状态栏图标即刻消失。Go 引擎持有的是
+     *  establishVpn 里 dup + detach 出的独立 fd,不受此 close 影响,由随后的
+     *  stopRouter 收尾。shutdown 幂等(重复进入 tunPfd 已置 null)。 */
     private fun shutdown() {
         Log.i(TAG, "[shutdown] Step 0: Enter shutdown(). startedEngine=$startedEngine, _isRunning=${_isRunning.value}")
         tunPfd?.let { pfd ->
