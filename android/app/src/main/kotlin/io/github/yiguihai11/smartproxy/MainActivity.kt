@@ -287,11 +287,11 @@ private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme:
     var showServiceModeDialog by remember { mutableStateOf(false) }
 
     // DNS / 排除路由在 establish() 时固化(读 AppPrefs),改了要重建 VpnService 才生效;
-    // 两者是 App 层设置,Go watcher 不感知,不能像 IPv4/IPv6 那样靠 config.json 热重载自动
-    // 重启——VPN 在跑则显式走 VpnControl 串行化重启。未在跑时只落盘,下次启动自然生效。
+    // 两者是 App 层设置,Go watcher 不感知。VPN 在跑则显式重建(SmartProxyVpnService.restart
+    // 主线程原子停→建);未在跑时只落盘,下次启动自然生效。
     fun applyVpnSettings() {
         if (SmartProxyVpnService.isRunning.value) {
-            VpnControl.dispatch(context, "restart")
+            SmartProxyVpnService.restart(context)
         }
     }
 
@@ -645,10 +645,10 @@ private fun HomeLauncher(
                     title = "IPv4 拦截", subtitle = "接管 IPv4 流量", checked = ipv4,
                     onCheckedChange = { v ->
                         ipv4 = v
-                        // 写 config.json tun.inet4_address(§4.6):Go watcher 检测到隧道参数变更会
-                        // 自动重启 VPN(engine 的 configReload → Vpn("restart")),不再手动重启——
-                        // 手动 + watcher 双触发会让服务被起两次,后一次 startRouter 报错把隧道杀掉。
+                        // 写 config.json tun.inet4_address(§4.6):运行中显式重建才生效
+                        // (Go watcher 自动重启已删除)。restart() 自带 isRunning 守卫,未在跑只落盘。
                         ConfigProvider.setIpv4(context, v)
+                        SmartProxyVpnService.restart(context)
                     },
                     modifier = Modifier.weight(1f)
                 )
@@ -657,8 +657,8 @@ private fun HomeLauncher(
                     title = "IPv6 拦截", subtitle = "接管 IPv6 流量", checked = ipv6,
                     onCheckedChange = { v ->
                         ipv6 = v
-                        // 同上 v4:单一触发 = watcher 自动重启,App 侧不手动重启。
                         ConfigProvider.setIpv6(context, v)
+                        SmartProxyVpnService.restart(context)
                     },
                     modifier = Modifier.weight(1f)
                 )

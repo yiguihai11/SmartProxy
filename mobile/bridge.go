@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sync"
 	"time"
 
@@ -27,31 +26,10 @@ var (
 	routerWatcher *config.Watcher
 )
 
-// AndroidBridge 在 Kotlin 侧实现并于 App 启动时注册(M5,§4.4)。纯 Go 面板还原后,
-// /api/prefs、/api/vpn 桥接端点已删除,桥仅保留 Vpn(action):
-// configReload 检测到隧道参数变更时经它触发 Android 侧 VPN 重启(重建 VpnService
-// 才生效的字段)。仅用 string,gobind 双向编组支持;接口必须在本 bound 包内。
-type AndroidBridge interface {
-	Vpn(action string) string
-}
-
-var (
-	bridge   AndroidBridge
-	bridgeMu sync.RWMutex
-)
-
-// SetAndroidBridge 注册 Kotlin 实现(Kotlin 线程设置,configReload 线程读取,加锁)。
-func SetAndroidBridge(b AndroidBridge) {
-	bridgeMu.Lock()
-	bridge = b
-	bridgeMu.Unlock()
-}
-
-func currentBridge() AndroidBridge {
-	bridgeMu.RLock()
-	defer bridgeMu.RUnlock()
-	return bridge
-}
+// Android→Go 反向桥已删除(2026-08,停 VPN 后图标赖着不掉排查):configReload 曾经
+// AndroidBridge.Vpn("restart") 触发 Android 侧自动重启,但该异步重启循环存在竞态——
+// 用户显式停止后仍可能在 delayed start 把隧道拉起,状态栏图标不消失。现改为 App 侧
+// 显式重建(ACTION_RESTART,主线程原子停→建),Go 侧不再向 Android 发任何命令。
 
 func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 	slog.Info("[Go-Bridge] StartRouter called", "configPath", configPath, "tunFd", tunFd, "tunEnabled", tunEnabled)
@@ -135,7 +113,6 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 			})
 		}
 
-		oldCfg := cfg
 		oldChnFile, oldACLFile := cfg.Routing.ChnrouteFile, cfg.Routing.ACLFile
 		cfg = newCfg
 		eng.Config.Store(cfg)
@@ -181,17 +158,9 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 			eng.AdminServer().SetAdminAuth(cfg.Listen.AdminAuth)
 		}
 
-		// TUN 隧道参数 / admin 端口证书不能热重载(establish 时固化),必须重建
-		// VpnService。经桥触发 Android 侧重启(VpnControl → stop + delayed start,
-		// 异步,不阻塞 watcher;桥未注册时跳过)。
-		if needsRestart(oldCfg, newCfg) {
-			if b := currentBridge(); b != nil {
-				if msg := b.Vpn("restart"); msg != "" {
-					slog.Warn("config changed fields requiring restart; auto-restart failed", "err", msg)
-				}
-			}
-		}
-
+		// 隧道参数 / admin 端口证书不能热重载(establish 时固化),Android 侧不再自动
+		// 重启(自动重启循环删除:用户停止后可能被 delayed start 拉起,图标赖着不掉)。
+		// 这类变更经 App 首页 IPv4/IPv6 开关显式重建,或下次手动连接生效。
 		slog.Info("config reloaded")
 	}
 	watcher.SetConfigReloader(configReload)
@@ -263,26 +232,6 @@ func IsRunning() bool {
 	engineMu.Lock()
 	defer engineMu.Unlock()
 	return globalEngine != nil
-}
-
-// needsRestart 判断配置变更是否需要重建 VpnService(Android 特有;纯 Go 桌面无此
-// 概念,main.go 只做热重载)。热重载能覆盖的(admin_auth、dns.foreign、smart_proxy、
-// upstream)不算;TUN 隧道参数与 admin 端口/证书在 establish() 时固化,变了只能重启。
-func needsRestart(oldCfg, newCfg *config.Config) bool {
-	oldT, newT := oldCfg.TUN, newCfg.TUN
-	if oldT.MTU != newT.MTU || oldT.Stack != newT.Stack ||
-		!reflect.DeepEqual(oldT.Inet4Address, newT.Inet4Address) ||
-		!reflect.DeepEqual(oldT.Inet6Address, newT.Inet6Address) ||
-		!reflect.DeepEqual(oldT.DNSServers, newT.DNSServers) {
-		return true
-	}
-	oldL, newL := oldCfg.Listen, newCfg.Listen
-	if oldL.AdminPort != newL.AdminPort || oldL.AdminHTTPS != newL.AdminHTTPS ||
-		oldL.AdminCertFile != newL.AdminCertFile || oldL.AdminKeyFile != newL.AdminKeyFile ||
-		!reflect.DeepEqual(oldL.AdminCertSANs, newL.AdminCertSANs) {
-		return true
-	}
-	return false
 }
 
 // 不导出:gomobile bind 只绑定导出类型。GetStatus 返回 JSON 串,无需把

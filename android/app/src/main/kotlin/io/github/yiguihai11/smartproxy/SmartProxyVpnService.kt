@@ -36,8 +36,11 @@ class SmartProxyVpnService : VpnService() {
 
         private const val ACTION_START = "io.github.yiguihai11.smartproxy.START_VPN"
 
-        /** VpnControl 重启循环的内部 stop 标记:这类 stop 不算用户停止,不递增重启世代。 */
-        const val EXTRA_INTERNAL_STOP = "io.github.yiguihai11.smartproxy.INTERNAL_STOP"
+        /** 设置变更重建(§6 应用层设置 / 首页 IPv4 / IPv6 开关):停旧会话 → 立即按新配置
+         *  重建 VpnService。onStartCommand 主线程单一回调内原子执行,只由 App 侧显式
+         *  调用——不会再像旧的 VpnControl 异步重启循环那样,在用户停止后被 delayed start
+         *  把隧道重新拉起(状态栏图标赖着不掉,2026-08 已删除该机制)。 */
+        const val ACTION_RESTART = "io.github.yiguihai11.smartproxy.RESTART_VPN"
 
         /** 启动 VPN(外部调用,如 MainActivity 的启动按钮)。 */
         fun start(context: android.content.Context) {
@@ -56,14 +59,16 @@ class SmartProxyVpnService : VpnService() {
             )
         }
 
-        /** 重启循环内部 stop(过渡性,随后立即 start):带 EXTRA_INTERNAL_STOP 标记,
-         *  ACTION_STOP 处理时不算用户停止,不递增重启世代(否则会取消重启自己)。 */
-        fun stopInternal(context: android.content.Context) {
-            Log.i(TAG, "[Companion] stopInternal() requested by caller (Internal restart stop)")
+        /** 设置变更重建入口:仅 VPN 在跑时才有意义(未在跑只落盘,下次启动自然生效)。
+         *  重启是主线程原子的 stop→build,不异步、无竞态窗口。 */
+        fun restart(context: android.content.Context) {
+            if (!isRunning.value) {
+                Log.i(TAG, "[Companion] restart() requested but VPN not running, skipping.")
+                return
+            }
+            Log.i(TAG, "[Companion] restart() requested by caller (settings change)")
             context.startService(
-                Intent(context, SmartProxyVpnService::class.java)
-                    .setAction(NotificationHelper.ACTION_STOP)
-                    .putExtra(EXTRA_INTERNAL_STOP, true)
+                Intent(context, SmartProxyVpnService::class.java).setAction(ACTION_RESTART)
             )
         }
 
@@ -92,27 +97,27 @@ class SmartProxyVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
-        val isInternalStop = intent?.getBooleanExtra(EXTRA_INTERNAL_STOP, false) == true
-        Log.i(TAG, "[onStartCommand] Called. action=$action, isInternalStop=$isInternalStop, startId=$startId")
+        Log.i(TAG, "[onStartCommand] Called. action=$action, startId=$startId")
 
         if (action == NotificationHelper.ACTION_STOP) {
-            // 圆球 / 通知停止 = 用户显式停止 → 递增 VpnControl 重启世代,使在途/挂起的
-            // 重启在 delayed start 时取消(否则关掉后隧道又被拉起,状态栏图标不消失)。
-            // VpnControl 重启循环的内部 stop 带 EXTRA_INTERNAL_STOP,不算用户停止。
-            if (!isInternalStop) {
-                Log.i(TAG, "[onStartCommand] ACTION_STOP is user stop. Calling VpnControl.noteUserStop().")
-                VpnControl.noteUserStop()
-            } else {
-                Log.i(TAG, "[onStartCommand] ACTION_STOP is internal stop (restart flow).")
-            }
-            // 通知栏"停止"按钮 / 首页停止按钮:用户主动 → 静默停,后续 onRevoke 不误报被动。
+            // 圆球 / 通知停止 = 用户显式停止:静默停,后续 onRevoke 不误报被动。
             userInitiatedStop = true
-            Log.i(TAG, "[onStartCommand] Step 1/2: Executing shutdown()...")
+            Log.i(TAG, "[onStartCommand] ACTION_STOP is user stop. Step 1/2: Executing shutdown()...")
             shutdown()
-            Log.i(TAG, "[onStartCommand] Step 2/2: Executing stopSelf()...")
+            Log.i(TAG, "[onStartCommand] ACTION_STOP Step 2/2: Executing stopSelf()...")
             stopSelf()
             Log.i(TAG, "[onStartCommand] ACTION_STOP handling completed. Returning START_NOT_STICKY.")
             return START_NOT_STICKY
+        }
+
+        // 设置变更重建(§6 / 首页 IPv4 / IPv6 开关):停旧会话 → 立即按新配置重建。
+        // shutdown + startInternal 在同一主线程回调内顺序执行,原子完成——不会再像旧的
+        // 异步重启循环那样,在用户停止后靠 delayed start 把隧道重新拉起。
+        if (action == ACTION_RESTART) {
+            Log.i(TAG, "[onStartCommand] ACTION_RESTART: shutting down then rebuilding VPN...")
+            shutdown()
+            Log.i(TAG, "[onStartCommand] ACTION_RESTART: re-establishing with new settings...")
+            return startInternal()
         }
 
         // 通知授权补发:只重刷前台通知,不动引擎。已在跑保持,没在跑不拉起。
@@ -128,20 +133,26 @@ class SmartProxyVpnService : VpnService() {
         // 正常启动:之后的 onRevoke 一律视为被动断连(被抢占 / 系统设置断开)。
         Log.i(TAG, "[onStartCommand] Normal start path. Setting userInitiatedStop=false.")
         userInitiatedStop = false
-        Log.i(TAG, "[onStartCommand] Calling NotificationHelper.startForeground()...")
+        return startInternal()
+    }
+
+    /** 建前台通知并按服务模式启动引擎 / 隧道(§8):START 与 RESTART 分支共用。
+     *  成功返回 START_STICKY;失败立即收掉前台服务避免空转,返回 START_NOT_STICKY。 */
+    private fun startInternal(): Int {
+        Log.i(TAG, "[startInternal] Calling NotificationHelper.startForeground()...")
         NotificationHelper.startForeground(this)
         // 服务模式(§8):仅代理(SOCKS5)不建 VpnService,直接起引擎 SOCKS5;VPN 模式走 establishVpn。
         val socksOnly = AppPrefs.serviceMode(this) == AppPrefs.MODE_SOCKS5
-        Log.i(TAG, "[onStartCommand] serviceMode=${AppPrefs.serviceMode(this)}, socksOnly=$socksOnly. Calling ${if (socksOnly) "startSocksOnly()" else "establishVpn()"}...")
+        Log.i(TAG, "[startInternal] serviceMode=${AppPrefs.serviceMode(this)}, socksOnly=$socksOnly. Calling ${if (socksOnly) "startSocksOnly()" else "establishVpn()"}...")
         val started = if (socksOnly) startSocksOnly() else establishVpn()
         if (started) {
             startedEngine = true
             _isRunning.value = true
-            Log.i(TAG, "[onStartCommand] Start SUCCESS (socks=$socksOnly)! startedEngine=true, _isRunning=true. Returning START_STICKY.")
+            Log.i(TAG, "[startInternal] Start SUCCESS (socks=$socksOnly)! startedEngine=true, _isRunning=true. Returning START_STICKY.")
             return START_STICKY
         }
         // start 失败:前台服务已起,立即收掉避免空转。
-        Log.e(TAG, "[onStartCommand] Start FAILED (socks=$socksOnly)! Stopping foreground notification and service.")
+        Log.e(TAG, "[startInternal] Start FAILED (socks=$socksOnly)! Stopping foreground notification and service.")
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
         return START_NOT_STICKY
