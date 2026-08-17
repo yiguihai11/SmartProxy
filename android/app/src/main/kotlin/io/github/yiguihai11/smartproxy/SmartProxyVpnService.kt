@@ -87,6 +87,12 @@ class SmartProxyVpnService : VpnService() {
      *  (~20s+)才清(系统不拆 VPN 就拖着服务不销毁)。 */
     private var tunPfd: ParcelFileDescriptor? = null
 
+    /** establishVpn 里 dup + detachFd 交给 Go 的原始 fd 号。Go 引擎 stopRouter 会关它;
+     *  这里保留一份,shutdown 时兜底强关(Go 已关则 EBADF 无害)——实测 stopSelf→
+     *  onDestroy 会拖到 240s(OriginOS 冻结后台服务),若 Go 那份没真正关掉,tun0 不删、
+     *  图标就赖到服务销毁。close 后置 -1,shutdown 幂等。 */
+    private var goFdForClose = -1
+
     /** §4.5 区分主动/被动停止:ACTION_STOP 置 true;正常启动置 false。主线程回调间切换。 */
     private var userInitiatedStop = false
 
@@ -246,14 +252,16 @@ class SmartProxyVpnService : VpnService() {
                 // 拆 VPN 的唯一干净信号,图标即刻消失。
                 val dupPfd = pfd.dup()
                 val goFd = dupPfd.detachFd()
+                goFdForClose = goFd
                 smartproxy.mobile.Mobile.startRouter(configPath, goFd.toLong(), true)
-                Log.i(TAG, "[establishVpn] Mobile.startRouter() returned successfully in ${System.currentTimeMillis() - t0} ms. (goFd=$goFd, kotlinPfd=${pfd.fd})")
+                Log.i(TAG, "[establishVpn] Mobile.startRouter() returned successfully in ${System.currentTimeMillis() - t0} ms. (goFd=$goFd, kotlinPfd=${pfd.fd}, tunFds=$tunFdCount())")
                 tunPfd = pfd
                 Log.i(TAG, "[establishVpn] Step 4: VPN established. tunPfd retained for shutdown close.")
             } catch (e: Exception) {
                 Log.e(TAG, "[establishVpn] Mobile.startRouter threw exception! Closing PFD...", e)
                 pfd.close()
                 tunPfd = null
+                goFdForClose = -1
                 // goFd 所有权已交 Go:若其已 os.NewFile 包装,Go 的失败清理会关它;此处不关,
                 // 避免与 Go 清理路径 double-close(EBADF 或 fd 号被复用后误关)。
                 throw e
@@ -286,6 +294,17 @@ class SmartProxyVpnService : VpnService() {
         }
     }
 
+    /** 统计本进程当前持有的 tun 设备 fd 数(/proc/self/fd 符号链接指向 /dev/tun)。
+     *  诊断用:stop 后若仍 >0,说明 Go 或 PFD 没真正释放,内核不会删 tun0,状态栏图标
+     *  就赖到服务/进程销毁。失败返回 -1。 */
+    private fun tunFdCount(): Int = try {
+        java.io.File("/proc/self/fd").listFiles()?.count { f ->
+            try { android.system.Os.readlink(f.absolutePath).contains("tun") } catch (e: Exception) { false }
+        } ?: 0
+    } catch (e: Exception) {
+        -1
+    }
+
     /** 停引擎 + 收前台服务 + 状态落 false(§4.5)。
      *  先停 Go 引擎、再关原始 PFD:Go 那份是 establishVpn 里 dup + detach 出的独立 fd,
      *  stopRouter 先关它;随后对 tunPfd 的 close 是 tun 设备的最后一次引用释放,单事件触发
@@ -294,14 +313,14 @@ class SmartProxyVpnService : VpnService() {
      *  不再复查(实测 stopSelf→onDestroy 间歇性拖到 128s,图标赖到服务销毁)。shutdown
      *  幂等(重复进入 startedEngine=false、tunPfd 已置 null)。 */
     private fun shutdown() {
-        Log.i(TAG, "[shutdown] Step 0: Enter shutdown(). startedEngine=$startedEngine, _isRunning=${_isRunning.value}")
+        Log.i(TAG, "[shutdown] Step 0: Enter shutdown(). startedEngine=$startedEngine, _isRunning=${_isRunning.value}, tunFds=$tunFdCount()")
         if (startedEngine) {
             try {
-                Log.i(TAG, "[shutdown] Step 1/4: Invoking Go Mobile.stopRouter()...")
+                Log.i(TAG, "[shutdown] Step 1/4: Invoking Go Mobile.stopRouter()... (tunFds before=$tunFdCount())")
                 val t0 = System.currentTimeMillis()
                 smartproxy.mobile.Mobile.stopRouter()
                 val duration = System.currentTimeMillis() - t0
-                Log.i(TAG, "[shutdown] Step 1/4: Mobile.stopRouter() completed in ${duration} ms.")
+                Log.i(TAG, "[shutdown] Step 1/4: Mobile.stopRouter() completed in ${duration} ms. tunFds after=$tunFdCount()")
             } catch (e: Exception) {
                 Log.e(TAG, "[shutdown] Step 1/4: Mobile.stopRouter() threw exception", e)
             }
@@ -309,11 +328,23 @@ class SmartProxyVpnService : VpnService() {
         } else {
             Log.i(TAG, "[shutdown] Step 1/4: startedEngine is false, skipping Mobile.stopRouter().")
         }
+        // 兜底:stopRouter 若没真正关掉 Go 那份 fd,tun0 不会删,系统拆 VPN 事件不触发,
+        // 图标赖到服务销毁(实测拖 240s)。Go 已关则 Os.close 抛 EBADF,无害。紧接在
+        // stopRouter 返回后执行,fd 号被复用的窗口是微秒级,可接受。
+        if (goFdForClose > 0) {
+            try {
+                android.system.Os.close(goFdForClose)
+                Log.i(TAG, "[shutdown] Step 1.5/4: goFd=$goFdForClose closed. tunFds=$tunFdCount()")
+            } catch (e: Exception) {
+                Log.i(TAG, "[shutdown] Step 1.5/4: goFd=$goFdForClose already closed by Go (${e.javaClass.simpleName}). tunFds=$tunFdCount()")
+            }
+            goFdForClose = -1
+        }
         tunPfd?.let { pfd ->
             try {
                 Log.i(TAG, "[shutdown] Step 2/4: Closing tun PFD (last fd to tun device, tear down VPN)...")
                 pfd.close()
-                Log.i(TAG, "[shutdown] Step 2/4: tun PFD closed.")
+                Log.i(TAG, "[shutdown] Step 2/4: tun PFD closed. tunFds=$tunFdCount()")
             } catch (e: Exception) {
                 Log.e(TAG, "[shutdown] Step 2/4: tun PFD close failed", e)
             }
@@ -326,7 +357,7 @@ class SmartProxyVpnService : VpnService() {
 
         Log.i(TAG, "[shutdown] Step 4/4: Updating state _isRunning.value = false...")
         _isRunning.value = false
-        Log.i(TAG, "[shutdown] Step 5/4: shutdown() completed. _isRunning is now false.")
+        Log.i(TAG, "[shutdown] Step 5/4: shutdown() completed. _isRunning is now false. tunFds=$tunFdCount()")
     }
 
     /** 被其它 VPN 抢占 / 系统设置断开:系统调此,隧道即刻失效(§4.5 主信号)。 */
