@@ -27,8 +27,11 @@ object TunConfig {
         val tun = json.optJSONObject("tun") ?: JSONObject()
         return TunParams(
             mtu = tun.optInt("mtu", 1500),
-            inet4 = tun.optJSONArray("inet4_address")?.let { parseCidr(it.getString(0)) },
-            inet6 = tun.optJSONArray("inet6_address")?.let { parseCidr(it.getString(0)) }
+            // 空数组([])与缺失等价 = 该族未启用:关掉开关时 ConfigProvider 写 [] 而非删 key
+            // (自文档化),这里必须跳过空数组,否则 getString(0) 抛 JSONException,establishVpn
+            // 兜住返回 false,VPN 静默起不来。
+            inet4 = tun.optJSONArray("inet4_address")?.takeIf { it.length() > 0 }?.let { parseCidr(it.getString(0)) },
+            inet6 = tun.optJSONArray("inet6_address")?.takeIf { it.length() > 0 }?.let { parseCidr(it.getString(0)) }
         )
     }
 
