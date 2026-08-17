@@ -30,13 +30,12 @@ object PanelUrl {
 
     /** https://smartproxy.lan:<port>;未连网/拿不到局域网 IP 返回 null。
      *  仅代理(SOCKS5)模式(§8)无 VPN DNS 接管:smartproxy.lan 手机系统 DNS 解析不了,
-     *  改用裸 IP。SOCKS5 绑全接口("::")局域网可达,面板同样给局域网 IP(证书 SAN 含它,
-     *  本机与局域网设备都能开);无局域网 IP 回退 127.0.0.1(admin 绑 ":AdminPort",
-     *  证书内置 SAN 127.0.0.1,本机可开面板)。 */
+     *  改用 loopback 127.0.0.1(admin 绑 ":AdminPort",证书内置 SAN 127.0.0.1,本机开
+     *  面板无告警)。LAN IP 不进证书(用户取消 SAN 自动追加,§8),不再给局域网设备
+     *  提供 App 链接;需要者可自行加 admin_cert_sans 或放行自签告警。 */
     fun url(context: Context): String? {
         if (AppPrefs.serviceMode(context) == AppPrefs.MODE_SOCKS5) {
-            val lan = lanIpv4()
-            return "https://${lan ?: "127.0.0.1"}:${ConfigProvider.adminPort(context)}"
+            return "https://127.0.0.1:${ConfigProvider.adminPort(context)}"
         }
         if (lanIpv4() == null) return null
         return "https://smartproxy.lan:${ConfigProvider.adminPort(context)}"

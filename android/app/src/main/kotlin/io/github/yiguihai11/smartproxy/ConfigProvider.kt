@@ -113,9 +113,8 @@ object ConfigProvider {
         // 首页面板链接用 https://smartproxy.lan:port:VPN 运行时引擎接管手机 DNS,static
         // record 把 smartproxy.lan 解析到手机自己(网络/系统 DNS 不认识该域名)。
         // 记录恒建且 loopback 优先(127.0.0.1/::1):本地浏览器直连 admin,loopback 不进
-        // TUN,离线/仅流量也能开面板;LAN IP 排后供其它设备经手机 DNS 解析。证书内置 SAN
-        // 含 127.0.0.1/::1 且不变量追加 LAN IP,换网后 IP 变、域名不变 → 证书始终有效。
-        // 每次启动用当前 IP 刷新,不保留旧 IP。
+        // TUN,离线/仅流量也能开面板;LAN IP 排后供其它设备经手机 DNS 解析(纯 DNS 解析,
+        // 与证书 SAN 无关,见上)。每次启动用当前 IP 刷新,不保留旧 IP。
         val lanIp = PanelUrl.lanIpv4()
         val dns = base.optJSONObject("dns") ?: JSONObject().also { base.put("dns", it) }
         val records = dns.optJSONArray("static_records")
@@ -134,21 +133,10 @@ object ConfigProvider {
         rec.put("ip", ips)
         base.put("dns", dns)
 
-        // admin cert SAN 追加手机局域网 IP,减浏览器警告(证书随 SAN 变化重新自签)。
-        val listen = base.optJSONObject("listen") ?: JSONObject().also { base.put("listen", it) }
-        val sans = listen.optJSONArray("admin_cert_sans")
-            ?: JSONArray().also { listen.put("admin_cert_sans", it) }
-        PanelUrl.lanIpv4()?.let { ip ->
-            var found = false
-            for (i in 0 until sans.length()) {
-                if (sans.optString(i) == ip) {
-                    found = true
-                    break
-                }
-            }
-            if (!found) sans.put(ip)
-        }
-        base.put("listen", listen)
+        // admin_cert_sans 不再自动追加 LAN IP(用户要求,§8):证书 SAN 保持配置原样
+        // (assets 基础 smartproxy.lan + 引擎内置 loopback 127.0.0.1/::1)。换网不触发
+        // 重签,持久化证书复用,浏览器只告警一次;局域网面板链接的免告警能力相应取消
+        // (PanelUrl socks 模式回退 loopback)。
         return base
     }
 
