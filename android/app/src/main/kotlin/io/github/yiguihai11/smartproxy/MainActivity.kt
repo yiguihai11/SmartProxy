@@ -260,10 +260,16 @@ private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme:
 
     // 面板 URL:局域网 IP 变化时在 onResume 刷新(§4.4 注意)。
     var panelUrl by remember { mutableStateOf(PanelUrl.url(context)) }
+    // 面板账号密码:与 URL 同源(读 listen.admin_auth),onResume 一并刷新,
+    // 在面板里改过密码后回首页能取到新值。
+    var adminAuth by remember { mutableStateOf(ConfigProvider.adminAuth(context)) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) panelUrl = PanelUrl.url(context)
+            if (event == Lifecycle.Event.ON_RESUME) {
+                panelUrl = PanelUrl.url(context)
+                adminAuth = ConfigProvider.adminAuth(context)
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -308,6 +314,7 @@ private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme:
     ) {
         HomeLauncher(
             panelUrl = panelUrl,
+            adminAuth = adminAuth,
             onToggleVpn = onToggleVpn,
             onOpenDrawer = { scope.launch { drawerState.open() } },
             themeMode = themeMode,
@@ -513,6 +520,7 @@ private fun DrawerMenuItem(
 @Composable
 private fun HomeLauncher(
     panelUrl: String?,
+    adminAuth: Pair<String, String>?,
     onToggleVpn: () -> Unit,
     onOpenDrawer: () -> Unit,
     themeMode: String,
@@ -661,7 +669,7 @@ private fun HomeLauncher(
 
             // ── 管理面板卡(仅 VPN 运行时显示:连接后才有可扫的 QR 面板)────────
             if (running) {
-                PanelCard(url = panelUrl, onCopy = { url -> copyPanelUrl(context, url) }, onOpen = { url -> openPanel(context, url) })
+                PanelCard(url = panelUrl, auth = adminAuth, onCopy = { url -> copyPanelUrl(context, url) }, onOpen = { url -> openPanel(context, url) })
                 Spacer(Modifier.height(8.dp))
             }
         }
@@ -937,9 +945,10 @@ private fun SwitchCard(
 }
 
 
-/** 管理面板入口卡:URL + 复制 + 浏览器选择器;二维码默认折叠,点卡片底部居中箭头展开(§4.4)。 */
+/** 管理面板入口卡:URL + 账号密码提示 + 复制 + 浏览器选择器;二维码默认折叠,点卡片
+ *  底部居中箭头展开(§4.4)。auth 非空(admin_auth 启用)时在 URL 下方显示登录凭据。 */
 @Composable
-private fun PanelCard(url: String?, onCopy: (String) -> Unit, onOpen: (String) -> Unit) {
+private fun PanelCard(url: String?, auth: Pair<String, String>?, onCopy: (String) -> Unit, onOpen: (String) -> Unit) {
     Surface(
         shape = RoundedCornerShape(24.dp),
         color = CardSurface,
@@ -963,6 +972,11 @@ private fun PanelCard(url: String?, onCopy: (String) -> Unit, onOpen: (String) -
             if (url != null) {
                 Spacer(Modifier.height(6.dp))
                 Text(url, fontSize = 13.sp, color = GreyText)
+                if (auth != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("登录账号: ${auth.first}", fontSize = 12.sp, color = GreyText)
+                    Text("登录密码: ${auth.second}", fontSize = 12.sp, color = GreyText)
+                }
                 Spacer(Modifier.height(10.dp))
                 Row {
                     OutlinedButton(onClick = { onCopy(url) }, modifier = Modifier.weight(1f)) {

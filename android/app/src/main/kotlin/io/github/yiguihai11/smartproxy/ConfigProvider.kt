@@ -99,6 +99,16 @@ object ConfigProvider {
         readConfig(context).optJSONObject("listen")
             ?.optBoolean("admin_https", true) ?: true
 
+    /** 面板管理账号密码:读 listen.admin_auth。未启用 / 无用户名(引擎实际不开 Basic Auth)
+     *  返回 null → 面板无需登录,首页不显示账号密码提示。 */
+    fun adminAuth(context: Context): Pair<String, String>? {
+        val a = readConfig(context).optJSONObject("listen")?.optJSONObject("admin_auth") ?: return null
+        if (!a.optBoolean("enabled", true)) return null
+        val u = a.optString("username")
+        if (u.isBlank()) return null
+        return u to a.optString("password")
+    }
+
     // ── 不变量(ensureConfig 每次应用,与 ConfigGenerator 的强制项一致)──────
 
     private fun applyInvariants(context: Context, base: JSONObject): JSONObject {
