@@ -254,7 +254,7 @@ class SmartProxyVpnService : VpnService() {
                 val goFd = dupPfd.detachFd()
                 goFdForClose = goFd
                 smartproxy.mobile.Mobile.startRouter(configPath, goFd.toLong(), true)
-                Log.i(TAG, "[establishVpn] Mobile.startRouter() returned successfully in ${System.currentTimeMillis() - t0} ms. (goFd=$goFd, kotlinPfd=${pfd.fd}, tunFds=$tunFdCount())")
+                Log.i(TAG, "[establishVpn] Mobile.startRouter() returned successfully in ${System.currentTimeMillis() - t0} ms. (goFd=$goFd, kotlinPfd=${pfd.fd}, tunFds=${tunFdCount()})")
                 tunPfd = pfd
                 Log.i(TAG, "[establishVpn] Step 4: VPN established. tunPfd retained for shutdown close.")
             } catch (e: Exception) {
@@ -313,14 +313,14 @@ class SmartProxyVpnService : VpnService() {
      *  不再复查(实测 stopSelf→onDestroy 间歇性拖到 128s,图标赖到服务销毁)。shutdown
      *  幂等(重复进入 startedEngine=false、tunPfd 已置 null)。 */
     private fun shutdown() {
-        Log.i(TAG, "[shutdown] Step 0: Enter shutdown(). startedEngine=$startedEngine, _isRunning=${_isRunning.value}, tunFds=$tunFdCount()")
+        Log.i(TAG, "[shutdown] Step 0: Enter shutdown(). startedEngine=$startedEngine, _isRunning=${_isRunning.value}, tunFds=${tunFdCount()}")
         if (startedEngine) {
             try {
-                Log.i(TAG, "[shutdown] Step 1/4: Invoking Go Mobile.stopRouter()... (tunFds before=$tunFdCount())")
+                Log.i(TAG, "[shutdown] Step 1/4: Invoking Go Mobile.stopRouter()... (tunFds before=${tunFdCount()})")
                 val t0 = System.currentTimeMillis()
                 smartproxy.mobile.Mobile.stopRouter()
                 val duration = System.currentTimeMillis() - t0
-                Log.i(TAG, "[shutdown] Step 1/4: Mobile.stopRouter() completed in ${duration} ms. tunFds after=$tunFdCount()")
+                Log.i(TAG, "[shutdown] Step 1/4: Mobile.stopRouter() completed in ${duration} ms. tunFds after=${tunFdCount()}")
             } catch (e: Exception) {
                 Log.e(TAG, "[shutdown] Step 1/4: Mobile.stopRouter() threw exception", e)
             }
@@ -333,10 +333,10 @@ class SmartProxyVpnService : VpnService() {
         // stopRouter 返回后执行,fd 号被复用的窗口是微秒级,可接受。
         if (goFdForClose > 0) {
             try {
-                android.system.Os.close(goFdForClose)
-                Log.i(TAG, "[shutdown] Step 1.5/4: goFd=$goFdForClose closed. tunFds=$tunFdCount()")
+                android.system.Os.close(android.system.Os.newFileDescriptor(goFdForClose))
+                Log.i(TAG, "[shutdown] Step 1.5/4: goFd=$goFdForClose closed. tunFds=${tunFdCount()}")
             } catch (e: Exception) {
-                Log.i(TAG, "[shutdown] Step 1.5/4: goFd=$goFdForClose already closed by Go (${e.javaClass.simpleName}). tunFds=$tunFdCount()")
+                Log.i(TAG, "[shutdown] Step 1.5/4: goFd=$goFdForClose already closed by Go (${e.javaClass.simpleName}). tunFds=${tunFdCount()}")
             }
             goFdForClose = -1
         }
@@ -344,7 +344,7 @@ class SmartProxyVpnService : VpnService() {
             try {
                 Log.i(TAG, "[shutdown] Step 2/4: Closing tun PFD (last fd to tun device, tear down VPN)...")
                 pfd.close()
-                Log.i(TAG, "[shutdown] Step 2/4: tun PFD closed. tunFds=$tunFdCount()")
+                Log.i(TAG, "[shutdown] Step 2/4: tun PFD closed. tunFds=${tunFdCount()}")
             } catch (e: Exception) {
                 Log.e(TAG, "[shutdown] Step 2/4: tun PFD close failed", e)
             }
@@ -357,7 +357,7 @@ class SmartProxyVpnService : VpnService() {
 
         Log.i(TAG, "[shutdown] Step 4/4: Updating state _isRunning.value = false...")
         _isRunning.value = false
-        Log.i(TAG, "[shutdown] Step 5/4: shutdown() completed. _isRunning is now false. tunFds=$tunFdCount()")
+        Log.i(TAG, "[shutdown] Step 5/4: shutdown() completed. _isRunning is now false. tunFds=${tunFdCount()}")
     }
 
     /** 被其它 VPN 抢占 / 系统设置断开:系统调此,隧道即刻失效(§4.5 主信号)。 */
