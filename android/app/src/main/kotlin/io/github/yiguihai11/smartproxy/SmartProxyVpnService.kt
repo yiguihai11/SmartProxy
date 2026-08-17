@@ -85,6 +85,7 @@ class SmartProxyVpnService : VpnService() {
      *  独占那份;原始 PFD 从不过手,close 它就是系统拆 VPN 的唯一干净信号。不可 detach 原始
      *  PFD——fd 所有权转给 Go 后系统收不到关闭回调,实测图标赖到 onDestroy(~20s+)才清
      *  (系统不拆 VPN 就拖着服务不销毁)。 */
+    private var tunPfd: ParcelFileDescriptor? = null
 
     /** §4.5 区分主动/被动停止:ACTION_STOP 置 true;正常启动置 false。主线程回调间切换。 */
     private var userInitiatedStop = false
