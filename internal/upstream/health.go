@@ -184,12 +184,13 @@ func (ph *ProxyHealth) Snapshot() ProxyHealthSnapshot {
 }
 
 type HealthChecker struct {
-	cfg     atomic.Pointer[config.HealthCheckConf]
-	proxies []*Proxy
-	stopCh  chan struct{}
-	wg      sync.WaitGroup
-	ctx     context.Context
-	cancel  context.CancelFunc
+	cfg      atomic.Pointer[config.HealthCheckConf]
+	proxies  []*Proxy
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	wg       sync.WaitGroup
+	ctx      context.Context
+	cancel   context.CancelFunc
 }
 
 func NewHealthChecker(cfg config.HealthCheckConf, proxies []*Proxy) *HealthChecker {
@@ -220,9 +221,13 @@ func (hc *HealthChecker) Start() {
 	}
 }
 
+// Stop terminates the per-node check loops and waits for them to finish. It is idempotent
+// with respect to the current stopCh (via stopOnce): Engine.Stop calls Manager.Stop →
+// HealthChecker.Stop, and a concurrent config reload also routes through Stop internally,
+// so closing stopCh must not panic on a double close. cancel is safe to call repeatedly.
 func (hc *HealthChecker) Stop() {
 	hc.cancel()
-	close(hc.stopCh)
+	hc.stopOnce.Do(func() { close(hc.stopCh) })
 	hc.wg.Wait()
 }
 
@@ -230,6 +235,7 @@ func (hc *HealthChecker) Reload(cfg config.HealthCheckConf, proxies []*Proxy) {
 	hc.Stop()
 	hc.cfg.Store(&cfg)
 	hc.proxies = proxies
+	hc.stopOnce = sync.Once{}
 	hc.stopCh = make(chan struct{})
 	hc.ctx, hc.cancel = context.WithCancel(context.Background())
 	hc.Start()
@@ -550,7 +556,15 @@ func (hc *HealthChecker) recordSuccess(p *Proxy, ph *ProxyHealth, circuit string
 	case StateClosed:
 		ph.consecutiveFailures = 0
 	case StateOpen:
-
+		// checkProxy skips probing while Open and inside the cool-down, so reaching here
+		// means the cool-down has passed and this probe succeeded — the node is recovering.
+		// Move to half-open and count this success toward the recovery threshold. Without
+		// this, an Open circuit could only ever recover by failing again (recordFailure is
+		// the only other Open→HalfOpen path), which defeats the breaker's failover purpose:
+		// the node would stay permanently skipped despite probes succeeding.
+		ph.state = StateHalfOpen
+		ph.consecutiveSuccesses = 1
+		slog.Info("proxy circuit half-open on probe success", "url", p.URL, "circuit", circuit, "latency", latency)
 	case StateHalfOpen:
 		ph.consecutiveSuccesses++
 		if ph.consecutiveSuccesses >= cfg.SuccessesThreshold {

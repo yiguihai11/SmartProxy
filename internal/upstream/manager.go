@@ -63,6 +63,19 @@ func (m *Manager) Reload(cfg UpstreamConfig) {
 	slog.Info("upstream manager reloaded", "aliases", len(m.aliasMap), "strategy", m.strategy)
 }
 
+// Stop shuts down the manager's background work: the health checker's per-node check loops
+// and the DNS UDP associate pool. It is called from Engine.Stop. Without it, every
+// stop/restart (e.g. toggling the Android VPN) leaks one goroutine per proxy node (each
+// checkLoop spins on stopCh forever) plus up to four pooled UDP ASSOCIATE connections.
+func (m *Manager) Stop() {
+	if m.healthChecker != nil {
+		m.healthChecker.Stop()
+	}
+	if m.dnsUDPPool != nil {
+		m.dnsUDPPool.Close()
+	}
+}
+
 // circuitPin captures one health circuit's manual pin: whether it is pinned and, if so,
 // the forced availability. Both index 0 (TCP) and index 1 (UDP) live in the same array.
 type circuitPin struct {
@@ -135,7 +148,7 @@ func (m *Manager) rebuildFromConfig(cfg UpstreamConfig) {
 		}
 		proxy, err := NewProxy(entry.URL)
 		if err != nil {
-			slog.Warn("failed to create proxy", "url", entry.URL, "error", err)
+			slog.Warn("failed to create proxy", "url", MaskProxyURL(entry.URL), "error", err)
 			continue
 		}
 		// The config entry's udp_in_tcp field (the panel switch) is the primary source;

@@ -429,7 +429,7 @@ func TestStaticRecordsMap(t *testing.T) {
 	cfg.StaticRecords = []StaticRecord{
 		{Host: "SmartProxy.LAN.", IP: IPList{"192.168.1.1"}},
 		{Host: "smartproxy.lan", IP: IPList{"fc00::1"}},
-		{Host: "  ", IP: IPList{"1.2.3.4"}},      // empty host → skipped
+		{Host: "  ", IP: IPList{"1.2.3.4"}},       // empty host → skipped
 		{Host: "bad.example", IP: IPList{"oops"}}, // invalid IP → skipped
 	}
 	m := cfg.StaticRecordsMap()

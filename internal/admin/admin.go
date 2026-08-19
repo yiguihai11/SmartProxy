@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,7 +63,6 @@ type Server struct {
 	// certPEM is the public certificate in use (auto-generated or custom), captured at
 	// buildTLSConfig for the /admin.crt download. Empty when HTTPS is not in use.
 	certPEM []byte
-
 }
 
 type cachedStats struct {
@@ -100,6 +100,10 @@ func (s *Server) SetConfigPath(path string) {
 }
 func (s *Server) Start() error {
 	mux := s.setupMux()
+	// Auth + request-body cap are the same for every transport (unix socket, plain
+	// HTTP, HTTPS); build one hardened handler and reuse it so the three http.Server
+	// constructors can't drift.
+	handler := s.authMiddleware(s.limitBody(mux))
 
 	if s.sockPath != "" {
 		dir := filepath.Dir(s.sockPath)
@@ -114,7 +118,7 @@ func (s *Server) Start() error {
 		}
 		os.Chmod(s.sockPath, 0666)
 		s.listener = ln
-		s.server = &http.Server{Handler: mux}
+		s.server = newHTTPServer(handler)
 		slog.Info("admin server started", "socket", s.sockPath)
 		go s.server.Serve(ln)
 	}
@@ -140,6 +144,14 @@ func (s *Server) Start() error {
 
 	if s.tcpPort > 0 {
 		addr := fmt.Sprintf(":%d", s.tcpPort)
+		if !s.authEnabled() {
+			// No authentication configured: an open panel bound to all interfaces would let
+			// anyone on the LAN (or via port forwarding) write config, change ACLs/chnroute,
+			// create files and flip circuits. Force loopback so it is only reachable from
+			// this host.
+			addr = fmt.Sprintf("127.0.0.1:%d", s.tcpPort)
+			slog.Warn("admin panel has no auth configured; binding TCP to loopback only", "port", s.tcpPort)
+		}
 		tcpLn, err := net.Listen("tcp", addr)
 		if err != nil {
 			slog.Warn("admin TCP listen failed", "port", s.tcpPort, "error", err)
@@ -151,19 +163,19 @@ func (s *Server) Start() error {
 					// A bad cert (e.g. unreadable configured files) must not take the
 					// panel down: fall back to plain HTTP so it stays reachable.
 					slog.Warn("admin TLS setup failed, falling back to plain HTTP", "error", err)
-					s.tcpServer = &http.Server{Handler: s.authMiddleware(mux)}
+					s.tcpServer = newHTTPServer(handler)
 					slog.Info("admin HTTP server started", "port", s.tcpPort)
 					go s.tcpServer.Serve(tcpLn)
 				} else {
 					// One port, two protocols: TLS handshakes are served as HTTPS,
 					// plaintext requests are 301-redirected to https (see tls.go).
-					s.tcpServer = &http.Server{Handler: s.tlsDispatch(mux)}
+					s.tcpServer = newHTTPServer(s.tlsDispatch(handler))
 					slog.Info("admin HTTPS server started (HTTP redirects to https)", "port", s.tcpPort)
 					go s.tcpServer.Serve(&splitListener{Listener: tcpLn, tlsCfg: tlsCfg})
 				}
 			} else {
 				// The TCP port requires authentication
-				s.tcpServer = &http.Server{Handler: s.authMiddleware(mux)}
+				s.tcpServer = newHTTPServer(handler)
 				slog.Info("admin HTTP server started", "port", s.tcpPort)
 				go s.tcpServer.Serve(tcpLn)
 			}
@@ -173,12 +185,13 @@ func (s *Server) Start() error {
 }
 
 // tlsDispatch routes a TCP-port request by transport: real TLS (handshaked by
-// http.Server, r.TLS set) is served through the authenticated mux; plaintext HTTP
-// is bounced to the https:// URL on the same host:port with the original path.
-func (s *Server) tlsDispatch(mux http.Handler) http.Handler {
+// http.Server, r.TLS set) is served through the authenticated, body-limited handler;
+// plaintext HTTP is bounced to the https:// URL on the same host:port with the
+// original path.
+func (s *Server) tlsDispatch(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.TLS != nil {
-			s.authMiddleware(mux).ServeHTTP(w, r)
+			handler.ServeHTTP(w, r)
 			return
 		}
 		host := r.Host
@@ -222,6 +235,7 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/chnroute", s.handleChnroute)
 	mux.HandleFunc("/health/proxy", s.handleHealthProxy)
 	mux.HandleFunc("/health/reset-auto", s.handleHealthResetAuto)
+	mux.HandleFunc("/export", s.handleExport)
 	mux.HandleFunc("/config", s.handleConfig)
 	mux.HandleFunc("/version", s.handleVersion)
 	mux.HandleFunc("/files", s.handleFiles)
@@ -246,9 +260,16 @@ func (s *Server) setupMux() http.Handler {
 	return mux
 }
 
+// authEnabled reports whether Basic Auth is actually configured on the panel. It is the
+// single gate both authMiddleware and the bind-address logic must agree on: the same
+// condition that leaves endpoints open decides whether binding all interfaces is safe.
+func (s *Server) authEnabled() bool {
+	return s.adminAuth != nil && s.adminAuth.Enabled && s.adminAuth.Username != ""
+}
+
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.adminAuth != nil && s.adminAuth.Enabled && s.adminAuth.Username != "" {
+		if s.authEnabled() {
 			u, p, ok := r.BasicAuth()
 			if !ok || u != s.adminAuth.Username || p != s.adminAuth.Password {
 				w.Header().Set("WWW-Authenticate", `Basic realm="Admin Console"`)
@@ -258,6 +279,44 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+const (
+	// maxRequestBody caps every admin request body (config PUT, ACL add, files, DNS
+	// static records…). All body reads go through http.MaxBytesReader, so a huge
+	// request cannot OOM the process.
+	maxRequestBody = 1 << 20 // 1 MiB
+	// adminMaxHeaderBytes bounds request headers; adminReadHeaderTimeout stops
+	// slowloris (a client trickling headers forever). IdleTimeout recycles keep-alive
+	// connections. WriteTimeout must stay above the SSE push interval (~3s+, see
+	// handleEvents); 60s leaves plenty of headroom.
+	adminMaxHeaderBytes    = 1 << 20
+	adminReadHeaderTimeout = 10 * time.Second
+	adminIdleTimeout       = 90 * time.Second
+	adminWriteTimeout      = 60 * time.Second
+	adminReadTimeout       = 30 * time.Second
+)
+
+// limitBody caps request bodies for every route, whether it uses io.ReadAll or
+// json.Decode — both error out with "request body too large" past the cap.
+func (s *Server) limitBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// newHTTPServer builds the panel's http.Server with slowloris/OOM hardening that the
+// bare &http.Server{} constructors lacked.
+func newHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: adminReadHeaderTimeout,
+		ReadTimeout:       adminReadTimeout,
+		WriteTimeout:      adminWriteTimeout,
+		IdleTimeout:       adminIdleTimeout,
+		MaxHeaderBytes:    adminMaxHeaderBytes,
+	}
 }
 
 func (s *Server) SetTCPPort(port int) {
@@ -669,6 +728,31 @@ func (s *Server) handleHealthResetAuto(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "reset": n})
 }
 
+// handleExport returns a node's full shareable URL (real ss:// link, credentials intact)
+// on demand. It is the only place the panel gets the real URL back, because /health and
+// /config mask passwords (see MaskProxyURL); the export link/QR feature needs the real
+// one. The panel is auth-gated, so this is a deliberate authenticated release, not a leak.
+func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	alias := r.URL.Query().Get("alias")
+	cfg := s.configSrc()
+	if cfg == nil {
+		http.Error(w, "config not available", http.StatusServiceUnavailable)
+		return
+	}
+	for _, p := range cfg.Upstream.Proxies {
+		if p.Alias == alias {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"url": p.URL})
+			return
+		}
+	}
+	http.Error(w, "alias not found", http.StatusNotFound)
+}
+
 // ---- config reload ----
 
 func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {
@@ -686,6 +770,109 @@ func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+// maskConfigForDisplay returns a copy of the live config whose proxy URLs have their
+// passwords masked (upstream.MaskProxyURL) — so /config GET never echoes credentials
+// to the panel or a network observer. PUT round-trips via restoreMaskedProxies.
+func maskConfigForDisplay(c *config.Config) *config.Config {
+	cp := *c
+	proxies := make([]config.ProxyEntry, len(c.Upstream.Proxies))
+	for i, p := range c.Upstream.Proxies {
+		proxies[i] = p
+		proxies[i].URL = upstream.MaskProxyURL(p.URL)
+	}
+	cp.Upstream.Proxies = proxies
+	return &cp
+}
+
+// restoreMaskedProxies resolves proxy URLs whose password was masked to
+// upstream.MaskPassword back to the live password, keyed by alias. Called on the PUT
+// path (and saveConfig) before Validate, so a panel round-trip that never touched the
+// password keeps the real secret server-side instead of writing "******" to disk.
+// A changed host/method still applies; only the untouched password is restored.
+func restoreMaskedProxies(c, live *config.Config) {
+	if c == nil || live == nil {
+		return
+	}
+	liveByAlias := make(map[string]config.ProxyEntry, len(live.Upstream.Proxies))
+	for _, p := range live.Upstream.Proxies {
+		if p.Alias != "" {
+			liveByAlias[p.Alias] = p
+		}
+	}
+	for i := range c.Upstream.Proxies {
+		cur := &c.Upstream.Proxies[i]
+		if cur.URL == "" {
+			continue
+		}
+		u, err := url.Parse(cur.URL)
+		if err != nil {
+			continue
+		}
+		lv, ok := liveByAlias[cur.Alias]
+		if u.Scheme == "ss" && u.User == nil {
+			// Legacy ss:// form: the whole payload was masked, so the live URL must be
+			// restored in full (no host/method to preserve — the payload is self-contained).
+			if ok && lv.URL != "" {
+				cur.URL = lv.URL
+			}
+			continue
+		}
+		if u.User == nil {
+			continue
+		}
+		pass, hasPass := u.User.Password()
+		if !hasPass || pass != upstream.MaskPassword {
+			continue
+		}
+		if !ok || lv.URL == "" {
+			continue
+		}
+		lu, err := url.Parse(lv.URL)
+		if err != nil || lu.User == nil {
+			continue
+		}
+		realPass, hasReal := lu.User.Password()
+		if !hasReal {
+			continue
+		}
+		masked := *u
+		masked.User = url.UserPassword(u.User.Username(), realPass)
+		cur.URL = masked.String()
+	}
+}
+
+// atomicWriteFile writes data to path via a temp file in the same directory + rename,
+// so a crash mid-write can never leave a truncated config.json (or ACL/chnroute file)
+// behind — readers always see either the old complete file or the new complete file.
+// The config file is hot-reloaded by fsnotify on every write; without atomicity a torn
+// write could be reloaded as invalid JSON. The file is fsynced before rename so the new
+// content is durable before it becomes visible.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -695,7 +882,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "config not available", http.StatusServiceUnavailable)
 			return
 		}
-		json.NewEncoder(w).Encode(s.configSrc())
+		json.NewEncoder(w).Encode(maskConfigForDisplay(s.configSrc()))
 
 	case http.MethodPut:
 		if s.configPath == "" || s.reloadConfig == nil {
@@ -707,6 +894,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		restoreMaskedProxies(&cfg, s.configSrc())
 		if err := cfg.Validate(); err != nil {
 			http.Error(w, "validation failed: "+err.Error(), http.StatusBadRequest)
 			return
@@ -716,7 +904,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "format error", http.StatusInternalServerError)
 			return
 		}
-		if err := os.WriteFile(s.configPath, indented, 0644); err != nil {
+		if err := atomicWriteFile(s.configPath, indented, 0644); err != nil {
 			http.Error(w, "write failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -739,6 +927,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) saveConfig(mutate func(c *config.Config)) (*config.Config, error, error) {
 	next := *s.configSrc()
 	mutate(&next)
+	restoreMaskedProxies(&next, s.configSrc())
 	if err := next.Validate(); err != nil {
 		return nil, err, nil
 	}
@@ -746,7 +935,7 @@ func (s *Server) saveConfig(mutate func(c *config.Config)) (*config.Config, erro
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := os.WriteFile(s.configPath, indented, 0644); err != nil {
+	if err := atomicWriteFile(s.configPath, indented, 0644); err != nil {
 		return nil, nil, err
 	}
 	slog.Info("admin: config saved to disk", "path", s.configPath)
@@ -1166,7 +1355,7 @@ func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "read error", http.StatusBadRequest)
 			return
 		}
-		if err := os.WriteFile(path, body, 0644); err != nil {
+		if err := atomicWriteFile(path, body, 0644); err != nil {
 			http.Error(w, "write failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -1330,7 +1519,7 @@ func (s *Server) handleChnroute(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "no valid CIDR entries found in uploaded content", http.StatusBadRequest)
 			return
 		}
-		if err := os.WriteFile(path, body, 0644); err != nil {
+		if err := atomicWriteFile(path, body, 0644); err != nil {
 			http.Error(w, "write failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -1467,7 +1656,6 @@ func formatUptime(d time.Duration) string {
 	}
 	return fmt.Sprintf("%dh%dm", hours, mins)
 }
-
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

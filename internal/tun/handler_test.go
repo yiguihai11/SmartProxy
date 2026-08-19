@@ -333,7 +333,7 @@ func TestTUNHandler_Start(t *testing.T) {
 	mockTun.On("Start").Return(nil)
 	mockStack.On("Start").Return(nil)
 
-	tunDev, tunStack, err := handler.Start(cfg.TUN)
+	tunDev, tunStack, err := handler.Start(context.Background(), cfg.TUN)
 	assert.NoError(t, err)
 	assert.NotNil(t, tunDev)
 	assert.NotNil(t, tunStack)
@@ -362,7 +362,7 @@ func TestPrepareConnection(t *testing.T) {
 
 func TestTUNHandler_Start_Disabled(t *testing.T) {
 	handler := NewHandler(&config.Config{}, nil, nil, nil, nil)
-	tunDev, tunStack, err := handler.Start(config.TUNConfig{Enabled: false})
+	tunDev, tunStack, err := handler.Start(context.Background(), config.TUNConfig{Enabled: false})
 	assert.NoError(t, err)
 	assert.Nil(t, tunDev)
 	assert.Nil(t, tunStack)
@@ -389,7 +389,7 @@ func TestTUNHandler_Start_FdMode_MTUDefault(t *testing.T) {
 
 	handler := NewHandler(&config.Config{}, nil, nil, nil, nil)
 	mockTun.On("Start").Return(nil)
-	_, _, err := handler.Start(config.TUNConfig{
+	_, _, err := handler.Start(context.Background(), config.TUNConfig{
 		Enabled:        true,
 		FileDescriptor: 42,
 		MTU:            0,
@@ -421,7 +421,7 @@ func TestTUNHandler_Start_FdMode_NoAddresses(t *testing.T) {
 
 	handler := NewHandler(&config.Config{}, nil, nil, nil, nil)
 	mockTun.On("Start").Return(nil)
-	_, _, err := handler.Start(config.TUNConfig{
+	_, _, err := handler.Start(context.Background(), config.TUNConfig{
 		Enabled:        true,
 		FileDescriptor: 42,
 		MTU:            1500,
@@ -432,7 +432,7 @@ func TestTUNHandler_Start_FdMode_NoAddresses(t *testing.T) {
 
 func TestTUNHandler_Start_InvalidIPv4Prefix(t *testing.T) {
 	handler := NewHandler(&config.Config{}, nil, nil, nil, nil)
-	_, _, err := handler.Start(config.TUNConfig{
+	_, _, err := handler.Start(context.Background(), config.TUNConfig{
 		Enabled:      true,
 		Inet4Address: []string{"not-a-valid-prefix"},
 		Stack:        "gvisor",
@@ -443,7 +443,7 @@ func TestTUNHandler_Start_InvalidIPv4Prefix(t *testing.T) {
 
 func TestTUNHandler_Start_InvalidIPv6Prefix(t *testing.T) {
 	handler := NewHandler(&config.Config{}, nil, nil, nil, nil)
-	_, _, err := handler.Start(config.TUNConfig{
+	_, _, err := handler.Start(context.Background(), config.TUNConfig{
 		Enabled:      true,
 		Inet6Address: []string{"xyz::/999"},
 		Stack:        "gvisor",
@@ -471,7 +471,7 @@ func TestTUNHandler_Start_DefaultStack(t *testing.T) {
 
 	handler := NewHandler(&config.Config{}, nil, nil, nil, nil)
 	mockTun.On("Start").Return(nil)
-	_, _, err := handler.Start(config.TUNConfig{
+	_, _, err := handler.Start(context.Background(), config.TUNConfig{
 		Enabled: true,
 		MTU:     1500,
 		Stack:   "",

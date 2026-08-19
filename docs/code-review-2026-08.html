@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartProxy 代码审查报告 · 2026-08</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-soft: #f6f7f9;
+    --bg-code: #f3f4f6;
+    --border: #e3e5e9;
+    --text: #1a1d23;
+    --text-soft: #545964;
+    --text-muted: #8a8f99;
+    --accent: #5b4ec7;
+    --p0: #d12f2f;
+    --p0-bg: #fdecec;
+    --p1: #d97706;
+    --p1-bg: #fef4e6;
+    --p2: #2563eb;
+    --p2-bg: #eaf1fe;
+    --p3: #6b7280;
+    --p3-bg: #f1f2f4;
+    --code: #be185d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161c;
+      --bg-soft: #1c1f27;
+      --bg-code: #1a1d24;
+      --border: #2c313c;
+      --text: #e6e8ec;
+      --text-soft: #b3b9c4;
+      --text-muted: #7c8390;
+      --accent: #9d91ff;
+      --p0: #ff6b6b;
+      --p0-bg: #2a1818;
+      --p1: #fbbf24;
+      --p1-bg: #2a2314;
+      --p2: #60a5fa;
+      --p2-bg: #162033;
+      --p3: #9ca3af;
+      --p3-bg: #1d2028;
+      --code: #f0a3c7;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.65;
+    font-size: 15px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 40px 24px 80px; }
+  header { border-bottom: 1px solid var(--border); padding-bottom: 24px; margin-bottom: 32px; }
+  h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: -0.02em; }
+  .subtitle { color: var(--text-soft); font-size: 15px; margin: 0; }
+  .meta { color: var(--text-muted); font-size: 13px; margin-top: 12px; }
+  h2 {
+    font-size: 21px; margin: 48px 0 16px; padding-top: 16px;
+    border-top: 1px solid var(--border); letter-spacing: -0.01em;
+  }
+  h2:first-of-type { border-top: none; padding-top: 0; }
+  h3 { font-size: 16px; margin: 28px 0 10px; }
+  p { margin: 8px 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 0.88em;
+    background: var(--bg-code);
+    color: var(--code);
+    padding: 1.5px 5px;
+    border-radius: 4px;
+  }
+  pre {
+    background: var(--bg-code);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  pre code { background: none; color: inherit; padding: 0; }
+  ul { padding-left: 22px; }
+  li { margin: 6px 0; }
+
+  .toc {
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 22px;
+    margin: 24px 0 8px;
+  }
+  .toc-title { font-weight: 600; margin: 0 0 10px; font-size: 14px; }
+  .toc ol { margin: 0; padding-left: 22px; }
+  .toc a { color: var(--text-soft); }
+  .toc .count { color: var(--text-muted); font-size: 12px; }
+
+  .badge {
+    display: inline-block; font-size: 11px; font-weight: 700;
+    padding: 2px 8px; border-radius: 999px; vertical-align: middle;
+    letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  .b-p0 { background: var(--p0-bg); color: var(--p0); border: 1px solid var(--p0); }
+  .b-p1 { background: var(--p1-bg); color: var(--p1); border: 1px solid var(--p1); }
+  .b-p2 { background: var(--p2-bg); color: var(--p2); border: 1px solid var(--p2); }
+  .b-p3 { background: var(--p3-bg); color: var(--p3); border: 1px solid var(--p3); }
+
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--bg-soft); font-weight: 600; font-size: 13px; color: var(--text-soft); }
+  td code { white-space: nowrap; }
+
+  .card {
+    border: 1px solid var(--border);
+    border-left-width: 3px;
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 14px 0;
+    background: var(--bg-soft);
+  }
+  .card.p0 { border-left-color: var(--p0); }
+  .card.p1 { border-left-color: var(--p1); }
+  .card.p2 { border-left-color: var(--p2); }
+  .card.p3 { border-left-color: var(--p3); }
+  .card h3 { margin: 0 0 6px; font-size: 15.5px; }
+  .card .loc { color: var(--text-muted); font-size: 12.5px; font-family: "SF Mono", Menlo, monospace; }
+  .card .label { font-weight: 600; color: var(--text-soft); }
+
+  .callout {
+    background: var(--p0-bg); border: 1px solid var(--p0);
+    border-radius: 8px; padding: 14px 18px; margin: 16px 0;
+  }
+  .callout.p1 { background: var(--p1-bg); border-color: var(--p1); }
+  .callout.ok { background: var(--p2-bg); border-color: var(--p2); }
+  .callout strong { color: inherit; }
+
+  .stats { display: flex; gap: 12px; flex-wrap: wrap; margin: 20px 0; }
+  .stat {
+    flex: 1; min-width: 130px; background: var(--bg-soft);
+    border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px;
+  }
+  .stat .n { font-size: 26px; font-weight: 700; line-height: 1.1; }
+  .stat .l { font-size: 12.5px; color: var(--text-muted); margin-top: 4px; }
+  .stat.p0 .n { color: var(--p0); }
+  .stat.p1 .n { color: var(--p1); }
+  .stat.p2 .n { color: var(--p2); }
+  .stat.p3 .n { color: var(--p3); }
+
+  footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--border);
+    color: var(--text-muted); font-size: 12.5px; }
+  .file-tag { font-family: "SF Mono", Menlo, monospace; font-size: 12.5px; color: var(--text-soft); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>SmartProxy 代码审查报告</h1>
+  <p class="subtitle">Go 引擎核心 · 管理面板安全 · Android App · 上游代理 / DPI / 热重载</p>
+  <p class="meta">审查日期：2026-08-19 · 范围：<code>internal/</code>、<code>mobile/</code>、<code>cmd/</code>、<code>android/</code> · 方法：分模块并行静态审查，关键项已人工复核</p>
+</header>
+
+<div class="stats">
+  <div class="stat p0"><div class="n">8</div><div class="l">P0 必须修</div></div>
+  <div class="stat p1"><div class="n">16</div><div class="l">P1 应该修</div></div>
+  <div class="stat p2"><div class="n">18</div><div class="l">P2 加固/质量</div></div>
+  <div class="stat p3"><div class="n">3</div><div class="l">P3 仓库卫生</div></div>
+</div>
+
+<div class="callout ok">
+  <strong>已确认无问题：</strong>记忆中强调的 SS none+obfs wire format（<code>addr + 首块数据必须一次写</code>，<code>deferredSSConn</code>）当前实现正确——none/plain 经 <code>firstWrite</code> 合并单次写，AEAD 由 sing 单次 Write 发出 salt+addr+payload，obfs-http/tls 帧核算无误，未发现破坏线格式的路径。
+</div>
+
+<div class="toc">
+  <p class="toc-title">目录</p>
+  <ol>
+    <li><a href="#p0">P0 — 必须修（崩溃 / 安全 / 用户可感知失效）</a> <span class="count">8 项</span></li>
+    <li><a href="#p1">P1 — 应该修（资源泄漏 / 正确性 / ANR）</a> <span class="count">16 项</span></li>
+    <li><a href="#p2">P2 — 加固 / 质量</a> <span class="count">18 项</span></li>
+    <li><a href="#p3">P3 — 仓库卫生</a> <span class="count">3 项</span></li>
+    <li><a href="#order">建议修复顺序</a></li>
+  </ol>
+</div>
+
+<!-- ===================== P0 ===================== -->
+<h2 id="p0"><span class="badge b-p0">P0</span> 必须修 <span style="font-weight:400;color:var(--text-muted);font-size:14px">— 崩溃 / 安全 / 用户可感知失效</span></h2>
+
+<div class="card p0">
+  <h3>1. CA 根私钥入库且 embed 进二进制 <span class="badge b-p0">安全</span></h3>
+  <div class="loc">internal/admin/certs/admin_ca.key · embed_ca.go:13 · tls.go</div>
+  <p><span class="label">问题：</span><code>CN=SmartProxy Root CA</code>、自签、<code>CA:TRUE</code>、有效期 20 年（2026→2046）的根 CA 私钥被 git 跟踪，并经 <code>//go:embed</code> 编进所有桌面/Android 二进制；<code>/admin.crt</code> 还引导用户把它装成系统信任根。已用 openssl 人工核实证书属性。</p>
+  <p><span class="label">后果：</span>任何拿到仓库或二进制的人都持有私钥，可为任意域名/IP 签发受信叶子证书，做全站 HTTPS MITM（解密面板凭据和流量）。</p>
+  <p><span class="label">修法：</span>轮换 CA；用 <code>git filter-repo</code>/BFG 从历史清除私钥；构建期注入而非入库；CA 证书可入库但私钥绝不入库；已安装旧 CA 的设备需撤销重装。</p>
+</div>
+
+<div class="card p0">
+  <h3>2. 断路器 Open 状态下节点永不恢复 <span class="badge b-p0">正确性</span></h3>
+  <div class="loc">internal/upstream/health.go:549-562</div>
+  <p><span class="label">问题：</span><code>recordSuccess</code> 的 <code>StateOpen</code> 分支是空的；<code>Open→HalfOpen</code> 只能由 <em>失败</em> 触发（且冷却已过）。节点熔断后即使探测一直成功，状态也纹丝不动——要恢复反而得先再失败一次。</p>
+  <p><span class="label">后果：</span><code>IsAvailable()</code> 对 Open 返回 false，默认/兜底选路与 UDP 路径（<code>manager.go:198,356</code>）永久跳过该节点，用户必须手动"一键恢复"或重启引擎——与故障转移目标相反。（注：规则路由路径 <code>manager.go:293</code> 仍会尝试连接 Open 节点，并非 100% 全部路径跳过。）</p>
+  <p><span class="label">修法：</span>冷却到期后下一次探测（无论成败）驱动 <code>Open→HalfOpen</code>；<code>StateOpen</code> 成功分支清零失败计数并转 HalfOpen/Closed，记录 latency。</p>
+</div>
+
+<div class="card p0">
+  <h3>3. 面板无鉴权时裸绑所有网卡 <span class="badge b-p0">安全</span></h3>
+  <div class="loc">internal/admin/admin.go:249-261, 141-143 · 注:config.go:457 是 SOCKS5 的 Listen.Host,面板地址硬编码于 admin.go:142</div>
+  <p><span class="label">问题：</span><code>authMiddleware</code> 仅在 <code>adminAuth != nil &amp;&amp; Enabled &amp;&amp; Username != ""</code> 时校验；一旦鉴权未配置，TCP 监听（默认绑 <code>[::]</code> 全部接口）全部端点零鉴权开放。面板能写配置、改 ACL/chnroute、创建文件、切换电路。</p>
+  <p><span class="label">后果：</span>同 LAN（或端口转发暴露公网）者直接 <code>PUT /config</code> 写入恶意上游、篡改配置。</p>
+  <p><span class="label">修法：</span>未启用鉴权时拒绝绑通配地址（强制 loopback）或拒绝启动并显著告警；默认绑定改 loopback。</p>
+</div>
+
+<div class="card p0">
+  <h3>4. <code>/files</code> 三件套无目录沙箱 <span class="badge b-p0">安全</span></h3>
+  <div class="loc">internal/admin/admin.go:987-1140</div>
+  <p><span class="label">问题：</span><code>handleFiles</code>/<code>handleFileCreate</code>/<code>handleFileValidate</code> 只做 <code>filepath.Abs+Clean</code>，从不校验路径是否在允许根目录内，也不检查符号链接。可 <code>GET /files?path=/etc</code> 列任意目录、把任意路径交给解析器（存在性/可读性 oracle）、在进程可写的任意位置建空文件（<code>O_EXCL</code>）。</p>
+  <p><span class="label">修法：</span>定义允许根（配置目录），用 <code>filepath.Rel(base, abs)</code> 校验越界；<code>lstat</code> 拒绝符号链接；<code>create</code> 限制在基础目录内。</p>
+</div>
+
+<div class="card p0">
+  <h3>5. 每次读 config 都无条件重写文件，触发 Go 热重载风暴 <span class="badge b-p0">功能/性能</span></h3>
+  <div class="loc">android/.../ConfigProvider.kt:35-53（getter 61-110）· MainActivity.kt:268,271,276-277,539-540 · PanelUrl.kt</div>
+  <p><span class="label">问题：</span><code>readConfig()</code> 第一件事调 <code>ensureConfig()</code>，后者<em>无条件</em> <code>writeText(applyInvariants(...))</code>，哪怕内容没改。首页每次 <code>ON_RESUME</code> 调 <code>PanelUrl.url()</code>（内部调 <code>adminHttps()</code>+<code>adminPort()</code>）与 <code>adminAuth()</code>（MainActivity.kt:276-277），回首页就重写 3 次；初次组合另加 ipv4/ipv6 getter（539-540），合计 5 次。</p>
+  <p><span class="label">后果：</span>每次写盘触发 fsnotify → <code>configReload</code> → <code>UpstreamMgr.Reload()</code> + DNS 静态记录重放，用户切回 App 可能断流；同时在主线程做磁盘写。</p>
+  <p><span class="label">修法：</span>读与 ensure（写）分离；getter 只读不写；ensure 仅启动/起 VPN 前调一次，写前比较 JSON 是否真的变化。</p>
+</div>
+
+<div class="card p0">
+  <h3>6. 重复/重投的 START intent 拆掉正在运行的 VPN <span class="badge b-p0">崩溃/状态</span></h3>
+  <div class="loc">android/.../SmartProxyVpnService.kt:140-168 · mobile/bridge.go:39-42</div>
+  <p><span class="label">问题：</span>正常启动分支没有"已在运行就返回"的守卫。第二个 <code>ACTION_START</code>（快速双击、<code>START_STICKY</code> 系统重投、<code>BOOT_COMPLETED</code> 与 <code>MY_PACKAGE_REPLACED</code> 重叠）会再次 <code>Builder.establish()</code>（撤销第一个 TUN），然后 Go 侧返回 <code>"router is already running"</code>，失败分支执行 <code>stopForeground+stopSelf</code> 把运行中的服务收掉。</p>
+  <p><span class="label">后果：</span>正在跑的 VPN 被自己拆掉，UI 翻成未连接，留下 TUN 失效但引擎仍在跑的错乱窗口。</p>
+  <p><span class="label">修法：</span>正常分支开头加 <code>if (startedEngine) return START_STICKY</code>；start/restart 入口基于 <code>isRunning</code> 幂等。</p>
+</div>
+
+<div class="card p0">
+  <h3>7. TUN UDP WaitGroup Add/Wait 竞态可 panic <span class="badge b-p0">崩溃</span></h3>
+  <div class="loc">internal/tun/handler.go:419-479</div>
+  <p><span class="label">问题：</span><code>tun.udpSend</code> goroutine 经 <code>safego.Go</code> 启动但未纳入 <code>remoteWg</code>。主 select 退出后先 close 已有 remote、再 <code>remoteWg.Wait()</code>；此时 udpSend 可能正处于 <code>getOrCreateRemote</code> 慢路径（dial 最长 10s），dial 成功后 <code>Add(1)</code> —— 若 Wait 已在进行且计数为 0，触发 <code>sync: WaitGroup misuse</code> panic（被 safego recover 兜住，不崩进程）；若 Wait 已返回，新建的 remote conn 不在关闭清单，conn 与其 reader goroutine 永久泄漏（Add/Done 严格配对，不会出现 negative counter）。</p>
+  <p><span class="label">修法：</span>将 udpSend 纳入 WaitGroup（或第二个 Wg）并用 ctx/closeCh 通知停止；close 循环后用 <code>ctx.Done()</code> 保护慢路径不再 dial。</p>
+</div>
+
+<div class="card p0">
+  <h3>8. config.json 损坏即启动闪退、无法自愈 <span class="badge b-p0">健壮性</span></h3>
+  <div class="loc">android/.../ConfigProvider.kt:37-57 · SmartProxyApp.kt:14-15</div>
+  <p><span class="label">问题：</span><code>ensureConfig</code>/<code>readConfig</code> 的 <code>JSONObject(readText())</code> 与 <code>writeText</code> 无 try/catch；写入是 truncate+write 非原子，写一半被杀/磁盘满、面板写坏 JSON、并发读到中间态都会让 <code>Application.onCreate</code> 抛异常。</p>
+  <p><span class="label">后果：</span>App 一启动就闪退，且无法自愈（每次启动都读坏文件），等于"一次坏配置永久砖"。</p>
+  <p><span class="label">修法：</span>解析失败回退 assets 默认 config 并覆盖落盘；写入用临时文件 + <code>rename</code> 原子替换；<code>onCreate</code> 整体包 <code>runCatching</code>。</p>
+</div>
+
+<!-- ===================== P1 ===================== -->
+<h2 id="p1"><span class="badge b-p1">P1</span> 应该修 <span style="font-weight:400;color:var(--text-muted);font-size:14px">— 资源泄漏 / 正确性 / ANR</span></h2>
+
+<table>
+  <thead><tr><th style="width:30%">问题</th><th>位置 / 说明 / 修法</th></tr></thead>
+  <tbody>
+  <tr>
+    <td><strong>Engine.Stop 不停 Manager / HealthChecker</strong><br><span class="file-tag">engine.go:568-616 · health.go:195</span></td>
+    <td>Manager 没有 <code>Stop()</code>；HealthChecker 的 ctx 派生自 <code>Background</code>，每个节点的 <code>checkLoop</code> goroutine 永久自旋，<code>dnsUDPPool</code> 也不关。Android 每次停/重启 VPN 泄漏 N 个 goroutine + UDP socket。给 Manager 加 Stop 并在 Engine.Stop 调用。</td>
+  </tr>
+  <tr>
+    <td><strong>移动端热重载丢 <code>udp_in_tcp</code> 开关</strong><br><span class="file-tag">mobile/bridge.go:109-114</span></td>
+    <td>构造 <code>upstream.ProxyEntry</code> 漏了 <code>UDPInTCP</code>（桌面 <code>engine.go:74</code> 有）。面板一保存，所有 hev UDP-over-TCP 节点静默失效（不走 CMD=5 帧、丢失"TCP 默认手动下线"）。补上字段。</td>
+  </tr>
+  <tr>
+    <td><strong>ACL/chnroute 路径变更不重新 watch；ACL 闭包捕获旧路径</strong><br><span class="file-tag">bridge.go:88,129-143,170-185 · watcher.go:95-103</span></td>
+    <td>切到新 ACL/chnroute 文件后立即加载了一次，但从未 <code>AddFile</code> 注册新路径，后续编辑不触发重载；ACL 重载闭包捕获启动时的 <code>aclPath</code> 永不更新。运行时增删 watch 路径，ACL 闭包改读最新 cfg。</td>
+  </tr>
+  <tr>
+    <td><strong>TUNHandler 热重载从不调 ReloadConfig</strong><br><span class="file-tag">tun/handler.go:125 · bridge.go:117-156</span></td>
+    <td>两个入口的 configReload 只 <code>eng.Config.Store(cfg)</code>，没调 <code>eng.TUNHandler.ReloadConfig(cfg)</code>，SmartProxy 开关/端口在 TUN 模式不生效（SOCKS5 才生效）。补上（只更新可热更字段子集）。</td>
+  </tr>
+  <tr>
+    <td><strong>主线程同步调 Go + Thread.sleep（ANR）</strong><br><span class="file-tag">SmartProxyVpnService.kt:104-144, 412, 430</span></td>
+    <td><code>startRouter</code>（config.Load+engine.New+加载 166KB chnroute 成 trie）、<code>stopRouter</code>（停 watcher 等 wg、优雅关闭）和 <code>sleep(100)</code> 全在主线程。<code>startForeground</code> 留主线程，其余丢协程；sleep 改 <code>Handler.postDelayed</code>。</td>
+  </tr>
+  <tr>
+    <td><strong>shutdown 被执行两次</strong><br><span class="file-tag">SmartProxyVpnService.kt:406-491</span></td>
+    <td>ACTION_STOP 调 shutdown（stopSelf→sleep→关fd→stopForeground），随后 onDestroy 再调一次：再 sleep 100ms、再 stopForeground，停止累计睡 ~200ms。加 <code>tornDown</code> 守卫或 onDestroy 用 <code>fullTeardown=false</code>。</td>
+  </tr>
+  <tr>
+    <td><strong>TUN UDP 会话表无上限 → OOM</strong><br><span class="file-tag">tun/handler.go:43,340</span></td>
+    <td><code>udpSessions sync.Map</code> 无界，每目标建 session，cleaner 5 秒才扫；向大量目标发一个 UDP 包即可数万 session（各持 goroutine+conn）。SOCKS5 路径已有 <code>maxUDPSessions=500</code>，给 TUN 加同样上限+LRU。</td>
+  </tr>
+  <tr>
+    <td><strong>errCh 阻塞发送泄漏 goroutine</strong><br><span class="file-tag">tun/handler.go:425,459</span></td>
+    <td>容量 8 的 errCh，<code>udpSend</code> 用阻塞发送；主 select 退出后不再 drain，reader 填满槽位即永久卡住。发送统一改非阻塞或加 done chan。</td>
+  </tr>
+  <tr>
+    <td><strong>无请求体上限 / 无 HTTP 超时 / SOCKS5 accept 无并发上限</strong><br><span class="file-tag">admin.go 各 PUT · engine.go:193</span></td>
+    <td>所有 <code>io.ReadAll</code>/<code>json.Decode</code> 不限制大小，<code>http.Server</code> 无 Timeout/MaxHeaderBytes → OOM + Slowloris；SOCKS5 每连接一个 goroutine 无信号量 → fd 耗尽。加 MaxBytesReader、Server 超时、accept 信号量。</td>
+  </tr>
+  <tr>
+    <td><strong>goFd 在 startRouter 失败路径泄漏</strong><br><span class="file-tag">mobile/bridge.go:34-79</span></td>
+    <td>Kotlin 已 <code>detachFd</code> 不能兜底关；Go 侧 <code>config.Load</code>/<code>engine.New</code> 在真正用 fd 前就有失败返回，这些路径没 <code>unix.Close(tunFd)</code>。修复点在 Go：任何错误返回前若 fd 未交给 TUN 就关。</td>
+  </tr>
+  <tr>
+    <td><strong>gvisor 栈用 context.Background()</strong><br><span class="file-tag">tun/handler.go:689-696</span></td>
+    <td><code>StackOptions.Context</code> 传 Background 而非引擎 ctx，栈内生命周期与引擎 cancel 解耦（Engine.Stop 靠显式 Close tunStack 而非 ctx，非永不退出）。Start 签名接 ctx 并传入。</td>
+  </tr>
+  <tr>
+    <td><strong>DNS 4096 缓冲截断大响应</strong><br><span class="file-tag">relay/tcp.go:35 · dns/handler.go:320,380</span></td>
+    <td><code>PacketPool</code> 仅 4KB，UDP 消息语义下大响应（DNSSEC/EDNS0 常 4KB+）被静默截断 → SERVFAIL；经 SOCKS5 UDP 还要扣头。改用 65535 或至少 8192 的 pool。</td>
+  </tr>
+  <tr>
+    <td><strong>DNS singleflight 被首个请求 ctx 毒化</strong><br><span class="file-tag">dns/handler.go:166-233</span></td>
+    <td>fn 闭包捕获首个调用者的 ctx；若它已取消/很快超时，同域名所有并发等待者一起 SERVFAIL，哪怕自身 ctx 健康。fn 内用独立 <code>WithTimeout(Background, queryTimeout)</code>。</td>
+  </tr>
+  <tr>
+    <td><strong>HTTP CONNECT 丢弃响应头后残余字节</strong><br><span class="file-tag">upstream/proxy.go:921-948</span></td>
+    <td>读到 <code>\r\n\r\n</code> 即停，若合包带进 200 后的隧道数据会随 buf 丢弃，极少数场景 TLS/SSH 握手失败。用 <code>bufio.Reader</code> 携带缓冲返回（readerConn）。</td>
+  </tr>
+  <tr>
+    <td><strong>凭据明文进日志 / 经 API 回读</strong><br><span class="file-tag">upstream/proxy.go:426 · admin.go:698, 472</span></td>
+    <td><code>NewProxy</code> Info 打印完整 ss:// URL（base64 可解码密码）；<code>/config</code>、<code>/health</code> 直出 admin 密码与代理 URL；同时进 logbuf/logcat。日志与响应都对 userinfo 打码（只留 scheme://host:port）。</td>
+  </tr>
+  <tr>
+    <td><strong>Kotlin 与 Go 并发写 config.json，无锁非原子</strong><br><span class="file-tag">ConfigProvider.kt:56-80 · admin.go:719,749</span></td>
+    <td>两个写者都 truncate+write，无文件锁 → 丢更新 + 撕裂读。统一原子 rename + FileLock，或把 App 改动收口到 Go admin API 由 Go 单点写；read-modify-write 加重试。</td>
+  </tr>
+  </tbody>
+</table>
+
+<!-- ===================== P2 ===================== -->
+<h2 id="p2"><span class="badge b-p2">P2</span> 加固 / 质量</h2>
+
+<table>
+  <thead><tr><th style="width:30%">问题</th><th>位置 / 说明</th></tr></thead>
+  <tbody>
+  <tr><td><strong>配置校验薄弱</strong><br><span class="file-tag">config.go:224 · TunConfig.kt</span></td>
+    <td><code>Validate()</code> 只查 URL 非空，不校验 scheme/MTU（可 0）、CIDR 前缀（可 /99）、health URL（<code>listen.port</code> 0–65535 有校验，<code>admin_port</code> 与 URL 内嵌端口未校验）。坏配置保存返回 200 但节点静默消失或 establish 才崩。逐项加校验。</td></tr>
+  <tr><td><strong>config watcher 无去抖、写一半即触发</strong><br><span class="file-tag">watcher.go:88</span></td>
+    <td><code>os.WriteFile</code> 多次 Write 触发多次重载甚至读到半文件。加 100–300ms debounce + 重载前重读校验。</td></tr>
+  <tr><td><strong>TLS 失败静默降级明文 HTTP</strong><br><span class="file-tag">admin.go:149-156</span></td>
+    <td><code>buildTLSConfig</code> 出错只 warn 就回落 http，Basic Auth 口令明文传输且无感知。证书加载失败应拒绝启动或显式告警。</td></tr>
+  <tr><td><strong>Basic Auth 非常量时间比较 + 无爆破限速</strong><br><span class="file-tag">admin.go:253</span></td>
+    <td>普通 <code>!=</code> 比较存在时序侧信道；所有端点无失败计数/限速。用 <code>subtle.ConstantTimeCompare</code> + 失败退避/限速。</td></tr>
+  <tr><td><strong>CSRF（状态修改端点）</strong><br><span class="file-tag">admin.go 各 POST/DELETE</span></td>
+    <td>空 body/query 的 POST 是"简单请求"无 CORS 预检，Basic Auth 浏览器自动带凭据，恶意页面可跨站改配置。校验 Origin/Referer 或要求自定义头。</td></tr>
+  <tr><td><strong>Unix socket 0666 且无鉴权</strong><br><span class="file-tag">admin.go:111-119</span></td>
+    <td>socket 不经 authMiddleware，权限 0666 允许同机任意用户访问。收紧到 0600/0660，或加 token 鉴权。</td></tr>
+  <tr><td><strong>默认弱口令 root/admin</strong><br><span class="file-tag">config.json:14-18</span></td>
+    <td>示例配置用公开弱口令，部署时未改且绑通配地址即被秒破。首次启动随机生成或强制改密。</td></tr>
+  <tr><td><strong>allowBackup 泄露明文凭据</strong><br><span class="file-tag">AndroidManifest.xml:18</span></td>
+    <td><code>allowBackup=true</code> 把含 admin 密码/上游 URL 的 config.json 备份到云/adb backup。设 false 或用 backup 规则排除 config.json。</td></tr>
+  <tr><td><strong>SOCKS5 无鉴权开放局域网 UI 警示不足；面板密码明文显示</strong><br><span class="file-tag">MainActivity.kt:848, 995 · bridge.go:60</span></td>
+    <td>SOCKS5 模式绑 <code>[::]:1080</code> 无鉴权，对话框只说"局域网可访问"未提示安全后果；面板密码直接显示在屏幕上易肩窥/截屏。加明确警示、密码默认遮盖点击显示。</td></tr>
+  <tr><td><strong>chnroute/ACL Scanner 单行 64KB 上限</strong><br><span class="file-tag">chnroute/loader.go:57 · rules/engine.go:108</span></td>
+    <td>未调 <code>Buffer</code>，超长行触发 <code>ErrTooLong</code> 让整个引擎启动失败（ACL 可能有长 domain 行）。调大 buffer（1MB）并跳过坏行而非整体失败。</td></tr>
+  <tr><td><strong>健康检查每次新建 Transport 且不 drain body</strong><br><span class="file-tag">health.go:303-340</span></td>
+    <td>每周期 new Transport/Client、为 SS/obfs 建新隧道，响应不 drain 即 Close，空闲连接延迟释放。探测后 drain+CloseIdleConnections，或按节点复用 Transport。</td></tr>
+  <tr><td><strong>dnsUDPPool Reload 数据竞争</strong><br><span class="file-tag">manager.go:39-63,310</span></td>
+    <td><code>AcquireDNSUDP</code> 无锁读 <code>m.dnsUDPPool</code>，Reload 解锁后 Close 旧池再赋新值 → 用后关闭/race。改 <code>atomic.Pointer</code> 或全走 mutex，先换入再关旧。</td></tr>
+  <tr><td><strong>Compose 主线程做重活</strong><br><span class="file-tag">MainActivity.kt:539,1008 · PanelUrl.kt:20</span></td>
+    <td>QR 生成（zxing 512px + 26 万 int 数组）、<code>remember{}</code> 里读写 config、网卡枚举无异常保护都在主线程/组合期。QR 改 <code>LaunchedEffect</code>+Default 异步；配置/网卡下沉 IO；lanIpv4 try/catch。</td></tr>
+  <tr><td><strong>AppSelectionActivity 只在 onDestroy 保存</strong><br><span class="file-tag">AppSelectionActivity.kt:129-134</span></td>
+    <td>后台被杀不保证调 onDestroy，勾选可能丢。改 onPause/onStop 落盘或 toggle 时 debounce 写。</td></tr>
+  <tr><td><strong>MTU/CIDR 未校验，坏配置静默起不来</strong><br><span class="file-tag">TunConfig.kt:26-45 · SmartProxyVpnService.kt:194,203</span></td>
+    <td>mtu 为 0/字符串时 <code>optInt</code> 返回 0 → setMtu(0) 异常；prefix 可 99 → addAddress 异常，被外层 catch 静默 false。clamp/校验 mtu（576–9000）、prefix（0..32/0..128），失败给用户明确提示。</td></tr>
+  <tr><td><strong>SOCKS5 模式仍以 specialUse/vpn 类型起前台服务</strong><br><span class="file-tag">NotificationHelper.kt:87</span></td>
+    <td>仅代理模式不建 VPN 却用 VPN 类型 FGS，可能有 Play 政策审核风险。按服务模式选合适的 FGS 类型。</td></tr>
+  <tr><td><strong>若干小正确性</strong><br><span class="file-tag">多处</span></td>
+    <td><code>remoteUDPReader</code> SOCKS5 头无显式长度校验（v4 缺 n&lt;10、v6 缺 n&lt;22，现有 <code>payloadStart&gt;=n</code> 守卫兜底、无越界）；<code>ReadClientHello</code> 遇 (0,nil) 自旋且吞 read error；<code>Router.IsDomestic</code> 用 <code>ResolveIPAddr</code> 应改 <code>ParseIP</code>；DNS 用 <code>strings.Contains(ip,":")</code> 判 v4/v6 在 mapped 地址出错；<code>conn.RemoteAddr().(*net.TCPAddr)</code> 无 ok 检查。</td></tr>
+  <tr><td><strong>dashboard.html 多处 innerHTML 未转义</strong><br><span class="file-tag">dashboard.html:552,1372,1664,1835</span></td>
+    <td>代理 URL、黑名单 host/last_reason、静态记录、ACL value 直拼 innerHTML 未用已有的 escHtml/escAttr。黑名单 host 来自远端观测，虽受 DNS 字符集限制利用面小，仍应统一转义/用 textContent。</td></tr>
+  </tbody>
+</table>
+
+<!-- ===================== P3 ===================== -->
+<h2 id="p3"><span class="badge b-p3">P3</span> 仓库卫生</h2>
+<ul>
+  <li>根目录有被跟踪的临时脚本 <code>a.py</code>、<code>test_admin.py</code>、<code>test_dns_udp.py</code>、<code>build.js</code>、<code>config_test.json</code> —— 应移到 <code>test/</code>、<code>scripts/</code> 或加入 .gitignore。</li>
+  <li><code>.gitignore</code> 已正确排除根目录运行时产物（<code>socks5-router</code>、<code>*.log</code>、运行时自签的 <code>admin.crt/key</code>）；问题仅是入库的 <code>internal/admin/certs/admin_ca.key</code>（见 P0 #1）。</li>
+  <li>嵌入的第三方库（<code>chart.umd.min.js</code>、<code>codemirror</code>、<code>jsqr</code> 等）建议记录版本与来源，便于后续更新和供应链核对。</li>
+</ul>
+
+<div class="callout p1">
+  <strong>复核说明：</strong>P0 #1（CA 私钥）已用 <code>openssl x509</code> 人工确认证书属性（CN=SmartProxy Root CA、CA:TRUE、2026–2046、私钥被 git 跟踪并 go:embed）。其余条目均带文件:行号，来自四个子系统（引擎核心、面板安全、Android、上游/DPI/热重载）的并行静态审查交叉结果。<strong>2026-08-20 独立复核：</strong>45 条断言逐条对照源码，44 条属实；P0 #7 的 panic 机制描述已更正（misuse panic / conn 泄漏而非 negative counter），P0 #2/#3、P1 #11、P2 #1/#17 等细节已就地修正。Go 侧改动建议本地 <code>go build ./... &amp;&amp; go vet ./...</code> 与 <code>go test -race ./...</code>；Android 侧按项目约定走 CI 构建。
+</div>
+
+<!-- ===================== ORDER ===================== -->
+<h2 id="order">建议修复顺序</h2>
+<ol>
+  <li><strong>先堵安全/崩溃：</strong>CA 私钥轮换+移出仓库（#1，动作较大，需确认）、无鉴权禁止绑通配（#3）、files 沙箱（#4）、断路器恢复（#2）、重复启动自拆（#6）、UDP WaitGroup 竞态（#7）、坏 config 自愈（#8）。</li>
+  <li><strong>再修泄漏/热重载正确性：</strong>Manager.Stop、移动端 <code>udp_in_tcp</code>、watcher 重绑、TUNHandler.ReloadConfig。</li>
+  <li><strong>然后是 Android 主线程/ANR + config 读触发写（P0 #5）</strong>：改动面较大（IO 移出主线程、ensure 与 read 分离），但用户可感知收益最高。</li>
+  <li>最后滚动处理 P1/P2，并把 P3 仓库卫生顺手清掉。</li>
+</ol>
+
+<footer>
+  SmartProxy 代码审查报告 · 2026-08-19 · 由分模块并行静态审查生成，关键安全项已人工复核。
+</footer>
+
+</div>
+</body>
+</html>

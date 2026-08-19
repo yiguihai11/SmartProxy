@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -340,6 +341,37 @@ func boolFromRawQuery(rawQuery, key string) bool {
 	return false
 }
 
+// MaskPassword 是面板/API 回显代理 URL 时替换真实密码的哨兵;PUT 回传时由
+// admin 侧 restoreMaskedProxies 按 alias 解析回真实密码,往返不丢凭据。
+const MaskPassword = "******"
+
+// MaskProxyURL 返回用于日志、/health、/config 展示的代理 URL,密码一律打码为
+// MaskPassword,用户名(ss 的 method、http/socks 的账号)保留以便编辑往返时定位。
+// ss:// 的 legacy base64 形式整个 payload 都是凭据,无结构可拆,整段打码。
+func MaskProxyURL(proxyURL string) string {
+	u, err := url.Parse(proxyURL)
+	if err != nil {
+		return "<invalid proxy url>"
+	}
+	if u.Scheme == "ss" {
+		if u.User != nil {
+			masked := *u
+			masked.User = url.UserPassword(u.User.Username(), MaskPassword)
+			return masked.String()
+		}
+		return "ss://" + MaskPassword
+	}
+	if u.User == nil {
+		return u.String()
+	}
+	if _, hasPass := u.User.Password(); !hasPass {
+		return u.String()
+	}
+	masked := *u
+	masked.User = url.UserPassword(u.User.Username(), MaskPassword)
+	return masked.String()
+}
+
 func NewProxy(proxyURL string) (*Proxy, error) {
 	u, err := url.Parse(proxyURL)
 	if err != nil {
@@ -360,7 +392,7 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 	}
 
 	p := &Proxy{
-		URL:           proxyURL,
+		URL:           MaskProxyURL(proxyURL),
 		Scheme:        scheme,
 		Host:          u.Hostname(),
 		Port:          port,
@@ -423,7 +455,7 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 			p.udpHealth.SetManualState(false)
 		}
 	}
-	slog.Info("upstream proxy loaded", "url", proxyURL, "name", p.Name)
+	slog.Info("upstream proxy loaded", "url", MaskProxyURL(proxyURL), "name", p.Name)
 	return p, nil
 }
 
@@ -927,7 +959,7 @@ func (p *Proxy) httpConnect(ctx context.Context, targetHost string, targetPort i
 			return nil, err
 		}
 		buf = append(buf, tmp[:n]...)
-		if strings.Contains(string(buf), "\r\n\r\n") {
+		if bytes.Contains(buf, []byte("\r\n\r\n")) {
 			break
 		}
 		if len(buf) > 65536 {
@@ -935,7 +967,8 @@ func (p *Proxy) httpConnect(ctx context.Context, targetHost string, targetPort i
 			return nil, fmt.Errorf("HTTP proxy response headers too large")
 		}
 	}
-	statusLine := strings.SplitN(string(buf), "\r\n", 2)[0]
+	headerEnd := bytes.Index(buf, []byte("\r\n\r\n")) + 4
+	statusLine := strings.SplitN(string(buf[:headerEnd]), "\r\n", 2)[0]
 	parts := strings.Fields(statusLine)
 	if len(parts) < 2 {
 		conn.Close()
@@ -945,7 +978,23 @@ func (p *Proxy) httpConnect(ctx context.Context, targetHost string, targetPort i
 		conn.Close()
 		return nil, fmt.Errorf("HTTP proxy returned %s", parts[1])
 	}
+	// 代理可能在同一个 TCP 段里把 200 响应和已建立的隧道数据一起发过来
+	// （TLS ServerHello 等）。header 之后的多余字节必须先回放，否则会被静默丢弃、腐蚀隧道。
+	if leftover := buf[headerEnd:]; len(leftover) > 0 {
+		conn = &bufferedConn{Conn: conn, r: bytes.NewReader(leftover)}
+	}
 	return conn, nil
+}
+
+// bufferedConn 先把 CONNECT 200 之后多读到的应用字节回放给调用方，
+// 再读底层连接；否则那些字节会被丢弃。
+type bufferedConn struct {
+	net.Conn
+	r io.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) {
+	return c.r.Read(p)
 }
 
 func (p *Proxy) socks4Connect(ctx context.Context, targetHost string, targetPort int) (net.Conn, error) {

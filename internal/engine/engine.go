@@ -47,6 +47,10 @@ type Engine struct {
 	adminServer *admin.Server
 	reloadFn    func()
 	configPath  string
+	// clientSem caps concurrent SOCKS5 client handlers. Without it a burst of TCP
+	// connects spawns an unbounded number of goroutines (one per conn) and exhausts
+	// fds. The accept loop blocks on this before spawning, which throttles accept.
+	clientSem chan struct{}
 }
 
 func New(cfg *config.Config, cfgDir string) (*Engine, error) {
@@ -106,10 +110,14 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 		Router:      router,
 		DNSHandler:  dnsHandler,
 		TUNHandler:  tun.NewHandler(cfg, router, ruleEng, upstreamMgr, dnsHandler),
+		clientSem:   make(chan struct{}, maxConcurrentClients),
 	}
 	eng.Config.Store(cfg)
 	return eng, nil
 }
+
+// maxConcurrentClients bounds the SOCKS5 client handler goroutines (see clientSem).
+const maxConcurrentClients = 1024
 
 func (e *Engine) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
@@ -121,7 +129,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	}
 
 	if e.Config.Load().TUN.Enabled {
-		tunDev, tunStack, err := e.TUNHandler.Start(e.Config.Load().TUN)
+		tunDev, tunStack, err := e.TUNHandler.Start(ctx, e.Config.Load().TUN)
 		if err != nil {
 			cancel()
 			return fmt.Errorf("failed to start TUN: %w", err)
@@ -200,7 +208,18 @@ func (e *Engine) serve(ctx context.Context) {
 			slog.Error("accept error", "error", err)
 			continue
 		}
-		safego.Go("engine.handleClient", func() { e.handleClient(ctx, conn) })
+		// Backpressure: when maxConcurrentClients handlers are busy, block accept
+		// instead of spawning an unbounded goroutine per connection.
+		select {
+		case e.clientSem <- struct{}{}:
+		case <-ctx.Done():
+			conn.Close()
+			return
+		}
+		safego.Go("engine.handleClient", func() {
+			defer func() { <-e.clientSem }()
+			e.handleClient(ctx, conn)
+		})
 	}
 }
 
@@ -605,6 +624,11 @@ func (e *Engine) Stop() {
 		if e.DNSHandler != nil {
 			slog.Info("[Go-Engine] Closing DNSHandler...")
 			e.DNSHandler.Close()
+		}
+		if e.UpstreamMgr != nil {
+			slog.Info("[Go-Engine] Stopping upstream manager...")
+			e.UpstreamMgr.Stop()
+			slog.Info("[Go-Engine] upstream manager stopped")
 		}
 		if e.adminServer != nil {
 			slog.Info("[Go-Engine] Stopping adminServer...")

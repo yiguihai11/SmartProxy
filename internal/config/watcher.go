@@ -15,6 +15,11 @@ type Watcher struct {
 	files  map[string]string
 	stopCh chan struct{}
 	wg     sync.WaitGroup
+	// addDirCh carries directory paths that must be registered with the kernel
+	// fsnotify watch after Start (used by ReplaceFile when a reloaded config points
+	// at a file in a new directory). Buffered so the send from a reload callback
+	// (which runs on the loop goroutine) never blocks.
+	addDirCh chan string
 
 	onConfigReload   func()
 	onACLReload      func()
@@ -23,8 +28,9 @@ type Watcher struct {
 
 func NewWatcher() *Watcher {
 	return &Watcher{
-		files:  make(map[string]string),
-		stopCh: make(chan struct{}),
+		files:    make(map[string]string),
+		stopCh:   make(chan struct{}),
+		addDirCh: make(chan string, 8),
 	}
 }
 
@@ -36,6 +42,23 @@ func (w *Watcher) AddFile(name, path string) {
 		absPath = path
 	}
 	w.files[name] = absPath
+}
+
+// ReplaceFile re-points a watched file to a new path after Start and registers the new
+// directory with fsnotify if it is not already watched. Used when a hot reload switches
+// the ACL/chnroute file: without it, the new path would be in w.files but the kernel
+// would never report events for its directory (the initial watch set is built once in
+// loop()). Name must match the one passed to AddFile.
+func (w *Watcher) ReplaceFile(name, path string) {
+	w.AddFile(name, path)
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		absPath = path
+	}
+	select {
+	case w.addDirCh <- filepath.Dir(absPath):
+	default:
+	}
 }
 
 func (w *Watcher) SetConfigReloader(fn func()) {
@@ -107,6 +130,19 @@ func (w *Watcher) loop() {
 					slog.Info("detected file change, reloading", "path", event.Name, "name", nameMatched)
 					w.trigger(nameMatched)
 				}
+			}
+
+		case dir := <-w.addDirCh:
+			// dirs is loop-local: after Start's initial scan this goroutine is the only
+			// reader/writer, so no lock is needed here.
+			if dirs[dir] {
+				continue
+			}
+			if err := watcher.Add(dir); err != nil {
+				slog.Error("failed to watch new directory", "dir", dir, "error", err)
+			} else {
+				dirs[dir] = true
+				slog.Info("now watching directory", "dir", dir)
 			}
 
 		case err, ok := <-watcher.Errors:

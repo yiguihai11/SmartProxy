@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"smartproxy/internal/chnroute"
 	"smartproxy/internal/config"
 	"smartproxy/internal/dns"
@@ -36,9 +37,19 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 	engineMu.Lock()
 	defer engineMu.Unlock()
 
+	// tunFd 经 detachFd 交给 Go 后,Kotlin 不再能关它;真正把 fd 交出去是
+	// eng.Start 建 TUN 栈那一刻。此前的任何错误返回都必须由 Go 侧关闭,
+	// 否则每次失败的 start 泄漏一个 tun fd(报告 P1#10)。
+	closeFdOnErr := func(err error) error {
+		if tunFd > 0 {
+			unix.Close(tunFd)
+		}
+		return err
+	}
+
 	if globalEngine != nil {
 		slog.Warn("[Go-Bridge] StartRouter failed: router is already running")
-		return fmt.Errorf("router is already running")
+		return closeFdOnErr(fmt.Errorf("router is already running"))
 	}
 
 	// 从文件加载配置(与桌面端 config.Load 同路径):Kotlin 侧把最终 config 落到
@@ -46,7 +57,7 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		slog.Error("[Go-Bridge] StartRouter failed to load config", "error", err)
-		return fmt.Errorf("failed to load config: %w", err)
+		return closeFdOnErr(fmt.Errorf("failed to load config: %w", err))
 	}
 
 	// 与桌面 main.go 一致:slog 输出同时进 logbuf.Default 环形缓冲,纯 Go 面板的
@@ -75,7 +86,7 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 	eng, err := engine.New(cfg, "")
 	if err != nil {
 		slog.Error("[Go-Bridge] StartRouter failed to create engine", "error", err)
-		return err
+		return closeFdOnErr(err)
 	}
 
 	// 纯 Go 面板机制(与 cmd/smartproxy/main.go L138-233 对齐):面板 PUT /config
@@ -108,14 +119,18 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 		}
 		for _, p := range newCfg.Upstream.Proxies {
 			upstreamCfg.Proxies = append(upstreamCfg.Proxies, upstream.ProxyEntry{
-				Alias: p.Alias,
-				URL:   p.URL,
+				Alias:    p.Alias,
+				URL:      p.URL,
+				UDPInTCP: p.UDPInTCP,
 			})
 		}
 
 		oldChnFile, oldACLFile := cfg.Routing.ChnrouteFile, cfg.Routing.ACLFile
 		cfg = newCfg
 		eng.Config.Store(cfg)
+		// TUN 模式必须同步热更:tunHandler 从自己的 config 指针读 SmartProxy 开关/端口,
+		// 只 Store eng.Config 会让这些改动在 TUN 路径永不生效(仅 SOCKS5 生效)。
+		eng.TUNHandler.ReloadConfig(cfg)
 		eng.UpstreamMgr.Reload(upstreamCfg)
 
 		// Hot-reload chnroute / ACL when their paths change, so that choosing a
@@ -131,6 +146,9 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 				slog.Error("failed to reload chnroute from new path", "path", cfg.Routing.ChnrouteFile, "error", err)
 			} else {
 				eng.Chnroute.Pull(trie)
+				// 把 fsnotify 重指向新路径并注册其目录,后续编辑新文件才触发热重载
+				// (loop() 只在 Start 时建过内核 watch,不 ReplaceFile 新目录永远不报事件)。
+				watcher.ReplaceFile("chnroute", cfg.Routing.ChnrouteFile)
 				slog.Info("chnroute reloaded from new path", "path", cfg.Routing.ChnrouteFile)
 			}
 		}
@@ -138,6 +156,8 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 			if err := eng.RuleEng.Reload(resolveFile(cfg.Routing.ACLFile)); err != nil {
 				slog.Error("failed to reload ACL from new path", "path", cfg.Routing.ACLFile, "error", err)
 			} else {
+				aclPath = cfg.Routing.ACLFile // 闭包(SetACLReloader)按引用捕获,必须更新
+				watcher.ReplaceFile("acl", cfg.Routing.ACLFile)
 				slog.Info("ACL reloaded from new path", "path", cfg.Routing.ACLFile)
 			}
 		}
@@ -190,7 +210,17 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 	if err := eng.Start(ctx); err != nil {
 		slog.Error("[Go-Bridge] StartRouter eng.Start failed", "error", err)
 		cancel()
+		// eng.Start 失败时 TUN 栈可能已部分建立也可能没有;fd 是否被接管不确定,
+		// 保守起见不在这里补关(避免双关),交给引擎自身的清理路径。
 		return err
+	}
+
+	// TUN 模式下 fd 已交给 gvisor 栈(TUN 栈持有并负责关闭);仅代理模式
+	// (tunEnabled=false)没有 TUN 栈,fd 无人接管,成功路径也要关掉。
+	if !tunEnabled {
+		if tunFd > 0 {
+			unix.Close(tunFd)
+		}
 	}
 
 	globalEngine = eng

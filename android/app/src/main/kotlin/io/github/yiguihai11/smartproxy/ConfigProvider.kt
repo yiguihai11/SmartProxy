@@ -31,39 +31,56 @@ object ConfigProvider {
         copyAssetIfMissing(context, "acl.txt", context.cacheDir)
     }
 
-    /** 幂等:确保 filesDir/config.json 存在且应用不变量(App 启动 + 引擎启动前都调)。 */
+    /**
+     * 幂等:确保 filesDir/config.json 存在且应用不变量(App 启动 + 引擎启动前都调)。
+     * 比较后写:内容不变则不动文件,避免每次调用都触发 fsnotify 热重载风暴
+     * (报告 P0#5)。config.json 损坏时回退 assets 默认再落盘,保证不因坏配置
+     * 闪退(P0#8)。
+     */
     fun ensureConfig(context: Context) {
         val f = File(context.filesDir, CONFIG_NAME)
-        val base = if (f.exists()) {
-            JSONObject(f.readText())
-        } else {
-            JSONObject(readAsset(context, CONFIG_NAME))
+        if (!f.exists()) {
+            atomicWriteText(f, applyInvariants(context, JSONObject(readAsset(context, CONFIG_NAME))).toString())
+            return
         }
-        f.writeText(applyInvariants(context, base).toString())
+        val text = runCatching { f.readText() }.getOrDefault("")
+        val parsed = runCatching { JSONObject(text) }.getOrNull()
+        val base = parsed ?: JSONObject(readAsset(context, CONFIG_NAME))
+        val out = applyInvariants(context, base).toString()
+        if (out != text) atomicWriteText(f, out)
     }
 
     /** filesDir/config.json 绝对路径(StartRouter 按路径加载,与桌面 config.Load 同路)。 */
     fun configPath(context: Context): String =
         File(context.filesDir, CONFIG_NAME).absolutePath
 
-    /** 读当前 config.json(先 ensure,首页开关初始态用)。 */
+    /** 只读快照,不 ensure 不写盘(getter 专用):文件缺失/损坏返回 null,由调用方回退默认。 */
+    private fun readRaw(context: Context): JSONObject? {
+        val f = File(context.filesDir, CONFIG_NAME)
+        if (!f.exists()) return null
+        return runCatching { JSONObject(f.readText()) }.getOrNull()
+    }
+
+    /** 读当前 config.json(先 ensure,首页开关写入前用——这是唯一会写盘的读取路径)。 */
     fun readConfig(context: Context): JSONObject {
         ensureConfig(context)
-        return JSONObject(File(context.filesDir, CONFIG_NAME).readText())
+        return readRaw(context) ?: JSONObject(readAsset(context, CONFIG_NAME))
     }
 
-    /** 写回 config.json(首页开关改 tun 段;不变量已由 ensureConfig 应用,直写即可)。 */
+    /** 写回 config.json(首页开关改 tun 段;不变量已由 ensureConfig 应用,直写即可)。
+     *  原子写:临时文件 + rename,与 Go 面板 admin.go 的 atomicWriteFile 同一策略,
+     *  避免写一半被杀/磁盘满时留下撕裂文件让下次启动闪退(P1#16/P0#8)。 */
     fun writeConfig(context: Context, json: JSONObject) {
-        File(context.filesDir, CONFIG_NAME).writeText(json.toString())
+        atomicWriteText(File(context.filesDir, CONFIG_NAME), json.toString())
     }
 
-    /** IPv4 拦截 = tun.inet4_address 非空数组(空 [] 或缺失都算关)。 */
+    /** IPv4 拦截 = tun.inet4_address 非空数组(空 [] 或缺失都算关)。只读,不触发写盘。 */
     fun ipv4(context: Context): Boolean =
-        (readConfig(context).optJSONObject("tun")?.optJSONArray("inet4_address")?.length() ?: 0) > 0
+        (readRaw(context)?.optJSONObject("tun")?.optJSONArray("inet4_address")?.length() ?: 0) > 0
 
-    /** IPv6 拦截 = tun.inet6_address 非空数组。 */
+    /** IPv6 拦截 = tun.inet6_address 非空数组。只读,不触发写盘。 */
     fun ipv6(context: Context): Boolean =
-        (readConfig(context).optJSONObject("tun")?.optJSONArray("inet6_address")?.length() ?: 0) > 0
+        (readRaw(context)?.optJSONObject("tun")?.optJSONArray("inet6_address")?.length() ?: 0) > 0
 
     /** 开关 IPv4 拦截:关写空数组 []、开补默认值(运行中改由调用方重启 VPN)。 */
     fun setIpv4(context: Context, on: Boolean) {
@@ -82,27 +99,27 @@ object ConfigProvider {
     /** 上游代理节点是否已配置:upstream.proxies 非空(面板经 /config 写它)。首页开启前
      *  检查,无节点时引擎能起但所有流量报 "no default proxy available"(§8 提示去面板配置)。 */
     fun hasUpstreamProxy(context: Context): Boolean {
-        val proxies = readConfig(context)
-            .optJSONObject("upstream")?.optJSONArray("proxies")
+        val proxies = readRaw(context)
+            ?.optJSONObject("upstream")?.optJSONArray("proxies")
         return proxies != null && proxies.length() > 0
     }
 
     /** 面板管理端口:读 filesDir/config.json(运行时真源,面板可改、引擎实际绑定它)。
-     *  动态跟随面板编辑;首页链接 ON_RESUME 重算即取到最新值。 */
+     *  动态跟随面板编辑;首页链接 ON_RESUME 重算即取到最新值。只读,不触发写盘。 */
     fun adminPort(context: Context): Int =
-        readConfig(context).optJSONObject("listen")
+        readRaw(context)?.optJSONObject("listen")
             ?.optInt("admin_port", DEFAULT_ADMIN_PORT) ?: DEFAULT_ADMIN_PORT
 
     /** 面板是否 HTTPS:读 filesDir/config.json 的 listen.admin_https(默认 true),
-     *  首页链接据此决定 http/https 前缀。 */
+     *  首页链接据此决定 http/https 前缀。只读,不触发写盘。 */
     fun adminHttps(context: Context): Boolean =
-        readConfig(context).optJSONObject("listen")
+        readRaw(context)?.optJSONObject("listen")
             ?.optBoolean("admin_https", true) ?: true
 
     /** 面板管理账号密码:读 listen.admin_auth。未启用 / 无用户名(引擎实际不开 Basic Auth)
-     *  返回 null → 面板无需登录,首页不显示账号密码提示。 */
+     *  返回 null → 面板无需登录,首页不显示账号密码提示。只读,不触发写盘。 */
     fun adminAuth(context: Context): Pair<String, String>? {
-        val a = readConfig(context).optJSONObject("listen")?.optJSONObject("admin_auth") ?: return null
+        val a = readRaw(context)?.optJSONObject("listen")?.optJSONObject("admin_auth") ?: return null
         if (!a.optBoolean("enabled", true)) return null
         val u = a.optString("username")
         if (u.isBlank()) return null
@@ -187,6 +204,20 @@ object ConfigProvider {
         val dest = File(destDir, name)
         if (dest.exists() && dest.length() > 0L) return
         copyAsset(context, name, destDir)
+    }
+
+    /** 原子写:写同目录临时文件再 rename(同文件系统原子替换)。rename 极端失败时退回
+     *  直写兜底,并清掉残留临时文件,避免下次读到半截文件。 */
+    private fun atomicWriteText(f: File, text: String) {
+        val tmp = File(f.parentFile, f.name + ".tmp")
+        try {
+            tmp.writeText(text)
+            if (tmp.renameTo(f)) return
+            // rename 失败(跨挂载点/被占用等):退回直写,尽力保证可用
+            f.writeText(text)
+        } finally {
+            if (tmp.exists()) tmp.delete()
+        }
     }
 
     private const val CONFIG_NAME = "config.json"

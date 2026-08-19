@@ -55,6 +55,11 @@ type TUNHandler struct {
 // do not match sing-tun, this will fail to compile.
 var _ singtun.Handler = (*TUNHandler)(nil)
 
+// maxUDPSessions bounds the TUN UDP session table (udpSessions). SOCKS5's UDP handler
+// already caps at 500 (internal/udp); without a matching cap here a flood of distinct UDP
+// destinations would grow the map — one goroutine + one remote conn per session — until OOM.
+const maxUDPSessions = 500
+
 func NewHandler(cfg *config.Config, r *route.Router, re *rules.Engine, um *upstream.Manager, dh *dns.Handler) *TUNHandler {
 	h := &TUNHandler{
 		router:        r,
@@ -314,6 +319,40 @@ func (s *tunUdpSession) signalClose() {
 	})
 }
 
+// storeUDPSession records a TUN UDP session under key, evicting the least-recently-active
+// session when the table is at capacity so it stays bounded under a destination flood.
+func (h *TUNHandler) storeUDPSession(key string, sess *tunUdpSession) {
+	if h.countUDPSessions() >= maxUDPSessions {
+		h.evictLeastRecentUDPSession()
+	}
+	h.udpSessions.Store(key, sess)
+}
+
+func (h *TUNHandler) countUDPSessions() int {
+	n := 0
+	h.udpSessions.Range(func(_, _ any) bool { n++; return true })
+	return n
+}
+
+// evictLeastRecentUDPSession closes and removes the session that was active longest ago.
+// Its own select unblocks via closeCh and its deferred cleanup runs normally.
+func (h *TUNHandler) evictLeastRecentUDPSession() {
+	var victimKey any
+	var victimLast int64 = 1 << 62
+	h.udpSessions.Range(func(key, value any) bool {
+		if act := value.(*tunUdpSession).lastActive.Load(); act < victimLast {
+			victimLast = act
+			victimKey = key
+		}
+		return true
+	})
+	if victimKey != nil {
+		if v, ok := h.udpSessions.LoadAndDelete(victimKey); ok {
+			v.(*tunUdpSession).signalClose()
+		}
+	}
+}
+
 type udpRemoteEntry struct {
 	conn        net.Conn
 	dst         M.Socksaddr
@@ -337,7 +376,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, de
 	sess.lastActive.Store(time.Now().Unix())
 
 	sessKey := destination.String()
-	h.udpSessions.Store(sessKey, sess)
+	h.storeUDPSession(sessKey, sess)
 	h.startUDPCleaner()
 	defer h.udpSessions.Delete(sessKey)
 	defer sess.signalClose()
@@ -345,7 +384,8 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, de
 	var (
 		mu       sync.Mutex
 		remotes  = make(map[string]*udpRemoteEntry)
-		remoteWg sync.WaitGroup
+		remoteWg sync.WaitGroup // tracks remoteUDPReader goroutines (one per dialed remote)
+		sendWg   sync.WaitGroup // tracks the udpSend goroutine
 		errCh    = make(chan error, 8)
 	)
 
@@ -416,13 +456,20 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, de
 		return entry, nil
 	}
 
+	sendWg.Add(1)
 	safego.Go("tun.udpSend", func() {
+		defer sendWg.Done()
 		for {
 			buffer := buf.NewPacket()
 			pktDst, err := conn.ReadPacket(buffer)
 			if err != nil {
 				buffer.Release()
-				errCh <- err
+				// Non-blocking: once the main select exits nobody drains errCh, and a full
+				// channel must not wedge the sender forever (it would also stall sendWg.Wait).
+				select {
+				case errCh <- err:
+				default:
+				}
 				return
 			}
 
@@ -456,7 +503,10 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, de
 			} else {
 				if _, err := entry.conn.Write(buffer.Bytes()); err != nil {
 					buffer.Release()
-					errCh <- err
+					select {
+					case errCh <- err:
+					default:
+					}
 					return
 				}
 			}
@@ -470,6 +520,15 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, de
 	case <-sess.closeCh:
 		slog.Debug("TUN UDP session closed by cleaner", "key", sessKey)
 	}
+
+	// Shut the sender down first: closing the tun packet conn makes its ReadPacket fail, and
+	// sendWg.Wait() guarantees the sender has exited — so no dialRemote can Add(1) to
+	// remoteWg any more, which would otherwise race with the Wait below (WaitGroup misuse
+	// panic) or leak a freshly-dialed remote that the close loop has already walked past.
+	// Any remote the sender finished dialing is already recorded in remotes by the time it
+	// exits, so the close loop below covers it.
+	conn.Close()
+	sendWg.Wait()
 
 	mu.Lock()
 	for _, entry := range remotes {
@@ -578,7 +637,7 @@ func (h *TUNHandler) handleDNS(ctx context.Context, conn N.PacketConn, host stri
 var NewTUN = singtun.New
 var NewTUNStack = singtun.NewStack
 
-func (h *TUNHandler) Start(cfg config.TUNConfig) (singtun.Tun, singtun.Stack, error) {
+func (h *TUNHandler) Start(ctx context.Context, cfg config.TUNConfig) (singtun.Tun, singtun.Stack, error) {
 	if !cfg.Enabled {
 		return nil, nil, nil
 	}
@@ -687,7 +746,7 @@ func (h *TUNHandler) Start(cfg config.TUNConfig) (singtun.Tun, singtun.Stack, er
 	// UDPTimeout/ICMPTimeout must be non-zero: sing-tun's gvisor UDP forwarder panics
 	// directly in udpnat2.New when timeout==0 (previously omitted, causing the TUN to fail to start).
 	stackOpts := singtun.StackOptions{
-		Context:     context.Background(),
+		Context:     ctx,
 		Tun:         t,
 		TunOptions:  tunOpts,
 		Handler:     h,

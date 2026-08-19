@@ -19,11 +19,11 @@ type Config struct {
 }
 
 type TUNConfig struct {
-	Enabled        bool     `json:"enabled"`
-	Name           string   `json:"name"`
-	MTU            int      `json:"mtu"`
-	Inet4Address   []string `json:"inet4_address"`
-	Inet6Address   []string `json:"inet6_address"`
+	Enabled      bool     `json:"enabled"`
+	Name         string   `json:"name"`
+	MTU          int      `json:"mtu"`
+	Inet4Address []string `json:"inet4_address"`
+	Inet6Address []string `json:"inet6_address"`
 	// DNSServers lists the DNS server addresses the TUN advertises to the system
 	// resolver on Android (fed to VpnService.Builder.addDnsServer). Index 0 = IPv4
 	// (default 223.5.5.5), index 1 = IPv6 (default 2400:3200::1). Not read on

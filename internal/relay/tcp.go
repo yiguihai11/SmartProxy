@@ -34,7 +34,8 @@ var UDPBufPool = sync.Pool{
 
 var PacketPool = sync.Pool{
 	New: func() interface{} {
-		buf := make([]byte, 4096)
+		// UDP 报文最大载荷 65507 字节;4KB 缓冲会截断大 EDNS0 DNS 响应。
+		buf := make([]byte, 65535)
 		return &buf
 	},
 }

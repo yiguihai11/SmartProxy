@@ -91,6 +91,11 @@ class SmartProxyVpnService : VpnService() {
 
     private var startedEngine = false
 
+    /** P1#6 守卫:完整拆机(fullTeardown=true)只执行一次。ACTION_STOP 的 shutdown 之后
+     *  onDestroy 会再调一次 shutdown,没有这个守卫就会再 sleep 100ms + 再 stopForeground;
+     *  onRevoke 与 onDestroy 并发/先后到达同理。startInternal 成功建隧道时复位。 */
+    private var tornDown = false
+
     /** §4.6 establish 保留的原始 PFD:shutdown 时显式 close() 通知系统拆 VPN(状态栏图标
      *  即刻消失)。传给 Go 的 fd 是 dup + detachFd 出的独立拷贝(见 establishVpn),Go 引擎
      *  独占那份;原始 PFD 从不过手,close 它就是系统拆 VPN 的唯一干净信号。不可 detach 原始
@@ -146,6 +151,15 @@ class SmartProxyVpnService : VpnService() {
     /** 建前台通知并按服务模式启动引擎 / 隧道(§8):START 与 RESTART 分支共用。
      *  成功返回 START_STICKY;失败立即收掉前台服务避免空转,返回 START_NOT_STICKY。 */
     private fun startInternal(): Int {
+        // P0#6 守卫:重复/重投的 START intent 在引擎已跑时直接忽略。没有这个守卫,
+        // 已运行状态下再走 establishVpn → StartRouter 报 "router is already running"
+        // → establishVpn 返回 false → 走到下方失败分支把正在跑的 VPN 拆掉。
+        if (startedEngine) {
+            Log.i(TAG, "[startInternal] Engine already running; ignoring duplicate start (P0#6).")
+            return START_STICKY
+        }
+        // 新的隧道会话开始:tornDown 复位,允许下次完整拆机再走一遍停服流程。
+        tornDown = false
         Log.i(TAG, "[startInternal] Calling NotificationHelper.startForeground()...")
         NotificationHelper.startForeground(this)
         // 服务模式(§8):仅代理(SOCKS5)不建 VpnService,直接起引擎 SOCKS5;VPN 模式走 establishVpn。
@@ -404,6 +418,13 @@ class SmartProxyVpnService : VpnService() {
      *  幂等:重复进入 startedEngine=false、tunPfd 已置 null;stopSelf() 本身也是幂等的。
      */
     private fun shutdown(fullTeardown: Boolean = true) {
+        // P1#6:完整拆机只执行一次。ACTION_STOP 的 shutdown 之后 onDestroy 会再调一次,
+        // 没有这个守卫会重复 sleep(100ms)+stopForeground,停止累计睡 ~200ms;onRevoke 与
+        // onDestroy 先后到达同理。重建(fullTeardown=false)不置位,可反复执行。
+        if (tornDown) {
+            Log.i(TAG, "[shutdown] Already torn down (tornDown=true), skipping.")
+            return
+        }
         Log.i(TAG, "[shutdown] Step 0: Enter shutdown(). startedEngine=$startedEngine, _isRunning=${_isRunning.value}, tunFds=${tunFdCount()}, fullTeardown=$fullTeardown")
         if (startedEngine) {
             try {
@@ -461,6 +482,8 @@ class SmartProxyVpnService : VpnService() {
 
             Log.i(TAG, "[shutdown] Step 5/6: Updating state _isRunning.value = false...")
             _isRunning.value = false
+            // 完整拆机完成,后续(如 onDestroy)的 shutdown 直接跳过。
+            tornDown = true
         } else {
             Log.i(TAG, "[shutdown] Step 4/6: fullTeardown=false, keeping foreground notification + isRunning=true for rebuild.")
         }

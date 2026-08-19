@@ -64,9 +64,13 @@ func (c *testGraceConn) Write(b []byte) (int, error) {
 
 func (c *testGraceConn) SetReadDeadline(t time.Time) error { c.deadline = !t.IsZero(); return nil }
 func (c *testGraceConn) Close() error                      { return nil }
-func (c *testGraceConn) LocalAddr() net.Addr               { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1} }
-func (c *testGraceConn) RemoteAddr() net.Addr              { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 2} }
-func (c *testGraceConn) SetDeadline(t time.Time) error     { return nil }
+func (c *testGraceConn) LocalAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1}
+}
+func (c *testGraceConn) RemoteAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 2}
+}
+func (c *testGraceConn) SetDeadline(t time.Time) error { return nil }
 func (c *testGraceConn) SetWriteDeadline(t time.Time) error {
 	return nil
 }
