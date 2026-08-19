@@ -640,10 +640,17 @@ private fun HomeLauncher(
             Spacer(Modifier.height(30.dp))
 
             // ── 开关卡:IPv4 / IPv6 左右各半;开机自启(Apps 已移至侧边栏菜单)──
+            // 守卫:两个族不能同时关。VpnService.Builder 至少要一个 addAddress,否则 establish()
+            // 抛 IllegalArgumentException 启动必败;运行中关最后一个还会让 restart() 重建失败、
+            // 连隧道一起收掉。拦在开关这一层,checked 是受控 state,不更新即回弹。
             Row(modifier = Modifier.fillMaxWidth()) {
                 SwitchCard(
                     title = "IPv4 拦截", subtitle = "接管 IPv4 流量", checked = ipv4,
                     onCheckedChange = { v ->
+                        if (!v && !ipv6) {
+                            Toast.makeText(context, "至少需开启 IPv4 或 IPv6 其中一个", Toast.LENGTH_SHORT).show()
+                            return@SwitchCard
+                        }
                         ipv4 = v
                         // 写 config.json tun.inet4_address(§4.6):运行中显式重建才生效
                         // (Go watcher 自动重启已删除)。restart() 自带 isRunning 守卫,未在跑只落盘。
@@ -656,6 +663,10 @@ private fun HomeLauncher(
                 SwitchCard(
                     title = "IPv6 拦截", subtitle = "接管 IPv6 流量", checked = ipv6,
                     onCheckedChange = { v ->
+                        if (!v && !ipv4) {
+                            Toast.makeText(context, "至少需开启 IPv4 或 IPv6 其中一个", Toast.LENGTH_SHORT).show()
+                            return@SwitchCard
+                        }
                         ipv6 = v
                         ConfigProvider.setIpv6(context, v)
                         SmartProxyVpnService.restart(context)

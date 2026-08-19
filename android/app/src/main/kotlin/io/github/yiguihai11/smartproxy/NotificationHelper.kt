@@ -63,9 +63,6 @@ object NotificationHelper {
         return content.build()
     }
 
-    fun isStopAction(intent: Intent?): Boolean =
-        intent?.action == ACTION_STOP
-
     /** §4.5 被动断连提示:一次性(auto-cancel)通知,非 ongoing,点掉即消失。 */
     fun notifyDisconnected(context: Context) {
         ensureChannel(context)

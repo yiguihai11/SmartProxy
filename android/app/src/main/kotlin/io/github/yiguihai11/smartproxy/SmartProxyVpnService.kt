@@ -158,8 +158,11 @@ class SmartProxyVpnService : VpnService() {
             Log.i(TAG, "[startInternal] Start SUCCESS (socks=$socksOnly)! startedEngine=true, _isRunning=true. Returning START_STICKY.")
             return START_STICKY
         }
-        // start 失败:前台服务已起,立即收掉避免空转。
+        // start 失败:前台服务已起,立即收掉避免空转。状态落 false——正常启动路径本就
+        // 是 false;重建(ACTION_RESTART)路径 shutdown(fullTeardown=false)为无感保留了
+        // isRunning=true,重建失败必须落 false,否则首页圆球卡在"已连接"但隧道已没了。
         Log.e(TAG, "[startInternal] Start FAILED (socks=$socksOnly)! Stopping foreground notification and service.")
+        _isRunning.value = false
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
         return START_NOT_STICKY
@@ -177,6 +180,14 @@ class SmartProxyVpnService : VpnService() {
             val configPath = ConfigProvider.configPath(this)
             val tun = TunConfig.parse(configJson)
             Log.i(TAG, "[establishVpn] Parsed TUN config: mtu=${tun.mtu}, inet4=${tun.inet4}, inet6=${tun.inet6}")
+
+            // 兜底:至少一个 IP 族启用。VpnService.Builder 没调过 addAddress 就 establish()
+            // 会抛 IllegalArgumentException;首页开关层已阻止双关,但 Go 面板或直接编辑
+            // config.json 仍可能把 inet4/6_address 都写成空,这里明确判失败而非让异常冒泡。
+            if (tun.inet4 == null && tun.inet6 == null) {
+                Log.e(TAG, "[establishVpn] Neither IPv4 nor IPv6 enabled in config (tun.inet4/6_address both empty); cannot establish VPN.")
+                return false
+            }
 
             // VpnService.Builder 是 VpnService 的内部类,不能写成 VpnService.Builder():
             // 本类继承 VpnService,裸 Builder() 会用 this 当外部接收者。
@@ -227,22 +238,40 @@ class SmartProxyVpnService : VpnService() {
             }
 
             // 流量模式(§4):M1 默认"仅绕过(global)",M2/M5 从 AppPrefs 喂选中列表。
+            //
+            // 逐项包名必须独立兜底 NameNotFoundException:addDisallowed/AllowedApplication
+            // 对已卸载/多用户下不可见的包会抛此异常,若用一个 forEach 不兜,外层 try/catch
+            // 会让整个 establishVpn 返回 false → 前台服务被收掉、VPN 静默起不来(只在 logcat
+            // 留异常)。陈旧偏好里残留已卸载包是常态(用户卸 app 不会同步改我们的选择),
+            // 所以这里跳过并告警,绝不因一个包名拖垮整次启动。
+            val selected = AppPrefs.selectedApps(this)
             if (AppPrefs.globalMode(this)) {
                 Log.i(TAG, "[establishVpn] Mode: Global (Bypass selected apps + self)")
-                // 仅绕过(黑名单):全接管,唯独放行选中 + 自身。
-                AppPrefs.selectedApps(this).forEach { builder.addDisallowedApplication(it) }
+                // 仅绕过(黑名单):全接管,唯独放行选中 + 自身。selected 里滤掉本包名,
+                // 自身只由下面显式加一次(避免重复 addDisallowed)。
+                selected.filter { it != packageName }
+                    .forEach { pkg -> applyDisallowedApp(builder, pkg, isSelf = false) }
                 // 自身 uid 无条件排除,防回环:引擎的出站直连/上游连接出自本进程 uid,
                 // 不排除就会灌回 TUN → gvisor 处理自己的出站包 → 死循环。
-                builder.addDisallowedApplication(packageName)
+                applyDisallowedApp(builder, packageName, isSelf = true)
             } else {
                 Log.i(TAG, "[establishVpn] Mode: Bypass (Proxy selected apps only)")
                 // 仅代理(白名单):只放行选中。自身 uid 天然不在白名单里(面板枚举已滤掉
                 // 自己),且 Android 不允许白名单/黑名单混用(混加抛 UnsupportedOperationException),
                 // 所以这里既不能也不需加 addDisallowedApplication(self)。防御性滤掉自身,
                 // 防陈旧偏好里残留本包名导致回环。
-                AppPrefs.selectedApps(this)
-                    .filter { it != packageName }
-                    .forEach { builder.addAllowedApplication(it) }
+                var allowedCount = 0
+                selected.filter { it != packageName }.forEach { pkg ->
+                    if (applyAllowedApp(builder, pkg)) allowedCount++
+                }
+                // 白名单一个有效包都没有(全卸载 / 空选 / 全不可见)时,Builder 没调过任何
+                // addAllowed/DisallowedApplication → Android 默认接管全部流量,含本引擎
+                // 自身出站 → TUN 回环死循环。直接判失败,不 establish。
+                if (allowedCount == 0) {
+                    Log.e(TAG, "[establishVpn] Whitelist mode but 0 valid apps to proxy (all uninstalled?); aborting to avoid TUN loopback.")
+                    return false
+                }
+                Log.i(TAG, "[establishVpn] Whitelist: $allowedCount app(s) will be proxied.")
             }
 
             Log.i(TAG, "[establishVpn] Step 2: Executing Builder.establish()...")
@@ -302,6 +331,31 @@ class SmartProxyVpnService : VpnService() {
             true
         } catch (e: Exception) {
             Log.e(TAG, "[startSocksOnly] Mobile.startRouter() threw exception", e)
+            false
+        }
+    }
+
+    /** 把 [pkg] 加进黑名单(bypass)。已卸载/不可见的包抛 NameNotFoundException → 跳过并
+     *  告警,不让一个陈旧包名拖垮 establish(见 establishVpn 调用处)。isSelf=true 仅用于
+     *  日志标注(自身 uid 排除是防回环的关键项,缺失要留痕)。返回是否成功加入。 */
+    private fun applyDisallowedApp(builder: Builder, pkg: String, isSelf: Boolean): Boolean {
+        return try {
+            builder.addDisallowedApplication(pkg)
+            true
+        } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
+            val tag = if (isSelf) " (self — unexpected! TUN loopback protection lost)" else ""
+            Log.w(TAG, "[establishVpn] Skipping disallowed '$pkg': not installed$tag")
+            false
+        }
+    }
+
+    /** 把 [pkg] 加进白名单(仅代理)。已卸载/不可见的包跳过并告警(同上)。返回是否成功加入。 */
+    private fun applyAllowedApp(builder: Builder, pkg: String): Boolean {
+        return try {
+            builder.addAllowedApplication(pkg)
+            true
+        } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
+            Log.w(TAG, "[establishVpn] Skipping allowed '$pkg': not installed")
             false
         }
     }
@@ -397,13 +451,20 @@ class SmartProxyVpnService : VpnService() {
             tunPfd = null
         }
 
-        Log.i(TAG, "[shutdown] Step 4/6: Calling ServiceCompat.stopForeground(STOP_FOREGROUND_REMOVE)...")
-        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-        Log.i(TAG, "[shutdown] Step 4/6: stopForeground completed.")
+        if (fullTeardown) {
+            // 完整拆机(用户停止 / onRevoke / onDestroy):拆保活通知 + 状态落 false。
+            // 重建(fullTeardown=false)时不拆——通知保留避免闪烁,_isRunning 保持 true,
+            // 隧道重建对用户无感;若重建失败,由 startInternal 失败分支负责落 false。
+            Log.i(TAG, "[shutdown] Step 4/6: Calling ServiceCompat.stopForeground(STOP_FOREGROUND_REMOVE)...")
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+            Log.i(TAG, "[shutdown] Step 4/6: stopForeground completed.")
 
-        Log.i(TAG, "[shutdown] Step 5/6: Updating state _isRunning.value = false...")
-        _isRunning.value = false
-        Log.i(TAG, "[shutdown] Step 6/6: shutdown() completed. _isRunning is now false. tunFds=${tunFdCount()}")
+            Log.i(TAG, "[shutdown] Step 5/6: Updating state _isRunning.value = false...")
+            _isRunning.value = false
+        } else {
+            Log.i(TAG, "[shutdown] Step 4/6: fullTeardown=false, keeping foreground notification + isRunning=true for rebuild.")
+        }
+        Log.i(TAG, "[shutdown] Step 6/6: shutdown() completed. _isRunning=${_isRunning.value}. tunFds=${tunFdCount()}")
     }
 
     /** 被其它 VPN 抢占 / 系统设置断开:系统调此,隧道即刻失效(§4.5 主信号)。
