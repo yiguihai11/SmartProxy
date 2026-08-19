@@ -29,9 +29,7 @@
     "inet4_address": [
       "172.19.0.1/30"
     ],
-    "inet6_address": [
-      "fc00::1/64"
-    ],
+    "inet6_address": [],
     "auto_route": false,
     "stack": "gvisor",
     "output_mark": 0,

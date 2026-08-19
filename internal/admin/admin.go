@@ -983,7 +983,7 @@ func (s *Server) writeJSONError(w http.ResponseWriter, code int, msg string) {
 }
 
 // handleFiles lists directory contents; when path is empty, it starts from the
-// program's working directory.
+// directory holding the config file.
 func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodGet {
@@ -992,12 +992,21 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	path := r.URL.Query().Get("path")
 	if path == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			s.writeJSONError(w, http.StatusInternalServerError, "cannot get working directory: "+err.Error())
-			return
+		// 起始目录用配置文件所在目录,不要用 os.Getwd():Android 上 app 进程的
+		// CWD 是 "/",untrusted_app 域无权读它 → 文件选择器一打开就报
+		// "open /: permission denied"。configPath 在 Android 是 filesDir/config.json
+		// (app 可读写),桌面端也由 engine.SetConfigPath 设好;仅在其为空(异常)时
+		// 才回退到 CWD。
+		if s.configPath != "" {
+			path = filepath.Dir(s.configPath)
+		} else {
+			cwd, err := os.Getwd()
+			if err != nil {
+				s.writeJSONError(w, http.StatusInternalServerError, "cannot get working directory: "+err.Error())
+				return
+			}
+			path = cwd
 		}
-		path = cwd
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
