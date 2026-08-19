@@ -469,6 +469,26 @@ AppSelectionActivity(Compose,单 Activity)
 | 9 | 管理面板凭据 | **用户自行设置**(非随机),面板内可改 | 0.0.0.0 常开下别用弱密码;改后热重载 |
 | 10 | 首页定位 | **主管理**:启停 + IPv4/IPv6 + 开机自启 + **Apps(应用选择入口)**+ 面板入口;模式 / 应用选择已应用内化(§5),DNS 只在面板 | 用户已定;§4.4「产品形态」 |
 
+### 8.1 未来方向(暂缓):Shizuku 免 root 热点 / 网络共享
+
+> 来源:[v2rayNG PR #5903](https://github.com/2dust/v2rayNG/pull/5903)(作者 eliotcougar,OPEN,41 文件 / 4037 行)。**现状:只记录思路,不做。** 与 §4.5/4.6 的图标拆除问题无关,不解决也不依赖它。
+
+**它解决什么**:不 root,让 v2rayNG 作为**系统热点 / USB 网络共享**的上游,旁路设备流量也走代理。给 SmartProxy 的启示在「净权限」:`untrusted_app` 域禁 netlink(见记忆 android-netlink-banned-monitor),shell UID 恰好绕开。
+
+**核心机制**(五步):
+1. **shell UID 的 Shizuku UserService**:`ShizukuTetheringService.kt` 跑在 Shizuku shell 进程,持有 shell UID,才够格调隐藏 API。
+2. **造 TUN 用测试网络而非 VpnService**:反射 `TestNetworkManager.createTunInterface(192.0.2.2/24)` 建内核 TUN + `setupTestNetwork(LinkProperties, …, IBinder)` 发布成测试网络,`NetworkCallback` 等 publish(`CountDownLatch` 超时)。
+3. **双进程共享 fd**:UserService 持 TUN 一份,`ParcelFileDescriptor.dup()` 复制一份经 AIDL(`ICoreTetheringLease.holdTestNetwork`)交给主核心,主核心把 fd 当自身 tun 的 `fd` 吃进第二实例(`startLoop(config, fd)`)。一 TUN 两 dup fd,各管一边。
+4. **`TetheringManager.setPreferTestNetworks(true)`**:让系统 tethering 上游优先选测试网络 → 热点流量自动进内核 TUN → 主核心代理出去,不碰 iptables/netd。
+5. **兜底引擎**:主核心不可用时 UserService 自己起 HEV(临时 yaml 到 `/data/local/tmp`)或原生 Xray(`Libv2ray.newCoreController`)。
+
+**工程亮点(可抄)**:双域保活(app 死则 UserService 持网络,Shizuku 死则主核心持 dup fd,`IBinder.DeathRecipient` 监听对端死亡);`RoutingSession.token` 会话隔离;`cleanupRouting()` fail-closed 有序清理(停引擎 → 还 fd → teardown → 关 TUN → `setPreferTestNetworks(false)`),防系统把下游悄悄迁回物理网卡;UserService 版本号 `20_260_755` 防跨 APK 升级 AIDL 失配。
+
+**前置 / 风险**:
+- Shizuku **v11+**;Android **API 33+**(隐藏 API 全反射);MIUI/HyperOS/ColorOS 等 tethering 魔改 ROM 不保证。
+- 复杂度高(双进程 AIDL + 状态机 + 反射),Hotspot 客户端是整机流量,**做不了 per-app 路由**。
+- 若日后要做「接管热点 / 需要 netlink / privileged 操作」,整套架构(server-UID UserService + AIDL 桥 + dup fd)直接可移植;否则维持 VpnService 现状。
+
 ## 9. 里程碑
 
 - **M1**:真实工程骨架 + VpnService 起隧道 + Go 引擎跑通(DNS 走拦截,基本连通)+ 前台服务保活通知
