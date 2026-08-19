@@ -167,12 +167,20 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 	result, err, _ := h.group.Do(key, func() (interface{}, error) {
 		isDomestic := h.IsDomestic(targetIP)
 
+		// P1#13: the merged query must not ride the first caller's connection ctx.
+		// singleflight fans this fn out to every concurrent requester for the same
+		// domain|type; if that leader's connection dies mid-flight, its cancelled ctx
+		// would abort the shared upstream query and SERVFAIL the whole batch. Use an
+		// independent budget so one client's disconnect only costs itself.
+		fctx, cancel := context.WithTimeout(context.Background(), cfg.queryTimeout)
+		defer cancel()
+
 		var resp []byte
 		var rerr error
 
 		if isDomestic {
 			slog.Debug("querying domestic DNS", "target", fmt.Sprintf("%s:%d", targetIP, targetPort))
-			resp, rerr = h.QueryUDPVerifyID(ctx, queryWire, targetIP, targetPort)
+			resp, rerr = h.QueryUDPVerifyID(fctx, queryWire, targetIP, targetPort)
 			if rerr != nil {
 				slog.Warn("domestic DNS query failed, falling back to foreign DNS",
 					"qname", qname, "error", rerr)
@@ -182,7 +190,7 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 					foreignHost = cfg.foreignIPv6
 					foreignPort = cfg.foreignIPv6Port
 				}
-				resp, rerr = h.queryForeignDNSWithRetry(ctx, queryWire, foreignHost, foreignPort)
+				resp, rerr = h.queryForeignDNSWithRetry(fctx, queryWire, foreignHost, foreignPort)
 				if rerr != nil {
 					slog.Error("foreign DNS fallback also failed, answering SERVFAIL", "qname", qname, "error", rerr)
 					return h.buildSERVFAIL(queryWire), nil
@@ -192,7 +200,7 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 			}
 		} else {
 			slog.Debug("querying foreign DNS via proxy", "target", fmt.Sprintf("%s:%d", targetIP, targetPort))
-			resp, rerr = h.queryForeignDNSWithRetry(ctx, queryWire, targetIP, targetPort)
+			resp, rerr = h.queryForeignDNSWithRetry(fctx, queryWire, targetIP, targetPort)
 			if rerr != nil {
 				slog.Error("foreign DNS query failed, answering SERVFAIL", "error", rerr)
 				return h.buildSERVFAIL(queryWire), nil
@@ -201,7 +209,7 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 
 		if isDomestic {
 			// A single parse performs both the pollution check and IP preference selection (avoiding unpacking the response twice)
-			if preferred, cached, clean := h.isDNSCleanAndPrefer(ctx, resp, qname); clean {
+			if preferred, cached, clean := h.isDNSCleanAndPrefer(fctx, resp, qname); clean {
 				resp = preferred
 				if cached {
 					h.cache.Set(qname, qtype, resp, 0)
@@ -215,7 +223,7 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 					foreignHost = cfg.foreignIPv6
 					foreignPort = cfg.foreignIPv6Port
 				}
-				fallback, ferr := h.queryForeignDNSWithRetry(ctx, queryWire, foreignHost, foreignPort)
+				fallback, ferr := h.queryForeignDNSWithRetry(fctx, queryWire, foreignHost, foreignPort)
 				if ferr != nil || fallback == nil {
 					slog.Warn("foreign DNS fallback failed, answering SERVFAIL",
 						"qname", qname, "foreignTarget", fmt.Sprintf("%s:%d", foreignHost, foreignPort),
