@@ -669,9 +669,8 @@ func (e *Engine) Stop() {
 	})
 }
 func (e *Engine) relayTCP(ctx context.Context, client, remote net.Conn, isProxy bool, prefix []byte) {
-	relay.ActiveConns.Add(1)
+	// ActiveConns 由 relay.TCPRelay 内部统一结算(与 TUN 入口共用同一实现)。
 	relay.TCPRelay(ctx, client, remote, isProxy, prefix)
-	relay.ActiveConns.Add(-1)
 }
 
 func (e *Engine) SetReloadFn(fn func()) {

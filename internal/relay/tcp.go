@@ -45,6 +45,11 @@ var PacketPool = sync.Pool{
 // (the 1 byte read during smart-direct direct connection validation); paths without
 // a prefix pass nil.
 func TCPRelay(ctx context.Context, client, remote net.Conn, proxy bool, prefix []byte) {
+	// ActiveConns 在这里统一结算:SOCKS5 与 TUN 两条 TCP 入口都走 TCPRelay,
+	// 面板 tcp_conns 才不会被入口分流。engine 侧不再各自维护。
+	ActiveConns.Add(1)
+	defer ActiveConns.Add(-1)
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 

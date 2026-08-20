@@ -318,6 +318,8 @@ type tunUdpSession struct {
 
 func (s *tunUdpSession) signalClose() {
 	s.closeOnce.Do(func() {
+		// 与 SOCKS5 UDP 会话共用 udp.ActiveSessions,面板 udp_sessions 才一致。
+		udp.ActiveSessions.Add(-1)
 		close(s.closeCh)
 	})
 }
@@ -377,6 +379,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, de
 		closeCh: make(chan struct{}),
 	}
 	sess.lastActive.Store(time.Now().Unix())
+	udp.ActiveSessions.Add(1)
 
 	sessKey := destination.String()
 	h.storeUDPSession(sessKey, sess)
