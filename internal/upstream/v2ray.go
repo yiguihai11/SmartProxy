@@ -188,7 +188,7 @@ func (p *Proxy) v2rayPlugin() (*v2rayPluginConfig, error) {
 	}
 	cfg, err := parseV2rayPluginOptions(p.Plugin)
 	if err != nil {
-		return nil, fmt.Errorf("ss proxy %q: %w", p.URL, err)
+		return nil, fmt.Errorf("ss proxy %q: %w", MaskProxyURL(p.URL), err)
 	}
 	return cfg, nil
 }
@@ -203,7 +203,7 @@ func (p *Proxy) v2rayPlugin() (*v2rayPluginConfig, error) {
 func (p *Proxy) dialV2ray(ctx context.Context, cfg *v2rayPluginConfig) (net.Conn, error) {
 	conn, err := dialV2rayTransport(ctx, cfg, p.Host, p.Port)
 	if err != nil {
-		return nil, fmt.Errorf("v2ray-plugin dial to %s: %w", p.URL, err)
+		return nil, fmt.Errorf("v2ray-plugin dial to %s: %w", MaskProxyURL(p.URL), err)
 	}
 	if cfg.mode == "websocket" && cfg.mux != 0 {
 		return &v2rayMuxStream{conn: conn, id: 1}, nil

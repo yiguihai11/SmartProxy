@@ -16,11 +16,13 @@ type BlacklistEntry struct {
 	Port       int    `json:"port"`
 	LastReason string `json:"last_reason"`
 	ExpiresAt  int64  `json:"expires_at"`
+	LastHit    int64  `json:"last_hit"` // 最近命中/添加时间,面板按它排序(最近在前)
 }
 
 type blacklistRecord struct {
 	expiry     time.Time
 	lastReason string
+	lastHit    time.Time
 }
 
 type Blacklist struct {
@@ -51,10 +53,14 @@ func (b *Blacklist) IsBlacklisted(host string, port int) bool {
 	if !exists {
 		return false
 	}
-	if time.Now().After(rec.expiry) {
+	now := time.Now()
+	if now.After(rec.expiry) {
 		delete(b.entries, key)
 		return false
 	}
+	// 命中即刷新"最近使用",面板黑名单表按它排(最近命中的置顶)。
+	rec.lastHit = now
+	b.entries[key] = rec
 	slog.Debug("dynamic blacklist hit", "type", b.name, "host", host, "port", port)
 	return true
 }
@@ -64,6 +70,7 @@ func (b *Blacklist) Add(host string, port int, ttl time.Duration, reason string)
 	defer b.mu.Unlock()
 
 	key := blacklistKey{host: host, port: port}
+	now := time.Now()
 
 	if _, exists := b.entries[key]; !exists {
 		if len(b.entries) >= b.maxSize {
@@ -72,16 +79,18 @@ func (b *Blacklist) Add(host string, port int, ttl time.Duration, reason string)
 	} else {
 
 		b.entries[key] = blacklistRecord{
-			expiry:     time.Now().Add(ttl),
+			expiry:     now.Add(ttl),
 			lastReason: reason,
+			lastHit:    now,
 		}
 		slog.Info("updated dynamic blacklist", "type", b.name, "host", host, "port", port, "reason", reason)
 		return
 	}
 
 	b.entries[key] = blacklistRecord{
-		expiry:     time.Now().Add(ttl),
+		expiry:     now.Add(ttl),
 		lastReason: reason,
+		lastHit:    now,
 	}
 	slog.Info("added to dynamic blacklist", "type", b.name, "host", host, "port", port, "ttl", ttl, "reason", reason)
 }
@@ -120,10 +129,15 @@ func (b *Blacklist) Entries() []BlacklistEntry {
 				Port:       k.port,
 				LastReason: rec.lastReason,
 				ExpiresAt:  rec.expiry.Unix(),
+				LastHit:    rec.lastHit.Unix(),
 			})
 		}
 	}
+	// 面板按"最近访问使用"排序:最近命中/添加的排最前;同级按 host 稳定排。
 	sort.Slice(result, func(i, j int) bool {
+		if result[i].LastHit != result[j].LastHit {
+			return result[i].LastHit > result[j].LastHit
+		}
 		if result[i].Host != result[j].Host {
 			return result[i].Host < result[j].Host
 		}

@@ -2,7 +2,6 @@ package dns
 
 import (
 	"container/list"
-	"sort"
 	"sync"
 	"time"
 
@@ -179,12 +178,15 @@ func (c *Cache) Entries() []CacheEntryInfo {
 	defer c.mu.RUnlock()
 	now := time.Now()
 	result := make([]CacheEntryInfo, 0)
-	for k, v := range c.entries {
+	// 按 LRU 链表 front→back 遍历:front 是最近使用(Get 命中/Set 刷新都 MoveToFront),
+	// 面板缓存表即按"最近访问"排序,最常用的排最前。
+	for e := c.lru.Front(); e != nil; e = e.Next() {
+		v := e.Value.(*cacheEntry)
 		if v.expire.After(now) {
 			info := CacheEntryInfo{
-				Qname: k.qname, Qtype: k.qtype, Expires: v.expire.Unix(),
+				Qname: v.key.qname, Qtype: v.key.qtype, Expires: v.expire.Unix(),
 			}
-			if k.qtype == dns.TypeA || k.qtype == dns.TypeAAAA {
+			if v.key.qtype == dns.TypeA || v.key.qtype == dns.TypeAAAA {
 				msg := new(dns.Msg)
 				if err := msg.Unpack(v.wire); err == nil {
 					for _, a := range msg.Answer {
@@ -200,11 +202,5 @@ func (c *Cache) Entries() []CacheEntryInfo {
 			result = append(result, info)
 		}
 	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Qname != result[j].Qname {
-			return result[i].Qname < result[j].Qname
-		}
-		return result[i].Qtype < result[j].Qtype
-	})
 	return result
 }

@@ -341,13 +341,13 @@ func boolFromRawQuery(rawQuery, key string) bool {
 	return false
 }
 
-// MaskPassword 是面板/API 回显代理 URL 时替换真实密码的哨兵;PUT 回传时由
-// admin 侧 restoreMaskedProxies 按 alias 解析回真实密码,往返不丢凭据。
+// MaskPassword 是日志输出时替换真实密码的哨兵。API/面板回显真实配置(用户明确要求
+// 只在日志里隐藏,不做全链路脱敏);日志打印 URL 时必须显式走 MaskProxyURL。
 const MaskPassword = "******"
 
-// MaskProxyURL 返回用于日志、/health、/config 展示的代理 URL,密码一律打码为
-// MaskPassword,用户名(ss 的 method、http/socks 的账号)保留以便编辑往返时定位。
-// ss:// 的 legacy base64 形式整个 payload 都是凭据,无结构可拆,整段打码。
+// MaskProxyURL 返回用于日志/错误信息展示的代理 URL,密码一律打码为 MaskPassword,
+// 用户名(ss 的 method、http/socks 的账号)保留以便定位。ss:// 的 legacy base64
+// 形式整个 payload 都是凭据,无结构可拆,整段打码。
 func MaskProxyURL(proxyURL string) string {
 	u, err := url.Parse(proxyURL)
 	if err != nil {
@@ -375,7 +375,8 @@ func MaskProxyURL(proxyURL string) string {
 func NewProxy(proxyURL string) (*Proxy, error) {
 	u, err := url.Parse(proxyURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid proxy URL %q: %w", proxyURL, err)
+		// 错误信息会进日志,URL 打码
+		return nil, fmt.Errorf("invalid proxy URL %q: %w", MaskProxyURL(proxyURL), err)
 	}
 
 	scheme := ProxyScheme(strings.ToLower(u.Scheme))
@@ -392,7 +393,9 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 	}
 
 	p := &Proxy{
-		URL:           MaskProxyURL(proxyURL),
+		// 存真实 URL:面板/API(health/config/export)回显需要真实凭据,日志打印处
+		// 各自显式 MaskProxyURL,见 manager.go / health.go / ss.go。
+		URL:           proxyURL,
 		Scheme:        scheme,
 		Host:          u.Hostname(),
 		Port:          port,

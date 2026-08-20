@@ -1930,8 +1930,10 @@ function showCfg(i){
   document.getElementById('cfg-content').innerHTML=
     '<div class="config-section"><div id="'+k+'-wrap" class="config-editor"></div><div class="config-actions">'+
     '<button class="btn primary btn-sm" onclick="sv(\''+k+'\')">Save</button>'+
+    '<button class="btn btn-sm" onclick="clearCfg(\''+k+'\')" title="Clear the editor content">Clear</button>'+
     (k==='cfg'?'<button class="btn btn-sm" onclick="loadConfig()">Reset</button>':'')+
     (k==='cfg'?'<button class="btn btn-sm" onclick="copyCfg()">Copy</button>':'')+
+    (k==='cfg'?'<button class="btn btn-sm" onclick="exportCfg(\'cfg\')">Export</button>':'')+
     (k==='acl'?'<button class="btn btn-sm" onclick="exportCfg(\'acl\')">Export</button>':'')+
     (k==='chn'?'<button class="btn btn-sm" onclick="exportCfg(\'chn\')">Export</button>':'')+
     (k==='chn'?'<button class="btn btn-sm" onclick="uploadChn()">Upload</button>':'')+
@@ -1979,11 +1981,17 @@ function copyCfg(){
     fallbackCopy(text,toast);
   }
 }
+// 一键清理:清空当前 tab 的编辑器内容。不落盘,保存仍走 Save。
+function clearCfg(k){
+  var cm=window['cm_'+k];
+  if(cm)cm.setValue('');
+  else cfgD[k]='';
+}
 function exportCfg(k){
   var cm=window['cm_'+k];
   var val=cm?cm.getValue():cfgD[k]||'';
-  var names={acl:'acl.txt',chn:'chnroute.txt'};
-  var blob=new Blob([val],{type:'text/plain;charset=utf-8'});
+  var names={cfg:'config.json',acl:'acl.txt',chn:'chnroute.txt'};
+  var blob=new Blob([val],{type:k==='cfg'?'application/json;charset=utf-8':'text/plain;charset=utf-8'});
   var url=URL.createObjectURL(blob);
   var a=document.createElement('a');
   a.href=url;a.download=names[k]||k+'.txt';a.style.display='none';
@@ -2260,9 +2268,12 @@ es.onmessage=function(e){
     setDot(true);
     updateHealthBanner(d);
     var v=document.querySelector('.nav-item.active').dataset.view;
-    if(v==='dashboard')ldash(d);
-    else if(v==='traffic'&&trafficAuto)ltraf(d);
-    else if(v==='health')lhealth(d);
+    // ldash/ltraf/lhealth 是增量渲染,不负责时间;绿点旁的"最后更新"时间在
+    // SSE 推送时一并刷新,否则这几个页面时间会停在进入时的秒(blacklist/cache/
+    // logs 走各自 refresh* 已更新)。
+    if(v==='dashboard'){ldash(d);st('dash-time')}
+    else if(v==='traffic'&&trafficAuto){ltraf(d);st('traffic-time')}
+    else if(v==='health'){lhealth(d);st('health-time')}
     else if(v==='blacklist'&&blAuto)refreshBlacklist();
     else if(v==='cache'&&cacheAuto){if(dnsTab==='static')loadStatic();else refreshCache()}
     else if(v==='logs'&&logsAuto)refreshLogs();

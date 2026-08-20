@@ -564,14 +564,14 @@ func (hc *HealthChecker) recordSuccess(p *Proxy, ph *ProxyHealth, circuit string
 		// the node would stay permanently skipped despite probes succeeding.
 		ph.state = StateHalfOpen
 		ph.consecutiveSuccesses = 1
-		slog.Info("proxy circuit half-open on probe success", "url", p.URL, "circuit", circuit, "latency", latency)
+		slog.Info("proxy circuit half-open on probe success", "url", MaskProxyURL(p.URL), "circuit", circuit, "latency", latency)
 	case StateHalfOpen:
 		ph.consecutiveSuccesses++
 		if ph.consecutiveSuccesses >= cfg.SuccessesThreshold {
 			ph.state = StateClosed
 			ph.consecutiveFailures = 0
 			ph.consecutiveSuccesses = 0
-			slog.Info("proxy recovered", "url", p.URL, "circuit", circuit, "latency", latency)
+			slog.Info("proxy recovered", "url", MaskProxyURL(p.URL), "circuit", circuit, "latency", latency)
 		}
 	}
 }
@@ -596,7 +596,7 @@ func (hc *HealthChecker) recordFailure(p *Proxy, ph *ProxyHealth, circuit string
 		if ph.consecutiveFailures >= cfg.FailuresThreshold {
 			ph.state = StateOpen
 			ph.openSince = time.Now()
-			slog.Warn("proxy circuit opened", "url", p.URL, "circuit", circuit, "failures", ph.consecutiveFailures, "error", err)
+			slog.Warn("proxy circuit opened", "url", MaskProxyURL(p.URL), "circuit", circuit, "failures", ph.consecutiveFailures, "error", err)
 		}
 	case StateOpen:
 		if time.Since(ph.openSince) >= time.Duration(cfg.OpenCoolDown)*time.Second {
@@ -606,12 +606,12 @@ func (hc *HealthChecker) recordFailure(p *Proxy, ph *ProxyHealth, circuit string
 			// half-opens and re-opens repeatedly must keep showing a real failure count in the
 			// dashboard, not a misleading 0 next to a "down" badge. Recovery resets it to 0
 			// (recordSuccess in StateHalfOpen).
-			slog.Info("proxy circuit half-open", "url", p.URL, "circuit", circuit)
+			slog.Info("proxy circuit half-open", "url", MaskProxyURL(p.URL), "circuit", circuit)
 		}
 	case StateHalfOpen:
 		ph.state = StateOpen
 		ph.openSince = time.Now()
 		ph.consecutiveSuccesses = 0
-		slog.Warn("proxy circuit re-opened", "url", p.URL, "circuit", circuit, "error", err)
+		slog.Warn("proxy circuit re-opened", "url", MaskProxyURL(p.URL), "circuit", circuit, "error", err)
 	}
 }

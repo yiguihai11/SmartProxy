@@ -202,10 +202,10 @@ func (p *Proxy) ssPluginKind() (string, error) {
 	}
 	parts, err := splitPluginOptions(p.Plugin)
 	if err != nil {
-		return "", fmt.Errorf("ss proxy %q: %w", p.URL, err)
+		return "", fmt.Errorf("ss proxy %q: %w", MaskProxyURL(p.URL), err)
 	}
 	if len(parts) == 0 || parts[0] == "" {
-		return "", fmt.Errorf("ss proxy %q: empty plugin options", p.URL)
+		return "", fmt.Errorf("ss proxy %q: empty plugin options", MaskProxyURL(p.URL))
 	}
 	switch parts[0] {
 	case "obfs-local":
@@ -213,7 +213,7 @@ func (p *Proxy) ssPluginKind() (string, error) {
 	case "v2ray-plugin", "xray-plugin":
 		return parts[0], nil
 	default:
-		return "", fmt.Errorf("ss proxy %q: unsupported SIP003 plugin %q (SmartProxy ships obfs-local http/tls and v2ray-plugin/xray-plugin websocket/grpc/quic)", p.URL, parts[0])
+		return "", fmt.Errorf("ss proxy %q: unsupported SIP003 plugin %q (SmartProxy ships obfs-local http/tls and v2ray-plugin/xray-plugin websocket/grpc/quic)", MaskProxyURL(p.URL), parts[0])
 	}
 }
 
@@ -224,7 +224,7 @@ func (p *Proxy) ssPlugin() (*obfsConfig, error) {
 	}
 	cfg, err := parsePluginOptions(p.Plugin)
 	if err != nil {
-		return nil, fmt.Errorf("ss proxy %q: %w", p.URL, err)
+		return nil, fmt.Errorf("ss proxy %q: %w", MaskProxyURL(p.URL), err)
 	}
 	if cfg.host == "" {
 		cfg.host = p.Host // default obfs-host to the SS server host
@@ -240,7 +240,7 @@ func (p *Proxy) ssConnect(ctx context.Context, targetHost string, targetPort int
 		return nil, err
 	}
 	if p.ssMethod == nil {
-		return nil, fmt.Errorf("ss proxy %q has no method", p.URL)
+		return nil, fmt.Errorf("ss proxy %q has no method", MaskProxyURL(p.URL))
 	}
 	var conn net.Conn
 	switch kind {
@@ -287,7 +287,7 @@ func (p *Proxy) ssConnect(ctx context.Context, targetHost string, targetPort int
 		var addrBuf bytes.Buffer
 		if err := M.SocksaddrSerializer.WriteAddrPort(&addrBuf, dest); err != nil {
 			conn.Close()
-			return nil, fmt.Errorf("ss address header to %s: %w", p.URL, err)
+			return nil, fmt.Errorf("ss address header to %s: %w", MaskProxyURL(p.URL), err)
 		}
 		addr := addrBuf.Bytes()
 		// firstWrite merges [addr][payload] into one obfs body; flush (read-first protocols)
@@ -412,7 +412,7 @@ func (p *Proxy) ssUDPAssociate(ctx context.Context, targetHost string, targetPor
 		return nil, err
 	}
 	if p.ssMethod == nil {
-		return nil, fmt.Errorf("ss proxy %q has no method", p.URL)
+		return nil, fmt.Errorf("ss proxy %q has no method", MaskProxyURL(p.URL))
 	}
 	raddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(p.Host, strconv.Itoa(p.Port)))
 	if err != nil {
@@ -422,7 +422,7 @@ func (p *Proxy) ssUDPAssociate(ctx context.Context, targetHost string, targetPor
 	if err != nil {
 		return nil, err
 	}
-	slog.Debug("ss UDP relay established", "proxy", p.URL, "serverAddr", raddr)
+	slog.Debug("ss UDP relay established", "proxy", MaskProxyURL(p.URL), "serverAddr", raddr)
 	return &ssUDPConn{NetPacketConn: p.ssMethod.DialPacketConn(udpConn)}, nil
 }
 

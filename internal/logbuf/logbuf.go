@@ -112,11 +112,23 @@ func NewSlogHandlerLevel(h slog.Handler, buf *RingBuffer, minLevel slog.Level) *
 		handler:  h,
 		buffer:   buf,
 		minLevel: minLevel,
+		// 默认按上海时间格式化:用户要求面板日志统一显示上海时间,与服务器/浏览器
+		// 所在时区无关。WithLocation 可显式覆盖。
+		location: shanghaiLocation(),
 	}
 }
 
-// WithLocation sets the timezone log timestamps are converted into before being
-// buffered. When nil, time.Local is used. Returns the receiver for chaining.
+// shanghaiLocation 返回 Asia/Shanghai(恒 UTC+8,无夏令时);异常时退化为固定 +08:00。
+func shanghaiLocation() *time.Location {
+	if loc, err := time.LoadLocation("Asia/Shanghai"); err == nil {
+		return loc
+	}
+	return time.FixedZone("CST", 8*60*60)
+}
+
+// WithLocation overrides the timezone log timestamps are converted into before
+// being buffered (default Asia/Shanghai, see shanghaiLocation). Returns the
+// receiver for chaining.
 func (sh *SlogHandler) WithLocation(loc *time.Location) *SlogHandler {
 	if loc == nil {
 		loc = time.Local

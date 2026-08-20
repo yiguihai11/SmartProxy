@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -479,6 +478,7 @@ type BlacklistEntry struct {
 	Port       int    `json:"port"`
 	LastReason string `json:"last_reason"`
 	ExpiresAt  int64  `json:"expires_at"`
+	LastHit    int64  `json:"last_hit"`
 }
 
 func (s *Server) handleBlacklist(w http.ResponseWriter, r *http.Request) {
@@ -492,13 +492,13 @@ func (s *Server) handleBlacklist(w http.ResponseWriter, r *http.Request) {
 		for _, e := range ipEntries {
 			entries = append(entries, BlacklistEntry{
 				Type: "ip", Host: e.Host, Port: e.Port,
-				LastReason: e.LastReason, ExpiresAt: e.ExpiresAt,
+				LastReason: e.LastReason, ExpiresAt: e.ExpiresAt, LastHit: e.LastHit,
 			})
 		}
 		for _, e := range domainEntries {
 			entries = append(entries, BlacklistEntry{
 				Type: "domain", Host: e.Host, Port: e.Port,
-				LastReason: e.LastReason, ExpiresAt: e.ExpiresAt,
+				LastReason: e.LastReason, ExpiresAt: e.ExpiresAt, LastHit: e.LastHit,
 			})
 		}
 
@@ -729,9 +729,8 @@ func (s *Server) handleHealthResetAuto(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleExport returns a node's full shareable URL (real ss:// link, credentials intact)
-// on demand. It is the only place the panel gets the real URL back, because /health and
-// /config mask passwords (see MaskProxyURL); the export link/QR feature needs the real
-// one. The panel is auth-gated, so this is a deliberate authenticated release, not a leak.
+// on demand for the export link/QR feature. /config and /health already return real URLs
+// (masking is log-only now); this endpoint just makes fetching a single node convenient.
 func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -770,76 +769,8 @@ func (s *Server) handleConfigReload(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-// maskConfigForDisplay returns a copy of the live config whose proxy URLs have their
-// passwords masked (upstream.MaskProxyURL) — so /config GET never echoes credentials
-// to the panel or a network observer. PUT round-trips via restoreMaskedProxies.
-func maskConfigForDisplay(c *config.Config) *config.Config {
-	cp := *c
-	proxies := make([]config.ProxyEntry, len(c.Upstream.Proxies))
-	for i, p := range c.Upstream.Proxies {
-		proxies[i] = p
-		proxies[i].URL = upstream.MaskProxyURL(p.URL)
-	}
-	cp.Upstream.Proxies = proxies
-	return &cp
-}
-
-// restoreMaskedProxies resolves proxy URLs whose password was masked to
-// upstream.MaskPassword back to the live password, keyed by alias. Called on the PUT
-// path (and saveConfig) before Validate, so a panel round-trip that never touched the
-// password keeps the real secret server-side instead of writing "******" to disk.
-// A changed host/method still applies; only the untouched password is restored.
-func restoreMaskedProxies(c, live *config.Config) {
-	if c == nil || live == nil {
-		return
-	}
-	liveByAlias := make(map[string]config.ProxyEntry, len(live.Upstream.Proxies))
-	for _, p := range live.Upstream.Proxies {
-		if p.Alias != "" {
-			liveByAlias[p.Alias] = p
-		}
-	}
-	for i := range c.Upstream.Proxies {
-		cur := &c.Upstream.Proxies[i]
-		if cur.URL == "" {
-			continue
-		}
-		u, err := url.Parse(cur.URL)
-		if err != nil {
-			continue
-		}
-		lv, ok := liveByAlias[cur.Alias]
-		if u.Scheme == "ss" && u.User == nil {
-			// Legacy ss:// form: the whole payload was masked, so the live URL must be
-			// restored in full (no host/method to preserve — the payload is self-contained).
-			if ok && lv.URL != "" {
-				cur.URL = lv.URL
-			}
-			continue
-		}
-		if u.User == nil {
-			continue
-		}
-		pass, hasPass := u.User.Password()
-		if !hasPass || pass != upstream.MaskPassword {
-			continue
-		}
-		if !ok || lv.URL == "" {
-			continue
-		}
-		lu, err := url.Parse(lv.URL)
-		if err != nil || lu.User == nil {
-			continue
-		}
-		realPass, hasReal := lu.User.Password()
-		if !hasReal {
-			continue
-		}
-		masked := *u
-		masked.User = url.UserPassword(u.User.Username(), realPass)
-		cur.URL = masked.String()
-	}
-}
+// 密码脱敏策略:只在日志/错误信息输出时打码(upstream.MaskProxyURL),API/面板回显
+// 真实配置,不做往返 mask-restore。面板编辑后 PUT 原样写回,无需还原。
 
 // atomicWriteFile writes data to path via a temp file in the same directory + rename,
 // so a crash mid-write can never leave a truncated config.json (or ACL/chnroute file)
@@ -882,7 +813,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "config not available", http.StatusServiceUnavailable)
 			return
 		}
-		json.NewEncoder(w).Encode(maskConfigForDisplay(s.configSrc()))
+		// 回显真实配置(含密码):面板编辑/导出需要;脱敏只在日志侧做。
+		json.NewEncoder(w).Encode(s.configSrc())
 
 	case http.MethodPut:
 		if s.configPath == "" || s.reloadConfig == nil {
@@ -894,7 +826,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		restoreMaskedProxies(&cfg, s.configSrc())
 		if err := cfg.Validate(); err != nil {
 			http.Error(w, "validation failed: "+err.Error(), http.StatusBadRequest)
 			return
@@ -927,7 +858,6 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) saveConfig(mutate func(c *config.Config)) (*config.Config, error, error) {
 	next := *s.configSrc()
 	mutate(&next)
-	restoreMaskedProxies(&next, s.configSrc())
 	if err := next.Validate(); err != nil {
 		return nil, err, nil
 	}
@@ -1550,6 +1480,14 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+
+	// SSE 是长连接,必须清掉 server 级 WriteTimeout(60s):否则连接即使每 3s 推一帧,
+	// 到 60s 也被 net/http 强制断开 → 前端 onerror 红点闪烁 + EventSource 自动重连,
+	// 重连间隙(及后台 tab 节流)表现为"数据暂停/切页停止"。
+	rc := http.NewResponseController(w)
+	if err := rc.SetWriteDeadline(time.Time{}); err != nil {
+		slog.Warn("events: cannot clear write deadline", "error", err)
+	}
 
 	interval := s.refreshInt
 	if interval < 1 {
