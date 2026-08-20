@@ -15,12 +15,13 @@ go test -tags with_gvisor -race ./internal/engine/ -run TestEngine -count=1  # �
 | 场景 | TCP | UDP | 断言依据 |
 |---|---|---|---|
 | 直连(ACL force-direct) | `TestEngineDirectTCP`(+1MB 大包) | `TestEngineDirectUDP` | 引擎侧 `relay.DirectBytesUp` / `udp.DirectBytesUp` 增长,proxy 计数不动 |
+| 直连 · IPv6 目标 | `TestEngineDirectTCP_IPv6` | `TestEngineDirectUDP_IPv6` | 客户端经 `::1` 接入、目标 ATYP=0x04,断言同上 |
 | 代理 · ACL 规则命中 | `TestEngineProxyTCP_RuleSelected` | `TestEngineProxyUDP_RuleSelected` | 主引擎 proxy 计数增长 **且** 上游引擎 direct 计数增长 |
 | 代理 · 默认策略兜底 | `TestEngineProxyTCP_DefaultStrategy` | `TestEngineProxyUDP_DefaultStrategy` | 同上(空 ACL/chnroute + `strategy: up`) |
 | 代理 · IPv6 目标 | `TestEngineProxyTCP_IPv6` | `TestEngineProxyUDP_IPv6` | 客户端经 `::1` 接入、目标 ATYP=0x04 走上游(上游 B 是 IPv4 SOCKS5 不受影响) |
 | ACL `block ip` | `TestEngineACL_BlockIP` | 同用例 UDP 分支 | TCP 回 `ReplyNotAllowed(0x02)`;UDP 帧被静默丢弃 |
-| ACL `block port` | `TestEngineACL_BlockPort` | — | TCP 回 `0x02` |
-| ACL `allow` 优先于 proxy | `TestEngineACL_AllowOverridesProxy` | — | 配了走上游规则但 allow 命中 → 走直连 |
+| ACL `block port` | `TestEngineACL_BlockPort` / `_IPv6` | — | TCP 回 `0x02`(端口匹配族无关,`IsPortBlocked` 纯端口 map) |
+| ACL `allow` 优先于 proxy | `TestEngineACL_AllowOverridesProxy` / `_IPv6` | — | 配了走上游规则但 allow 命中 → 走直连 |
 | TUN 隧道 · 直连 | `TestEngineTUN_DirectTCP` | `TestEngineTUN_DirectUDP` | 真实建 tun,SO_BINDTODEVICE 客户端进隧道;TCP 走 relay 计数(连接关闭才结算),UDP 走 tun handler 自身转发、**只断回包内容** |
 | TUN 隧道 · 代理 | `TestEngineTUN_ProxyTCP` | `TestEngineTUN_ProxyUDP` | tun 引擎把流量交给 SOCKS5 上游引擎 B;B 侧 `relay/udp.DirectBytesUp` 增长 |
 | TUN 隧道 · block | `TestEngineTUN_BlockTCP` | `TestEngineTUN_BlockUDP` | TCP 拨号失败;UDP 无回包读超时 |

@@ -643,6 +643,33 @@ func TestEngineACL_BlockPort(t *testing.T) {
 	c.Close()
 }
 
+// TestEngineACL_BlockPort_IPv6:block port 匹配是纯端口 map 查找(internal/rules
+// IsPortBlocked),与 IP 族无关,对 IPv6 目标(ATYP=0x04)同样生效。
+func TestEngineACL_BlockPort_IPv6(t *testing.T) {
+	echo := startTCPEcho6(t)
+	echoPort := echo.Addr().(*net.TCPAddr).Port
+	eng := startEngine(t, engineSpec{
+		chnroute: "::1/128\n",
+		acl:      fmt.Sprintf("block port %d\n", echoPort),
+		listen:   "::1",
+	})
+	serverAddr := eng.listener.Addr().String()
+
+	c := socks5Greeting(t, serverAddr)
+	req := append([]byte{0x05, 0x01, 0x00}, socks5Addr("::1", echoPort)...)
+	if _, err := c.Write(req); err != nil {
+		t.Fatal(err)
+	}
+	hdr := make([]byte, 4)
+	if _, err := io.ReadFull(c, hdr); err != nil {
+		t.Fatal(err)
+	}
+	if hdr[1] != 0x02 {
+		t.Fatalf("expected ReplyNotAllowed(0x02) for blocked IPv6 port TCP, got %d", hdr[1])
+	}
+	c.Close()
+}
+
 // TestEngineACL_BlockIP_IPv6:block ip ::1 对 IPv6 回环同样生效(ATYP=0x04)。
 func TestEngineACL_BlockIP_IPv6(t *testing.T) {
 	eng := startEngine(t, engineSpec{
@@ -712,6 +739,40 @@ func TestEngineACL_AllowOverridesProxy(t *testing.T) {
 		t.Fatalf("TCP echo mismatch: got %q want %q", buf, payload)
 	}
 	// allow 命中后走的是直连,proxy 计数不该动;关闭连接等 relay 结算
+	c.Close()
+	assertDirectTraffic(t, before, false)
+}
+
+// TestEngineACL_AllowOverridesProxy_IPv6:allow ip ::1 优先于 proxy cidr ::1/128 up--
+// IPv6 目标命中 allow 后走直连。上游引擎闲置,仍是「单引擎正负断言」场景
+// (relay.DirectBytesUp 动、relay.ProxyBytesUp 不动),与 v4 版同构。
+func TestEngineACL_AllowOverridesProxy_IPv6(t *testing.T) {
+	up := newTestEngine(t) // 上游:纯直连 SOCKS5(闲置,allow 命中后流量不会到它)
+	eng := startEngine(t, engineSpec{
+		chnroute: "::1/128\n",
+		acl:      "proxy cidr ::1/128 up\nallow ip ::1\n",
+		upstream: []config.ProxyEntry{{Alias: "up", URL: "socks5://" + up.listener.Addr().String()}},
+		listen:   "::1",
+	})
+	echo := startTCPEcho6(t)
+	echoPort := echo.Addr().(*net.TCPAddr).Port
+
+	before := sampleCounters()
+	c := socks5Connect(t, eng.listener.Addr().String(), "::1", echoPort)
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(10 * time.Second))
+
+	payload := []byte("allow should force direct (ipv6)")
+	if _, err := c.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, len(payload))
+	if _, err := io.ReadFull(c, buf); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf, payload) {
+		t.Fatalf("TCP echo mismatch: got %q want %q", buf, payload)
+	}
 	c.Close()
 	assertDirectTraffic(t, before, false)
 }
