@@ -1,0 +1,50 @@
+name: go-test
+
+# 轻量 Go 回归:任何 Go 源码改动(含 internal/engine 的端到端回归套件)
+# 在 CI 上跑 go test / race / vet / build,防止「改完代码 UDP 又出问题」这类
+# 回归(见 docs/e2e-regression.md)。跟 android-build.yml 是两条线:
+#   - 本工作流:纯 Go 快速回归,一次 ~1 分钟;
+#   - android-build.yml:Android 打包,只在 android/** 等变更时自动跑,
+#     Go 内部改动想出新 APK 在 Actions 页手动 Run workflow。
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/go-test.yml'
+  pull_request:
+    paths:
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/go-test.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Test (all packages)
+        run: go test ./... -count=1
+
+      # 并发热点包再跑一遍 race:engine 端到端回归(直连/代理/ACL)、
+      # relay/udp 计数器与转发、upstream 会话管理。
+      - name: Test with race (concurrency-heavy)
+        run: go test -race -count=1 ./internal/engine/ ./internal/relay/ ./internal/udp/ ./internal/upstream/
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
