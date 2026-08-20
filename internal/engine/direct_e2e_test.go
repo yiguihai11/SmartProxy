@@ -154,6 +154,18 @@ func socks5UDPAssociate(t *testing.T, serverAddr string) (net.Conn, *net.UDPConn
 	return c, u.(*net.UDPConn)
 }
 
+// closedPort 返回一个当前无人监听的本地端口(绑定后立刻关闭,用作不可达上游)。
+func closedPort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	return p
+}
+
 // stripUDPHeader 去掉直连应答的 SOCKS5 UDP 头,返回载荷。
 func stripUDPHeader(b []byte) ([]byte, error) {
 	if len(b) < 4 {
@@ -775,4 +787,216 @@ func TestEngineACL_AllowOverridesProxy_IPv6(t *testing.T) {
 	}
 	c.Close()
 	assertDirectTraffic(t, before, false)
+}
+
+// TestEngineACL_BlockCIDR:block cidr 命中——TCP 回 ReplyNotAllowed,UDP 帧静默丢弃。
+// 与 block ip 同构,但走 allowed/blockedCIDR trie 分支(internal/rules engine.go)。
+func TestEngineACL_BlockCIDR(t *testing.T) {
+	eng := startEngine(t, engineSpec{
+		chnroute: "127.0.0.0/8\n",
+		acl:      "block cidr 127.0.0.0/8\n",
+	})
+	echo := startTCPEcho(t)
+	echoPort := echo.Addr().(*net.TCPAddr).Port
+	serverAddr := eng.listener.Addr().String()
+
+	// TCP:期望 ReplyNotAllowed(0x02)
+	c := socks5Greeting(t, serverAddr)
+	req := append([]byte{0x05, 0x01, 0x00}, socks5Addr("127.0.0.1", echoPort)...)
+	if _, err := c.Write(req); err != nil {
+		t.Fatal(err)
+	}
+	hdr := make([]byte, 4)
+	if _, err := io.ReadFull(c, hdr); err != nil {
+		t.Fatal(err)
+	}
+	if hdr[1] != 0x02 {
+		t.Fatalf("expected ReplyNotAllowed(0x02) for blocked CIDR TCP, got %d", hdr[1])
+	}
+	c.Close()
+
+	// UDP:帧被丢弃,无回包(短超时断言)
+	tcpConn, udpConn := socks5UDPAssociate(t, serverAddr)
+	defer tcpConn.Close()
+	defer udpConn.Close()
+	udpConn.SetDeadline(time.Now().Add(2 * time.Second))
+	frame := append([]byte{0, 0, 0}, socks5Addr("127.0.0.1", echoPort)...)
+	frame = append(frame, []byte("blocked cidr udp")...)
+	if _, err := udpConn.Write(frame); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := udpConn.Read(make([]byte, 1024)); err == nil {
+		t.Fatalf("expected CIDR block to drop the UDP frame, but got a %d-byte reply", n)
+	}
+}
+
+// TestEngineACL_BlockDomain:block domain 对 SOCKS5 CONNECT 的域名型目标(ATYP=0x03)
+// 与 UDP 帧的 DOMAIN 型目标都生效。拦截发生在 dial 之前,目标域名是否可解析无关紧要。
+//   - 精确:`block domain localhost` 命中 CONNECT "localhost";
+//   - 后缀:`block domain *.localhost` 命中任意子域 "api.localhost"(suffixTrie 只匹配有子域的域名);
+//   - UDP:DOMAIN 型帧 "localhost" 被静默丢弃。
+//
+// 这个用例是 SOCKS5/UDP 入口 domain 规则缺口的回归钉:以前非 smart 路径与 UDP 路径
+// 的规则匹配恒传 domain=""(见 engine.go handleConnect / udp handler),这些帧会穿透。
+func TestEngineACL_BlockDomain(t *testing.T) {
+	eng := startEngine(t, engineSpec{
+		acl: "block domain localhost\nblock domain *.localhost\n",
+	})
+	echo := startTCPEcho(t)
+	echoPort := echo.Addr().(*net.TCPAddr).Port
+	serverAddr := eng.listener.Addr().String()
+
+	// 精确域名 CONNECT "localhost" → 0x02
+	c := socks5Greeting(t, serverAddr)
+	req := append([]byte{0x05, 0x01, 0x00}, socks5Addr("localhost", echoPort)...)
+	if _, err := c.Write(req); err != nil {
+		t.Fatal(err)
+	}
+	hdr := make([]byte, 4)
+	if _, err := io.ReadFull(c, hdr); err != nil {
+		t.Fatal(err)
+	}
+	if hdr[1] != 0x02 {
+		t.Fatalf("expected ReplyNotAllowed for blocked domain localhost, got %d", hdr[1])
+	}
+	c.Close()
+
+	// 后缀 *.localhost 命中子域 "api.localhost" → 0x02
+	c2 := socks5Greeting(t, serverAddr)
+	req2 := append([]byte{0x05, 0x01, 0x00}, socks5Addr("api.localhost", echoPort)...)
+	if _, err := c2.Write(req2); err != nil {
+		t.Fatal(err)
+	}
+	hdr2 := make([]byte, 4)
+	if _, err := io.ReadFull(c2, hdr2); err != nil {
+		t.Fatal(err)
+	}
+	if hdr2[1] != 0x02 {
+		t.Fatalf("expected ReplyNotAllowed for blocked *.localhost suffix, got %d", hdr2[1])
+	}
+	c2.Close()
+
+	// UDP DOMAIN 型帧 "localhost" → 静默丢弃(修复前会 dial 到 echo 并回包)
+	tcpConn, udpConn := socks5UDPAssociate(t, serverAddr)
+	defer tcpConn.Close()
+	defer udpConn.Close()
+	udpConn.SetDeadline(time.Now().Add(2 * time.Second))
+	frame := append([]byte{0, 0, 0}, socks5Addr("localhost", echoPort)...)
+	frame = append(frame, []byte("blocked domain udp")...)
+	if _, err := udpConn.Write(frame); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := udpConn.Read(make([]byte, 1024)); err == nil {
+		t.Fatalf("expected domain block to drop the UDP frame, but got a %d-byte reply", n)
+	}
+}
+
+// TestEngineACL_AllowCIDR:allow cidr 优先于 proxy ip——配置了精确 IP 走上游的规则,
+// 但 allow cidr 覆盖命中后走直连(上游引擎闲置,单引擎正负断言成立)。
+func TestEngineACL_AllowCIDR(t *testing.T) {
+	up := newTestEngine(t) // 上游:纯直连 SOCKS5(闲置)
+	eng := startEngine(t, engineSpec{
+		chnroute: "127.0.0.0/8\n",
+		acl:      "proxy ip 127.0.0.1 up\nallow cidr 127.0.0.0/8\n",
+		upstream: []config.ProxyEntry{{Alias: "up", URL: "socks5://" + up.listener.Addr().String()}},
+	})
+	echo := startTCPEcho(t)
+	echoPort := echo.Addr().(*net.TCPAddr).Port
+
+	before := sampleCounters()
+	c := socks5Connect(t, eng.listener.Addr().String(), "127.0.0.1", echoPort)
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(10 * time.Second))
+
+	payload := []byte("allow cidr forces direct")
+	if _, err := c.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, len(payload))
+	if _, err := io.ReadFull(c, buf); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf, payload) {
+		t.Fatalf("TCP echo mismatch: got %q want %q", buf, payload)
+	}
+	c.Close()
+	assertDirectTraffic(t, before, false)
+}
+
+// TestEngineACL_AllowPort:allow port 优先于 proxy port——端口规则走上游,但 allow
+// 命中后走直连(IsPortBlocked/MatchProxyRule 都先查 allowedPorts)。
+func TestEngineACL_AllowPort(t *testing.T) {
+	echo := startTCPEcho(t)
+	echoPort := echo.Addr().(*net.TCPAddr).Port
+	up := newTestEngine(t)
+	eng := startEngine(t, engineSpec{
+		chnroute: "127.0.0.0/8\n",
+		acl:      fmt.Sprintf("proxy port %d up\nallow port %d\n", echoPort, echoPort),
+		upstream: []config.ProxyEntry{{Alias: "up", URL: "socks5://" + up.listener.Addr().String()}},
+	})
+
+	before := sampleCounters()
+	c := socks5Connect(t, eng.listener.Addr().String(), "127.0.0.1", echoPort)
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(10 * time.Second))
+
+	payload := []byte("allow port forces direct")
+	if _, err := c.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, len(payload))
+	if _, err := io.ReadFull(c, buf); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf, payload) {
+		t.Fatalf("TCP echo mismatch: got %q want %q", buf, payload)
+	}
+	c.Close()
+	assertDirectTraffic(t, before, false)
+}
+
+// TestEngineACL_AllowDomain:allow domain 优先于 proxy domain。
+//
+// 注意架构约束:域名(非 IP)无法判 domestic,allow 命中后回落「默认上游」而非直连
+// (EstablishConnection 只对 IP 判 isDomesticHost)。因此这里用两个上游区分:
+//   - ruleA = 规则指定的节点,故意指向一个无人监听的端口(不可达);
+//   - ruleB = 默认上游,可达。
+//
+// allow 生效 → proxy domain ruleA 被跳过 → 回落默认 → ruleB 连通(echo 通);
+// allow 失效 → 命中 ruleA → 连接失败(echo 不通)。用连通性作为优先级判据。
+func TestEngineACL_AllowDomain(t *testing.T) {
+	ruleA := fmt.Sprintf("socks5://127.0.0.1:%d", closedPort(t))
+	// ruleB 不能是纯直连引擎:域名(非 IP)无法判 domestic,纯直连引擎收到域名 CONNECT
+	// 会 fallback 到 ConnectDefault(无上游)而失败。配 `proxy domain localhost direct`
+	// 让它对 localhost 显式直连,担当「可达的默认上游」。
+	ruleB := startEngine(t, engineSpec{
+		acl: "proxy domain localhost direct\n",
+	})
+	eng := startEngine(t, engineSpec{
+		chnroute: "",
+		acl:      "proxy domain localhost ruleA\nallow domain localhost\n",
+		upstream: []config.ProxyEntry{
+			{Alias: "ruleA", URL: ruleA},
+			{Alias: "ruleB", URL: "socks5://" + ruleB.listener.Addr().String()},
+		},
+	})
+	echo := startTCPEcho(t)
+	echoPort := echo.Addr().(*net.TCPAddr).Port
+
+	// 必须走到连通路径:如果 allow domain 没有压过 proxy domain,引擎会撞 ruleA(拒连)
+	c := socks5Connect(t, eng.listener.Addr().String(), "localhost", echoPort)
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(15 * time.Second))
+
+	payload := []byte("allow domain bypasses proxy domain")
+	if _, err := c.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, len(payload))
+	if _, err := io.ReadFull(c, buf); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf, payload) {
+		t.Fatalf("TCP echo mismatch: got %q want %q", buf, payload)
+	}
 }

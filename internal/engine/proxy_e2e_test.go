@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net"
 	"testing"
@@ -256,4 +257,119 @@ func TestEngineProxyUDP_DefaultStrategy(t *testing.T) {
 
 	assertProxiedTraffic(t, beforeA, true)
 	assertUpstreamDirect(t, beforeB, true)
+}
+
+// ── proxy 规则按匹配键细分:port / ip / domain ──────
+//
+// 上面的 proxy cidr 用例已覆盖「规则命中→走上游」的总路径;这里补三个匹配键,
+// 验证规则引擎的 map 查找分支:proxyPorts / proxyIPs / proxyDomains(+suffix)。
+// 断言套路与 RuleSelected 完全一致:A 的 proxy 计数涨,B 的 direct 计数涨。
+
+// TestEngineProxy_Port:`proxy port <port> up` 按端口走上游(目标 IP 无关)。
+func TestEngineProxy_Port(t *testing.T) {
+	echo := startTCPEcho(t)
+	echoPort := echo.Addr().(*net.TCPAddr).Port
+	up := newTestEngine(t)
+	eng := startEngine(t, engineSpec{
+		chnroute: "",
+		acl:      fmt.Sprintf("proxy port %d up\n", echoPort),
+		upstream: []config.ProxyEntry{{Alias: "up", URL: "socks5://" + up.listener.Addr().String()}},
+	})
+
+	beforeA := sampleCounters()
+	beforeB := sampleCounters()
+	c := socks5Connect(t, eng.listener.Addr().String(), "127.0.0.1", echoPort)
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(15 * time.Second))
+
+	payload := []byte("proxy port rule tcp")
+	if _, err := c.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, len(payload))
+	if _, err := io.ReadFull(c, buf); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf, payload) {
+		t.Fatalf("TCP echo mismatch: got %q want %q", buf, payload)
+	}
+	c.Close()
+	assertProxiedTraffic(t, beforeA, false) // A 把该端口的流量交给了上游
+	assertUpstreamDirect(t, beforeB, false) // B 直连了目标
+}
+
+// TestEngineProxy_IP:`proxy ip 127.0.0.1 up` 精确 IP 走上游(端口无关)。
+func TestEngineProxy_IP(t *testing.T) {
+	up := newTestEngine(t)
+	eng := startEngine(t, engineSpec{
+		chnroute: "",
+		acl:      "proxy ip 127.0.0.1 up\n",
+		upstream: []config.ProxyEntry{{Alias: "up", URL: "socks5://" + up.listener.Addr().String()}},
+	})
+	echo := startTCPEcho(t)
+	echoPort := echo.Addr().(*net.TCPAddr).Port
+
+	beforeA := sampleCounters()
+	beforeB := sampleCounters()
+	c := socks5Connect(t, eng.listener.Addr().String(), "127.0.0.1", echoPort)
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(15 * time.Second))
+
+	payload := []byte("proxy ip rule tcp")
+	if _, err := c.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, len(payload))
+	if _, err := io.ReadFull(c, buf); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf, payload) {
+		t.Fatalf("TCP echo mismatch: got %q want %q", buf, payload)
+	}
+	c.Close()
+	assertProxiedTraffic(t, beforeA, false)
+	assertUpstreamDirect(t, beforeB, false)
+}
+
+// TestEngineProxy_Domain:`proxy domain localhost up` 域名型 CONNECT(ATYP=0x03)走上游。
+//
+// 这是 SOCKS5 非 smart 路径 domain 规则缺口的回归钉:以前 handleConnect 的
+// EstablishConnection 恒传 domain=""(engine.go),proxy domain 规则对普通 SOCKS5
+// CONNECT 永不命中,这个用例会失败;现在 host 是域名时把它作为 domain 传下去。
+//
+// 注意:上游 B 必须能处理域名——域名(非 IP)无法判 domestic,纯直连引擎收到域名
+// CONNECT 会 fallback 到 ConnectDefault(无上游)而失败。这里给 B 配
+// `proxy domain localhost direct`,让它对 localhost 显式直连。
+func TestEngineProxy_Domain(t *testing.T) {
+	up := startEngine(t, engineSpec{
+		acl: "proxy domain localhost direct\n",
+	})
+	eng := startEngine(t, engineSpec{
+		chnroute: "",
+		acl:      "proxy domain localhost up\n",
+		upstream: []config.ProxyEntry{{Alias: "up", URL: "socks5://" + up.listener.Addr().String()}},
+	})
+	echo := startTCPEcho(t)
+	echoPort := echo.Addr().(*net.TCPAddr).Port
+
+	beforeA := sampleCounters()
+	beforeB := sampleCounters()
+	c := socks5Connect(t, eng.listener.Addr().String(), "localhost", echoPort)
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(15 * time.Second))
+
+	payload := []byte("proxy domain rule tcp")
+	if _, err := c.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, len(payload))
+	if _, err := io.ReadFull(c, buf); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf, payload) {
+		t.Fatalf("TCP echo mismatch: got %q want %q", buf, payload)
+	}
+	c.Close()
+	assertProxiedTraffic(t, beforeA, false) // A 命中 proxy domain,把域名 CONNECT 交给 B
+	assertUpstreamDirect(t, beforeB, false) // B 按 proxy domain direct 规则直连 localhost
 }

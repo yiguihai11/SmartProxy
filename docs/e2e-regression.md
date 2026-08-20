@@ -21,7 +21,15 @@ go test -tags with_gvisor -race ./internal/engine/ -run TestEngine -count=1  # �
 | 代理 · IPv6 目标 | `TestEngineProxyTCP_IPv6` | `TestEngineProxyUDP_IPv6` | 客户端经 `::1` 接入、目标 ATYP=0x04 走上游(上游 B 是 IPv4 SOCKS5 不受影响) |
 | ACL `block ip` | `TestEngineACL_BlockIP` | 同用例 UDP 分支 | TCP 回 `ReplyNotAllowed(0x02)`;UDP 帧被静默丢弃 |
 | ACL `block port` | `TestEngineACL_BlockPort` / `_IPv6` | — | TCP 回 `0x02`(端口匹配族无关,`IsPortBlocked` 纯端口 map) |
+| ACL `block cidr` | `TestEngineACL_BlockCIDR` | 同用例 UDP 分支 | TCP 回 `0x02`;UDP 帧静默丢弃(走 blockedCIDR trie) |
+| ACL `block domain` 精确+后缀 | `TestEngineACL_BlockDomain` | 同用例 UDP DOMAIN 帧 | TCP 回 `0x02`;UDP DOMAIN 型帧丢弃;拦截在 dial 前、域名无需可解析 |
 | ACL `allow` 优先于 proxy | `TestEngineACL_AllowOverridesProxy` / `_IPv6` | — | 配了走上游规则但 allow 命中 → 走直连 |
+| ACL `allow cidr` 优先 | `TestEngineACL_AllowCIDR` | — | `proxy ip` 被 `allow cidr` 覆盖 → 直连 |
+| ACL `allow port` 优先 | `TestEngineACL_AllowPort` | — | `proxy port` 被 `allow port` 覆盖 → 直连 |
+| ACL `allow domain` 优先 | `TestEngineACL_AllowDomain` | — | `proxy domain` 被 `allow domain` 覆盖 → 回落默认上游(非直连,见下) |
+| proxy 按端口 | `TestEngineProxy_Port` | — | A proxy 计数涨 + B direct 涨(`proxyPorts` map) |
+| proxy 按精确 IP | `TestEngineProxy_IP` | — | 同上(`proxyIPs` map) |
+| proxy 按域名 | `TestEngineProxy_Domain` | — | 域名 CONNECT(ATYP=0x03)命中 `proxyDomains`;A/B 双计数 |
 | TUN 隧道 · 直连 | `TestEngineTUN_DirectTCP` | `TestEngineTUN_DirectUDP` | 真实建 tun,SO_BINDTODEVICE 客户端进隧道;TCP 走 relay 计数(连接关闭才结算),UDP 走 tun handler 自身转发、**只断回包内容** |
 | TUN 隧道 · 代理 | `TestEngineTUN_ProxyTCP` | `TestEngineTUN_ProxyUDP` | tun 引擎把流量交给 SOCKS5 上游引擎 B;B 侧 `relay/udp.DirectBytesUp` 增长 |
 | TUN 隧道 · block | `TestEngineTUN_BlockTCP` | `TestEngineTUN_BlockUDP` | TCP 拨号失败;UDP 无回包读超时 |
@@ -38,6 +46,27 @@ go test -tags with_gvisor -race ./internal/engine/ -run TestEngine -count=1  # �
 - 直连:relay/udp `DirectBytesUp` 增长,`ProxyBytesUp` 不动;
 - 代理(双引擎串联:引擎 B 是引擎 A 的 SOCKS5 上游):A 的 `ProxyBytesUp` 增长(B 收到并
   直连目标),B 的 `DirectBytesUp` 增长(A 确实把数据交给了上游)。
+
+## domain 规则的入口缺口(已修,别再改回去)
+
+`block/proxy domain` 规则依赖「目标域名」参与规则匹配,但两个入口曾经**恒传空串**,
+导致 domain 规则在那两条路上永不命中:
+
+1. **SOCKS5 TCP 非 smart 路径**(`internal/engine/engine.go` `handleConnect`):CONNECT
+   ATYP=0x03 时 `host` 就是域名,以前 `EstablishConnection(host, port, "", ...)` 丢了它。
+   已修:`host` 非 IP 时作为 `domain` 传入,并在 dial 前补 `IsDomainBlocked(host)` 检查
+   (80/443 回 `SendEnhancedBlock`,其余回 `ReplyNotAllowed`,与 IP/port 分支语义一致)。
+2. **UDP 入口**(`internal/udp/handler.go`):UDP 帧 DOMAIN 型目标(ATYP=0x03)把域名放进
+   `ip`,但 `SelectProxy(ip, port, "", ...)` 同样丢 domain。已修:解析时单独保留 `domain`,
+   新会话前加 `IsDomainBlocked`,并传给 `createUDPSession → SelectProxy`。
+
+TUN 入口(`tun/handler.go`)与 smart 路径(`ExtractDomain`/`ExtractSNI`)本来就传 domain,未动。
+回归钉:见 `TestEngineACL_BlockDomain`(精确+后缀, TCP/UDP)与 `TestEngineProxy_Domain`。
+
+域名规则的架构约束(写测试时踩过):域名不是 IP,`isDomesticHost` 判不了「国内」,
+`allow domain` 命中后回落的默认路径是**默认上游而非直连**——纯直连引擎收到域名 CONNECT
+会因 `ConnectDefault` 无上游而失败。所以域名走上游的用例,上游必须显式配
+`proxy domain <域名> direct` 才能担当目标。
 
 ## 断言方法论(两条铁律,违反必出假绿/假红)
 

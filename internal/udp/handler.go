@@ -168,6 +168,10 @@ func (h *Handler) HandlePacket(ctx context.Context, data []byte, clientAddr net.
 
 	var ip string
 	var headerLen int
+	// domain 只在 ATYP=0x03(DOMAIN 型目标)时非空。它是规则匹配的键:block/proxy domain
+	// 规则需要它,不能像以前那样在 SelectProxy 里恒传 ""。ip 在 DOMAIN 型时仍是原始域名
+	// (dial/ASSOCIATE 需要域名),IsIPBlocked 对域名返回 false,互不干扰。
+	var domain string
 
 	switch atyp {
 	case 0x01:
@@ -190,7 +194,7 @@ func (h *Handler) HandlePacket(ctx context.Context, data []byte, clientAddr net.
 		if len(data) < 5+domainLen+2 {
 			return
 		}
-		domain := string(data[5 : 5+domainLen])
+		domain = string(data[5 : 5+domainLen])
 		ip = domain
 		headerLen = 4 + 1 + domainLen
 	default:
@@ -240,27 +244,31 @@ func (h *Handler) HandlePacket(ctx context.Context, data []byte, clientAddr net.
 		slog.Info("UDP blocked IP", "ip", ip)
 		return
 	}
+	if domain != "" && h.ruleEngine.IsDomainBlocked(domain) {
+		slog.Info("UDP blocked domain", "domain", domain)
+		return
+	}
 
 	if port == 53 {
 		if !h.dnsHandler.Enabled() {
 			slog.Debug("DNS passthrough mode: forwarding raw UDP packet")
-			h.handleGenericUDP(ctx, payload, data, clientAddr, ip, port)
+			h.handleGenericUDP(ctx, payload, data, clientAddr, ip, port, domain)
 			return
 		}
 		h.handleDNS(ctx, payload, clientAddr, ip, port, ip, port)
 		return
 	}
 
-	h.handleGenericUDP(ctx, payload, data, clientAddr, ip, port)
+	h.handleGenericUDP(ctx, payload, data, clientAddr, ip, port, domain)
 }
 
-func (h *Handler) handleGenericUDP(ctx context.Context, payload, fullData []byte, clientAddr net.Addr, ip string, port int) {
+func (h *Handler) handleGenericUDP(ctx context.Context, payload, fullData []byte, clientAddr net.Addr, ip string, port int, domain string) {
 	targetAddr := net.JoinHostPort(ip, strconv.Itoa(port))
 	key := sessionKeyFor(clientAddr, ip, port)
 
 	// Concurrent first packets for the same target create only one session: singleflight serializes the dial to avoid duplicate connections and leaks.
 	v, err, _ := h.createGroup.Do(key.String(), func() (interface{}, error) {
-		return h.createUDPSession(ctx, clientAddr, ip, port, key)
+		return h.createUDPSession(ctx, clientAddr, ip, port, key, domain)
 	})
 	if err != nil {
 		slog.Error("failed to create UDP session", "target", targetAddr, "error", err)
@@ -286,8 +294,10 @@ func (h *Handler) handleGenericUDP(ctx context.Context, payload, fullData []byte
 }
 
 // createUDPSession dials and registers a UDP session (called only via handleGenericUDP's singleflight, guaranteeing at most one creation per key).
-func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip string, port int, key udpSessionKey) (*udpSession, error) {
-	result, selected := h.upstreamMgr.SelectProxy(ip, port, "", h.ruleEngine)
+// domain 来自 UDP 帧的 ATYP=0x03 目标,交给规则匹配:proxy/block domain 规则在 UDP 入口
+// 也要命中(以前恒传 "" 使这类规则对 UDP 无效)。
+func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip string, port int, key udpSessionKey, domain string) (*udpSession, error) {
+	result, selected := h.upstreamMgr.SelectProxy(ip, port, domain, h.ruleEngine)
 
 	var remoteConn net.Conn
 	var err error

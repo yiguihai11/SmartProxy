@@ -319,9 +319,26 @@ func (e *Engine) handleConnect(ctx context.Context, conn net.Conn, req *socks5.R
 	smartEnabled := e.Config.Load().SmartProxy.Enabled && netutil.ContainsInt(e.Config.Load().SmartProxy.Ports, port)
 
 	if !smartEnabled {
-		remote, isProxy, err := e.Router.EstablishConnection(ctx, host, port, "", e.RuleEng)
+		// 非 smart 路径的 domain 规则:host 不是 IP 时它就是 CONNECT 的域名(SOCKS5
+		// ATYP=0x03),必须作为 domain 传给规则匹配,否则 block/proxy domain 规则在这里
+		// 永不命中(之前恒传 "" 是缺口)。拦截语义与上面的 IP/port 分支一致。
+		domain := ""
+		if net.ParseIP(host) == nil {
+			domain = host
+			if e.RuleEng.IsDomainBlocked(host) {
+				slog.Info("blocked domain by rule", "domain", host)
+				if port == 80 || port == 443 {
+					socks5.SendReply(conn, socks5.ReplySuccess, localIP, 0)
+					netutil.SendEnhancedBlock(conn, port)
+					return
+				}
+				socks5.SendReply(conn, socks5.ReplyNotAllowed, localIP, 0)
+				return
+			}
+		}
+		remote, isProxy, err := e.Router.EstablishConnection(ctx, host, port, domain, e.RuleEng)
 		if err != nil {
-			slog.Error("failed to establish connection", "host", host, "port", port, "error", err)
+			slog.Error("failed to establish connection", "host", host, "port", port, "domain", domain, "error", err)
 			socks5.SendReply(conn, replyForConnError(err), localIP, 0)
 			return
 		}
