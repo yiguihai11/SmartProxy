@@ -35,16 +35,20 @@ jobs:
           go-version: '1.25'
           cache: true
 
+      # -tags with_gvisor 必须带上:TUN 栈(sing-tun gvisor 栈)在这个 tag 下才编译,
+      # 不带只编译 stack_gvisor_stub。与 Makefile 的构建配置保持一致,保证 TUN 代码
+      # 路径在 CI 上真实被编译、被测到(托管 runner 无 /dev/net/tun 时 TUN 用例自动 Skip,
+      # 但编译正确性由本工作流保证)。
       - name: Test (all packages)
-        run: go test ./... -count=1
+        run: go test -tags with_gvisor ./... -count=1
 
-      # 并发热点包再跑一遍 race:engine 端到端回归(直连/代理/ACL)、
+      # 并发热点包再跑一遍 race:engine 端到端回归(直连/代理/ACL/TUN)、
       # relay/udp 计数器与转发、upstream 会话管理。
       - name: Test with race (concurrency-heavy)
-        run: go test -race -count=1 ./internal/engine/ ./internal/relay/ ./internal/udp/ ./internal/upstream/
+        run: go test -tags with_gvisor -race -count=1 ./internal/engine/ ./internal/relay/ ./internal/udp/ ./internal/upstream/
 
       - name: Vet
-        run: go vet ./...
+        run: go vet -tags with_gvisor ./...
 
       - name: Build
-        run: go build ./...
+        run: go build -tags with_gvisor ./...

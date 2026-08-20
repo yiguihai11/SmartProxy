@@ -1,11 +1,13 @@
-# 引擎端到端回归测试(TCP/UDP 直连 · 代理 · ACL)
+# 引擎端到端回归测试(TCP/UDP 直连 · 代理 · ACL · TUN 隧道)
 
-`internal/engine/direct_e2e_test.go` 与 `internal/engine/proxy_e2e_test.go` 是**基础能力回归
-测试**:不改逻辑的前提下,每次动到路由 / UDP 会话 / ACL / 上游转发相关代码,都必须跑绿。
+`internal/engine/direct_e2e_test.go`、`proxy_e2e_test.go` 与 `tun_e2e_test.go` 是**基础能力
+回归测试**:不改逻辑的前提下,每次动到路由 / UDP 会话 / ACL / 上游转发 / TUN 入口相关代码,
+都必须跑绿。
 
 ```bash
-go test ./internal/engine/ -run TestEngine -count=1   # 功能
-go test -race ./internal/engine/ -run TestEngine -count=1  # 竞态
+# 必须带 -tags with_gvisor:TUN 用例依赖 sing-tun 的 gvisor 栈,没这个 tag 只编译 stub
+go test -tags with_gvisor ./internal/engine/ -run TestEngine -count=1   # 功能
+go test -tags with_gvisor -race ./internal/engine/ -run TestEngine -count=1  # 竞态
 ```
 
 ## 覆盖矩阵
@@ -15,9 +17,17 @@ go test -race ./internal/engine/ -run TestEngine -count=1  # 竞态
 | 直连(ACL force-direct) | `TestEngineDirectTCP`(+1MB 大包) | `TestEngineDirectUDP` | 引擎侧 `relay.DirectBytesUp` / `udp.DirectBytesUp` 增长,proxy 计数不动 |
 | 代理 · ACL 规则命中 | `TestEngineProxyTCP_RuleSelected` | `TestEngineProxyUDP_RuleSelected` | 主引擎 proxy 计数增长 **且** 上游引擎 direct 计数增长 |
 | 代理 · 默认策略兜底 | `TestEngineProxyTCP_DefaultStrategy` | `TestEngineProxyUDP_DefaultStrategy` | 同上(空 ACL/chnroute + `strategy: up`) |
+| 代理 · IPv6 目标 | `TestEngineProxyTCP_IPv6` | `TestEngineProxyUDP_IPv6` | 客户端经 `::1` 接入、目标 ATYP=0x04 走上游(上游 B 是 IPv4 SOCKS5 不受影响) |
 | ACL `block ip` | `TestEngineACL_BlockIP` | 同用例 UDP 分支 | TCP 回 `ReplyNotAllowed(0x02)`;UDP 帧被静默丢弃 |
 | ACL `block port` | `TestEngineACL_BlockPort` | — | TCP 回 `0x02` |
 | ACL `allow` 优先于 proxy | `TestEngineACL_AllowOverridesProxy` | — | 配了走上游规则但 allow 命中 → 走直连 |
+| TUN 隧道 · 直连 | `TestEngineTUN_DirectTCP` | `TestEngineTUN_DirectUDP` | 真实建 tun,SO_BINDTODEVICE 客户端进隧道;TCP 走 relay 计数(连接关闭才结算),UDP 走 tun handler 自身转发、**只断回包内容** |
+| TUN 隧道 · 代理 | `TestEngineTUN_ProxyTCP` | `TestEngineTUN_ProxyUDP` | tun 引擎把流量交给 SOCKS5 上游引擎 B;B 侧 `relay/udp.DirectBytesUp` 增长 |
+| TUN 隧道 · block | `TestEngineTUN_BlockTCP` | `TestEngineTUN_BlockUDP` | TCP 拨号失败;UDP 无回包读超时 |
+
+> TUN 用例需要 `/dev/net/tun` + CAP_NET_ADMIN,不满足自动 Skip(GitHub Actions 托管
+> runner 通常没有)。本机 Linux 是它们的真实执行环境——改了 tun 入口代码后本机跑这组,
+> CI 只负责保证 gvisor 栈在 with_gvisor 下能编译。
 
 ## 为什么断言计数器,而不只是「echo 通了」
 
@@ -48,3 +58,26 @@ go test -race ./internal/engine/ -run TestEngine -count=1  # 竞态
 源地址对不上源校验的 `clientIP(127.0.0.1)` → 全部丢包;VPN 手机上该函数返回 TUN 网段 IP,
 更彻底走不通。修复:`handleUDPAssociate` 广告「客户端实际连到的本地地址」(`tcpLocal.IP`),
 见 `internal/engine/engine.go`。TUN 隧道路径无此问题。改任何 UDP 会话相关代码,先跑这组测试。
+
+## TUN 用例的两个内核坑(改 `tun_e2e_test.go` 前必读)
+
+TUN 用例的客户端「经隧道拨服务器」会遇到两层独立的内核过滤,都是静默丢包、表现成
+i/o timeout。**改这个文件时别把对策删掉**,否则就是「直连/代理全超时」的下一次踩坑:
+
+1. **gVisor martian 回环过滤**(拨 127.0.0.1 必死)。sagernet gvisor fork 在非回环 NIC 上
+   丢弃源/目的落在 127.0.0.0/8 的包(`AllowExternalLoopbackTraffic` 默认 false)。所以测试
+   目标恒为**非回环的本地别名** `198.18.0.2`(RFC 2544 benchmark 段,加到 lo):gVisor 放过、
+   引擎 dial 走 local 表直达 echo、SO_BINDTODEVICE 客户端照常进隧道。
+
+2. **内核 martian 源过滤**(`accept_local` 门控,和 rp_filter 无关)。gVisor 回包源地址 =
+   客户端 SYN 目的地址 = 198.18.0.2,而它是 lo 上的本地别名。内核在 tun 上收到「源是本机
+   另一接口的本地地址」的包,在路由阶段(prerouting 之后)当伪造源丢弃——SYN-ACK 能看见、
+   连接永远建不起来。对策:`startTUNEngine` 给自建 tun 设 `net.ipv4.conf.<tun>.accept_local=1`
+   (cleanup 恢复)。生产环境踩不到(服务器永远是远端真实 IP)。别用「route via lo 让它可达
+   但不本地」替代——实测内核只对 LOCAL 表命中做本地投递,该方案 0.0.0.0 listener 收不到包。
+
+3. **`-race` 下自动 Skip**:sing-tun 的 `GVisor.Start` 先 attach endpoint(dispatch 循环
+   拉起)再装 transport handler,gvisor 的 `Stack.transportProtocolHandlers` 无锁 map,
+   启动窗口期递送必撞数据竞态——竞态两侧都在 gvisor/sing-tun 依赖内,本仓库代码只是调用方。
+   因此 TUN 用例在 `go test -race` 下被 `requireTUN` 跳过(Go 隐式 `race` 构建标签判定),
+   其余用例与 CI 回归照常全跑。不要试图「修好」它——那是上游 bug,等 sing-tun 修了再放开。

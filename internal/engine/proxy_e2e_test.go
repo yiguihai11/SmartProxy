@@ -110,6 +110,87 @@ func TestEngineProxyUDP_RuleSelected(t *testing.T) {
 	assertUpstreamDirect(t, beforeB, true) // B(上游)真收到了并直连了目标
 }
 
+// ── IPv6 回环代理 ─────────────────────────────────
+//
+// 主引擎 A 监听 ::1、客户端经 IPv6 接入,目标 echo 在 ::1(ATYP=0x04);
+// 上游 B 是 IPv4 的直连 SOCKS5 引擎(A 连 B 走 127.0.0.1 不受影响)。
+// 覆盖:IPv6 的 CONNECT/UDP ASSOCIATE 目标地址、B 侧对 ::1 的直连、
+// A 的 proxy cidr ::1/128 规则命中(proxyCIDRTrie IPv6 分支)。
+
+// ipv6ProxySpec 返回「::1 走上游 up」、监听 ::1 的装配。
+func ipv6ProxySpec(upAddr string) engineSpec {
+	return engineSpec{
+		chnroute: "::1/128\n",
+		acl:      "proxy cidr ::1/128 up\n",
+		upstream: []config.ProxyEntry{{Alias: "up", URL: "socks5://" + upAddr}},
+		listen:   "::1",
+	}
+}
+
+func TestEngineProxyTCP_IPv6(t *testing.T) {
+	up := newTestEngine(t)
+	eng := startEngine(t, ipv6ProxySpec(up.listener.Addr().String()))
+	echo := startTCPEcho6(t)
+	echoPort := echo.Addr().(*net.TCPAddr).Port
+
+	beforeA := sampleCounters()
+	beforeB := sampleCounters()
+	c := socks5Connect(t, eng.listener.Addr().String(), "::1", echoPort)
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(15 * time.Second))
+
+	payload := []byte("hello smartproxy proxy tcp6")
+	if _, err := c.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, len(payload))
+	if _, err := io.ReadFull(c, buf); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf, payload) {
+		t.Fatalf("TCP6 echo mismatch: got %q want %q", buf, payload)
+	}
+	c.Close()
+	assertProxiedTraffic(t, beforeA, false) // A 把 ::1 的流量交给了上游
+	assertUpstreamDirect(t, beforeB, false) // B 直连了 ::1
+}
+
+func TestEngineProxyUDP_IPv6(t *testing.T) {
+	up := newTestEngine(t)
+	eng := startEngine(t, ipv6ProxySpec(up.listener.Addr().String()))
+	echo := startUDPEcho6(t)
+	echoPort := echo.LocalAddr().(*net.UDPAddr).Port
+
+	beforeA := sampleCounters()
+	beforeB := sampleCounters()
+	tcpConn, udpConn := socks5UDPAssociate(t, eng.listener.Addr().String())
+	defer tcpConn.Close()
+	defer udpConn.Close()
+	udpConn.SetDeadline(time.Now().Add(20 * time.Second))
+
+	payload := []byte("hello smartproxy proxy udp6")
+	frame := append([]byte{0, 0, 0}, socks5Addr("::1", echoPort)...)
+	frame = append(frame, payload...)
+	if _, err := udpConn.Write(frame); err != nil {
+		t.Fatalf("write udp6 frame: %v", err)
+	}
+
+	buf := make([]byte, 65535)
+	n, err := udpConn.Read(buf)
+	if err != nil {
+		t.Fatalf("read udp6 reply: %v", err)
+	}
+	got, err := stripUDPHeader(buf[:n])
+	if err != nil {
+		t.Fatalf("strip header: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("UDP6 echo mismatch: got %q want %q", got, payload)
+	}
+	assertProxiedTraffic(t, beforeA, true)
+	assertUpstreamDirect(t, beforeB, true)
+}
+
 // TestEngineProxyTCP_DefaultStrategy:无 ACL/chnroute 规则,strategy=up 兜底 → TCP 走上游。
 func TestEngineProxyTCP_DefaultStrategy(t *testing.T) {
 	up := newTestEngine(t)

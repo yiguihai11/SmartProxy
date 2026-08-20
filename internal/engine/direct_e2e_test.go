@@ -176,11 +176,12 @@ func stripUDPHeader(b []byte) ([]byte, error) {
 
 // ── echo 服务 ──────────────────────────────────────
 
-func startTCPEcho(t *testing.T) net.Listener {
+// startTCPEchoOn 在指定地址起 TCP echo 服务(127.0.0.1 或 TUN 测试用的本地别名)。
+func startTCPEchoOn(t *testing.T, host string) net.Listener {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	l, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
 	if err != nil {
-		t.Fatalf("tcp echo listen: %v", err)
+		t.Fatalf("tcp echo listen (%s): %v", host, err)
 	}
 	go func() {
 		for {
@@ -198,11 +199,63 @@ func startTCPEcho(t *testing.T) net.Listener {
 	return l
 }
 
-func startUDPEcho(t *testing.T) *net.UDPConn {
+func startTCPEcho(t *testing.T) net.Listener {
+	return startTCPEchoOn(t, "127.0.0.1")
+}
+
+func startUDPEchoOn(t *testing.T, host string) *net.UDPConn {
 	t.Helper()
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	pc, err := net.ListenPacket("udp", net.JoinHostPort(host, "0"))
 	if err != nil {
-		t.Fatalf("udp echo listen: %v", err)
+		t.Fatalf("udp echo listen (%s): %v", host, err)
+	}
+	go func() {
+		buf := make([]byte, 65535)
+		for {
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			pc.WriteTo(buf[:n], addr)
+		}
+	}()
+	t.Cleanup(func() { pc.Close() })
+	return pc.(*net.UDPConn)
+}
+
+func startUDPEcho(t *testing.T) *net.UDPConn {
+	return startUDPEchoOn(t, "127.0.0.1")
+}
+
+// ── IPv6 回环 echo(::1)────────────────────────────
+
+func startTCPEcho6(t *testing.T) net.Listener {
+	t.Helper()
+	l, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		t.Fatalf("tcp6 echo listen: %v", err)
+	}
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				io.Copy(c, c)
+			}()
+		}
+	}()
+	t.Cleanup(func() { l.Close() })
+	return l
+}
+
+func startUDPEcho6(t *testing.T) *net.UDPConn {
+	t.Helper()
+	pc, err := net.ListenPacket("udp6", "[::1]:0")
+	if err != nil {
+		t.Fatalf("udp6 echo listen: %v", err)
 	}
 	go func() {
 		buf := make([]byte, 65535)
@@ -300,11 +353,17 @@ type engineSpec struct {
 	acl      string              // acl.txt 内容(proxy/allow/block 规则)
 	upstream []config.ProxyEntry // 上游节点;空 = 纯直连引擎
 	strategy string              // upstream.default 策略(默认代理走谁)
+	listen   string              // SOCKS5 监听地址,默认 127.0.0.1;IPv6 测试用 "::1"
+	tun      *config.TUNConfig   // 非 nil = 启用真实 TUN 设备(tun_e2e_test.go 用)
 }
 
 // startEngine 起一个引擎,SOCKS5 监听随机端口,返回引擎(Stop 由 t.Cleanup 处理)。
 func startEngine(t *testing.T, spec engineSpec) *Engine {
 	t.Helper()
+	host := spec.listen
+	if host == "" {
+		host = "127.0.0.1"
+	}
 	dir := t.TempDir()
 	chn := filepath.Join(dir, "chnroute.txt")
 	acl := filepath.Join(dir, "acl.txt")
@@ -315,17 +374,17 @@ func startEngine(t *testing.T, spec engineSpec) *Engine {
 		t.Fatal(err)
 	}
 
-	// 找一个空闲端口给 SOCKS5 监听
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	// 找一个与监听同地址族的空闲端口给 SOCKS5
+	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
 	if err != nil {
-		t.Fatalf("port probe: %v", err)
+		t.Fatalf("port probe (%s): %v", host, err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
 
 	cfg := &config.Config{
 		LogLevel: "warn",
-		Listen:   config.ListenConfig{Host: "127.0.0.1", Port: port},
+		Listen:   config.ListenConfig{Host: host, Port: port},
 		TUN:      config.TUNConfig{Enabled: false},
 		Upstream: config.UpstreamConf{Default: spec.strategy, Proxies: spec.upstream},
 		Routing:  config.RoutingConf{ChnrouteFile: chn, ACLFile: acl},
@@ -336,6 +395,9 @@ func startEngine(t *testing.T, spec engineSpec) *Engine {
 			QueryTimeout: 3,
 		},
 		SmartProxy: config.SmartProxyConf{Timeout: 3, BlacklistTTL: 60},
+	}
+	if spec.tun != nil {
+		cfg.TUN = *spec.tun
 	}
 
 	eng, err := New(cfg, dir)
@@ -441,6 +503,79 @@ func TestEngineDirectUDP(t *testing.T) {
 	assertDirectTraffic(t, before, true)
 }
 
+// ── IPv6 回环直连 ──────────────────────────────────
+//
+// 与 IPv4 用例一一对应:引擎监听 ::1、目标 echo 在 ::1,走 ATYP=0x04。
+// 顺带钉死 UDP ASSOCIATE 的 IPv6 BND 分支——IPv6 客户端(tcpLocal.IP=::1)
+// 必须广告 ::1,否则源校验照样全丢包。路由与规则侧:proxyCIDRTrie 用
+// As16()/128 位遍历,::1/128 规则能命中(见 internal/rules/engine.go)。
+
+func TestEngineDirectTCP_IPv6(t *testing.T) {
+	eng := startEngine(t, engineSpec{
+		chnroute: "::1/128\n",
+		acl:      "proxy cidr ::1/128 direct\n",
+		listen:   "::1",
+	})
+	echo := startTCPEcho6(t)
+	echoPort := echo.Addr().(*net.TCPAddr).Port
+
+	before := sampleCounters()
+	c := socks5Connect(t, eng.listener.Addr().String(), "::1", echoPort)
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(10 * time.Second))
+
+	payload := []byte("hello smartproxy direct tcp6")
+	if _, err := c.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, len(payload))
+	if _, err := io.ReadFull(c, buf); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf, payload) {
+		t.Fatalf("TCP6 echo mismatch: got %q want %q", buf, payload)
+	}
+	c.Close()
+	assertDirectTraffic(t, before, false)
+}
+
+func TestEngineDirectUDP_IPv6(t *testing.T) {
+	eng := startEngine(t, engineSpec{
+		chnroute: "::1/128\n",
+		acl:      "proxy cidr ::1/128 direct\n",
+		listen:   "::1",
+	})
+	echo := startUDPEcho6(t)
+	echoPort := echo.LocalAddr().(*net.UDPAddr).Port
+
+	before := sampleCounters()
+	tcpConn, udpConn := socks5UDPAssociate(t, eng.listener.Addr().String())
+	defer tcpConn.Close()
+	defer udpConn.Close()
+	udpConn.SetDeadline(time.Now().Add(15 * time.Second))
+
+	payload := []byte("hello smartproxy direct udp6")
+	frame := append([]byte{0, 0, 0}, socks5Addr("::1", echoPort)...)
+	frame = append(frame, payload...)
+	if _, err := udpConn.Write(frame); err != nil {
+		t.Fatalf("write udp6 frame: %v", err)
+	}
+
+	buf := make([]byte, 65535)
+	n, err := udpConn.Read(buf)
+	if err != nil {
+		t.Fatalf("read udp6 reply: %v", err)
+	}
+	got, err := stripUDPHeader(buf[:n])
+	if err != nil {
+		t.Fatalf("strip header: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("UDP6 echo mismatch: got %q want %q", got, payload)
+	}
+	assertDirectTraffic(t, before, true)
+}
+
 // ── ACL 规则 ───────────────────────────────────────
 
 // TestEngineACL_BlockIP:block ip 命中 TCP CONNECT 回 ReplyNotAllowed,UDP 帧被静默丢弃。
@@ -506,6 +641,46 @@ func TestEngineACL_BlockPort(t *testing.T) {
 		t.Fatalf("expected ReplyNotAllowed(0x02) for blocked port TCP, got %d", hdr[1])
 	}
 	c.Close()
+}
+
+// TestEngineACL_BlockIP_IPv6:block ip ::1 对 IPv6 回环同样生效(ATYP=0x04)。
+func TestEngineACL_BlockIP_IPv6(t *testing.T) {
+	eng := startEngine(t, engineSpec{
+		chnroute: "::1/128\n",
+		acl:      "block ip ::1\n",
+		listen:   "::1",
+	})
+	echo := startTCPEcho6(t)
+	echoPort := echo.Addr().(*net.TCPAddr).Port
+	serverAddr := eng.listener.Addr().String()
+
+	c := socks5Greeting(t, serverAddr)
+	req := append([]byte{0x05, 0x01, 0x00}, socks5Addr("::1", echoPort)...)
+	if _, err := c.Write(req); err != nil {
+		t.Fatal(err)
+	}
+	hdr := make([]byte, 4)
+	if _, err := io.ReadFull(c, hdr); err != nil {
+		t.Fatal(err)
+	}
+	if hdr[1] != 0x02 {
+		t.Fatalf("expected ReplyNotAllowed(0x02) for blocked IPv6 TCP, got %d", hdr[1])
+	}
+	c.Close()
+
+	// UDP:帧被静默丢弃
+	tcpConn, udpConn := socks5UDPAssociate(t, serverAddr)
+	defer tcpConn.Close()
+	defer udpConn.Close()
+	udpConn.SetDeadline(time.Now().Add(2 * time.Second))
+	frame := append([]byte{0, 0, 0}, socks5Addr("::1", echoPort)...)
+	frame = append(frame, []byte("blocked udp6")...)
+	if _, err := udpConn.Write(frame); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := udpConn.Read(make([]byte, 1024)); err == nil {
+		t.Fatalf("expected UDP6 block to drop the frame, but got a %d-byte reply", n)
+	}
 }
 
 // TestEngineACL_AllowOverridesProxy:allow 优先于 proxy 规则——配置了走上游的规则,
