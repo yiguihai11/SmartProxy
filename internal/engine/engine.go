@@ -475,17 +475,30 @@ func (e *Engine) handleUDPAssociate(ctx context.Context, conn net.Conn, clientIP
 	if tcpLocal.IP.To4() != nil {
 
 		if bindHost == "0.0.0.0" || bindHost == "::" {
-			bindHost = getOutboundIPv4().String()
-			if bindHost == "" || bindHost == "<nil>" {
-				bindHost = "127.0.0.1"
+			// BND 必须广告「客户端能到达且源校验能过」的地址。UDP socket 绑 0.0.0.0,
+			// 所以客户端实际连到的本地 IP 必可达——loopback 客户端应广告 127.0.0.1
+			// (源校验比对的 clientIP 就是 loopback)。getOutboundIPv4 会返回出站接口 IP:
+			// 在 VPN 手机上是 TUN 网段 IP,loopback 客户端按它发 UDP 源地址变成该 IP,
+			// 与 clientIP(127.0.0.1)不匹配 → 全部丢包,直连 UDP 流量不走的直接原因。
+			if ip4 := tcpLocal.IP.To4(); ip4 != nil && !ip4.IsUnspecified() {
+				bindHost = ip4.String()
+			} else {
+				bindHost = getOutboundIPv4().String()
+				if bindHost == "" || bindHost == "<nil>" {
+					bindHost = "127.0.0.1"
+				}
 			}
 		}
 	} else {
 
 		if bindHost == "0.0.0.0" || bindHost == "::" {
-			bindHost = getOutboundIPv6().String()
-			if bindHost == "" || bindHost == "<nil>" {
-				bindHost = "::1"
+			if !tcpLocal.IP.IsUnspecified() {
+				bindHost = tcpLocal.IP.String()
+			} else {
+				bindHost = getOutboundIPv6().String()
+				if bindHost == "" || bindHost == "<nil>" {
+					bindHost = "::1"
+				}
 			}
 		}
 	}
