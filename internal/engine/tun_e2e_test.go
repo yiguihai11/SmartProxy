@@ -189,6 +189,8 @@ func tunDial(t *testing.T, ifname, network string, port int) net.Conn {
 
 // TestEngineTUN_DirectTCP:客户端经 tun 拨 198.18.0.2,ACL force-direct 规则 → 引擎直连 echo。
 func TestEngineTUN_DirectTCP(t *testing.T) {
+	requireTUN(t) // 必须先于 addLoAlias:无 CAP_NET_ADMIN 的环境(如 CI)在这里 Skip,
+	// 而不是挂在 ip addr 的 Fatal 上(探测命令本身也要 CAP_NET_ADMIN,能建 tun 才继续)
 	addLoAlias(t, tunServerIP)
 	_, ifname := startTUNEngine(t, engineSpec{
 		chnroute: tunServerNet + "\n",
@@ -220,6 +222,8 @@ func TestEngineTUN_DirectTCP(t *testing.T) {
 
 // TestEngineTUN_DirectUDP:客户端经 tun 发 UDP 到 198.18.0.2,ACL force-direct → 引擎直连 echo。
 func TestEngineTUN_DirectUDP(t *testing.T) {
+	requireTUN(t) // 必须先于 addLoAlias:无 CAP_NET_ADMIN 的环境(如 CI)在这里 Skip,
+	// 而不是挂在 ip addr 的 Fatal 上(探测命令本身也要 CAP_NET_ADMIN,能建 tun 才继续)
 	addLoAlias(t, tunServerIP)
 	_, ifname := startTUNEngine(t, engineSpec{
 		chnroute: tunServerNet + "\n",
@@ -249,6 +253,8 @@ func TestEngineTUN_DirectUDP(t *testing.T) {
 
 // TestEngineTUN_ProxyTCP:ACL 规则走上游 → 引擎 A 把 tun 流量交给 SOCKS5 引擎 B,B 直连 echo。
 func TestEngineTUN_ProxyTCP(t *testing.T) {
+	requireTUN(t) // 必须先于 addLoAlias:无 CAP_NET_ADMIN 的环境(如 CI)在这里 Skip,
+	// 而不是挂在 ip addr 的 Fatal 上(探测命令本身也要 CAP_NET_ADMIN,能建 tun 才继续)
 	addLoAlias(t, tunServerIP)
 	// 上游 B:纯直连引擎,但 newTestEngine 只 force-direct 回环,这里必须显式覆盖 198.18.0.0/16,
 	// 否则 B 对 198.18.0.2 落进空策略回退、无可用上游而报错。
@@ -286,6 +292,8 @@ func TestEngineTUN_ProxyTCP(t *testing.T) {
 
 // TestEngineTUN_ProxyUDP:ACL 规则走上游 → 引擎 A 把 tun UDP 交给 SOCKS5 引擎 B,B 直连 echo。
 func TestEngineTUN_ProxyUDP(t *testing.T) {
+	requireTUN(t) // 必须先于 addLoAlias:无 CAP_NET_ADMIN 的环境(如 CI)在这里 Skip,
+	// 而不是挂在 ip addr 的 Fatal 上(探测命令本身也要 CAP_NET_ADMIN,能建 tun 才继续)
 	addLoAlias(t, tunServerIP)
 	up := startEngine(t, engineSpec{
 		chnroute: tunServerNet + "\n",
@@ -322,6 +330,8 @@ func TestEngineTUN_ProxyUDP(t *testing.T) {
 // 非假阳性:直连用例(TestEngineTUN_DirectTCP)证明同一条链路报文能到 handler,
 // 这里报文同样到达,只是被 block 规则关掉。
 func TestEngineTUN_BlockTCP(t *testing.T) {
+	requireTUN(t) // 必须先于 addLoAlias:无 CAP_NET_ADMIN 的环境(如 CI)在这里 Skip,
+	// 而不是挂在 ip addr 的 Fatal 上(探测命令本身也要 CAP_NET_ADMIN,能建 tun 才继续)
 	addLoAlias(t, tunServerIP)
 	_, ifname := startTUNEngine(t, engineSpec{
 		chnroute: tunServerNet + "\n",
@@ -341,6 +351,8 @@ func TestEngineTUN_BlockTCP(t *testing.T) {
 
 // TestEngineTUN_BlockUDP:block ip 命中 → handler 关闭 UDP 连接、无回包 → 读超时断言。
 func TestEngineTUN_BlockUDP(t *testing.T) {
+	requireTUN(t) // 必须先于 addLoAlias:无 CAP_NET_ADMIN 的环境(如 CI)在这里 Skip,
+	// 而不是挂在 ip addr 的 Fatal 上(探测命令本身也要 CAP_NET_ADMIN,能建 tun 才继续)
 	addLoAlias(t, tunServerIP)
 	_, ifname := startTUNEngine(t, engineSpec{
 		chnroute: tunServerNet + "\n",
