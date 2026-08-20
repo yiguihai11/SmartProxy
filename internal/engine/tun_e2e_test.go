@@ -56,11 +56,13 @@ package engine
 // 完全走内核,不再有抢读问题,也更贴近真实部署路径。
 //
 // TUN 路径与 SOCKS5 的关键差异:
-//   - TUN UDP 走 internal/tun/handler.go 自己的转发(不经 internal/udp),所以
-//     udp.* 计数器不涨,直连用例只能靠「回包内容」断言;但上游引擎 B 是 SOCKS5 引擎时,
-//     B 侧 udp.DirectBytesUp 会涨(见 TestEngineTUN_ProxyUDP);
+//   - TUN UDP 走 internal/tun/handler.go 自己的转发,但已与 SOCKS5 对齐:转发同时累加
+//     udp.* 面板计数器(直连=纯 payload、代理=带 SOCKS5 header 整帧),语义与
+//     internal/udp 一致,见 TestEngineTUN_UDPCounters_Direct / _Proxy;
 //   - TUN TCP 走 relay.TCPRelay(共享 relay.* 计数器),连接关闭才结算,
-//     直连/代理用例都先关客户端连接再轮询计数。
+//     直连/代理用例都先关客户端连接再轮询计数;
+//   - domain 规则:仅 smart_proxy 端口生效(非 smart / UDP 不做 SNI·Host 解析,性能取舍)。
+//   - 完整差异清单见 docs/e2e-regression.md「TUN 与 SOCKS5 的 UDP 行为一致性」。
 
 import (
 	"bytes"
@@ -377,3 +379,4 @@ func TestEngineTUN_BlockUDP(t *testing.T) {
 		t.Fatal("expected TUN block to drop the UDP packet, but got a reply")
 	}
 }
+

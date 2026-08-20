@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	mdns "github.com/miekg/dns"
@@ -21,7 +20,6 @@ import (
 
 	"smartproxy/internal/chnroute"
 	"smartproxy/internal/dns"
-	"smartproxy/internal/fwmark"
 	"smartproxy/internal/rules"
 	"smartproxy/internal/upstream"
 )
@@ -304,20 +302,9 @@ func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip 
 	isProxy := false
 
 	if result == "direct" || (result == "fallback" && h.isDomestic(ip)) {
-		d := net.Dialer{Timeout: 5 * time.Second, Control: func(network, address string, raw syscall.RawConn) error {
-			if err := fwmark.Control(network, address, raw); err != nil {
-				return err
-			}
-			if err := setSocketBuffers(raw); err != nil {
-				return err
-			}
-			// Direct UDP only: fail fast on oversized datagrams instead of emitting fragile fragments.
-			// (The proxied SS path is intentionally left alone — server-side coordination required.)
-			if err := setDisableUDPFragmentation(raw); err != nil {
-				slog.Debug("IP_MTU_DISCOVER not set on direct UDP socket", "err", err)
-			}
-			return nil
-		}}
+		// 直连 UDP socket 选项(fwmark/缓冲/禁分片)与 TUN 路径共用 DirectUDPControl,
+		// 保证两端直连行为一致。
+		d := net.Dialer{Timeout: 5 * time.Second, Control: DirectUDPControl}
 		remoteConn, err = d.DialContext(ctx, "udp", net.JoinHostPort(ip, strconv.Itoa(port)))
 	} else if selected != nil {
 		remoteConn, err = selected.UDPAssociate(ctx, ip, port)
@@ -501,69 +488,16 @@ func (h *Handler) isDomestic(ip string) bool {
 
 func (h *Handler) handleDNS(ctx context.Context, payload []byte, clientAddr net.Addr,
 	origIP string, origPort int, realIP string, realPort int) {
-
-	// Static records are authoritative overrides: answer first so they win over the
-	// blocked-domain and cache shortcuts below (and stay consistent with the TUN path).
-	if resp, ok := h.dnsHandler.StaticRecordAnswer(payload); ok {
-		h.sendDNSResponse(resp, clientAddr, origIP, origPort)
-		return
-	}
-
-	qname := extractDNSQname(payload)
-	if qname != "" && h.ruleEngine.IsDomainBlocked(qname) {
-		slog.Info("blocked DNS query", "domain", qname)
-		fake := h.dnsHandler.BuildFakeResponse(payload)
-		h.sendDNSResponse(fake, clientAddr, origIP, origPort)
-		return
-	}
-	if qname != "" {
-		var qtype uint16
-		if msg, err := unpackDNSMsg(payload); err == nil && len(msg.Question) > 0 {
-			qtype = msg.Question[0].Qtype
-		}
-		if cached := h.dnsHandler.CacheGet(qname, qtype); cached != nil {
-			slog.Debug("DNS cache hit", "qname", qname, "qtype", qtype, "responseLen", len(cached))
-			// The cached response's transaction ID came from the query that first populated this entry;
-			// it must be rewritten to the current query's ID, otherwise strict DNS clients will drop the
-			// response on an ID mismatch and the lookup will time out.
-			if len(cached) >= 2 && (cached[0] != payload[0] || cached[1] != payload[1]) {
-				cachedCopy := make([]byte, len(cached))
-				copy(cachedCopy, cached)
-				cachedCopy[0], cachedCopy[1] = payload[0], payload[1]
-				h.sendDNSResponse(cachedCopy, clientAddr, origIP, origPort)
-				return
-			}
-			h.sendDNSResponse(cached, clientAddr, origIP, origPort)
-			return
-		}
-	}
-	if isPrivateIP(realIP) {
-		slog.Info("DNS target is private/local, using direct query", "target", realIP)
-		response, err := h.dnsHandler.QueryUDPVerifyID(ctx, payload, realIP, realPort)
-		if err != nil {
-			slog.Error("direct DNS query failed", "target", fmt.Sprintf("%s:%d", realIP, realPort), "error", err)
-			return
-		}
-		if h.dnsHandler.IsDNSClean(response) {
-			if qname != "" {
-				var qtype uint16
-				if msg, err := unpackDNSMsg(payload); err == nil && len(msg.Question) > 0 {
-					qtype = msg.Question[0].Qtype
-				}
-				h.dnsHandler.CacheSet(qname, qtype, response, 0)
-			}
-		} else {
-			slog.Warn("private DNS response polluted, returning as-is")
-		}
-		h.sendDNSResponse(response, clientAddr, origIP, origPort)
-		return
-	}
+	// 完整 DNS 管线(static/block/cache/private-IP 直连/domestic-foreign 分流)统一在
+	// dns.Handler.HandleDNS 内,与 TUN 路径共用同一条管线、行为一致。此前 SOCKS5 在
+	// 这里重复 static/block/cache/private 前置(HandleDNS 内部已做),已删除;
+	// private 目标的直连分支也移入 HandleDNS,避免两条路各自实现。
 	response := h.dnsHandler.HandleDNS(ctx, payload, realIP, realPort, h.ruleEngine)
 	if response != nil {
 		h.sendDNSResponse(response, clientAddr, origIP, origPort)
 	} else {
 		slog.Warn("DNS handler returned nil, no response sent to client",
-			"client", clientAddr, "qname", qname, "dnsTarget", fmt.Sprintf("%s:%d", realIP, realPort))
+			"client", clientAddr, "dnsTarget", fmt.Sprintf("%s:%d", realIP, realPort))
 	}
 }
 

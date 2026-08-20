@@ -2,11 +2,36 @@
 
 package udp
 
-import "syscall"
+import (
+	"log/slog"
+	"syscall"
+
+	"smartproxy/internal/fwmark"
+)
 
 // udpSocketBufferSize is the target UDP socket send/receive buffer size (bytes).
 // The actual value is capped by the kernel's net.core.rmem_max / wmem_max; this is a best-effort enlargement.
 const udpSocketBufferSize = 1 << 20 // 1MB
+
+// DirectUDPControl is the Control func for direct (non-proxied) outbound UDP sockets:
+// fwmark routing plus enlarged send/recv buffers, and on Linux disabled IP fragmentation
+// so oversized datagrams fail fast instead of being silently fragmented. Shared by the
+// SOCKS5 (internal/udp) and TUN (internal/tun) direct-forwarding paths so both paths
+// build identical sockets.
+func DirectUDPControl(network, address string, raw syscall.RawConn) error {
+	if err := fwmark.Control(network, address, raw); err != nil {
+		return err
+	}
+	if err := setSocketBuffers(raw); err != nil {
+		return err
+	}
+	// Direct UDP only: fail fast on oversized datagrams instead of emitting fragile fragments.
+	// (The proxied SS path is intentionally left alone — server-side coordination required.)
+	if err := setDisableUDPFragmentation(raw); err != nil {
+		slog.Debug("IP_MTU_DISCOVER not set on direct UDP socket", "err", err)
+	}
+	return nil
+}
 
 // setDisableUDPFragmentation disables IPv4 UDP fragmentation (IP_MTU_DISCOVER=IP_PMTUDISC_DO) on an
 // outbound UDP socket: oversized datagrams fail fast with EMSGSIZE at the sender instead of being silently

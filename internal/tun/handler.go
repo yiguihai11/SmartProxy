@@ -29,6 +29,7 @@ import (
 	"smartproxy/internal/route"
 	"smartproxy/internal/rules"
 	"smartproxy/internal/safego"
+	"smartproxy/internal/udp"
 
 	"smartproxy/internal/upstream"
 )
@@ -288,7 +289,9 @@ func (h *TUNHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketCon
 		return
 	}
 
-	if port == 53 {
+	// DNS handler 启用时 53 端口走内置 DNS 管线;关闭时按普通 UDP 转发(passthrough),
+	// 与 SOCKS5 入口的 DNS 分流一致——不能无条件进 handleDNS(HandleDNS 返回 nil 会静默丢包)。
+	if port == 53 && h.dnsHandler != nil && h.dnsHandler.Enabled() {
 		safego.Go("tun.handleDNS", func() {
 			h.handleDNS(ctx, conn, host, port)
 			if onClose != nil {
@@ -400,7 +403,9 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, de
 		isProxy := false
 
 		if result == "direct" || (result == "fallback" && h.router.IsDomesticByIP(host)) {
-			d := net.Dialer{Timeout: 10 * time.Second, Control: fwmark.Control}
+			// 直连 UDP socket 选项(fwmark/1MB 缓冲/禁分片)与 SOCKS5 路径共用
+			// udp.DirectUDPControl,保证两端直连 socket 行为一致;dial 超时也对齐 5s。
+			d := net.Dialer{Timeout: 5 * time.Second, Control: udp.DirectUDPControl}
 			remote, err = d.DialContext(ctx, "udp", net.JoinHostPort(host, fmt.Sprintf("%d", port)))
 		} else {
 			isProxy = true
@@ -499,6 +504,8 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, de
 					}
 					return
 				}
+				// 上行计数:代理帧带 SOCKS5 header,语义与 internal/udp 一致
+				udp.ProxyBytesUp.Add(int64(len(proxyHeader) + payloadLen))
 				relay.UDPBufPool.Put(pktBufPtr)
 			} else {
 				if _, err := entry.conn.Write(buffer.Bytes()); err != nil {
@@ -509,6 +516,8 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, de
 					}
 					return
 				}
+				// 上行计数:直连写纯 payload
+				udp.DirectBytesUp.Add(int64(len(buffer.Bytes())))
 			}
 			buffer.Release()
 		}
@@ -571,6 +580,11 @@ func (h *TUNHandler) remoteUDPReader(tunConn N.PacketConn, entry *udpRemoteEntry
 			if payloadStart >= n {
 				continue
 			}
+			// 下行计数:代理回包带 SOCKS5 header,语义与 internal/udp 一致
+			udp.ProxyBytesDown.Add(int64(n))
+		} else {
+			// 下行计数:直连回包是纯 payload
+			udp.DirectBytesDown.Add(int64(n))
 		}
 		// Use buf.As instead of buf.With: With does not set end, so Bytes() returns an empty slice, which would write the UDP reply as an empty datagram.
 		respBuf := buf.As(rawBuf[payloadStart:n])

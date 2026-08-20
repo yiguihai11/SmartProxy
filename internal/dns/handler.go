@@ -114,6 +114,17 @@ func (h *Handler) IsDomestic(ip string) bool {
 	return h.chnroute.Contains(parsed)
 }
 
+// isPrivateIP reports whether ip targets a private/local unicast address. Private DNS
+// servers (LAN router, self-hosted) must be queried directly — see the private branch
+// in HandleDNS — because the foreign/proxy branch cannot reach them.
+func isPrivateIP(ipStr string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()
+}
+
 func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP string, targetPort int, engine *rules.Engine) []byte {
 	cfg := h.cfg.Load()
 	if !cfg.enabled {
@@ -165,8 +176,6 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 	// Coalesce concurrent queries: when the same domain and type are requested simultaneously, query only once
 	key := qname + "|" + strconv.Itoa(int(qtype))
 	result, err, _ := h.group.Do(key, func() (interface{}, error) {
-		isDomestic := h.IsDomestic(targetIP)
-
 		// P1#13: the merged query must not ride the first caller's connection ctx.
 		// singleflight fans this fn out to every concurrent requester for the same
 		// domain|type; if that leader's connection dies mid-flight, its cancelled ctx
@@ -174,6 +183,31 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 		// independent budget so one client's disconnect only costs itself.
 		fctx, cancel := context.WithTimeout(context.Background(), cfg.queryTimeout)
 		defer cancel()
+
+		// Private/local DNS servers (LAN router, self-hosted) must be queried directly:
+		// chnroute never classifies them as domestic, and the foreign/proxy branch
+		// cannot reach them — routing them there SERVFAILs. SOCKS5 and TUN UDP paths
+		// share this one pipeline, so both treat private targets identically.
+		if isPrivateIP(targetIP) {
+			slog.Debug("querying private DNS directly", "target", fmt.Sprintf("%s:%d", targetIP, targetPort))
+			presp, perr := h.QueryUDPVerifyID(fctx, queryWire, targetIP, targetPort)
+			if perr != nil {
+				// 私有 DNS 直连失败/响应 ID 不匹配时静默丢弃(返回 nil 让 HandleDNS 不回复),
+				// 与 SOCKS5 历史语义一致:伪造或失配的响应绝不转发、绝不缓存,客户端靠自身
+				// 解析器超时重试。不要在这里改回 SERVFAIL——会违反
+				// TestHandleDNS_PrivatePathRejectsMismatchedID 钉死的「不回复」语义。
+				slog.Warn("private DNS query failed, dropping", "target", fmt.Sprintf("%s:%d", targetIP, targetPort), "error", perr)
+				return nil, nil
+			}
+			if h.IsDNSClean(presp) {
+				h.cache.Set(qname, qtype, presp, 0)
+			} else {
+				slog.Warn("private DNS response polluted, returning as-is", "qname", qname)
+			}
+			return presp, nil
+		}
+
+		isDomestic := h.IsDomestic(targetIP)
 
 		var resp []byte
 		var rerr error

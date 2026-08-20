@@ -30,8 +30,9 @@ go test -tags with_gvisor -race ./internal/engine/ -run TestEngine -count=1  # �
 | proxy 按端口 | `TestEngineProxy_Port` | — | A proxy 计数涨 + B direct 涨(`proxyPorts` map) |
 | proxy 按精确 IP | `TestEngineProxy_IP` | — | 同上(`proxyIPs` map) |
 | proxy 按域名 | `TestEngineProxy_Domain` | — | 域名 CONNECT(ATYP=0x03)命中 `proxyDomains`;A/B 双计数 |
-| TUN 隧道 · 直连 | `TestEngineTUN_DirectTCP` | `TestEngineTUN_DirectUDP` | 真实建 tun,SO_BINDTODEVICE 客户端进隧道;TCP 走 relay 计数(连接关闭才结算),UDP 走 tun handler 自身转发、**只断回包内容** |
+| TUN 隧道 · 直连 | `TestEngineTUN_DirectTCP` | `TestEngineTUN_DirectUDP` | 真实建 tun,SO_BINDTODEVICE 客户端进隧道;TCP 走 relay 计数(连接关闭才结算) |
 | TUN 隧道 · 代理 | `TestEngineTUN_ProxyTCP` | `TestEngineTUN_ProxyUDP` | tun 引擎把流量交给 SOCKS5 上游引擎 B;B 侧 `relay/udp.DirectBytesUp` 增长 |
+| TUN 隧道 · UDP 计数与 SOCKS5 一致 | — | `TestEngineTUN_UDPCounters_Direct` / `_Proxy` | TUN 自身 `udp.*` 面板计数上下行都涨:直连只涨 Direct、代理只涨 Proxy(曾不经 internal/udp 导致面板 UDP 恒 0,与 SOCKS5 不一致,已修) |
 | TUN 隧道 · block | `TestEngineTUN_BlockTCP` | `TestEngineTUN_BlockUDP` | TCP 拨号失败;UDP 无回包读超时 |
 
 > TUN 用例需要 `/dev/net/tun` + CAP_NET_ADMIN,不满足自动 Skip(GitHub Actions 托管
@@ -88,6 +89,32 @@ TUN 入口(`tun/handler.go`)与 smart 路径(`ExtractDomain`/`ExtractSNI`)本来
 源地址对不上源校验的 `clientIP(127.0.0.1)` → 全部丢包;VPN 手机上该函数返回 TUN 网段 IP,
 更彻底走不通。修复:`handleUDPAssociate` 广告「客户端实际连到的本地地址」(`tcpLocal.IP`),
 见 `internal/engine/engine.go`。TUN 隧道路径无此问题。改任何 UDP 会话相关代码,先跑这组测试。
+
+## TUN 与 SOCKS5 的 UDP 行为一致性(改 tun/udp 入口前必读)
+
+用户要求 TUN 与 SOCKS5 两条 UDP 路径的行为影响**一致、最好复用**。曾有四类不一致,
+前三类已修、第四类为架构固有限制:
+
+1. **面板计数**:TUN UDP 曾走 `tun/handler.go` 自己的转发、不经 `internal/udp`,
+   `udp.*` 计数器不涨 → 面板 UDP 恒 0。已修:`udpSend`/`remoteUDPReader` 在转发时
+   累加,计数语义与 `internal/udp` 完全一致(直连=纯 payload,代理=带 SOCKS5 header
+   整帧)。回归钉:`TestEngineTUN_UDPCounters_Direct` / `_Proxy`。
+2. **直连 socket 选项**:TUN direct UDP 曾只有 `fwmark.Control`;SOCKS5 还有
+   `setSocketBuffers`(1MB)+ `setDisableUDPFragmentation`(禁分片,超大报错快速失败)。
+   已抽共享 `udp.DirectUDPControl`(见 `internal/udp/sockopt_linux.go`),两端直连路径
+   同用,且 dial 超时对齐 5s。
+3. **DNS 管线**:完整管线(static/block/cache/private-IP 直连/domestic-foreign 分流)
+   统一在 `dns.Handler.HandleDNS` 内,SOCKS5 与 TUN 共用同一条。曾有的重复前置
+   (SOCKS5 的 static/block/cache/private 检查)已删;私有 DNS 目标(如 192.168.0.1:53)
+   的直连分支移入 `HandleDNS`(此前 TUN 会把它当非 domestic 走代理 → 必然 SERVFAIL);
+   DNS handler 关闭时 53 端口按普通 UDP 转发(passthrough),TUN 不再静默丢包。
+4. **domain 规则(架构限制,不强统一)**:SOCKS5 UDP 帧 ATYP=0x03 带域名 → block/proxy
+   domain 规则命中;TUN 是 L3、只能拿到目标 IP,无法从 QUIC/TLS 首包可靠提取域名,
+   domain 规则对 TUN UDP 不生效是固有限制。TUN UDP 的 `SelectProxy(host, port, "", …)`
+   domain 恒空,别把这块改成死空串以外的东西而不加说明。
+
+其余良性差异记录不修:TUN 每端口会话超时(53=5s/123=10s/443=60s)vs SOCKS5 平 60s;
+TUN 会话键按 destination、SOCKS5 按 (client,ip,port)——机制不同、行为等价。
 
 ## TUN 用例的两个内核坑(改 `tun_e2e_test.go` 前必读)
 
