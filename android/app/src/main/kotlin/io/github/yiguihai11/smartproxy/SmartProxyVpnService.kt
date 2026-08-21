@@ -208,8 +208,8 @@ class SmartProxyVpnService : VpnService() {
             val builder = Builder().setMtu(tun.mtu)
 
             // IPv4/IPv6 拦截 = tun.inet4/6_address 存在(首页开关读写同一字段);
-            // DNS 只走 AppPrefs(§6 应用内设置):tun.dns_servers 引擎不消费、config.json
-            // 无此字段,缺省回退硬编码默认。
+            // DNS 只走 AppPrefs(§6 应用内设置):config.json 已无 tun.dns_servers
+            // (2026-08 删死配置),缺省回退硬编码默认。
             val inet4 = tun.inet4
             val customDnsV4 = AppPrefs.dnsV4(this)
             val effectiveDnsV4 = if (customDnsV4.isNotBlank()) customDnsV4 else DEFAULT_DNS_V4

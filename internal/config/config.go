@@ -19,16 +19,11 @@ type Config struct {
 }
 
 type TUNConfig struct {
-	Enabled      bool     `json:"enabled"`
-	Name         string   `json:"name"`
-	MTU          int      `json:"mtu"`
-	Inet4Address []string `json:"inet4_address"`
-	Inet6Address []string `json:"inet6_address"`
-	// DNSServers lists the DNS server addresses the TUN advertises to the system
-	// resolver on Android (fed to VpnService.Builder.addDnsServer). Index 0 = IPv4
-	// (default 223.5.5.5), index 1 = IPv6 (default 2400:3200::1). Not read on
-	// desktop; harmless when absent.
-	DNSServers     []string `json:"dns_servers"`
+	Enabled        bool     `json:"enabled"`
+	Name           string   `json:"name"`
+	MTU            int      `json:"mtu"`
+	Inet4Address   []string `json:"inet4_address"`
+	Inet6Address   []string `json:"inet6_address"`
 	AutoRoute      bool     `json:"auto_route"`
 	FileDescriptor int      `json:"-"`
 	Stack          string   `json:"stack"`
@@ -56,9 +51,6 @@ func (t TUNConfig) MarshalJSON() ([]byte, error) {
 	}
 	if t.Inet6Address == nil {
 		t.Inet6Address = []string{}
-	}
-	if t.DNSServers == nil {
-		t.DNSServers = []string{}
 	}
 	if t.RouteExcludePorts == nil {
 		t.RouteExcludePorts = []int{}
@@ -261,12 +253,6 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
-	for i, d := range c.TUN.DNSServers {
-		if net.ParseIP(strings.TrimSpace(d)) == nil {
-			errs = append(errs, fmt.Sprintf("tun.dns_servers[%d] must be a valid IP", i))
-		}
-	}
-
 	if len(errs) == 0 {
 		return nil
 	}
@@ -466,7 +452,6 @@ func DefaultConfig() *Config {
 			Name:              "tun0",
 			MTU:               1500,
 			Inet4Address:      []string{"172.19.0.1/30"},
-			DNSServers:        []string{"223.5.5.5", "2400:3200::1"},
 			AutoRoute:         false,
 			Stack:             "gvisor",
 			RouteExcludePorts: []int{22},

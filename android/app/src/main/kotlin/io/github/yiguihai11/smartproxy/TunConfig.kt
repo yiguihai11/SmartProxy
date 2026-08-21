@@ -8,9 +8,8 @@ import java.net.InetAddress
  * 单一真源:同一份 config.json 既喂 Builder 又喂 StartRouter。
  *
  * 只解析 Builder 用得到的:mtu / inet4/6_address。DNS 不在此列——tun.dns_servers
- * 引擎不消费(Go 侧只有校验和 DefaultConfig 默认值,运行时零引用),Android 的
- * addDnsServer 由 AppPrefs 自定义 DNS + 硬编码默认决定(§6,见 establishVpn),
- * 与 config.json 无关。
+ * 已删除(2026-08:死配置,Go 侧运行时零引用),Android 的 addDnsServer 由
+ * AppPrefs 自定义 DNS + 硬编码默认决定(§6,见 establishVpn),与 config.json 无关。
  */
 data class Cidr(val ip: String, val prefix: Int)
 

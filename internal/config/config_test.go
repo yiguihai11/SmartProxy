@@ -665,7 +665,7 @@ func TestMarshal_NilSlicesRenderEmptyArray(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"inet4_address", "inet6_address", "dns_servers", "route_exclude_ports"} {
+	for _, key := range []string{"inet4_address", "inet6_address", "route_exclude_ports"} {
 		want := `"` + key + `":[]`
 		if !bytes.Contains(b, []byte(want)) {
 			t.Errorf("%s rendered as null, want %s; full json: %s", key, want, b)
