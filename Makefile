@@ -40,7 +40,7 @@ GOARCH = $(word 2,$(GOOS_GOARCH))
 
 # android/ios 必须是 .PHONY:仓库里有同名目录 android/,不声明的话 make 会把目标
 # 当"目录已存在"跳过(gomobile 那步会打出 'android' is up to date 却不产出 AAR)。
-.PHONY: all build build-all check test test-verbose test-race clean lint fmt mod run help android ios
+.PHONY: all build build-all check test test-verbose test-race clean lint fmt mod run help android ios ca-cert
 
 ## all: build for current platform
 all: build
@@ -99,6 +99,26 @@ check-js:
 
 clean:
 	rm -rf $(OUTDIR)
+
+## ca-cert: regenerate the embedded admin CA (openssl, ECDSA P-256, 20y, CN=SmartProxy Root CA) — 覆盖 internal/admin/certs/ 下的 admin_ca.{crt,key},参数与现役完全同构(CA:TRUE pathlen:0, keyCertSign, sha256)。轮换后所有信任旧 CA 的设备/浏览器都要重新安装 admin_ca.crt,再重新构建(make build / make android)
+ca-cert:
+	@set -e; \
+	dir=internal/admin/certs; \
+	tmp=$$(mktemp); \
+	openssl ecparam -name prime256v1 -genkey -noout -out $$dir/admin_ca.key; \
+	openssl req -new -key $$dir/admin_ca.key -subj '/CN=SmartProxy Root CA' -out $$tmp.csr; \
+	printf '%s\n' \
+		'basicConstraints=critical,CA:TRUE,pathlen:0' \
+		'keyUsage=critical,keyCertSign,cRLSign' \
+		'subjectKeyIdentifier=hash' \
+		'authorityKeyIdentifier=keyid:always' > $$tmp.ext; \
+	openssl x509 -req -in $$tmp.csr -signkey $$dir/admin_ca.key -days 7305 \
+		-extfile $$tmp.ext -out $$dir/admin_ca.crt; \
+	rm -f $$tmp.csr $$tmp.ext; \
+	openssl x509 -in $$dir/admin_ca.crt -noout -subject -dates
+	@echo "=> embedded admin CA regenerated: internal/admin/certs/admin_ca.{crt,key}"
+	@echo "   WARNING: devices trusting the OLD CA must reinstall the new admin_ca.crt"
+	@echo "   rebuild with 'make build' (desktop) / 'make android' (AAR) after rotating"
 
 ## android: build Android AAR library
 android:
