@@ -49,6 +49,48 @@ func TestBlacklist_DifferentHosts(t *testing.T) {
 	}
 }
 
+func TestBlacklist_SnapshotCache(t *testing.T) {
+	b := NewBlacklist("test")
+	b.Add("b.com", 443, time.Hour, "r1")
+	b.Add("a.com", 443, time.Hour, "r2")
+	// 结构性变更(Add)立即反映到快照,最近添加的 a.com 排前。
+	e := b.Entries()
+	if len(e) != 2 {
+		t.Fatalf("want 2 entries, got %d", len(e))
+	}
+	if e[0].Host != "a.com" {
+		t.Fatalf("want a.com (last added) first, got %s", e[0].Host)
+	}
+	// 无变更时快照稳定(两次 Entries 一致)。
+	if e2 := b.Entries(); len(e2) != 2 {
+		t.Fatalf("cached snapshot should stay consistent, got %d", len(e2))
+	}
+	// Remove 立即反映。
+	b.Remove("b.com", 443)
+	if e3 := b.Entries(); len(e3) != 1 || e3[0].Host != "a.com" {
+		t.Fatalf("after remove want only a.com, got %d entries", len(e3))
+	}
+}
+
+func TestBlacklist_SnapshotReorderAfterHit(t *testing.T) {
+	b := NewBlacklist("test")
+	b.Add("a.com", 443, time.Hour, "r1")
+	b.Add("b.com", 443, time.Hour, "r2")
+	got := b.Entries()
+	if got[0].Host != "b.com" {
+		t.Fatalf("want b.com first initially, got %s", got[0].Host)
+	}
+	// 命中 a.com 刷新 lastHit;命中类变更经 hitRebuildInterval 节流后重建,a.com 置顶。
+	if !b.IsBlacklisted("a.com", 443) {
+		t.Fatal("a.com should be hit")
+	}
+	time.Sleep(hitRebuildInterval + 50*time.Millisecond)
+	got = b.Entries()
+	if got[0].Host != "a.com" {
+		t.Fatalf("want a.com first after hit, got %s", got[0].Host)
+	}
+}
+
 func TestBlacklist_CleanExpired(t *testing.T) {
 	b := NewBlacklist("test")
 	b.Add("keep.com", 443, 10*time.Second, "timeout")

@@ -9,6 +9,10 @@ import (
 
 const (
 	blacklistMaxSize = 10000
+	// hitRebuildInterval 是"命中刷新 lastHit"这类仅影响排序的变更允许的最小重建
+	// 间隔。命中很频繁(每次代理检查都会 hit),但面板 SSE 3s 才看一次,排序滞后
+	// 不到 1 秒用户感知不到;结构性变更(Add/Remove/过期删除)不节流,立即重建。
+	hitRebuildInterval = time.Second
 )
 
 type BlacklistEntry struct {
@@ -30,6 +34,13 @@ type Blacklist struct {
 	entries map[blacklistKey]blacklistRecord
 	maxSize int
 	name    string
+
+	// 增量快照缓存:SSE 每 3s 调 Entries(),黑名单最多 1 万条时全量遍历+排序浪费
+	// CPU。cacheDirty:1=结构性变更(立即重建),2=仅命中排序变更(节流重建)。
+	// cached 是只读快照,调用方不得修改。
+	cacheDirty  int
+	cached      []BlacklistEntry
+	lastCacheAt time.Time
 }
 
 type blacklistKey struct {
@@ -56,11 +67,14 @@ func (b *Blacklist) IsBlacklisted(host string, port int) bool {
 	now := time.Now()
 	if now.After(rec.expiry) {
 		delete(b.entries, key)
+		b.cacheDirty = 1 // 过期删除是结构性变更
 		return false
 	}
 	// 命中即刷新"最近使用",面板黑名单表按它排(最近命中的置顶)。
+	// 只影响排序 → cacheDirty=2,Entries 节流重建。
 	rec.lastHit = now
 	b.entries[key] = rec
+	b.cacheDirty = 2
 	slog.Debug("dynamic blacklist hit", "type", b.name, "host", host, "port", port)
 	return true
 }
@@ -71,6 +85,7 @@ func (b *Blacklist) Add(host string, port int, ttl time.Duration, reason string)
 
 	key := blacklistKey{host: host, port: port}
 	now := time.Now()
+	b.cacheDirty = 1 // 新增/更新都会改变快照内容
 
 	if _, exists := b.entries[key]; !exists {
 		if len(b.entries) >= b.maxSize {
@@ -117,11 +132,26 @@ func (b *Blacklist) Len() int {
 	return len(b.entries)
 }
 
+// Entries returns a read-only snapshot of live (unexpired) entries, newest-last-hit
+// first. The snapshot is cached: rebuilds only on structural change or, for hit-only
+// reordering, at most once per hitRebuildInterval. Callers must not modify the slice.
 func (b *Blacklist) Entries() []BlacklistEntry {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := time.Now()
-	var result []BlacklistEntry
+	switch {
+	case b.cached == nil:
+		b.rebuildLocked(now)
+	case b.cacheDirty == 1:
+		b.rebuildLocked(now)
+	case b.cacheDirty == 2 && now.Sub(b.lastCacheAt) >= hitRebuildInterval:
+		b.rebuildLocked(now)
+	}
+	return b.cached
+}
+
+func (b *Blacklist) rebuildLocked(now time.Time) {
+	result := make([]BlacklistEntry, 0, len(b.entries))
 	for k, rec := range b.entries {
 		if rec.expiry.After(now) {
 			result = append(result, BlacklistEntry{
@@ -129,7 +159,8 @@ func (b *Blacklist) Entries() []BlacklistEntry {
 				Port:       k.port,
 				LastReason: rec.lastReason,
 				ExpiresAt:  rec.expiry.Unix(),
-				LastHit:    rec.lastHit.Unix(),
+				// 纳秒精度:秒精度会让同一秒内多条记录排序退化(面板只用它排序,不显示)
+				LastHit: rec.lastHit.UnixNano(),
 			})
 		}
 	}
@@ -143,30 +174,45 @@ func (b *Blacklist) Entries() []BlacklistEntry {
 		}
 		return result[i].Port < result[j].Port
 	})
-	return result
+	b.cached = result
+	b.lastCacheAt = now
+	b.cacheDirty = 0
 }
 
 func (b *Blacklist) cleanExpired() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := time.Now()
+	removed := false
 	for k, rec := range b.entries {
 		if rec.expiry.Before(now) {
 			delete(b.entries, k)
+			removed = true
 		}
+	}
+	if removed {
+		b.cacheDirty = 1
 	}
 }
 
 func (b *Blacklist) Remove(host string, port int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	removed := false
 	if port > 0 {
-		delete(b.entries, blacklistKey{host: host, port: port})
-		return
-	}
-	for k := range b.entries {
-		if k.host == host {
-			delete(b.entries, k)
+		if _, ok := b.entries[blacklistKey{host: host, port: port}]; ok {
+			delete(b.entries, blacklistKey{host: host, port: port})
+			removed = true
 		}
+	} else {
+		for k := range b.entries {
+			if k.host == host {
+				delete(b.entries, k)
+				removed = true
+			}
+		}
+	}
+	if removed {
+		b.cacheDirty = 1
 	}
 }
