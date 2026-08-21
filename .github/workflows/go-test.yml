@@ -32,7 +32,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
           cache: true
 
       # -tags with_gvisor 必须带上:TUN 栈(sing-tun gvisor 栈)在这个 tag 下才编译,
