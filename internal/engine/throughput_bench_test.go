@@ -1,13 +1,60 @@
 package engine
 
 import (
+	"fmt"
 	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
 	"smartproxy/internal/config"
 )
+
+// startUDPEchoParallel 与 e2e 的 startUDPEcho 不同:每包一个 goroutine + buffer
+// 池,echo 端不再串行转发——用来排除"echo 单 goroutine 就是吞吐瓶颈"的干扰,
+// 测出引擎/内核各自的真实上限。仅 benchmark 用,不进 e2e。
+func startUDPEchoParallel(b *testing.B) *net.UDPConn {
+	b.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	var pool = sync.Pool{New: func() any { return make([]byte, 65535) }}
+	go func() {
+		for {
+			buf := pool.Get().([]byte)
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			go func(buf []byte, n int, addr net.Addr) {
+				pc.WriteTo(buf[:n], addr)
+				pool.Put(buf)
+			}(buf, n, addr)
+		}
+	}()
+	b.Cleanup(func() { pc.Close() })
+	return pc.(*net.UDPConn)
+}
+
+// udpEchoPipelined 一组流水线转发:发 inflight 个包、读回 inflight 个包。
+// 同步 ping-pong 每次只有一个包在途,测的是 RTT;流水线让多个包同时在飞,
+// 才能逼近真实的 UDP 吞吐上限。迭代次数按 b.N 走,SetBytes 按 inflight 折算。
+func udpEchoPipelined(b *testing.B, w func(), r func()) {
+	b.Helper()
+	const inflight = 32
+	b.SetBytes(2 * 1200 * inflight)
+	b.ResetTimer()
+	for k := 0; k < b.N; k++ {
+		for i := 0; i < inflight; i++ {
+			w()
+		}
+		for i := 0; i < inflight; i++ {
+			r()
+		}
+	}
+}
 
 // 吞吐压测:真实流量打满 SOCKS5 入口,量的是"引擎处理能力"(relay 拷贝、
 // UDP 调度、路由判定),不是路由表查找之类的微基准。四档:
@@ -128,4 +175,150 @@ func BenchmarkUDPThroughput(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// BenchmarkUDPThroughput_Pipelined:经引擎,32 包在途的流水线吞吐。
+// 消除 ping-pong 的 RTT 主导后,这里才是引擎真实的 UDP 吞吐上限。
+func BenchmarkUDPThroughput_Pipelined(b *testing.B) {
+	eng := newTestEngine(b)
+	echo := startUDPEcho(b)
+	echoPort := echo.LocalAddr().(*net.UDPAddr).Port
+
+	tcpConn, udpConn := socks5UDPAssociate(b, eng.listener.Addr().String())
+	b.Cleanup(func() { tcpConn.Close() })
+	b.Cleanup(func() { udpConn.Close() })
+	udpConn.SetDeadline(time.Now().Add(30 * time.Second))
+
+	payload := make([]byte, 1200)
+	frame := append([]byte{0, 0, 0}, socks5Addr("127.0.0.1", echoPort)...)
+	frame = append(frame, payload...)
+	reply := make([]byte, 65535)
+
+	udpEchoPipelined(b,
+		func() {
+			if _, err := udpConn.Write(frame); err != nil {
+				b.Fatal(err)
+			}
+		},
+		func() {
+			if _, err := udpConn.Read(reply); err != nil {
+				b.Fatal(err)
+			}
+		},
+	)
+}
+
+// BenchmarkUDPThroughput_DirectSocket:不经引擎,直连 echo 的同步 ping-pong——
+// 纯内核 loopback 的 RTT 基线(不经过 SmartProxy 任何代码)。
+func BenchmarkUDPThroughput_DirectSocket(b *testing.B) {
+	echo := startUDPEcho(b)
+	echoPort := echo.LocalAddr().(*net.UDPAddr).Port
+	c, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", echoPort))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { c.Close() })
+	c.SetDeadline(time.Now().Add(30 * time.Second))
+
+	payload := make([]byte, 1200)
+	reply := make([]byte, 65535)
+	b.SetBytes(int64(len(payload) * 2))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := c.Write(payload); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := c.Read(reply); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkUDPThroughput_DirectSocketPipelined:不经引擎,32 包在途——
+// 纯内核 loopback 的 UDP 吞吐上限,给引擎版提供对比基准。
+func BenchmarkUDPThroughput_DirectSocketPipelined(b *testing.B) {
+	echo := startUDPEcho(b)
+	echoPort := echo.LocalAddr().(*net.UDPAddr).Port
+	c, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", echoPort))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { c.Close() })
+	c.SetDeadline(time.Now().Add(30 * time.Second))
+
+	payload := make([]byte, 1200)
+	reply := make([]byte, 65535)
+
+	udpEchoPipelined(b,
+		func() {
+			if _, err := c.Write(payload); err != nil {
+				b.Fatal(err)
+			}
+		},
+		func() {
+			if _, err := c.Read(reply); err != nil {
+				b.Fatal(err)
+			}
+		},
+	)
+}
+
+// BenchmarkUDPThroughput_PipelinedParallelEcho:引擎 + 并发 echo——echo 不再
+// 串行,排除 echo 端瓶颈后引擎的流水线吞吐上限。
+func BenchmarkUDPThroughput_PipelinedParallelEcho(b *testing.B) {
+	eng := newTestEngine(b)
+	echo := startUDPEchoParallel(b)
+	echoPort := echo.LocalAddr().(*net.UDPAddr).Port
+
+	tcpConn, udpConn := socks5UDPAssociate(b, eng.listener.Addr().String())
+	b.Cleanup(func() { tcpConn.Close() })
+	b.Cleanup(func() { udpConn.Close() })
+	udpConn.SetDeadline(time.Now().Add(30 * time.Second))
+
+	payload := make([]byte, 1200)
+	frame := append([]byte{0, 0, 0}, socks5Addr("127.0.0.1", echoPort)...)
+	frame = append(frame, payload...)
+	reply := make([]byte, 65535)
+
+	udpEchoPipelined(b,
+		func() {
+			if _, err := udpConn.Write(frame); err != nil {
+				b.Fatal(err)
+			}
+		},
+		func() {
+			if _, err := udpConn.Read(reply); err != nil {
+				b.Fatal(err)
+			}
+		},
+	)
+}
+
+// BenchmarkUDPThroughput_DirectPipelinedParallelEcho:纯内核 + 并发 echo——
+// 内核 loopback 的真实 UDP 吞吐上限,与引擎版严格同 echo。
+func BenchmarkUDPThroughput_DirectPipelinedParallelEcho(b *testing.B) {
+	echo := startUDPEchoParallel(b)
+	echoPort := echo.LocalAddr().(*net.UDPAddr).Port
+	c, err := net.Dial("udp", fmt.Sprintf("127.0.0.1:%d", echoPort))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { c.Close() })
+	c.SetDeadline(time.Now().Add(30 * time.Second))
+
+	payload := make([]byte, 1200)
+	reply := make([]byte, 65535)
+
+	udpEchoPipelined(b,
+		func() {
+			if _, err := c.Write(payload); err != nil {
+				b.Fatal(err)
+			}
+		},
+		func() {
+			if _, err := c.Read(reply); err != nil {
+				b.Fatal(err)
+			}
+		},
+	)
 }
