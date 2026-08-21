@@ -87,7 +87,7 @@ func readSocks5Reply(c net.Conn) (string, int, error) {
 }
 
 // socks5Greeting 完成无鉴权握手,返回已握手的 TCP 连接。
-func socks5Greeting(t *testing.T, serverAddr string) net.Conn {
+func socks5Greeting(t testing.TB, serverAddr string) net.Conn {
 	t.Helper()
 	c, err := net.Dial("tcp", serverAddr)
 	if err != nil {
@@ -111,7 +111,7 @@ func socks5Greeting(t *testing.T, serverAddr string) net.Conn {
 }
 
 // socks5Connect 完成握手并发送 CONNECT,成功返回已连到目标的连接。
-func socks5Connect(t *testing.T, serverAddr, host string, port int) net.Conn {
+func socks5Connect(t testing.TB, serverAddr, host string, port int) net.Conn {
 	t.Helper()
 	c := socks5Greeting(t, serverAddr)
 	req := append([]byte{0x05, 0x01, 0x00}, socks5Addr(host, port)...)
@@ -128,7 +128,7 @@ func socks5Connect(t *testing.T, serverAddr, host string, port int) net.Conn {
 
 // socks5UDPAssociate 完成握手并发送 UDP ASSOCIATE,返回控制 TCP 连接和
 // 已连到服务器 BND 地址的 UDP 连接。BND 为通配时回退 127.0.0.1。
-func socks5UDPAssociate(t *testing.T, serverAddr string) (net.Conn, *net.UDPConn) {
+func socks5UDPAssociate(t testing.TB, serverAddr string) (net.Conn, *net.UDPConn) {
 	t.Helper()
 	c := socks5Greeting(t, serverAddr)
 	// UDP ASSOCIATE 到 0.0.0.0:0
@@ -155,7 +155,7 @@ func socks5UDPAssociate(t *testing.T, serverAddr string) (net.Conn, *net.UDPConn
 }
 
 // closedPort 返回一个当前无人监听的本地端口(绑定后立刻关闭,用作不可达上游)。
-func closedPort(t *testing.T) int {
+func closedPort(t testing.TB) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -189,7 +189,7 @@ func stripUDPHeader(b []byte) ([]byte, error) {
 // ── echo 服务 ──────────────────────────────────────
 
 // startTCPEchoOn 在指定地址起 TCP echo 服务(127.0.0.1 或 TUN 测试用的本地别名)。
-func startTCPEchoOn(t *testing.T, host string) net.Listener {
+func startTCPEchoOn(t testing.TB, host string) net.Listener {
 	t.Helper()
 	l, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
 	if err != nil {
@@ -211,11 +211,11 @@ func startTCPEchoOn(t *testing.T, host string) net.Listener {
 	return l
 }
 
-func startTCPEcho(t *testing.T) net.Listener {
+func startTCPEcho(t testing.TB) net.Listener {
 	return startTCPEchoOn(t, "127.0.0.1")
 }
 
-func startUDPEchoOn(t *testing.T, host string) *net.UDPConn {
+func startUDPEchoOn(t testing.TB, host string) *net.UDPConn {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", net.JoinHostPort(host, "0"))
 	if err != nil {
@@ -235,13 +235,13 @@ func startUDPEchoOn(t *testing.T, host string) *net.UDPConn {
 	return pc.(*net.UDPConn)
 }
 
-func startUDPEcho(t *testing.T) *net.UDPConn {
+func startUDPEcho(t testing.TB) *net.UDPConn {
 	return startUDPEchoOn(t, "127.0.0.1")
 }
 
 // ── IPv6 回环 echo(::1)────────────────────────────
 
-func startTCPEcho6(t *testing.T) net.Listener {
+func startTCPEcho6(t testing.TB) net.Listener {
 	t.Helper()
 	l, err := net.Listen("tcp", "[::1]:0")
 	if err != nil {
@@ -263,7 +263,7 @@ func startTCPEcho6(t *testing.T) net.Listener {
 	return l
 }
 
-func startUDPEcho6(t *testing.T) *net.UDPConn {
+func startUDPEcho6(t testing.TB) *net.UDPConn {
 	t.Helper()
 	pc, err := net.ListenPacket("udp6", "[::1]:0")
 	if err != nil {
@@ -306,7 +306,7 @@ func sampleCounters() pathCounters {
 }
 
 // awaitIncrease 轮询等待计数器相对基线严格增长(最多 3s)。
-func awaitIncrease(t *testing.T, what string, cur func() int64, base int64) {
+func awaitIncrease(t testing.TB, what string, cur func() int64, base int64) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -320,7 +320,7 @@ func awaitIncrease(t *testing.T, what string, cur func() int64, base int64) {
 
 // assertDirectTraffic:单引擎场景下断言走了直连——direct 增长、proxy 未动。
 // 使用前提:采样窗口内没有其它引擎的代理流量(纯直连引擎 / ACL allow 测试)。
-func assertDirectTraffic(t *testing.T, before pathCounters, udpPath bool) {
+func assertDirectTraffic(t testing.TB, before pathCounters, udpPath bool) {
 	t.Helper()
 	if udpPath {
 		awaitIncrease(t, "UDP DIRECT up", func() int64 { return udp.DirectBytesUp.Load() }, before.udpDirectUp)
@@ -337,7 +337,7 @@ func assertDirectTraffic(t *testing.T, before pathCounters, udpPath bool) {
 
 // assertProxiedTraffic:双引擎测试中断言主引擎 A 走了代理(proxy 增长)。
 // 只做正断言——A 不直连,但 B 的直连流量会污染全局 direct 计数,不能断 direct==0。
-func assertProxiedTraffic(t *testing.T, before pathCounters, udpPath bool) {
+func assertProxiedTraffic(t testing.TB, before pathCounters, udpPath bool) {
 	t.Helper()
 	if udpPath {
 		awaitIncrease(t, "UDP PROXY up", func() int64 { return udp.ProxyBytesUp.Load() }, before.udpProxyUp)
@@ -348,7 +348,7 @@ func assertProxiedTraffic(t *testing.T, before pathCounters, udpPath bool) {
 
 // assertUpstreamDirect:双引擎测试中断言上游引擎 B 收到了流量并直连(direct 增长)。
 // 只做正断言——B 不代理,但 A 的代理流量会污染全局 proxy 计数,不能断 proxy==0。
-func assertUpstreamDirect(t *testing.T, before pathCounters, udpPath bool) {
+func assertUpstreamDirect(t testing.TB, before pathCounters, udpPath bool) {
 	t.Helper()
 	if udpPath {
 		awaitIncrease(t, "upstream UDP DIRECT up", func() int64 { return udp.DirectBytesUp.Load() }, before.udpDirectUp)
@@ -370,7 +370,7 @@ type engineSpec struct {
 }
 
 // startEngine 起一个引擎,SOCKS5 监听随机端口,返回引擎(Stop 由 t.Cleanup 处理)。
-func startEngine(t *testing.T, spec engineSpec) *Engine {
+func startEngine(t testing.TB, spec engineSpec) *Engine {
 	t.Helper()
 	host := spec.listen
 	if host == "" {
@@ -424,7 +424,7 @@ func startEngine(t *testing.T, spec engineSpec) *Engine {
 }
 
 // newTestEngine 起一个纯直连引擎:ACL 规则把 loopback 强制 force-direct。
-func newTestEngine(t *testing.T) *Engine {
+func newTestEngine(t testing.TB) *Engine {
 	return startEngine(t, engineSpec{
 		chnroute: "127.0.0.0/8\n::1/128\n",
 		acl:      "proxy cidr 127.0.0.0/8 direct\nproxy cidr ::1/128 direct\n",
