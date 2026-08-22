@@ -332,17 +332,23 @@ tr:last-child td{border-bottom:none}
 </div>
 <div class="view" id="view-tls">
   <div class="view-title">TLS Certificate</div>
-  <div class="view-meta"><span class="dot"></span><span>Self-signed admin certificate</span></div>
+  <div class="view-meta"><span class="dot"></span><span>Built-in root CA &amp; CA-signed leaf</span></div>
   <div class="card" style="max-width:720px;line-height:1.7;color:var(--text2)">
-    <p style="margin-bottom:16px">The panel serves HTTPS with a self-signed certificate
-      (<code>admin.crt</code>). Install it as a <b>trusted CA</b> on each device that opens
-      the panel to clear the "untrusted" warning — Android 7.0+ requires a lock-screen PIN to
-      install a CA; iOS needs the profile installed then trusted in Settings &gt; General &gt;
-      VPN &amp; Device Management. The certificate covers <code>localhost</code>,
-      <code>127.0.0.1</code>, <code>::1</code> and every address in
-      <code>admin_cert_sans</code> (config <code>listen</code> block); edit that field if a LAN
-      IP is missing and restart — the cert regenerates automatically. The certificate rotates
-      when its SAN list no longer matches.</p>
+    <p style="margin-bottom:16px">The panel serves HTTPS with a short-lived <b>leaf</b>
+      certificate signed by a built-in root CA (<code>admin.crt</code>). Install that CA as a
+      <b>trusted certificate authority</b> on each device that opens the panel — the leaf is
+      then trusted automatically and the "untrusted" warning disappears. The CA is a stable
+      trust anchor: it does <b>not</b> change across app reinstalls or when the panel's
+      addresses change, so a device only needs it installed once. Android 7.0+ requires a
+      lock-screen PIN to install a CA; iOS needs the profile installed then trusted in
+      Settings &gt; General &gt; VPN &amp; Device Management.</p>
+    <p style="margin-bottom:16px">The leaf covers <code>localhost</code>,
+      <code>127.0.0.1</code>, <code>::1</code> and every name/IP in
+      <code>admin_cert_sans</code> (config <code>listen</code> block). If a LAN address is
+      missing, add it there and restart — only the leaf is re-signed; the CA stays the same,
+      so devices that already trust it keep working. A user-supplied
+      <code>admin_ca.{crt,key}</code> next to the config overrides the embedded one; binaries
+      built without any CA fall back to a single self-signed certificate.</p>
     <a class="btn btn-sm primary" href="/admin.crt" download="admin.crt">Download admin.crt</a>
   </div>
 </div>
