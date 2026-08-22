@@ -77,6 +77,7 @@ android {
     }
     buildFeatures {
         compose = true
+        aidl = true // Shizuku 探针(M6):IShizukuProbe.aidl
     }
     packaging {
         jniLibs {
@@ -105,6 +106,11 @@ dependencies {
 
     // 面板入口二维码(M2):直接用 QRCodeWriter 编码,无反射路径,R8 安全。
     implementation("com.google.zxing:core:3.5.3")
+
+    // Shizuku 探针(M6):免 root 热点共享的授权桥。provider 负责 manifest 授权注册,
+    // api 提供 UserService 绑定。与 v2rayNG PR #5903 同款依赖。
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

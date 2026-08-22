@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
@@ -98,6 +99,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import io.github.yiguihai11.smartproxy.shizuku.TetheringProbe
 import kotlinx.coroutines.launch
 
 /**
@@ -689,6 +691,57 @@ private fun HomeLauncher(
                 PanelCard(url = panelUrl, auth = adminAuth, onCopy = { url -> copyPanelUrl(context, url) }, onOpen = { url -> openPanel(context, url) })
                 Spacer(Modifier.height(8.dp))
             }
+
+            // ── Shizuku 探针卡(M6 临时入口,验证 iQOO12 隐藏 API;验证完删除)──
+            ShizukuProbeCard(context = context)
+        }
+    }
+}
+
+/** M6 临时探针:跑一遍 ShellContextCompat + TestNetworkManager + setPreferTestNetworks,
+ *  结果回显,判断 OriginOS 上免 root 热点共享是否可行。验证完整个卡片删除。 */
+@Composable
+private fun ShizukuProbeCard(context: Context) {
+    var probeResult by remember { mutableStateOf("点「运行」探测隐藏 API 可用性") }
+    var probing by remember { mutableStateOf(false) }
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = CardSurface,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Shizuku 探针(临时)",
+                    fontSize = 16.sp,
+                    color = PurpleDark,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f)
+                )
+                Button(
+                    onClick = {
+                        probing = true
+                        probeResult = "运行中…(最长约 20s)"
+                        TetheringProbe.run(context) { result ->
+                            probing = false
+                            probeResult = result
+                        }
+                    },
+                    enabled = !probing,
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)
+                ) {
+                    Text(if (probing) "运行中…" else "运行")
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = probeResult,
+                fontSize = 12.sp,
+                color = GreyText,
+                lineHeight = 16.sp
+            )
         }
     }
 }
