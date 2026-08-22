@@ -10,6 +10,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Build
+import android.os.Bundle
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.util.Log
@@ -68,6 +69,11 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
         const val TUN_DNS_HINT_V6 = "fdfe:dcba:9877::53"
         private const val UPSTREAM_INTERFACES_PREFIX = "Current upstream interface(s):"
 
+        // startHotspot 返回 Bundle 的 key(AIDL 禁 String 作 out 参数,out 信息塞 Bundle)。
+        const val KEY_PFD = "pfd" // ParcelFileDescriptor,成功才有;调用方负责 close(Binder 自动 dup)
+        const val KEY_IFACE = "iface" // String,测试 TUN 接口名(成功时)
+        const val KEY_ERROR = "error" // String,失败原因;成功为空串
+
         internal fun createUserServiceArgs(): Shizuku.UserServiceArgs =
             Shizuku.UserServiceArgs(
                 ComponentName(BuildConfig.APPLICATION_ID, ShizukuProbeService::class.java.name),
@@ -105,27 +111,23 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
     // ════════════════════════ M7 持久热点共享 ════════════════════════
 
     @Synchronized
-    override fun startHotspot(
-        appToken: IBinder,
-        ifaceName: Array<String?>,
-        error: Array<String?>,
-    ): ParcelFileDescriptor? {
-        // 已启动:直接返回现有 fd。Binder 写 ParcelFileDescriptor 会重新 dup,
+    override fun startHotspot(appToken: IBinder): Bundle {
+        // 已启动:直接返回现有 fd。Binder 写 Bundle 里的 ParcelFileDescriptor 会重新 dup,
         // 每个调用方都拿到独立 fd,自己负责 close;服务端 tunPfd 不动。
         if (started) {
             tunPfd?.let { pfd ->
-                ifaceName[0] = hotIfaceName ?: ""
-                return pfd
+                return Bundle().apply {
+                    putParcelable(KEY_PFD, pfd)
+                    putString(KEY_IFACE, hotIfaceName)
+                }
             }
-            error[0] = "状态不一致:started=true 但 tunPfd 为空"
-            return null
+            return Bundle().apply { putString(KEY_ERROR, "状态不一致:started=true 但 tunPfd 为空") }
         }
-        // 失败统一出口:写 error + 幂等回收半截状态(started 尚未置位,stopHotspot 也全清)。
-        fun fail(msg: String): ParcelFileDescriptor? {
-            error[0] = msg
+        // 失败统一出口:error 塞 Bundle + 幂等回收半截状态(started 尚未置位,stopHotspot 也全清)。
+        fun fail(msg: String): Bundle {
             Log.w(TAG, "startHotspot 失败: $msg")
             stopHotspot()
-            return null
+            return Bundle().apply { putString(KEY_ERROR, msg) }
         }
         return try {
             // ① shell 归属 Context(与探针同路径)
@@ -155,7 +157,6 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
                 .invoke(testInterface) as String
             tunPfd = pfd
             hotIfaceName = iface
-            ifaceName[0] = iface
 
             // ④ 发布为测试网络,等 onAvailable(配双栈地址 + v6 DNS hint,否则热点不广告 IPv6)
             val lifetimeToken = SystemServiceHelper.getSystemService(Context.CONNECTIVITY_SERVICE) as IBinder
@@ -233,7 +234,10 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
 
             started = true
             Log.i(TAG, "startHotspot 成功: iface=$iface fd=${pfd.fd}")
-            pfd
+            Bundle().apply {
+                putParcelable(KEY_PFD, pfd)
+                putString(KEY_IFACE, iface)
+            }
         } catch (e: Throwable) {
             Log.e(TAG, "startHotspot 未捕获异常,回收", e)
             fail("未捕获异常: $e")

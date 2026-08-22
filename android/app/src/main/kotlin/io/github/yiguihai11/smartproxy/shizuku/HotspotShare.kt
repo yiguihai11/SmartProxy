@@ -122,15 +122,17 @@ object HotspotShare {
         try {
             val token = Binder()
             appToken = token
-            val iface = arrayOfNulls<String>(1)
-            val err = arrayOfNulls<String>(1)
-            val received = b.startHotspot(token, iface, err)
+            val result = b.startHotspot(token)
+            val err = result.getString(ShizukuProbeService.KEY_ERROR).orEmpty()
+            @Suppress("DEPRECATION") // getParcelable(key, class) 需 API 33,minSdk 26 用 core-ktx reified 老签名
+            val received: ParcelFileDescriptor? =
+                result.getParcelable<ParcelFileDescriptor>(ShizukuProbeService.KEY_PFD)
             if (received == null) {
-                fail(err[0] ?: "startHotspot 返回 null")
+                fail(if (err.isBlank()) "startHotspot 未返回 fd(无错误信息)" else err)
                 return
             }
             pfd = received
-            ifaceName = iface[0] ?: ""
+            ifaceName = result.getString(ShizukuProbeService.KEY_IFACE) ?: ""
 
             // dup + detachFd:让 Go 独占一个独立 fd(fdsan 所有权一起交出),Kotlin 此后不碰 goFd。
             val dup = received.dup()
