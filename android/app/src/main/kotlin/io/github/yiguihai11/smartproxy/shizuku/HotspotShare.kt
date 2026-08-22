@@ -138,16 +138,19 @@ object HotspotShare {
             val dup = received.dup()
             val fd = dup.detachFd()
             goFd = fd
-            val addErr: String? = Mobile.addTunFd(fd.toLong(), TEST_TUN_V4, TEST_TUN_V6, MTU)
-            if (addErr != null) {
+            // 注意:gomobile 把 Go error 抛成 Java 异常(与 SmartProxyVpnService 里
+            // startRouter 的 try/catch 同一约定),addTunFd 不是返回 String。
+            try {
+                Mobile.addTunFd(fd.toLong(), TEST_TUN_V4, TEST_TUN_V6, MTU)
+            } catch (e: Exception) {
                 // bridge.AddTunFd 失败时已自行 close(fd)(引擎未跑)或内部处理;这里绝不再关 goFd,
                 // 只回收 App 侧 pfd + 服务端热点。goFd 归零避免误关。
-                Log.e(TAG, "AddTunFd 失败: $addErr")
+                Log.e(TAG, "AddTunFd 失败", e)
                 goFd = -1
                 runCatching { b.stopHotspot() }
                 runCatching { received.close() }
                 pfd = null
-                mainHandler.post { onResult(false, "挂载额外 TUN 失败: $addErr") }
+                mainHandler.post { onResult(false, "挂载额外 TUN 失败: ${e.message}") }
                 return
             }
             active = true
@@ -165,7 +168,8 @@ object HotspotShare {
         active = false
         val fd = goFd
         if (fd > 0) {
-            // RemoveTunFd 幂等;引擎已停(StopRouter 已清 extras)时返回 nil,忽略即可。
+            // RemoveTunFd 幂等;引擎已停(StopRouter 已清 extras)或异常都归 runCatching 吞掉。
+            // gomobile 的 error 是抛 Java 异常,不是返回 String。
             runCatching { Mobile.removeTunFd(fd.toLong()) }
             goFd = -1
         }
