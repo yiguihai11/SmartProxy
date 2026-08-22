@@ -18,7 +18,7 @@
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{--bg:#0b0d14;--surface:#12141e;--surface2:#191c28;--border:#1e2132;--border2:#2a2e42;--text:#d6d9e4;--text2:#7a7f99;--text3:#50546b;--accent:#5b6ef5;--accent-hover:#6d7ff7;--accent-glow:rgba(91,110,245,.25);--green:#3ccf8e;--green-bg:rgba(60,207,142,.1);--yellow:#f5b34b;--yellow-bg:rgba(245,179,75,.1);--red:#f06060;--red-bg:rgba(240,96,96,.1);--radius:12px;--radius-sm:8px;--sidebar-w:240px;--font:"SF Pro","Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans SC",sans-serif;--mono:"SF Mono","JetBrains Mono","Fira Code",monospace;--sat:env(safe-area-inset-top,0px);--sar:env(safe-area-inset-right,0px);--sab:env(safe-area-inset-bottom,0px);--sal:env(safe-area-inset-left,0px)}
-[data-theme="light"]{--bg:#f2f3f7;--surface:#ffffff;--surface2:#f0f1f4;--border:#e0e2e8;--border2:#c4c7d0;--text:#1a1d26;--text2:#6b6f82;--text3:#9ca0b0;--accent:#4a5de0;--accent-hover:#3b4fd0;--accent-glow:rgba(74,93,224,.12);--green:#2dbd7a;--green-bg:rgba(45,189,122,.1);--yellow:#d99a2e;--yellow-bg:rgba(217,154,46,.1);--red:#d94a4a;--red-bg:rgba(217,74,74,.1);--editor-bg:#fafafa}[data-theme="light"] .config-editor{background:var(--editor-bg)!important}
+[data-theme="light"]{--bg:#f2f3f7;--surface:#ffffff;--surface2:#f0f1f4;--border:#e0e2e8;--border2:#c4c7d0;--text:#1a1d26;--text2:#6b6f82;--text3:#9ca0b0;--accent:#4a5de0;--accent-hover:#3b4fd0;--accent-glow:rgba(74,93,224,.12);--green:#2dbd7a;--green-bg:rgba(45,189,122,.1);--yellow:#d99a2e;--yellow-bg:rgba(217,154,46,.1);--red:#d94a4a;--red-bg:rgba(217,74,74,.1);--editor-bg:#fafafa}[data-theme="light"] .config-editor{background:var(--editor-bg)!important}[data-theme="light"] .config-editor .CodeMirror{background:var(--editor-bg);color:var(--text)}[data-theme="light"] .cm-s-default .CodeMirror-gutters{background:var(--editor-bg);border-right-color:var(--border)}[data-theme="light"] .cm-s-default .CodeMirror-linenumber{color:var(--text3)}[data-theme="light"] .cm-s-default .CodeMirror-cursor{border-left-color:var(--text)}[data-theme="light"] .cm-s-default .CodeMirror-selected{background:var(--accent-glow)}[data-theme="light"] .cm-s-default .CodeMirror-activeline-background{background:var(--surface2)}
 html{font-size:14px;-webkit-font-smoothing:antialiased}
 body{font-family:var(--font);background:var(--bg);color:var(--text);display:flex;min-height:100vh;min-height:100dvh;overflow:hidden}
 ::-webkit-scrollbar{width:6px;height:6px}
@@ -112,7 +112,7 @@ tr:last-child td{border-bottom:none}
 .toggle-group{display:flex;gap:4px;margin-bottom:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px;width:fit-content}
 .toggle-btn{padding:5px 14px;border-radius:5px;font-size:.82rem;cursor:pointer;border:none;background:transparent;color:var(--text2);transition:all .15s;font-family:var(--font)}
 .toggle-btn.active{background:var(--accent);color:#fff}
-.config-editor{background:#090b12;border:1px solid var(--border);border-radius:var(--radius-sm);padding:0;width:100%;height:600px;color:var(--text);resize:vertical;overflow:hidden;outline:none}
+.config-editor{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:0;width:100%;height:600px;color:var(--text);resize:vertical;overflow:hidden;outline:none}
 .config-editor .CodeMirror{height:100%;font-family:var(--mono);font-size:.8rem;line-height:1.55}
 .config-actions{display:flex;gap:8px;margin-top:8px}
 .search-input{flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 12px;color:var(--text);font-family:var(--font);font-size:.82rem;outline:none;transition:border-color .15s}
@@ -360,29 +360,53 @@ var DBG=false;
 function log(m){if(DBG)console.log('[SR] '+m)}
 function nv(){return new Date().toLocaleTimeString()}
 function st(id){var e=document.getElementById(id);if(e)e.textContent=nv()}
-function setThemeBtn(theme){
+var _themeMode=localStorage.getItem('sr-theme');
+if(_themeMode!=='light'&&_themeMode!=='dark')_themeMode='auto';
+var _mqDark=window.matchMedia?window.matchMedia('(prefers-color-scheme: dark)'):null;
+function effTheme(){ // 具体生效的主题:auto 态跟随系统 prefers-color-scheme
+  if(_themeMode==='light'||_themeMode==='dark')return _themeMode;
+  return _mqDark&&_mqDark.matches?'dark':'light';
+}
+function applyTheme(){
+  var t=effTheme();
+  document.documentElement.dataset.theme=t;
+  var mc=document.getElementById('theme-color');
+  if(mc)mc.content=t==='light'?'#f2f3f7':'#0b0d14';
+  // 编辑器跟随面板主题(dracula 深色 / default 浅色),已创建的实例即时重设。
+  ['cfg','acl','chn'].forEach(function(k){
+    var cm=window['cm_'+k];
+    if(cm)cm.setOption('theme',t==='light'?'default':'dracula');
+  });
+}
+function setThemeBtn(){
   var btn=document.getElementById('theme-btn');
-  if(btn)btn.innerHTML=(theme==='light'?'🌙':'☀️')+' <span>'+(theme==='light'?'Dark':'Light')+'</span>';
+  if(!btn)return;
+  var map={auto:['🌓','自动'],light:['☀️','浅色'],dark:['🌙','深色']};
+  var m=map[_themeMode];
+  btn.innerHTML=m[0]+' <span>'+m[1]+'</span>';
+  btn.title=_themeMode==='auto'?'跟随系统深浅色,点击切换':'点击切换主题';
 }
 function initTheme(){
-  // 默认恒深色(#0b0d14),不跟随系统深浅色:Android 系统深/浅模式下都是黑面板,
-  // 桌面端同样默认深色。手动点主题按钮切浅色会记住(localStorage),下次仍生效。
-  var saved=localStorage.getItem('sr-theme');
-  var theme=saved||'dark';
-  document.documentElement.dataset.theme=theme;
-  setThemeBtn(theme);
-  var mc=document.getElementById('theme-color');
-  if(mc)mc.content=theme==='light'?'#f2f3f7':'#0b0d14';
+  // 默认「自动」:跟随系统深浅色(iOS/Android/Windows/macOS 浏览器/WebView 均支持
+  // prefers-color-scheme),系统深色→深色面板、浅色→浅色面板,实时监听切换。
+  // 手动点按钮在 自动→浅色→深色 间循环并记住(localStorage);存了显式
+  // light/dark 后不再跟随系统,清掉 sr-theme 即恢复自动。
+  if(_mqDark){
+    var cb=function(){if(_themeMode==='auto')applyTheme()};
+    if(_mqDark.addEventListener)_mqDark.addEventListener('change',cb);
+    else if(_mqDark.addListener)_mqDark.addListener(cb);
+  }
+  syncTheme();
 }
 function toggleTheme(){
-  var cur=document.documentElement.dataset.theme||'dark';
-  var next=cur==='light'?'dark':'light';
-  document.documentElement.dataset.theme=next;
-  localStorage.setItem('sr-theme',next);
-  setThemeBtn(next);
-  var mc=document.getElementById('theme-color');
-  if(mc)mc.content=next==='light'?'#f2f3f7':'#0b0d14';
+  var order=['auto','light','dark'];
+  var idx=order.indexOf(_themeMode);
+  if(idx<0)idx=0;
+  _themeMode=order[(idx+1)%order.length];
+  localStorage.setItem('sr-theme',_themeMode);
+  syncTheme();
 }
+function syncTheme(){applyTheme();setThemeBtn()}
 initTheme();
 
 function fmtNum(n){
@@ -1937,7 +1961,7 @@ function showCfg(i){
     (k==='chn'?'<button class="btn btn-sm" onclick="uploadChn()">Upload</button>':'')+
     (k==='acl'||k==='chn'?'<button class="btn btn-sm" onclick="openFileBrowser(\''+k+'\')">Select File</button>':'')+
     '</div></div>';
-  var opts={value:cfgD[k]||'',theme:'dracula',lineNumbers:k==='cfg',lineWrapping:true,autofocus:false};
+  var opts={value:cfgD[k]||'',theme:effTheme()==='light'?'default':'dracula',lineNumbers:k==='cfg',lineWrapping:true,autofocus:false};
   if(k==='cfg'){opts.mode={name:'javascript',json:true};opts.indentUnit=2;opts.tabSize=2}
   else if(k==='acl'){opts.mode={name:'acl'}}
   window['cm_'+k]=CodeMirror(document.getElementById(k+'-wrap'),opts);
