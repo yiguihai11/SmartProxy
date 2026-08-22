@@ -9,7 +9,6 @@ import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
-import android.net.TetheringManager
 import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
@@ -54,6 +53,7 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
 
         private const val RESULT_OK = 0
         private const val RESULT_INTERNAL_ERROR = -1
+        private const val TETHERING_TYPE_WIFI = 0 // TetheringManager.TETHERING_TYPE_WIFI(该类是 @SystemApi,不能引用)
 
         // 与 v2rayNG AppConfig 完全一致:双栈地址 + v6 DNS hint。
         // TestNetworkManager 会为每个地址族装默认路由;热点要广告 IPv6 上游,
@@ -203,7 +203,7 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
                 step("✗ ⑥ 启动热点需要 Android 13+(当前 ${Build.VERSION.SDK_INT})")
                 return log.toString()
             }
-            val startResult = startWifiTethering(tetheringManager as TetheringManager, TETHERING_START_TIMEOUT_SECONDS)
+            val startResult = startWifiTethering(tetheringManager, TETHERING_START_TIMEOUT_SECONDS)
             step("⑥ startTethering(WIFI) 结果: $startResult (0=OK, 负数/其他=失败码)")
             if (startResult != RESULT_OK) {
                 step("✗ ⑥ 热点启动失败,上游验证跳过")
@@ -245,41 +245,83 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
         }
     }
 
-    /** Android 13+ 公共 API:启动 WiFi 热点,回调里拿到成败码,超时兜底。 */
-    @SuppressLint("NewApi")
-    private fun startWifiTethering(manager: TetheringManager, timeoutSeconds: Long): Int {
+    /**
+     * 启动 WiFi 热点:startTethering(TetheringRequest, Executor, StartTetheringCallback)。
+     * 整个 TetheringManager 类是 @SystemApi,不在公共 android.jar(编译都引用不了),
+     * 所以 TetheringRequest / 回调都走反射 + 动态代理。返回 0=成功,非 0=失败码。
+     * v2rayNG 同思路(stopTethering 也是反射找方法)。
+     */
+    private fun startWifiTethering(manager: Any, timeoutSeconds: Long): Int {
+        val requestClass = runCatching {
+            Class.forName("android.net.TetheringManager\$TetheringRequest")
+        }.getOrNull() ?: run {
+            Log.e(TAG, "找不到 android.net.TetheringManager\$TetheringRequest")
+            return RESULT_INTERNAL_ERROR
+        }
+        val callbackClass = runCatching {
+            Class.forName("android.net.TetheringManager\$StartTetheringCallback")
+        }.getOrNull() ?: run {
+            Log.e(TAG, "找不到 StartTetheringCallback")
+            return RESULT_INTERNAL_ERROR
+        }
+        val startMethod = manager.javaClass.methods.firstOrNull {
+            it.name == "startTethering" &&
+                it.parameterCount == 3 &&
+                it.parameterTypes[0] == requestClass &&
+                it.parameterTypes[1] == Executor::class.java &&
+                it.parameterTypes[2] == callbackClass
+        } ?: run {
+            Log.e(TAG, "TetheringManager 上没有 3 参 startTethering")
+            return RESULT_INTERNAL_ERROR
+        }
+
+        // TetheringRequest = new TetheringManager.TetheringRequest.Builder(TETHERING_TYPE_WIFI).build()
+        val request = runCatching {
+            val builderClass = Class.forName("android.net.TetheringManager\$TetheringRequest\$Builder")
+            val builder = builderClass.getConstructor(Int::class.javaPrimitiveType).newInstance(TETHERING_TYPE_WIFI)
+            builderClass.getMethod("build").invoke(builder)
+        }.getOrNull() ?: run {
+            Log.e(TAG, "构造 TetheringRequest 失败")
+            return RESULT_INTERNAL_ERROR
+        }
+
         var result = RESULT_INTERNAL_ERROR
         val latch = CountDownLatch(1)
-        val executor = Executor { it.run() }
-        try {
-            manager.startTethering(
-                TetheringManager.TetheringRequest.Builder(TetheringManager.TETHERING_TYPE_WIFI).build(),
-                executor,
-                object : TetheringManager.StartTetheringCallback {
-                    override fun onTetheringStarted() {
-                        result = RESULT_OK
-                        latch.countDown()
-                    }
-
-                    override fun onTetheringFailed(error: Int) {
-                        result = error
-                        latch.countDown()
-                    }
-                },
-            )
-        } catch (e: Throwable) {
-            return e.hashCode() and 0x7fffffff // 调用即抛(权限/未实现),返回失败码
+        val callback = java.lang.reflect.Proxy.newProxyInstance(
+            callbackClass.classLoader,
+            arrayOf(callbackClass),
+        ) { _, method, args ->
+            when (method.name) {
+                // API 31+ 的 onTetheringStarted(int result) 带结果码;个别 OEM ROM 走
+                // 旧的无参版,取不到参数就当作 0(成功)兜底。
+                "onTetheringStarted" -> {
+                    result = (args?.firstOrNull() as? Number)?.toInt() ?: RESULT_OK
+                    latch.countDown()
+                }
+                "onTetheringFailed" -> {
+                    result = (args?.firstOrNull() as? Number)?.toInt() ?: RESULT_INTERNAL_ERROR
+                    latch.countDown()
+                }
+                else -> null
+            }
         }
-        return if (latch.await(timeoutSeconds, TimeUnit.SECONDS)) result else RESULT_INTERNAL_ERROR
+
+        return try {
+            startMethod.invoke(manager, request, Executor { it.run() }, callback)
+            if (latch.await(timeoutSeconds, TimeUnit.SECONDS)) result else RESULT_INTERNAL_ERROR
+        } catch (e: Throwable) {
+            Log.e(TAG, "startTethering 调用抛异常", e)
+            e.hashCode() and 0x7fffffff // 调用即抛(权限/未实现),转失败码
+        }
     }
 
-    /** Android 13-15 上 stopTethering(int) 仍是隐藏 API,走反射;16+ 才公开。 */
+    /** stopTethering(int) 在 13-15 仍是隐藏 API(16+ 才公开),走反射;所有版本通用。 */
     private fun stopWifiTethering(manager: Any) {
         runCatching {
             val method = manager.javaClass.methods.firstOrNull {
                 it.name == "stopTethering" && it.parameterTypes.contentEquals(arrayOf(Int::class.javaPrimitiveType))
             } ?: return
-            method.invoke(manager, TetheringManager.TETHERING_TYPE_WIFI)
+            method.invoke(manager, TETHERING_TYPE_WIFI)
         }.onFailure { Log.w(TAG, "stopTethering 失败", it) }
     }
 

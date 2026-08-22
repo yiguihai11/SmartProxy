@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -101,6 +102,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import io.github.yiguihai11.smartproxy.shizuku.TetheringProbe
 import kotlinx.coroutines.launch
+import rikka.shizuku.Shizuku
 
 /**
  * 首页 = 纯启动器(§4.4),UI 参考 Ultimate VPN Free(com.open.hotspot.vpn.free)
@@ -287,6 +289,7 @@ private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme:
     var showDnsDialog by remember { mutableStateOf(false) }
     var showExcludeDialog by remember { mutableStateOf(false) }
     var showServiceModeDialog by remember { mutableStateOf(false) }
+    var showShizukuDialog by remember { mutableStateOf(false) }
 
     // DNS / 排除路由在 establish() 时固化(读 AppPrefs),改了要重建 VpnService 才生效;
     // 两者是 App 层设置,Go watcher 不感知。VPN 在跑则显式重建(SmartProxyVpnService.restart
@@ -316,6 +319,10 @@ private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme:
                 onOpenServiceMode = {
                     scope.launch { drawerState.close() }
                     showServiceModeDialog = true
+                },
+                onOpenShizuku = {
+                    scope.launch { drawerState.close() }
+                    showShizukuDialog = true
                 }
             )
         }
@@ -365,6 +372,9 @@ private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme:
             }
         )
     }
+    if (showShizukuDialog) {
+        ShizukuProbeDialog(onDismiss = { showShizukuDialog = false })
+    }
 }
 
 /** 侧边栏抽屉菜单内容 */
@@ -373,7 +383,8 @@ private fun AppDrawerContent(
     onOpenApps: () -> Unit,
     onOpenDns: () -> Unit,
     onOpenExclude: () -> Unit,
-    onOpenServiceMode: () -> Unit
+    onOpenServiceMode: () -> Unit,
+    onOpenShizuku: () -> Unit
 ) {
     val context = LocalContext.current
     ModalDrawerSheet(
@@ -460,6 +471,13 @@ private fun AppDrawerContent(
                 title = "服务模式",
                 subtitle = "当前: ${serviceModeLabel(AppPrefs.serviceMode(context))}",
                 onClick = onOpenServiceMode
+            )
+
+            // 侧边栏菜单项：Shizuku 实验功能(免 root 热点共享,实验性)。
+            DrawerMenuItem(
+                title = "Shizuku 实验功能",
+                subtitle = "免 root 热点共享 · 实验性",
+                onClick = onOpenShizuku
             )
 
             Spacer(Modifier.weight(1f))
@@ -691,57 +709,6 @@ private fun HomeLauncher(
                 PanelCard(url = panelUrl, auth = adminAuth, onCopy = { url -> copyPanelUrl(context, url) }, onOpen = { url -> openPanel(context, url) })
                 Spacer(Modifier.height(8.dp))
             }
-
-            // ── Shizuku 探针卡(M6 临时入口,验证 iQOO12 隐藏 API;验证完删除)──
-            ShizukuProbeCard(context = context)
-        }
-    }
-}
-
-/** M6 临时探针:跑一遍 ShellContextCompat + TestNetworkManager + setPreferTestNetworks,
- *  结果回显,判断 OriginOS 上免 root 热点共享是否可行。验证完整个卡片删除。 */
-@Composable
-private fun ShizukuProbeCard(context: Context) {
-    var probeResult by remember { mutableStateOf("点「运行」探测隐藏 API 可用性") }
-    var probing by remember { mutableStateOf(false) }
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = CardSurface,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp)
-    ) {
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "Shizuku 探针(临时)",
-                    fontSize = 16.sp,
-                    color = PurpleDark,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.weight(1f)
-                )
-                Button(
-                    onClick = {
-                        probing = true
-                        probeResult = "运行中…(会短暂开关手机热点,最长约 40s)"
-                        TetheringProbe.run(context) { result ->
-                            probing = false
-                            probeResult = result
-                        }
-                    },
-                    enabled = !probing,
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)
-                ) {
-                    Text(if (probing) "运行中…" else "运行")
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = probeResult,
-                fontSize = 12.sp,
-                color = GreyText,
-                lineHeight = 16.sp
-            )
         }
     }
 }
@@ -908,6 +875,121 @@ private fun ServiceModeDialog(
         confirmButton = { TextButton(onClick = { onSave(selected) }) { Text("保存") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
+}
+
+/**
+ * Shizuku 实验功能对话框(M6.1):免 root 热点共享探针。实验性入口,结果回显在对话框里。
+ * 开启流程 = 授权引导 → 运行探针:
+ *  - Shizuku 未运行 → 拉起 moe.shizuku.manager(引导在 Shizuku App 里),没装则打开 GitHub 文档;
+ *  - 已运行未授权 → Shizuku.requestPermission() 弹系统授权框;
+ *  - 都就绪 → 运行 TetheringProbe(短暂开关热点,最长约 40s)。
+ */
+@Composable
+private fun ShizukuProbeDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var probeResult by remember { mutableStateOf("尚未运行探针。") }
+    var probing by remember { mutableStateOf(false) }
+    // 打开/授权/探针之后各刷新一次状态(Shizuku 授权是系统弹窗,回本对话框要重新读)。
+    var statusTick by remember { mutableStateOf(0) }
+    val shizukuStatus = remember(statusTick) {
+        when {
+            !Shizuku.pingBinder() -> "Shizuku 未运行"
+            Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED -> "已就绪(已授权)"
+            else -> "运行中,但未授权"
+        }
+    }
+    fun refreshStatus() { statusTick++ }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text("Shizuku 实验功能")
+                Text("免 root 热点共享 · 实验性", fontSize = 12.sp, color = GreyText)
+            }
+        },
+        text = {
+            Column {
+                Text(
+                    text = "状态: $shizukuStatus",
+                    fontSize = 14.sp,
+                    color = PurpleDark,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = "原理: 通过 Shizuku 借用系统权限,创建测试网络 TUN 并让热点以其为上游,实现免 root 热点共享。当前为验证链路阶段。",
+                    fontSize = 12.sp,
+                    color = GreyText
+                )
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = {
+                        val msg = ShizukuGuideHelper.ensureShizuku(context)
+                        probeResult = msg
+                        refreshStatus()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("授权 / 激活 Shizuku")
+                }
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        probing = true
+                        probeResult = "运行中…(会短暂开关手机热点,最长约 40s)"
+                        TetheringProbe.run(context) { result ->
+                            probing = false
+                            probeResult = result
+                            refreshStatus()
+                        }
+                    },
+                    enabled = !probing,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (probing) "运行中…" else "运行探针")
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = probeResult,
+                    fontSize = 12.sp,
+                    color = GreyText,
+                    lineHeight = 16.sp,
+                    modifier = Modifier
+                        .heightIn(min = 80.dp, max = 260.dp)
+                        .verticalScroll(rememberScrollState())
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } }
+    )
+}
+
+/** Shizuku 授权引导:没运行拉 Shizuku App(没装跳 GitHub 文档),没授权弹系统授权框。 */
+private object ShizukuGuideHelper {
+    const val REQUEST_CODE = 0x53A0
+    private const val SHIZUKU_MANAGER_PACKAGE = "moe.shizuku.manager"
+    private const val SHIZUKU_GUIDE_URL = "https://github.com/RikkaApps/Shizuku"
+
+    fun ensureShizuku(context: Context): String {
+        if (!Shizuku.pingBinder()) {
+            val intent = context.packageManager.getLaunchIntentForPackage(SHIZUKU_MANAGER_PACKAGE)
+            return if (intent != null) {
+                context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                "已拉起 Shizuku App —— 按里面提示启动服务(无线调试 / ADB / root 任选其一),再回到本页点「运行探针」。"
+            } else {
+                context.startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse(SHIZUKU_GUIDE_URL)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+                "未检测到 Shizuku App,已打开 GitHub 文档,请先安装。"
+            }
+        }
+        if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+            runCatching { Shizuku.requestPermission(REQUEST_CODE) }
+            return "已发起 Shizuku 授权请求 —— 请在系统弹窗点允许,再回到本页点「运行探针」。"
+        }
+        return "Shizuku 已就绪(已授权),可以直接运行探针。"
+    }
 }
 
 /** DNS 必须是数字字面量(纯语法校验,不触发 DNS 解析)。拦在保存前:非法地址会让
