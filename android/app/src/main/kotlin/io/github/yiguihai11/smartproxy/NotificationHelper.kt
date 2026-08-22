@@ -86,14 +86,17 @@ object NotificationHelper {
         nm.notify(NOTIFICATION_ID_DISCONNECTED, n)
     }
 
-    /** 启动前台并带 vpn 类型(VpnService 专用类型;manifest 已声明,这里显式传参双保险)。 */
+    /** 启动前台并带 specialUse 类型。注意 `vpn` 不是合法的 manifest 属性 flag
+     *  (AOSP foregroundServiceType 全版本都没有它,FOREGROUND_SERVICE_TYPE_VPN 只是
+     *  运行期常量),v2rayNG 等 VPN 应用一律声明 specialUse + PROPERTY_SPECIAL_USE
+     *  subtype;运行期类型必须与 manifest 声明一致,否则 Android 14+ 抛异常。 */
     fun startForeground(service: Service) {
         ensureChannel(service)
         ServiceCompat.startForeground(
             service,
             NOTIFICATION_ID,
             build(service),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_VPN
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         )
     }
 }

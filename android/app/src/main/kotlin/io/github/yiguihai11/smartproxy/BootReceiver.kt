@@ -14,7 +14,7 @@ import android.net.VpnService
  * - 仅代理(SOCKS5)模式(§8)不建 VpnService,无需 VPN 授权,与 MainActivity 的
  *   启动规则一致,不做 prepare() 检查(否则纯 SOCKS5 用户从未授权
  *   或已撤销时,开机自启会被误杀)。
- * - Android 15 确认 vpn 类型不在 BOOT_COMPLETED 受限 FGS 类型,开机起合法。
+ * - Android 15 确认 specialUse(VPN) 不在 BOOT_COMPLETED 受限 FGS 类型,开机起合法。
  */
 class BootReceiver : BroadcastReceiver() {
 
