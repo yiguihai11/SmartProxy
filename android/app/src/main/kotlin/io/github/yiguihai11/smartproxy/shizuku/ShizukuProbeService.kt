@@ -31,7 +31,7 @@ import java.util.concurrent.TimeoutException
  * Shizuku 用类名反射实例化,必须 @Keep;构造参数是 Context(UserServiceArgs 约定)。
  */
 @Keep
-@SuppressLint("WrongConstant") // TRANSPORT_TEST(7) 是隐藏传输类型,无 public 常量
+@SuppressLint("WrongConstant", "PrivateApi", "DiscouragedPrivateApi")
 class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
 
     companion object {
@@ -46,6 +46,7 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
 
         // 与 v2rayNG SHIZUKU_TUN_ADDR_V4 一致:测试网段,不撞真实流量。
         private const val TUN_ADDR = "192.0.2.2/24"
+        private const val UPSTREAM_INTERFACES_PREFIX = "Current upstream interface(s):"
 
         internal fun createUserServiceArgs(): Shizuku.UserServiceArgs =
             Shizuku.UserServiceArgs(
@@ -56,6 +57,16 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
                 .debuggable(BuildConfig.DEBUG)
                 .version(USER_SERVICE_VERSION)
     }
+
+    /**
+     * LinkAddress(String) 在 SDK stub 里是 package-private(公共 API 只有
+     * InetAddress+prefix 的构造),只能反射实例化。v2rayNG 同款做法。
+     */
+    private fun createLinkAddress(cidr: String): LinkAddress =
+        LinkAddress::class.java.getDeclaredConstructor(String::class.java).run {
+            isAccessible = true
+            newInstance(cidr) as LinkAddress
+        }
 
     override fun probe(): String {
         val log = StringBuilder()
@@ -93,7 +104,7 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
             }
 
             // ③ 建测试网络 TUN(接口名形如 testtun0)
-            val addresses = arrayOf(LinkAddress(TUN_ADDR))
+            val addresses = arrayOf(createLinkAddress(TUN_ADDR))
             val testInterface: Any = try {
                 manager.javaClass.getMethod("createTunInterface", addresses.javaClass)
                     .invoke(manager, addresses as Any)
@@ -130,7 +141,7 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
 
             val properties = LinkProperties().apply {
                 interfaceName = iface
-                setLinkAddresses(listOf(LinkAddress(TUN_ADDR)))
+                setLinkAddresses(listOf(createLinkAddress(TUN_ADDR)))
             }
             try {
                 manager.javaClass.getMethod(
@@ -192,7 +203,7 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
                         ?.invoke(manager, n)
                 }
             }
-            runCatching { cm?.unregisterNetworkCallback(callback) }
+            runCatching { callback?.let { cm?.unregisterNetworkCallback(it) } }
             runCatching { tun?.close() }
             runCatching {
                 tetheringManager?.javaClass
@@ -227,6 +238,4 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
             output.cancel(true)
         }
     }
-
-    private const val UPSTREAM_INTERFACES_PREFIX = "Current upstream interface(s):"
 }

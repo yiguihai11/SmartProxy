@@ -78,6 +78,7 @@ android {
     buildFeatures {
         compose = true
         aidl = true // Shizuku 探针(M6):IShizukuProbe.aidl
+        buildConfig = true // AGP 8 默认关;Shizuku 探针用 BuildConfig.APPLICATION_ID / DEBUG
     }
     packaging {
         jniLibs {
