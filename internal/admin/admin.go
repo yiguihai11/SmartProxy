@@ -268,6 +268,16 @@ func (s *Server) authEnabled() bool {
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The CA download is a public trust anchor (only the public cert, never the
+		// private key): allow it without Basic Auth. On Android, clicking the download
+		// link hands the request to the system DownloadManager, a separate app that
+		// does not share the browser's cached Basic-Auth credentials — behind auth the
+		// download silently 401s. Desktop browsers cache credentials for same-origin
+		// navigations, but exempting it is harmless and consistent everywhere.
+		if r.Method == http.MethodGet && r.URL.Path == "/admin.crt" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if s.authEnabled() {
 			u, p, ok := r.BasicAuth()
 			if !ok || u != s.adminAuth.Username || p != s.adminAuth.Password {

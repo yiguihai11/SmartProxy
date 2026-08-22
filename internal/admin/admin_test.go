@@ -1285,6 +1285,64 @@ func TestAdminCertDownload_NoTLS(t *testing.T) {
 	}
 }
 
+// TestAdminCertDownload_BypassesAuth: the CA cert is a public trust anchor (only the
+// public cert, never the key), so GET /admin.crt must return 200 without Basic Auth even
+// when admin_auth is enabled. Reproduces the Android failure mode: clicking the download
+// link hands the request to the system DownloadManager, a separate app that does not carry
+// the browser's cached Authorization header — behind auth it silently got a 401. Other
+// endpoints stay protected.
+func TestAdminCertDownload_BypassesAuth(t *testing.T) {
+	s := newTestServer(t)
+	s.SetTLS("", "", true)
+	s.SetAdminAuth(&config.AdminAuthConf{Enabled: true, Username: "admin", Password: "secret"})
+	// Grab a free port, then release it for the server to bind (auth enabled → binds all
+	// interfaces; loopback connect still works).
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	s.SetTCPPort(port)
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(s.Stop)
+
+	c := &http.Client{
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		Timeout:   5 * time.Second,
+	}
+	base := fmt.Sprintf("https://127.0.0.1:%d", port)
+
+	// No credentials at all: the CA download must still succeed.
+	resp, err := c.Get(base + "/admin.crt")
+	if err != nil {
+		t.Fatalf("GET /admin.crt: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/admin.crt without auth: status %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !bytes.Contains(body, []byte("BEGIN CERTIFICATE")) {
+		t.Fatal("download body missing PEM certificate")
+	}
+	if bytes.Contains(body, []byte("PRIVATE KEY")) {
+		t.Fatal("download must never contain the private key")
+	}
+
+	// A protected endpoint without credentials must stay 401.
+	resp2, err := c.Get(base + "/version")
+	if err != nil {
+		t.Fatalf("GET /version: %v", err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("/version without auth: status %d, want 401", resp2.StatusCode)
+	}
+}
+
 // TestBuildTLSConfig_ExplicitFiles: configured cert/key PEM paths are loaded.
 func TestBuildTLSConfig_ExplicitFiles(t *testing.T) {
 	dir := t.TempDir()
