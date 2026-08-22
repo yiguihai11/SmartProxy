@@ -359,9 +359,10 @@ function setThemeBtn(theme){
   if(btn)btn.innerHTML=(theme==='light'?'🌙':'☀️')+' <span>'+(theme==='light'?'Dark':'Light')+'</span>';
 }
 function initTheme(){
+  // 默认恒深色(#0b0d14),不跟随系统深浅色:Android 系统深/浅模式下都是黑面板,
+  // 桌面端同样默认深色。手动点主题按钮切浅色会记住(localStorage),下次仍生效。
   var saved=localStorage.getItem('sr-theme');
-  var prefers=window.matchMedia('(prefers-color-scheme:light)').matches?'light':'dark';
-  var theme=saved||prefers;
+  var theme=saved||'dark';
   document.documentElement.dataset.theme=theme;
   setThemeBtn(theme);
   var mc=document.getElementById('theme-color');
@@ -376,15 +377,6 @@ function toggleTheme(){
   var mc=document.getElementById('theme-color');
   if(mc)mc.content=next==='light'?'#f2f3f7':'#0b0d14';
 }
-window.matchMedia('(prefers-color-scheme:light)').addEventListener('change',function(e){
-  if(!localStorage.getItem('sr-theme')){
-    var t=e.matches?'light':'dark';
-    document.documentElement.dataset.theme=t;
-    setThemeBtn(t);
-    var mc=document.getElementById('theme-color');
-    if(mc)mc.content=t==='light'?'#f2f3f7':'#0b0d14';
-  }
-});
 initTheme();
 
 function fmtNum(n){
