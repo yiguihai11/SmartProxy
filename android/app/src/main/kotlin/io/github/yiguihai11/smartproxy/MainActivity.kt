@@ -723,7 +723,7 @@ private fun ShizukuProbeCard(context: Context) {
                 Button(
                     onClick = {
                         probing = true
-                        probeResult = "运行中…(最长约 20s)"
+                        probeResult = "运行中…(会短暂开关手机热点,最长约 40s)"
                         TetheringProbe.run(context) { result ->
                             probing = false
                             probeResult = result

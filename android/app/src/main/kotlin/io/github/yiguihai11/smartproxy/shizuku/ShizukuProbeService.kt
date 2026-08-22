@@ -9,6 +9,8 @@ import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.TetheringManager
+import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.util.Log
@@ -16,18 +18,21 @@ import androidx.annotation.Keep
 import io.github.yiguihai11.smartproxy.BuildConfig
 import rikka.shizuku.Shizuku
 import rikka.shizuku.SystemServiceHelper
+import java.net.InetAddress
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
 /**
- * Shizuku 探针 UserService(M6 骨架,验证 iQOO12/OriginOS 上隐藏 API 可用性)。
+ * Shizuku 探针 UserService(M6.1,验证 iQOO12/OriginOS 上免 root 热点共享整条链路)。
  *
- * 流程 = v2rayNG PR #5903 的截断版:shell Context → TestNetworkManager 建测试网络 TUN →
- * setupTestNetwork 发布 → setPreferTestNetworks(true) → dumpsys 确认上游,逐步行进,
- * 失败点精确回显。全程不接引擎、不放行流量,验证通了再往下做完整热点共享。
+ * 流程 = v2rayNG PR #5903 的截断版:shell Context → TestNetworkManager 建双栈测试网络
+ * TUN → setupTestNetwork 发布 → setPreferTestNetworks(true) → 启动 WiFi 热点 →
+ * 轮询 dumpsys 确认热点上游 = 测试 TUN → 停热点收尾。失败点精确回显,不接引擎、不放流量。
  *
+ * 注意:会短暂开启/关闭手机热点(WiFi 客户端会切换),探测完自动恢复。
  * Shizuku 用类名反射实例化,必须 @Keep;构造参数是 Context(UserServiceArgs 约定)。
  */
 @Keep
@@ -36,16 +41,26 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
 
     companion object {
         private const val TAG = "ShizukuProbe"
-        const val USER_SERVICE_VERSION = 1
+        const val USER_SERVICE_VERSION = 2 // AIDL 行为变了,版本号 +1 让 Shizuku 重启旧进程
 
         private const val TEST_NETWORK_SERVICE = "test_network"
         private const val TETHERING_SERVICE = "tethering"
         private const val TEST_NETWORK_TIMEOUT_SECONDS = 15L
+        private const val TETHERING_START_TIMEOUT_SECONDS = 10L
+        private const val UPSTREAM_POLL_TIMEOUT_SECONDS = 15L
+        private const val UPSTREAM_POLL_INTERVAL_MILLIS = 500L
         private const val DUMPSYS_TIMEOUT_SECONDS = 2L
         private const val TRANSPORT_TEST = 7
 
-        // 与 v2rayNG SHIZUKU_TUN_ADDR_V4 一致:测试网段,不撞真实流量。
-        private const val TUN_ADDR = "192.0.2.2/24"
+        private const val RESULT_OK = 0
+        private const val RESULT_INTERNAL_ERROR = -1
+
+        // 与 v2rayNG AppConfig 完全一致:双栈地址 + v6 DNS hint。
+        // TestNetworkManager 会为每个地址族装默认路由;热点要广告 IPv6 上游,
+        // Android 要求 LinkProperties 里至少有一个 IPv6 DNS server。
+        private const val TUN_ADDR_V4 = "192.0.2.2/24"
+        private const val TUN_ADDR_V6 = "2001:db8:9877::1/64"
+        private const val TUN_DNS_HINT_V6 = "fdfe:dcba:9877::53"
         private const val UPSTREAM_INTERFACES_PREFIX = "Current upstream interface(s):"
 
         internal fun createUserServiceArgs(): Shizuku.UserServiceArgs =
@@ -75,7 +90,7 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
             Log.i(TAG, msg)
         }
 
-        // 逐步状态,供 finally 统一清理;闭包只读不写,判空后可智能转换。
+        // 逐步状态,供 finally 统一清理;闭包只读不写。
         var shellContext: Context? = null
         var manager: Any? = null
         var cm: ConnectivityManager? = null
@@ -85,7 +100,7 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
         var callback: ConnectivityManager.NetworkCallback? = null
 
         try {
-            // ① shell 归属 Context(首个探针点:OriginOS 若收紧 ContextImpl 反射,这里就死)
+            // ① shell 归属 Context(OriginOS 若收紧 ContextImpl 反射,这里就死;首轮已确认可用)
             shellContext = ShellContextCompat.create(context)
             step("✓ ① shellContext 创建成功")
 
@@ -103,8 +118,11 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
                 return log.toString()
             }
 
-            // ③ 建测试网络 TUN(接口名形如 testtun0)
-            val addresses = arrayOf(createLinkAddress(TUN_ADDR))
+            // ③ 建测试网络 TUN:双栈地址(对齐 v2rayNG)
+            val addresses = arrayOf(
+                createLinkAddress(TUN_ADDR_V4),
+                createLinkAddress(TUN_ADDR_V6),
+            )
             val testInterface: Any = try {
                 manager.javaClass.getMethod("createTunInterface", addresses.javaClass)
                     .invoke(manager, addresses as Any)
@@ -121,7 +139,8 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
                 .invoke(testInterface) as String
             step("✓ ③ createTunInterface OK: iface=$iface fd=${tun!!.fd}")
 
-            // ④ 发布为测试网络,等 onAvailable 确认(TRANSPORT_TEST = 7)
+            // ④ 发布为测试网络,等 onAvailable 确认。配双栈地址 + v6 DNS hint,
+            //    否则热点可能不广告 IPv6 上游 → 上游为空(首轮 v4-only 的疑点)。
             val lifetimeToken = SystemServiceHelper.getSystemService(Context.CONNECTIVITY_SERVICE) as IBinder
             val latch = CountDownLatch(1)
             callback = object : ConnectivityManager.NetworkCallback() {
@@ -141,7 +160,8 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
 
             val properties = LinkProperties().apply {
                 interfaceName = iface
-                setLinkAddresses(listOf(createLinkAddress(TUN_ADDR)))
+                setLinkAddresses(listOf(createLinkAddress(TUN_ADDR_V4), createLinkAddress(TUN_ADDR_V6)))
+                setDnsServers(listOf(InetAddress.getByName(TUN_DNS_HINT_V6)))
             }
             try {
                 manager.javaClass.getMethod(
@@ -162,7 +182,7 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
             }
             step("✓ ④ test network 已发布: network=$publishedNetwork")
 
-            // ⑤ 让热点以测试网络为上游(TetheringManager.setPreferTestNetworks)
+            // ⑤ 让热点以测试网络为上游(TetheringManager.setPreferTestNetworks,隐藏 API 走反射)
             tetheringManager = shellContext.getSystemService(TETHERING_SERVICE)
             if (tetheringManager == null) {
                 step("✗ ⑤ tethering 服务不可用")
@@ -175,20 +195,29 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
                 step("✓ ⑤ setPreferTestNetworks(true) 调用成功")
             } catch (e: Throwable) {
                 step("✗ ⑤ setPreferTestNetworks 反射失败: $e")
+                return log.toString()
             }
 
-            // ⑥ dumpsys 确认上游已被保护为测试 TUN(best-effort,OriginOS 输出格式可能不同)
-            val upstream = try {
-                readUpstreamInterfaceName()
-            } catch (e: Throwable) {
-                "读取失败: ${e.message}"
+            // ⑥ 启动 WiFi 热点(公共 API),验证上游选择 —— 探针真正的裁决点
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                step("✗ ⑥ 启动热点需要 Android 13+(当前 ${Build.VERSION.SDK_INT})")
+                return log.toString()
             }
-            step("⑥ 上游接口(dumpsys): $upstream | 期望: $iface")
+            val startResult = startWifiTethering(tetheringManager as TetheringManager, TETHERING_START_TIMEOUT_SECONDS)
+            step("⑥ startTethering(WIFI) 结果: $startResult (0=OK, 负数/其他=失败码)")
+            if (startResult != RESULT_OK) {
+                step("✗ ⑥ 热点启动失败,上游验证跳过")
+                return log.toString()
+            }
+
+            // ⑦ 轮询 dumpsys:热点上游是否 = 测试 TUN
+            val upstream = pollUpstreamInterfaceName(iface, UPSTREAM_POLL_TIMEOUT_SECONDS)
+            step("⑦ 上游接口(dumpsys): $upstream | 期望: $iface")
             val protectedUpstream = upstream != null && upstream.isNotBlank() &&
-                upstream.split(',').map(String::trim).all { it == iface }
+                upstream.split(',').map(String::trim).any { it == iface }
             step(
-                if (protectedUpstream) "✓ ⑦ 热点上游=测试 TUN $iface —— 机制可用,可以接引擎!"
-                else "⚠ ⑦ 上游非测试 TUN(OriginOS 可能需额外处理)"
+                if (protectedUpstream) "✓ ⑧ 热点上游=测试 TUN $iface —— 完整链路打通,可以接引擎!"
+                else "✗ ⑧ 热点已启动但上游仍非 $iface\n   (OriginOS 需适配,原因看上面 dumpsys 值)"
             )
 
             return log.toString()
@@ -196,15 +225,17 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
             step("✗ 未捕获异常: $e")
             return log.toString()
         } finally {
-            // 清理:反注册回调 → teardown → 关 fd → 撤销 prefer。全部 best-effort。
+            // 清理(逆序):先停热点(不然它还在跑在将被撕掉的网络上)→ teardown → 关 fd →
+            // 反注册 → 撤销 prefer。全部 best-effort。
+            if (tetheringManager != null) stopWifiTethering(tetheringManager)
             runCatching {
                 publishedNetwork?.let { n ->
                     manager?.javaClass?.getMethod("teardownTestNetwork", Network::class.java)
                         ?.invoke(manager, n)
                 }
             }
-            runCatching { callback?.let { cm?.unregisterNetworkCallback(it) } }
             runCatching { tun?.close() }
+            runCatching { callback?.let { cm?.unregisterNetworkCallback(it) } }
             runCatching {
                 tetheringManager?.javaClass
                     ?.getMethod("setPreferTestNetworks", Boolean::class.javaPrimitiveType)
@@ -212,6 +243,63 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
             }
             Log.i(TAG, "probe() 清理完成")
         }
+    }
+
+    /** Android 13+ 公共 API:启动 WiFi 热点,回调里拿到成败码,超时兜底。 */
+    @SuppressLint("NewApi")
+    private fun startWifiTethering(manager: TetheringManager, timeoutSeconds: Long): Int {
+        var result = RESULT_INTERNAL_ERROR
+        val latch = CountDownLatch(1)
+        val executor = Executor { it.run() }
+        try {
+            manager.startTethering(
+                TetheringManager.TetheringRequest.Builder(TetheringManager.TETHERING_TYPE_WIFI).build(),
+                executor,
+                object : TetheringManager.StartTetheringCallback {
+                    override fun onTetheringStarted() {
+                        result = RESULT_OK
+                        latch.countDown()
+                    }
+
+                    override fun onTetheringFailed(error: Int) {
+                        result = error
+                        latch.countDown()
+                    }
+                },
+            )
+        } catch (e: Throwable) {
+            return e.hashCode() and 0x7fffffff // 调用即抛(权限/未实现),返回失败码
+        }
+        return if (latch.await(timeoutSeconds, TimeUnit.SECONDS)) result else RESULT_INTERNAL_ERROR
+    }
+
+    /** Android 13-15 上 stopTethering(int) 仍是隐藏 API,走反射;16+ 才公开。 */
+    private fun stopWifiTethering(manager: Any) {
+        runCatching {
+            val method = manager.javaClass.methods.firstOrNull {
+                it.name == "stopTethering" && it.parameterTypes.contentEquals(arrayOf(Int::class.javaPrimitiveType))
+            } ?: return
+            method.invoke(manager, TetheringManager.TETHERING_TYPE_WIFI)
+        }.onFailure { Log.w(TAG, "stopTethering 失败", it) }
+    }
+
+    /** 轮询 dumpsys 直到上游命中期望接口或超时;返回最后一次读到的上游(可能为 null/空)。 */
+    private fun pollUpstreamInterfaceName(expected: String, timeoutSeconds: Long): String? {
+        val deadline = System.currentTimeMillis() + timeoutSeconds * 1000
+        var last: String? = null
+        while (System.currentTimeMillis() < deadline) {
+            last = runCatching { readUpstreamInterfaceName() }.getOrNull()
+            if (last != null && last.isNotBlank() && last.split(',').map(String::trim).any { it == expected }) {
+                return last
+            }
+            try {
+                Thread.sleep(UPSTREAM_POLL_INTERVAL_MILLIS)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                break
+            }
+        }
+        return last
     }
 
     /** dumpsys tethering 里读 "Current upstream interface(s):",2s 超时强杀,防挂死。 */
