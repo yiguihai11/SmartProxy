@@ -3,8 +3,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <!-- API 34+: VpnService runs as a specialUse foreground service. -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 前台服务 vpn 类型(normal 权限,免运行时授权)。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_VPN" />
     <!-- 开机自启(§4.3):BOOT_COMPLETED 受保护广播必须声明权限。 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Android 13+:VPN 保活通知展示需运行时授权(§4.3),启动时申请一次。 -->
@@ -37,17 +37,14 @@
             android:exported="false"
             android:theme="@style/Theme.SmartProxy" />
 
-        <!-- VPN 入口:系统以 BIND_VPN_SERVICE 权限绑定;Android 14+ 需 specialUse 类型。
-             PROPERTY_SPECIAL_USE_FGS_SUBTYPE 是声明用途所必需的。 -->
+        <!-- VPN 入口:系统以 BIND_VPN_SERVICE 权限绑定;前台服务声明 vpn 专用类型
+             (与 VpnService 性质一致,Play 上架无需为 specialUse 额外解释)。
+             Android 15 BOOT_COMPLETED 受限 FGS 类型不含 vpn,开机自启合法。 -->
         <service
             android:name=".SmartProxyVpnService"
             android:exported="false"
             android:permission="android.permission.BIND_VPN_SERVICE"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="vpn" />
-        </service>
+            android:foregroundServiceType="vpn" />
 
         <!-- 开机自启(§4.3):exported=false 仍能收系统广播(BOOT_COMPLETED / 升级重发),
              但对外部 app 关闭。 -->

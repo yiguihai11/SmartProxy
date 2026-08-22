@@ -40,6 +40,14 @@ object NotificationHelper {
     }
 
     fun build(context: Context): Notification {
+        // 点通知正文 → 打开主界面(CLEAR_TOP+SINGLE_TOP:已存在则复用同一实例,
+        // 不清任务栈;requestCode=1 与下方 stop 的 0 区分,避免 PendingIntent 互撞)。
+        val openIntent = Intent(context, MainActivity::class.java)
+            .setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val openPending = PendingIntent.getActivity(
+            context, 1, openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         // 停止按钮:用户主动停止 → 服务静默停(§4.5 userInitiatedStop)。
         val stopIntent = Intent(context, SmartProxyVpnService::class.java)
             .setAction(ACTION_STOP)
@@ -51,6 +59,7 @@ object NotificationHelper {
             .setSmallIcon(R.drawable.ic_stat_vpn)
             .setContentTitle(context.getString(R.string.app_name))
             .setContentText(context.getString(R.string.notification_running))
+            .setContentIntent(openPending)
             .setOngoing(true)
             .setShowWhen(false)
             .addAction(
@@ -77,14 +86,14 @@ object NotificationHelper {
         nm.notify(NOTIFICATION_ID_DISCONNECTED, n)
     }
 
-    /** 启动前台并带 specialUse 类型(API 34+ 必需;manifest 已声明,这里显式传参双保险)。 */
+    /** 启动前台并带 vpn 类型(VpnService 专用类型;manifest 已声明,这里显式传参双保险)。 */
     fun startForeground(service: Service) {
         ensureChannel(service)
         ServiceCompat.startForeground(
             service,
             NOTIFICATION_ID,
             build(service),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_VPN
         )
     }
 }

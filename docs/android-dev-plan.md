@@ -179,16 +179,18 @@ v6 `2400:3200::1`。系统解析器被指到该地址 → 查询被 `0.0.0.0/0`
 
 **前台服务 + 常驻通知(VPN 保活)**:
 
-- FGS 声明(API 34+ 强制类型):`android:foregroundServiceType="specialUse"` +
-  `FOREGROUND_SERVICE_SPECIAL_USE`(normal 权限,免运行时授权)+
-  `<property PROPERTY_SPECIAL_USE_FGS_SUBTYPE value="vpn">` +
+- FGS 声明:VpnService 用专用类型 `android:foregroundServiceType="vpn"` +
+  `FOREGROUND_SERVICE_VPN`(normal 权限,免运行时授权)+
   `android:permission="android.permission.BIND_VPN_SERVICE"`(仅系统可 bind)。
+  (vpn 与 VpnService 性质一致,Play 上架无需为 specialUse 额外解释;类型是编译期常量,
+  老系统自动忽略,minSdk=26 无兼容问题。)
 - `startForegroundService()` 启动,5s 内 `startForeground()`(`ServiceCompat.startForeground(…,
-  FOREGROUND_SERVICE_TYPE_SPECIAL_USE)`);`onStartCommand` 返回 `START_STICKY`。
+  FOREGROUND_SERVICE_TYPE_VPN)`);`onStartCommand` 返回 `START_STICKY`。
 - 通知:`setOngoing(true)` **不可滑动清除**、无清除按钮、免"全部清除";渠道 `IMPORTANCE_LOW`
   (不响铃);Android 13+ 申请 `POST_NOTIFICATIONS` 运行时权限。
 - 通知内容:**极简**——标题(app 名)+ 一行"正在运行",不显示模式 / 已选数量 / 黑名单 / 流量
-  等任何状态信息。通知 action:停止按钮(PendingIntent)(唯一的功能按钮,如需更极简可去掉)。
+  等任何状态信息。通知 action:停止按钮(PendingIntent)(唯一的功能按钮,如需更极简可去掉);
+  通知正文 `contentIntent` → 打开主界面(零视觉成本,与极简原则不冲突)。
 - **保活强化(目标:不被清掉)**:
   - `android:stopWithTask="false"` + `onTaskRemoved` 不 `stopSelf()`(从最近任务划掉不杀服务);
   - `START_STICKY`(系统回收 / 崩溃后系统尝试重启);
@@ -204,7 +206,7 @@ v6 `2400:3200::1`。系统解析器被指到该地址 → 查询被 `0.0.0.0/0`
 - 静态注册 `BOOT_COMPLETED` + `MY_PACKAGE_REPLACED` 接收器(升级后重注册);开机读偏好,开启才继续。
 - 先 `VpnService.prepare()`:`null` = 授权仍在(VPN 授权持久化,重启后有效)→ 直接起服务;
   非 `null` = 授权丢失 → 跳过并提示用户重新授权。
-- **Android 15 已确认**:`specialUse`(VPN)不在 BOOT_COMPLETED 受限 FGS 类型列表
+- **Android 15 已确认**:`vpn` 类型不在 BOOT_COMPLETED 受限 FGS 类型列表
   (`dataSync`/`camera`/`mediaPlayback` 等才受限),开机广播启动 VPN 合法 ✓。
 - 启动走同一套 `startForegroundService` → 通知栏保活接管。
 
