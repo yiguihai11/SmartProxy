@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.ServiceCompat
+import io.github.yiguihai11.smartproxy.shizuku.HotspotShare
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -439,6 +440,16 @@ class SmartProxyVpnService : VpnService() {
             startedEngine = false
         } else {
             Log.i(TAG, "[shutdown] Step 1/6: startedEngine is false, skipping Mobile.stopRouter().")
+        }
+
+        // M7 兜底:热点共享若还开着,停引擎后一并回收(停热点 + teardown 测试 TUN + 拆绑定)。
+        // 顺序在 stopRouter 之后:引擎已关掉额外 TUN(goFd 由 StopRouter 统一收),这里的
+        // removeTunFd 幂等返回 nil,真正干的是让服务端 stopHotspot() 停掉手机热点。
+        // 无活动时 HotspotShare.stop() 内部有守卫,整块是 no-op。
+        if (HotspotShare.isActive()) {
+            Log.i(TAG, "[shutdown] Step 1.5/6: HotspotShare active, stopping it...")
+            runCatching { HotspotShare.stop() }
+            Log.i(TAG, "[shutdown] Step 1.5/6: HotspotShare stopped.")
         }
 
         if (fullTeardown) {

@@ -100,6 +100,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import io.github.yiguihai11.smartproxy.shizuku.HotspotShare
 import io.github.yiguihai11.smartproxy.shizuku.TetheringProbe
 import kotlinx.coroutines.launch
 import rikka.shizuku.Shizuku
@@ -948,6 +949,51 @@ private fun ShizukuProbeDialog(onDismiss: () -> Unit) {
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(if (probing) "运行中…" else "运行探针")
+                }
+                Spacer(Modifier.height(16.dp))
+                // —— 热点共享区(M7):开/关 + 状态。开启需 Shizuku 已就绪 + VPN 先运行。
+                //    状态随 statusTick 重读(HotspotShare.isActive() 在组合期读取,refresh 即刷新)。
+                val hotspotActive = HotspotShare.isActive()
+                var hotspotBusy by remember { mutableStateOf(false) }
+                Text(
+                    text = "热点共享: ${if (hotspotActive) "已开启" else "未开启"}",
+                    fontSize = 14.sp,
+                    color = if (hotspotActive) PurpleDark else GreyText,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = "开启后:手机热点客户端流量走同一套代理。需先开启 VPN,关闭时自动停热点。",
+                    fontSize = 12.sp,
+                    color = GreyText
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        if (hotspotActive) {
+                            HotspotShare.stop()
+                            probeResult = "热点共享已关闭(热点 + 测试 TUN 已回收)。"
+                            refreshStatus()
+                        } else if (!SmartProxyVpnService.isRunning.value) {
+                            probeResult = "请先开启 VPN —— 热点共享需要引擎先运行,才能挂上第二条 TUN。"
+                            refreshStatus()
+                        } else {
+                            hotspotBusy = true
+                            probeResult = "开启中…(建测试 TUN + 开热点 + 挂引擎,最长约 30s)"
+                            HotspotShare.start(context) { ok, msg ->
+                                hotspotBusy = false
+                                probeResult = msg
+                                refreshStatus()
+                            }
+                        }
+                    },
+                    enabled = !hotspotBusy && !probing,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        if (hotspotBusy) "处理中…"
+                        else if (hotspotActive) "关闭热点共享"
+                        else "开启热点共享"
+                    )
                 }
                 Spacer(Modifier.height(12.dp))
                 Text(

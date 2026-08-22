@@ -25,14 +25,18 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
 /**
- * Shizuku 探针 UserService(M6.1,验证 iQOO12/OriginOS 上免 root 热点共享整条链路)。
+ * Shizuku UserService(M6.1 探针 + M7 持久热点共享),跑在 shell UID 进程里,
+ * 借 Shizuku 的系统权限调用隐藏 API(TestNetworkManager / TetheringManager)。
  *
- * 流程 = v2rayNG PR #5903 的截断版:shell Context → TestNetworkManager 建双栈测试网络
- * TUN → setupTestNetwork 发布 → setPreferTestNetworks(true) → 启动 WiFi 热点 →
- * 轮询 dumpsys 确认热点上游 = 测试 TUN → 停热点收尾。失败点精确回显,不接引擎、不放流量。
+ * 两种形态,同一进程内并存:
+ *  - [probe]:一次性冒烟探测(建 test TUN → 开热点 → 确认上游 → teardown),供诊断按钮回显。
+ *  - [startHotspot] / [stopHotspot]:M7 持久共享——建 test TUN + 开热点后**不拆**,把 fd 返回
+ *    App;App 侧 dup+detachFd 喂给 Go 引擎做双 TUN,热点客户端流量进同一套分流/代理。
+ *    停止时机:App 显式 stopHotspot(),或 App 进程死亡(linkToDeath → 自动回收)。
  *
- * 注意:会短暂开启/关闭手机热点(WiFi 客户端会切换),探测完自动恢复。
+ * 注意:startHotspot 会长期开启手机热点(WiFi 客户端会切换),关闭走对话框开关或停 VPN。
  * Shizuku 用类名反射实例化,必须 @Keep;构造参数是 Context(UserServiceArgs 约定)。
+ * AIDL 方法可能从不同 binder 线程并发进入,start/stop/isActive 都 @Synchronized。
  */
 @Keep
 @SuppressLint("WrongConstant", "PrivateApi", "DiscouragedPrivateApi")
@@ -40,7 +44,7 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
 
     companion object {
         private const val TAG = "ShizukuProbe"
-        const val USER_SERVICE_VERSION = 2 // AIDL 行为变了,版本号 +1 让 Shizuku 重启旧进程
+        const val USER_SERVICE_VERSION = 3 // M7:AIDL 新增 startHotspot 族,版本号 +1 让 Shizuku 重启旧进程
 
         private const val TEST_NETWORK_SERVICE = "test_network"
         private const val TETHERING_SERVICE = "tethering"
@@ -58,9 +62,10 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
         // 与 v2rayNG AppConfig 完全一致:双栈地址 + v6 DNS hint。
         // TestNetworkManager 会为每个地址族装默认路由;热点要广告 IPv6 上游,
         // Android 要求 LinkProperties 里至少有一个 IPv6 DNS server。
-        private const val TUN_ADDR_V4 = "192.0.2.2/24"
-        private const val TUN_ADDR_V6 = "2001:db8:9877::1/64"
-        private const val TUN_DNS_HINT_V6 = "fdfe:dcba:9877::53"
+        // App 侧(HotspotShare)直接引用这两个常量,保持 Go 引擎喂参一致,防漂移。
+        const val TUN_ADDR_V4 = "192.0.2.2/24"
+        const val TUN_ADDR_V6 = "2001:db8:9877::1/64"
+        const val TUN_DNS_HINT_V6 = "fdfe:dcba:9877::53"
         private const val UPSTREAM_INTERFACES_PREFIX = "Current upstream interface(s):"
 
         internal fun createUserServiceArgs(): Shizuku.UserServiceArgs =
@@ -73,6 +78,20 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
                 .version(USER_SERVICE_VERSION)
     }
 
+    // —— M7 持久热点共享状态(@Volatile,读写都持方法锁)——
+    @Volatile private var started = false
+    private var shellContext: Context? = null
+    private var manager: Any? = null
+    private var cm: ConnectivityManager? = null
+    private var tunPfd: ParcelFileDescriptor? = null
+    private var hotIfaceName: String? = null
+    private var publishedNetwork: Network? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var tetheringManager: Any? = null
+    private var tetheringStarted = false
+    private var appToken: IBinder? = null
+    private var deathRecipient: IBinder.DeathRecipient? = null
+
     /**
      * LinkAddress(String) 在 SDK stub 里是 package-private(公共 API 只有
      * InetAddress+prefix 的构造),只能反射实例化。v2rayNG 同款做法。
@@ -83,7 +102,187 @@ class ShizukuProbeService(private val context: Context) : IShizukuProbe.Stub() {
             newInstance(cidr) as LinkAddress
         }
 
+    // ════════════════════════ M7 持久热点共享 ════════════════════════
+
+    @Synchronized
+    override fun startHotspot(
+        appToken: IBinder,
+        ifaceName: Array<String?>,
+        error: Array<String?>,
+    ): ParcelFileDescriptor? {
+        // 已启动:直接返回现有 fd。Binder 写 ParcelFileDescriptor 会重新 dup,
+        // 每个调用方都拿到独立 fd,自己负责 close;服务端 tunPfd 不动。
+        if (started) {
+            tunPfd?.let { pfd ->
+                ifaceName[0] = hotIfaceName ?: ""
+                return pfd
+            }
+            error[0] = "状态不一致:started=true 但 tunPfd 为空"
+            return null
+        }
+        // 失败统一出口:写 error + 幂等回收半截状态(started 尚未置位,stopHotspot 也全清)。
+        fun fail(msg: String): ParcelFileDescriptor? {
+            error[0] = msg
+            Log.w(TAG, "startHotspot 失败: $msg")
+            stopHotspot()
+            return null
+        }
+        return try {
+            // ① shell 归属 Context(与探针同路径)
+            val sc = ShellContextCompat.create(context)
+            shellContext = sc
+
+            // ② TestNetworkManager
+            val m = sc.getSystemService(TEST_NETWORK_SERVICE) ?: return fail("test_network 服务不可用")
+            manager = m
+            val cmx = sc.getSystemService(ConnectivityManager::class.java) ?: return fail("ConnectivityManager 不可用")
+            cm = cmx
+
+            // ③ 建测试网络 TUN(双栈,对齐 v2rayNG)
+            val addresses = arrayOf(
+                createLinkAddress(TUN_ADDR_V4),
+                createLinkAddress(TUN_ADDR_V6),
+            )
+            val testInterface: Any = try {
+                m.javaClass.getMethod("createTunInterface", addresses.javaClass)
+                    .invoke(m, addresses as Any)
+            } catch (e: Throwable) {
+                return fail("createTunInterface 反射失败: $e")
+            } ?: return fail("createTunInterface 返回 null")
+            val pfd = testInterface.javaClass.getMethod("getFileDescriptor")
+                .invoke(testInterface) as ParcelFileDescriptor
+            val iface = testInterface.javaClass.getMethod("getInterfaceName")
+                .invoke(testInterface) as String
+            tunPfd = pfd
+            hotIfaceName = iface
+            ifaceName[0] = iface
+
+            // ④ 发布为测试网络,等 onAvailable(配双栈地址 + v6 DNS hint,否则热点不广告 IPv6)
+            val lifetimeToken = SystemServiceHelper.getSystemService(Context.CONNECTIVITY_SERVICE) as IBinder
+            val latch = CountDownLatch(1)
+            val cb = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    if (cmx.getLinkProperties(network)?.interfaceName == iface) {
+                        publishedNetwork = network
+                        latch.countDown()
+                    }
+                }
+            }
+            networkCallback = cb
+            val request = NetworkRequest.Builder()
+                .addTransportType(TRANSPORT_TEST)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED)
+                .build()
+            cmx.registerNetworkCallback(request, cb)
+            val properties = LinkProperties().apply {
+                interfaceName = iface
+                setLinkAddresses(listOf(createLinkAddress(TUN_ADDR_V4), createLinkAddress(TUN_ADDR_V6)))
+                setDnsServers(listOf(InetAddress.getByName(TUN_DNS_HINT_V6)))
+            }
+            try {
+                m.javaClass.getMethod(
+                    "setupTestNetwork",
+                    LinkProperties::class.java,
+                    Boolean::class.javaPrimitiveType,
+                    IBinder::class.java,
+                ).invoke(m, properties, true, lifetimeToken)
+            } catch (e: Throwable) {
+                return fail("setupTestNetwork 反射失败: $e")
+            }
+            if (!latch.await(TEST_NETWORK_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                return fail("test network 发布超时(${TEST_NETWORK_TIMEOUT_SECONDS}s)")
+            }
+
+            // ⑤ 热点以测试网络为上游
+            val tm = sc.getSystemService(TETHERING_SERVICE) ?: return fail("tethering 服务不可用")
+            tetheringManager = tm
+            try {
+                tm.javaClass.getMethod("setPreferTestNetworks", Boolean::class.javaPrimitiveType)
+                    .invoke(tm, true)
+            } catch (e: Throwable) {
+                return fail("setPreferTestNetworks 反射失败: $e")
+            }
+
+            // ⑥ 自动开 WiFi 热点(公共 API 需 Android 13+)
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                return fail("需要 Android 13+ 才能开热点(当前 ${Build.VERSION.SDK_INT})")
+            }
+            val startResult = startWifiTethering(tm, TETHERING_START_TIMEOUT_SECONDS)
+            if (startResult != RESULT_OK) {
+                return fail("startTethering 失败码 $startResult")
+            }
+            tetheringStarted = true
+
+            // ⑦ 最后才 linkToDeath:App 进程死 → 自动回收热点 + test TUN(免泄漏)。
+            val dr = object : IBinder.DeathRecipient {
+                override fun binderDied() {
+                    Log.w(TAG, "App 进程死亡,自动回收热点 + test TUN")
+                    stopHotspot()
+                }
+            }
+            this.appToken = appToken
+            deathRecipient = dr
+            try {
+                appToken.linkToDeath(dr, 0)
+            } catch (e: Throwable) {
+                // linkToDeath 抛 = App 已死/即将死,没人会来 stopHotspot,就地回收。
+                Log.e(TAG, "linkToDeath 失败(App 可能已死),回收", e)
+                return fail("linkToDeath 失败: $e")
+            }
+
+            started = true
+            Log.i(TAG, "startHotspot 成功: iface=$iface fd=${pfd.fd}")
+            pfd
+        } catch (e: Throwable) {
+            Log.e(TAG, "startHotspot 未捕获异常,回收", e)
+            fail("未捕获异常: $e")
+        }
+    }
+
+    /** 幂等停止:停热点 → teardown test network → 关 tunPfd → 反注册 → 撤销 prefer → unlink。 */
+    @Synchronized
+    override fun stopHotspot() {
+        started = false
+        if (tetheringStarted) {
+            runCatching { tetheringManager?.let { stopWifiTethering(it) } }
+            tetheringStarted = false
+        }
+        runCatching {
+            publishedNetwork?.let { n ->
+                manager?.javaClass?.getMethod("teardownTestNetwork", Network::class.java)
+                    ?.invoke(manager, n)
+            }
+        }
+        runCatching { tunPfd?.close() }
+        runCatching { networkCallback?.let { cm?.unregisterNetworkCallback(it) } }
+        runCatching {
+            tetheringManager?.javaClass
+                ?.getMethod("setPreferTestNetworks", Boolean::class.javaPrimitiveType)
+                ?.invoke(tetheringManager, false)
+        }
+        val token = appToken
+        val dr = deathRecipient
+        if (token != null && dr != null) runCatching { token.unlinkToDeath(dr, 0) }
+        // 清全部状态
+        shellContext = null; manager = null; cm = null; tunPfd = null; hotIfaceName = null
+        publishedNetwork = null; networkCallback = null; tetheringManager = null
+        appToken = null; deathRecipient = null
+        Log.i(TAG, "stopHotspot 完成")
+    }
+
+    @Synchronized
+    override fun isHotspotActive(): Boolean = started
+
+    // ════════════════════════ M6.1 一次性探针 ════════════════════════
+
     override fun probe(): String {
+        // 持久热点已开时禁止:探针会再建一条 test TUN + 再开一次热点,且 finally teardown
+        // 会把持久热点的上游一起撕掉。让用户先关热点共享再诊断。
+        if (started) {
+            return "热点共享已开启,请先在对话框关闭热点共享再运行探针。\n" +
+                "(探针与持久共享共用 test TUN 机制,同时跑会互相干扰热点上游)"
+        }
         val log = StringBuilder()
         fun step(msg: String) {
             log.append(msg).append('\n')
