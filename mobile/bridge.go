@@ -131,6 +131,8 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 		// TUN 模式必须同步热更:tunHandler 从自己的 config 指针读 SmartProxy 开关/端口,
 		// 只 Store eng.Config 会让这些改动在 TUN 路径永不生效(仅 SOCKS5 生效)。
 		eng.TUNHandler.ReloadConfig(cfg)
+		// M7 额外 TUN(热点路径)同理由自己的 handler.config 指针读智能分流开关,必须同步。
+		eng.ReloadExtraTUNConfig(cfg)
 		eng.UpstreamMgr.Reload(upstreamCfg)
 
 		// Hot-reload chnroute / ACL when their paths change, so that choosing a
@@ -262,6 +264,39 @@ func IsRunning() bool {
 	engineMu.Lock()
 	defer engineMu.Unlock()
 	return globalEngine != nil
+}
+
+// AddTunFd 给运行中的引擎添加第二路 TUN(Android 测试网络 TUN fd,承载热点客户端
+// 流量)。仅 TUN 模式 + 引擎运行中有效。
+//
+// fd 所有权(Kotlin 侧 dup+detachFd 后交来):从此 Go 持有该 fd 并负责关闭——
+// RemoveTunFd 或 engine.Stop 都会关。失败返回时:
+//   - globalEngine 为 nil(引擎没跑):这里直接 unix.Close(fd),因为 Go 还没接管;
+//   - 引擎已跑但 AddTunFd 失败:不在这里补关,交给 handler.Start 内部路径
+//     (t.Start() 失败会自行 t.Close();仅配置校验失败属于罕见泄漏,见 engine.AddTunFd)。
+func AddTunFd(fd int, v4, v6 string, mtu int) error {
+	slog.Info("[Go-Bridge] AddTunFd called", "fd", fd, "v4", v4, "v6", v6, "mtu", mtu)
+	engineMu.Lock()
+	defer engineMu.Unlock()
+	if globalEngine == nil {
+		if fd > 0 {
+			unix.Close(fd)
+		}
+		return fmt.Errorf("router is not running")
+	}
+	return globalEngine.AddTunFd(fd, v4, v6, mtu)
+}
+
+// RemoveTunFd 停止并关闭之前 AddTunFd 添加的额外 TUN。幂等;引擎已停时返回 nil
+// (StopRouter 的 engine.Stop 已把全部额外 TUN 一并关闭)。
+func RemoveTunFd(fd int) error {
+	slog.Info("[Go-Bridge] RemoveTunFd called", "fd", fd)
+	engineMu.Lock()
+	defer engineMu.Unlock()
+	if globalEngine == nil {
+		return nil
+	}
+	return globalEngine.RemoveTunFd(fd)
 }
 
 // 不导出:gomobile bind 只绑定导出类型。GetStatus 返回 JSON 串,无需把

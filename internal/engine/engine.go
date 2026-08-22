@@ -51,6 +51,25 @@ type Engine struct {
 	// connects spawns an unbounded number of goroutines (one per conn) and exhausts
 	// fds. The accept loop blocks on this before spawning, which throttles accept.
 	clientSem chan struct{}
+
+	// M7 免 root 热点共享:引擎运行时动态增删的第二路 TUN(Android 测试网络 TUN,
+	// 承载热点客户端流量)。与主 TUN 共用同一套 Router/RuleEng/UpstreamMgr/DNSHandler,
+	// 每个额外 TUN 一条独立的 sing-tun gvisor 栈 + 一个独立 TUNHandler。
+	ctx       context.Context // Start 保存的根 ctx,传给额外 handler.Start
+	running   atomic.Bool     // Start 置 true,Stop 置 false,保护 AddTunFd
+	extraMu   sync.Mutex      // 保护 extraTuns
+	extraTuns map[int]*extraTunEntry
+}
+
+// extraTunEntry 是 AddTunFd 添加的第二路 TUN 的完整状态。cfg 保留诊断用
+// (fd/地址只在 Start 时读取,之后不读)。关停顺序固定为 tunDev → tunStack → handler,
+// 与主 TUN 的 engine.Stop 顺序一致。
+type extraTunEntry struct {
+	fd       int
+	cfg      config.TUNConfig
+	tunDev   interface{}
+	tunStack interface{}
+	handler  *tun.TUNHandler
 }
 
 func New(cfg *config.Config, cfgDir string) (*Engine, error) {
@@ -111,6 +130,7 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 		DNSHandler:  dnsHandler,
 		TUNHandler:  tun.NewHandler(cfg, router, ruleEng, upstreamMgr, dnsHandler),
 		clientSem:   make(chan struct{}, maxConcurrentClients),
+		extraTuns:   make(map[int]*extraTunEntry),
 	}
 	eng.Config.Store(cfg)
 	return eng, nil
@@ -122,6 +142,7 @@ const maxConcurrentClients = 1024
 func (e *Engine) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	e.cancel = cancel
+	e.ctx = ctx // 供 AddTunFd 启动额外 TUN handler 使用
 
 	isFdMode := e.Config.Load().TUN.FileDescriptor != 0
 	if isFdMode {
@@ -191,6 +212,7 @@ func (e *Engine) Start(ctx context.Context) error {
 			slog.Warn("admin server failed to start", "socket", sockPath, "error", err)
 		}
 	}
+	e.running.Store(true)
 	return nil
 }
 
@@ -614,9 +636,97 @@ func (e *Engine) handleUDPAssociate(ctx context.Context, conn net.Conn, clientIP
 	udpConn.Close()
 }
 
+// closeExtraTun 按固定顺序关闭一个额外 TUN:先 tunDev(fd,让读循环立即出错退出)
+// 再 gvisor 栈,最后 handler。与主 TUN 的 engine.Stop 顺序一致。
+func (e *Engine) closeExtraTun(en *extraTunEntry) {
+	if en.tunDev != nil {
+		if closer, ok := en.tunDev.(interface{ Close() error }); ok {
+			closer.Close()
+		}
+	}
+	if en.tunStack != nil {
+		if closer, ok := en.tunStack.(interface{ Close() error }); ok {
+			closer.Close()
+		}
+	}
+	if en.handler != nil {
+		en.handler.Close()
+	}
+}
+
+// AddTunFd 在引擎运行期间添加第二路 TUN(Android 测试网络 TUN fd,承载热点客户端
+// 流量),复用同一套 Router/RuleEng/UpstreamMgr/DNSHandler 做分流/代理。
+//
+// fd 所有权:调用方已完成 detachFd,从此 Go 持有该 fd 并负责关闭(RemoveTunFd /
+// engine.Stop)。若 Start 失败这里不 unix.Close(fd):handler.Start 内部失败路径已
+// 自行关闭(t.Start() 失败会 t.Close()),仅 NewTUN 反射前的配置校验失败属于罕见
+// 泄漏——与 mobile/bridge.go StartRouter 的保守处理一致。
+func (e *Engine) AddTunFd(fd int, v4, v6 string, mtu int) error {
+	if !e.running.Load() {
+		return errors.New("engine not running")
+	}
+
+	cfg := config.TUNConfig{
+		Enabled:      true,
+		FileDescriptor: fd,
+		MTU:          mtu,
+		Stack:        "gvisor",
+		AutoRoute:    false,
+	}
+	if v4 != "" {
+		cfg.Inet4Address = []string{v4}
+	}
+	if v6 != "" {
+		cfg.Inet6Address = []string{v6}
+	}
+
+	handler := tun.NewHandler(e.Config.Load(), e.Router, e.RuleEng, e.UpstreamMgr, e.DNSHandler)
+	tunDev, tunStack, err := handler.Start(e.ctx, cfg)
+	if err != nil {
+		handler.Close()
+		return fmt.Errorf("failed to start extra TUN (fd=%d): %w", fd, err)
+	}
+
+	en := &extraTunEntry{fd: fd, cfg: cfg, tunDev: tunDev, tunStack: tunStack, handler: handler}
+	e.extraMu.Lock()
+	e.extraTuns[fd] = en
+	e.extraMu.Unlock()
+	slog.Info("extra TUN started", "fd", fd, "iface", cfg.Name, "v4", v4, "v6", v6, "mtu", mtu)
+	return nil
+}
+
+// RemoveTunFd 停止并关闭之前 AddTunFd 添加的额外 TUN。幂等:不存在则返回 nil。
+func (e *Engine) RemoveTunFd(fd int) error {
+	e.extraMu.Lock()
+	en := e.extraTuns[fd]
+	if en != nil {
+		delete(e.extraTuns, fd)
+	}
+	e.extraMu.Unlock()
+	if en == nil {
+		return nil
+	}
+	e.closeExtraTun(en)
+	slog.Info("extra TUN removed", "fd", fd)
+	return nil
+}
+
+// ReloadExtraTUNConfig 把热重载后的配置同步给所有额外 TUN handler。ReloadConfig
+// 只换原子指针,运行时 handler 只读 SmartProxy.Enabled/Ports(handler.go:180),
+// fd/地址/MTU 只在 Start 时从参数读取,不受影响。漏掉这个调用会让智能分流开关
+// 在热点路径上不生效,所以必须和主 TUNHandler.ReloadConfig 一起调。
+func (e *Engine) ReloadExtraTUNConfig(cfg *config.Config) {
+	e.extraMu.Lock()
+	defer e.extraMu.Unlock()
+	for _, en := range e.extraTuns {
+		en.handler.ReloadConfig(cfg)
+	}
+}
+
 func (e *Engine) Stop() {
 	e.stopOnce.Do(func() {
 		slog.Info("[Go-Engine] Engine.Stop() entered")
+		e.running.Store(false)
 		if e.cancel != nil {
 			slog.Info("[Go-Engine] Cancelling context...")
 			e.cancel()
@@ -629,6 +739,15 @@ func (e *Engine) Stop() {
 			slog.Info("[Go-Engine] Closing listener...")
 			e.listener.Close()
 		}
+		// M7 额外 TUN(热点 test TUN)先于主 TUN 关闭:热点上游先消失,避免 tethering
+		// 悬空引用即将被删的测试网络。
+		e.extraMu.Lock()
+		for _, en := range e.extraTuns {
+			slog.Info("[Go-Engine] Closing extra TUN", "fd", en.fd)
+			e.closeExtraTun(en)
+		}
+		e.extraTuns = make(map[int]*extraTunEntry)
+		e.extraMu.Unlock()
 		// 先关 tunDev(即 fd 模式下的 establish fd / 桌面 tun0)再关 gvisor 栈:
 		// VPN 连接第一时间终止 → Android 状态栏图标立刻消失;fd 先关也让栈的读循环
 		// 立即出错退出,剩余 drain 更快,避免"点击关闭后好几秒图标才消失"。连接直接
