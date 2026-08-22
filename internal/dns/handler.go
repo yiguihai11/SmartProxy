@@ -173,8 +173,13 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 		return cached
 	}
 
-	// Coalesce concurrent queries: when the same domain and type are requested simultaneously, query only once
-	key := qname + "|" + strconv.Itoa(int(qtype))
+	// Coalesce concurrent queries: same domain|type AND same target DNS server requested
+	// simultaneously → query once. targetIP/targetPort must be part of the key: the query
+	// branch (private-direct / domestic / foreign) and the answer both depend on which DNS
+	// server the client asked, so coalescing across different servers would answer one
+	// client with the other server's result — and the private branch could even send a
+	// public-IP query direct (bypassing the proxy) or a private one via proxy.
+	key := qname + "|" + strconv.Itoa(int(qtype)) + "|" + targetIP + "|" + strconv.Itoa(targetPort)
 	result, err, _ := h.group.Do(key, func() (interface{}, error) {
 		// P1#13: the merged query must not ride the first caller's connection ctx.
 		// singleflight fans this fn out to every concurrent requester for the same

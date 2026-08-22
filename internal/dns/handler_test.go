@@ -664,6 +664,123 @@ func TestHandleDNS_ForeignFailureAnswersSERVFAIL(t *testing.T) {
 	}
 }
 
+// startBarrierDNSServer is a UDP DNS server that holds each query in flight (blocking
+// until release is closed) after signaling on got, so a test can prove two concurrent
+// HandleDNS calls genuinely overlap. stop cancels a pending hold so a failing test never
+// deadlocks on a server goroutine wedged in the barrier.
+func startBarrierDNSServer(t *testing.T, answer string, got chan<- struct{}, release <-chan struct{}) (*net.UDPAddr, func()) {
+	t.Helper()
+	srv, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen barrier DNS server: %v", err)
+	}
+	stopCh := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		buf := make([]byte, 512)
+		for {
+			n, addr, err := srv.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			req := new(dns.Msg)
+			if err := req.Unpack(buf[:n]); err != nil || len(req.Question) == 0 {
+				continue
+			}
+			select {
+			case got <- struct{}{}:
+			default:
+			}
+			// Hold the query in flight so the two HandleDNS calls overlap; a coalesced
+			// query would never reach the second server and the test would time out.
+			select {
+			case <-release:
+			case <-stopCh:
+				return
+			}
+			resp := new(dns.Msg)
+			resp.SetReply(req)
+			resp.Answer = append(resp.Answer, &dns.A{
+				Hdr: dns.RR_Header{Name: req.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+				A:   net.ParseIP(answer),
+			})
+			wire, err := resp.Pack()
+			if err != nil {
+				continue
+			}
+			srv.WriteToUDP(wire, addr)
+		}
+	}()
+	stop := func() {
+		close(stopCh)
+		srv.Close()
+		<-done
+	}
+	return srv.LocalAddr().(*net.UDPAddr), stop
+}
+
+// TestHandleDNS_SingleflightKeyIncludesTarget is a regression pin for the cross-target
+// coalescing bug: the singleflight key used to be qname|qtype only, so two concurrent
+// queries for the same domain via DIFFERENT DNS servers were merged into one upstream
+// query answered by the first caller's server (and the private/domestic/foreign branch
+// was decided by that first caller's targetIP). Each target must get its own query and
+// its own answer.
+func TestHandleDNS_SingleflightKeyIncludesTarget(t *testing.T) {
+	release := make(chan struct{})
+	got := make(chan struct{}, 2)
+
+	srvA, stopA := startBarrierDNSServer(t, "10.1.1.1", got, release)
+	defer stopA()
+	srvB, stopB := startBarrierDNSServer(t, "10.2.2.2", got, release)
+	defer stopB()
+
+	// 127.0.0.1 is loopback → private-direct branch (no manager needed).
+	cn := chnroute.New()
+	h := NewHandler(100, 60, "", "", cn, nil, 3, "0.0.0.0", "::", false, PreferNone, nil, true)
+
+	query := buildTestDNSQuery("example.com", dns.TypeA)
+	results := make(chan []byte, 2)
+	go func() { results <- h.HandleDNS(context.Background(), query, "127.0.0.1", srvA.Port, nil) }()
+	go func() { results <- h.HandleDNS(context.Background(), query, "127.0.0.1", srvB.Port, nil) }()
+
+	// Both servers must receive their own query before we release them.
+	for i := 0; i < 2; i++ {
+		select {
+		case <-got:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("server %d never got its query — singleflight coalesced across targets", i)
+		}
+	}
+	close(release)
+
+	seen := map[string]int{}
+	for i := 0; i < 2; i++ {
+		resp := <-results
+		if resp == nil {
+			t.Fatal("nil DNS response")
+		}
+		msg := new(dns.Msg)
+		if err := msg.Unpack(resp); err != nil {
+			t.Fatalf("unpack response: %v", err)
+		}
+		var gotIP string
+		for _, rr := range msg.Answer {
+			if a, ok := rr.(*dns.A); ok {
+				gotIP = a.A.String()
+				break
+			}
+		}
+		if gotIP == "" {
+			t.Fatalf("response has no A record")
+		}
+		seen[gotIP]++
+	}
+	if seen["10.1.1.1"] != 1 || seen["10.2.2.2"] != 1 {
+		t.Fatalf("each target must get its own server's answer, got %v", seen)
+	}
+}
+
 func TestHandleDNS_Disabled(t *testing.T) {
 	cn := chnroute.New()
 	h := NewHandler(100, 60, "", "", cn, nil, 3, "0.0.0.0", "::", false, PreferNone, nil, false)

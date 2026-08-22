@@ -122,14 +122,12 @@ func (s *Server) Start() error {
 		go s.server.Serve(ln)
 	}
 
-	// Refresh process stats every 30 seconds (to avoid triggering STW on every SSE push)
+	// Refresh process stats every statsRefreshInterval (30s), NOT refreshInt: ReadMemStats
+	// stop-the-worlds, so sampling it at the 3s SSE push rate would STW the proxy 20×/min
+	// with nothing but a display number to show for it. SSE reads the cached snapshot.
 	s.refreshStats()
 	safego.Go("admin.statsRefresher", func() {
-		interval := s.refreshInt
-		if interval < 1 {
-			interval = 3
-		}
-		ticker := time.NewTicker(time.Duration(interval) * time.Second)
+		ticker := time.NewTicker(statsRefreshInterval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -304,6 +302,13 @@ const (
 	adminIdleTimeout       = 90 * time.Second
 	adminWriteTimeout      = 60 * time.Second
 	adminReadTimeout       = 30 * time.Second
+
+	// statsRefreshInterval is the cadence for refreshStats (runtime.ReadMemStats, which
+	// stop-the-worlds briefly). It deliberately does NOT follow SetRefreshInterval (default
+	// 3s): that interval exists for SSE pushes, and pushing cached stats every 3s does not
+	// need a fresh MemStats each time. 30s keeps the STW to twice a minute and makes the
+	// CPU% delta window more stable than a 3s one.
+	statsRefreshInterval = 30 * time.Second
 )
 
 // limitBody caps request bodies for every route, whether it uses io.ReadAll or
