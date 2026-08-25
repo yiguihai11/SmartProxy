@@ -1,5 +1,6 @@
 package io.github.yiguihai11.smartproxy
 
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -70,7 +71,7 @@ import java.util.Locale
  *  - 流量模式:仅代理(白名单)/ 仅绕过(黑名单,默认)两选一
  *  - 应用列表:行内 tab(全部/用户/系统)+ 搜索 + 方形图标 + label/pkg/uid +
  *    勾选框 + 状态角标(仅代理下勾选=绿"仅代理",仅绕过下勾选=红"已排除",
- *    拦截=红"已拦截")+「禁止联网」拦截按钮(仅绕过模式,§5 第一期)
+ *    拦截=红"已拦截联网")+「禁止联网」拦截按钮(仅绕过模式,§5 第一期,API 29+ 才显示)
  *  - 排序:已选优先,其余按拼音 label(Collator CHINA,§8#1)
  *  - 保存:sockstun 式返回自动保存(onDestroy 批写 AppPrefs),不自动重启,
  *    改动在下次连接生效;UI 底部有提示。
@@ -169,6 +170,15 @@ private val AppSelectionColors get() =
     if (ThemeState.isDark) darkColorScheme(primary = PurpleText)
     else lightColorScheme(primary = PurpleText)
 
+/** 排序优先级(数字越小越靠前):选中∩拦截 > 选中 > 拦截 > 其余。
+ *  仅代理模式拦截集恒空,此函数自然退化为「选中优先」。 */
+private fun blockSortRank(selected: Set<String>, blocked: Set<String>, pkg: String): Int = when {
+    pkg in selected && pkg in blocked -> 0
+    pkg in selected -> 1
+    pkg in blocked -> 2
+    else -> 3
+}
+
 @Composable
 private fun AppSelectionScreen(
     mode: Boolean,
@@ -196,11 +206,13 @@ private fun AppSelectionScreen(
         loaded = true
     }
 
-    // 已选优先,其余按拼音 label 排序(§8#1)。排序基准 = 进入页面时的勾选态(§8#2:
-    // 勾选后不实时置顶,避免列表跳动打断连续勾选,sockstun 同款)。
+    // 排序基准 = 进入页面时的勾选/拦截态(§8#2:勾选后不实时置顶,避免列表跳动打断
+    // 连续勾选,sockstun 同款)。优先级(§5 二期):选中∩拦截 > 选中 > 拦截 > 其余,
+    // 同 tier 按拼音(§8#1)。仅代理模式拦截集恒空,自然退化为「选中优先」。
     val initialSelected = remember { selected }
+    val initialBlocked = remember { blocked }
     val collator = remember { Collator.getInstance(Locale.CHINA) }
-    val visible = remember(allApps, tab, query, initialSelected) {
+    val visible = remember(allApps, tab, query, initialSelected, initialBlocked) {
         val q = query.trim().lowercase()
         allApps
             .filter { a ->
@@ -212,10 +224,10 @@ private fun AppSelectionScreen(
                 tabOk && (q.isEmpty() || a.label.lowercase().contains(q) || a.pkg.lowercase().contains(q))
             }
             .sortedWith { a, b ->
-                val sa = initialSelected.contains(a.pkg)
-                val sb = initialSelected.contains(b.pkg)
+                val ra = blockSortRank(initialSelected, initialBlocked, a.pkg)
+                val rb = blockSortRank(initialSelected, initialBlocked, b.pkg)
                 when {
-                    sa != sb -> if (sa) -1 else 1
+                    ra != rb -> ra.compareTo(rb)
                     else -> collator.compare(a.label, b.label)
                 }
             }
@@ -224,6 +236,10 @@ private fun AppSelectionScreen(
     // 角标语义随模式翻转:仅代理=绿"仅代理",仅绕过=红"已排除"(sockstun 同款)。
     val proxyMode = !mode
     val modeLabel = if (proxyMode) "仅代理" else "仅绕过"
+
+    // 「禁止联网」只在 API 29+ 可用(getConnectionOwnerUid 唯一重载的起点);
+    // 低于此隐藏全部相关 UI(按钮/白名单提示/统计),不误导用户。
+    val blockSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
 
     // 流量模式卡随列表滚动收起:滚离顶部(>48px)隐藏,回到顶部再显示(§5 UX)。
     // 搜索 / tab / 统计条保持固定,过滤随时可用;只有模式卡让出屏幕空间。
@@ -288,8 +304,8 @@ private fun AppSelectionScreen(
                                 color = GreyText
                             )
                             // §5 第一期:禁止联网仅在仅绕过(黑名单)模式提供;白名单模式隐藏
-                            // 拦截入口并说明原因。
-                            if (proxyMode) {
+                            // 拦截入口并说明原因;API<29 整段隐藏。
+                            if (proxyMode && blockSupported) {
                                 Spacer(Modifier.height(6.dp))
                                 Text(
                                     "仅代理模式不支持「禁止联网」拦截,请切换至「仅绕过」模式",
@@ -332,7 +348,7 @@ private fun AppSelectionScreen(
             Text(
                 buildString {
                     append("共 ${allApps.size} · 显示 ${visible.size} · 已选 ${selected.size}（$modeLabel）")
-                    if (mode) append(" · 已拦截 ${blocked.size}")
+                    if (mode && blockSupported) append(" · 已拦截 ${blocked.size}")
                 },
                 fontSize = 12.sp,
                 color = GreyText
@@ -359,7 +375,7 @@ private fun AppSelectionScreen(
                             app = app,
                             checked = selected.contains(app.pkg),
                             blocked = blocked.contains(app.pkg),
-                            blockable = mode,
+                            blockable = mode && blockSupported,
                             proxyMode = proxyMode,
                             onToggle = onToggle,
                             onToggleBlock = onToggleBlock
@@ -383,7 +399,7 @@ private fun AppSelectionScreen(
 }
 
 /** 应用行:方形图标 + label/pkg·uid + 状态角标 + 拦截按钮 + 勾选框;整行可点切换。
- *  §5 三态:仅绕过模式下可勾选(已排除)或拦截(已拦截),二者互斥;拦截优先级更高。
+ *  §5 三态:仅绕过模式下可勾选(已排除)或拦截(已拦截联网),二者互斥;拦截优先级更高。
  *  blockable=false(仅代理/白名单)时隐藏拦截按钮。 */
 @Composable
 private fun AppRow(
@@ -449,7 +465,7 @@ private fun AppRow(
             ) {
                 Text(
                     when {
-                        blocked -> "已拦截"
+                        blocked -> "已拦截联网"
                         proxyMode -> "仅代理"
                         else -> "已排除"
                     },
