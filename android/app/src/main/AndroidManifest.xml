@@ -39,7 +39,7 @@
             android:exported="false"
             android:theme="@style/Theme.SmartProxy" />
 
-        <!-- 日志查看页(Logcat):App 内启动,不导出。读自身进程日志(--pid)无需 READ_LOGS。 -->
+        <!-- 日志查看页(Logcat):App 内启动,不导出。读自身进程日志按 pid 过滤,无需 READ_LOGS。 -->
         <activity
             android:name=".LogcatActivity"
             android:exported="false"
