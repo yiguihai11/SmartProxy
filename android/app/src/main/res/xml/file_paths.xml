@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider 可暴露路径:仅 cacheDir/shared_logs(日志分享导出临时文件用)。 -->
+<paths>
+    <cache-path name="shared_logs" path="shared_logs/" />
+</paths>
