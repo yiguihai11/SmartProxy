@@ -25,7 +25,27 @@ var (
 	engineMu      sync.Mutex
 	cancelFunc    context.CancelFunc
 	routerWatcher *config.Watcher
+	uidResolver   UIDResolver
 )
+
+// UIDResolver 让 Go TUN 路径按连接反查所属 app UID(per-app「禁止联网」拦截)。
+// gomobile 会把该接口绑定成 Java 接口,Kotlin 侧实现并回注册:
+//
+//	Mobile.setUIDResolver(UIDResolver)
+//
+// proto: 6=TCP, 17=UDP;四元组即连接两端地址。返回 UID,未知返回 -1。
+// 实现见 Android UIDResolver.kt(API29+ ConnectivityManager.getConnectionOwnerUid,
+// API26-28 回退 /proc/net 解析)。
+type UIDResolver interface {
+	ResolveUID(proto int32, localIP string, localPort int32, remoteIP string, remotePort int32) int32
+}
+
+// SetUIDResolver 注册 UID 反查回调(Android 侧 establish 前调用一次;可重复调用覆盖)。
+// StartRouter 启动引擎时把它注入 TUN handler。
+func SetUIDResolver(r UIDResolver) {
+	uidResolver = r
+	slog.Info("[Go-Bridge] SetUIDResolver called", "set", r != nil)
+}
 
 // Android→Go 反向桥已删除(2026-08,停 VPN 后图标赖着不掉排查):configReload 曾经
 // AndroidBridge.Vpn("restart") 触发 Android 侧自动重启,但该异步重启循环存在竞态——
@@ -63,9 +83,11 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 	// 与桌面 main.go 一致:slog 输出同时进 logbuf.Default 环形缓冲,纯 Go 面板的
 	// Logs 页(GET /logs)才能读到;否则 logbuf 恒空,面板显示 "No logs available"。
 	// 包装会转发到 stdout(logcat GoLog tag 不受影响)。
+	// Level=Debug:App 侧 Logcat 页要求"详细到调试级别",TUN 热路径的连接级日志
+	// (NewConnectionEx 的 slog.Debug)也一并可见。
 	slog.SetDefault(slog.New(logbuf.NewSlogHandlerLevel(
-		slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}),
-		logbuf.Default, slog.LevelInfo,
+		slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}),
+		logbuf.Default, slog.LevelDebug,
 	)))
 
 	// 服务模式(Android §8):tunEnabled=false = 仅代理(SOCKS5)——不建 TUN 隧道,只跑
@@ -87,6 +109,16 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 	if err != nil {
 		slog.Error("[Go-Bridge] StartRouter failed to create engine", "error", err)
 		return closeFdOnErr(err)
+	}
+
+	// 注入 UID 反查回调(per-app「禁止联网」):Kotlin 侧 establish 前 setUIDResolver 注册,
+	// TUN handler 按连接回问 Android 连接所属 UID,命中 config.tun.blocked_uids 即拦截。
+	// nil(桌面端/未注册)= 功能关闭,不影响其它路径。
+	if uidResolver != nil {
+		res := uidResolver
+		eng.SetUIDResolver(func(proto int32, localIP string, localPort int32, remoteIP string, remotePort int32) int32 {
+			return res.ResolveUID(proto, localIP, localPort, remoteIP, remotePort)
+		})
 	}
 
 	// 纯 Go 面板机制(与 cmd/smartproxy/main.go L138-233 对齐):面板 PUT /config

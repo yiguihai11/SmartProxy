@@ -334,6 +334,10 @@ private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme:
                 onOpenServiceMode = {
                     scope.launch { drawerState.close() }
                     showServiceModeDialog = true
+                },
+                onOpenLogcat = {
+                    scope.launch { drawerState.close() }
+                    context.startActivity(Intent(context, LogcatActivity::class.java))
                 }
             )
         }
@@ -391,7 +395,8 @@ private fun AppDrawerContent(
     onOpenApps: () -> Unit,
     onOpenDns: () -> Unit,
     onOpenExclude: () -> Unit,
-    onOpenServiceMode: () -> Unit
+    onOpenServiceMode: () -> Unit,
+    onOpenLogcat: () -> Unit
 ) {
     val context = LocalContext.current
     ModalDrawerSheet(
@@ -478,6 +483,13 @@ private fun AppDrawerContent(
                 title = "服务模式",
                 subtitle = "当前: ${serviceModeLabel(AppPrefs.serviceMode(context))}",
                 onClick = onOpenServiceMode
+            )
+
+            // 侧边栏菜单项：日志查看(本进程 logcat,Debug 级)
+            DrawerMenuItem(
+                title = "日志查看",
+                subtitle = "程序运行日志 (Debug 级)",
+                onClick = onOpenLogcat
             )
 
             Spacer(Modifier.weight(1f))

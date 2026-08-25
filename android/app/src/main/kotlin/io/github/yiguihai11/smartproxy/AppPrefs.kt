@@ -20,6 +20,7 @@ object AppPrefs {
     private const val NAME = "smartproxy_prefs"
     private const val KEY_GLOBAL_MODE = "global_mode"
     private const val KEY_SELECTED_APPS = "selected_apps"
+    private const val KEY_BLOCKED_APPS = "blocked_apps"
     private const val KEY_BOOT_AUTO_START = "boot_auto_start"
     private const val KEY_DNS_V4 = "custom_dns_v4"
     private const val KEY_DNS_V6 = "custom_dns_v6"
@@ -51,6 +52,15 @@ object AppPrefs {
 
     fun setSelectedApps(context: Context, apps: Set<String>) {
         sp(context).edit().putStringSet(KEY_SELECTED_APPS, apps).apply()
+    }
+
+    /** 「禁止联网」拦截的应用包名列表(仅仅绕过/黑名单模式可用,白名单模式 UI 禁用)。
+     *  与 selectedApps 互斥(拦截优先);establish 时解析成 UID 写 tun.blocked_uids。 */
+    fun blockedApps(context: Context): Set<String> =
+        sp(context).getStringSet(KEY_BLOCKED_APPS, emptySet()) ?: emptySet()
+
+    fun setBlockedApps(context: Context, apps: Set<String>) {
+        sp(context).edit().putStringSet(KEY_BLOCKED_APPS, apps).apply()
     }
 
     /** 启动注入的 IPv4 DNS 服务器(默认 223.5.5.5)。 */

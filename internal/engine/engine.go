@@ -116,6 +116,12 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 	return eng, nil
 }
 
+// SetUIDResolver 把 Android 侧的 UID 反查回调透传给 TUN handler(mobile 包注入,
+// 供 per-app「禁止联网」拦截使用)。nil 时功能关闭。
+func (e *Engine) SetUIDResolver(f tun.UIDResolverFunc) {
+	e.TUNHandler.SetUIDResolver(f)
+}
+
 // maxConcurrentClients bounds the SOCKS5 client handler goroutines (see clientSem).
 const maxConcurrentClients = 1024
 

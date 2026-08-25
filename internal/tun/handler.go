@@ -34,12 +34,22 @@ import (
 	"smartproxy/internal/upstream"
 )
 
+// UIDResolverFunc asks the Android side which app UID owns a connection (per-app
+// "禁止联网"). proto: 6=TCP, 17=UDP. Returns the UID, or -1 if unknown/unresolvable.
+// mobile 包把 gomobile 的 UIDResolver 接口适配成这个函数闭包注入进来(见 mobile/bridge.go),
+// 避免 internal 包反向依赖 mobile(gomobile 绑定包)。
+type UIDResolverFunc func(proto int32, localIP string, localPort int32, remoteIP string, remotePort int32) int32
+
 type TUNHandler struct {
 	config      atomic.Pointer[config.Config]
 	router      *route.Router
 	ruleEng     *rules.Engine
 	upstreamMgr *upstream.Manager
 	dnsHandler  *dns.Handler
+
+	// uidResolver 反向回调(Android 侧实现):按连接反查所属 app UID,命中
+	// config.TUN.BlockedUIDs 即拦截。startRouter 时注入一次,之后只读。
+	uidResolverFn atomic.Pointer[UIDResolverFunc]
 
 	udpSessions   sync.Map
 	cleanerOnce   sync.Once
@@ -132,6 +142,40 @@ func (h *TUNHandler) ReloadConfig(cfg *config.Config) {
 	h.config.Store(cfg)
 }
 
+// SetUIDResolver 注入 UID 反查回调(mobile 包在 StartRouter 后调用一次)。nil 表示
+// 桌面端 / 未注册,isUIDBlocked 恒返回 false(功能关闭),不影响其它路径。
+func (h *TUNHandler) SetUIDResolver(f UIDResolverFunc) {
+	if f == nil {
+		h.uidResolverFn.Store(nil)
+		return
+	}
+	h.uidResolverFn.Store(&f)
+}
+
+// isUIDBlocked 判断连接是否属于被「禁止联网」的应用:先查 config.TUN.BlockedUIDs(空 = 关),
+// 再经 Android 回调反查连接所属 UID。解析失败 / 无回调返回 false(放行),避免把系统或
+// 引擎自身流量误拦;只有明确命中已配置 UID 才拦截。
+func (h *TUNHandler) isUIDBlocked(proto int32, source, destination M.Socksaddr) bool {
+	cfg := h.config.Load()
+	if len(cfg.TUN.BlockedUIDs) == 0 {
+		return false
+	}
+	fn := h.uidResolverFn.Load()
+	if fn == nil {
+		return false
+	}
+	uid := (*fn)(proto, source.Addr.String(), int32(source.Port), destination.Addr.String(), int32(destination.Port))
+	if uid <= 0 {
+		return false // -1 未知 / 0 系统进程,不放行黑名单拦截语义下误伤
+	}
+	for _, b := range cfg.TUN.BlockedUIDs {
+		if b == uid {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *TUNHandler) PrepareConnection(network string, source M.Socksaddr, destination M.Socksaddr, routeContext singtun.DirectRouteContext, timeout time.Duration) (singtun.DirectRouteDestination, error) {
 	return nil, nil
 }
@@ -171,6 +215,16 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 		} else {
 			conn.Close()
 		}
+		if onClose != nil {
+			onClose(nil)
+		}
+		return
+	}
+	if h.isUIDBlocked(6, source, destination) {
+		slog.Info("TUN blocked UID by per-app rule", "src", source, "dst", destination)
+		// 复用现有 block 模式:80/443 SetLinger(0)→RST,其余直接 Close(gvisor 半握手关闭
+		// 同样发 RST),被拦应用立刻看到连接被拒,而不是黑洞卡死。
+		netutil.SendEnhancedBlock(conn, port)
 		if onClose != nil {
 			onClose(nil)
 		}
@@ -298,6 +352,17 @@ func (h *TUNHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketCon
 				onClose(nil)
 			}
 		})
+		return
+	}
+
+	// 禁止联网:53 端口先放给 DNS 管线(被拦应用能解析、但数据连不上 → 直观的"无网络"),
+	// 其余 UDP 命中已拦 UID 直接丢,不建会话不转发。
+	if h.isUIDBlocked(17, source, destination) {
+		slog.Info("TUN blocked UID by per-app rule", "src", source, "dst", destination)
+		conn.Close()
+		if onClose != nil {
+			onClose(nil)
+		}
 		return
 	}
 

@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -68,7 +69,8 @@ import java.util.Locale
  * 应用选择页(§5 应用内化,替代 Web 面板的流量模式+应用选择):
  *  - 流量模式:仅代理(白名单)/ 仅绕过(黑名单,默认)两选一
  *  - 应用列表:行内 tab(全部/用户/系统)+ 搜索 + 方形图标 + label/pkg/uid +
- *    勾选框 + 状态角标(仅代理下勾选=绿"仅代理",仅绕过下勾选=红"已排除")
+ *    勾选框 + 状态角标(仅代理下勾选=绿"仅代理",仅绕过下勾选=红"已排除",
+ *    拦截=红"已拦截")+「禁止联网」拦截按钮(仅绕过模式,§5 第一期)
  *  - 排序:已选优先,其余按拼音 label(Collator CHINA,§8#1)
  *  - 保存:sockstun 式返回自动保存(onDestroy 批写 AppPrefs),不自动重启,
  *    改动在下次连接生效;UI 底部有提示。
@@ -85,10 +87,14 @@ class AppSelectionActivity : ComponentActivity() {
     /** 勾选的应用包名集合(语义随模式翻转:仅代理=白名单 / 仅绕过=黑名单)。 */
     private var selected by mutableStateOf<Set<String>>(emptySet())
 
+    /** 「禁止联网」拦截的应用包名集合(§5 第一期仅在仅绕过/黑名单模式可用,与 selected 互斥)。 */
+    private var blocked by mutableStateOf<Set<String>>(emptySet())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         mode = AppPrefs.globalMode(this)
         selected = AppPrefs.selectedApps(this)
+        blocked = AppPrefs.blockedApps(this)
         enableEdgeToEdge()
         setContent {
             // 主题(§7):与首页同源(同一份 AppPrefs.themeMode + 深色色板)。
@@ -98,8 +104,10 @@ class AppSelectionActivity : ComponentActivity() {
                     AppSelectionScreen(
                         mode = mode,
                         selected = selected,
+                        blocked = blocked,
                         onModeChange = { newMode -> changeMode(newMode) },
                         onToggle = { pkg, checked -> toggle(pkg, checked) },
+                        onToggleBlock = { pkg -> toggleBlock(pkg) },
                         onBack = { finish() }
                     )
                 }
@@ -117,19 +125,30 @@ class AppSelectionActivity : ComponentActivity() {
         mode = newMode
     }
 
-    /** 勾选/取消;仅代理模式取消最后一个时阻止(§8#6)。 */
+    /** 勾选/取消;仅代理模式取消最后一个时阻止(§8#6)。勾选(排除/代理)时清除该应用的
+     *  拦截态(两者互斥,拦截优先)。 */
     private fun toggle(pkg: String, checked: Boolean) {
         if (!checked && !mode && selected.size == 1 && selected.contains(pkg)) {
             Toast.makeText(this, "仅代理模式至少勾选 1 个应用", Toast.LENGTH_SHORT).show()
             return
         }
         selected = if (checked) selected + pkg else selected - pkg
+        if (checked) blocked = blocked - pkg
+    }
+
+    /** 切换「禁止联网」(§5):白名单模式 UI 不显示入口,这里防御性返回。与 selected 互斥:
+     *  拦截一个应用就把它从排除里移掉,反之勾选排除也会清掉拦截。 */
+    private fun toggleBlock(pkg: String) {
+        if (!mode) return
+        blocked = if (blocked.contains(pkg)) blocked - pkg else blocked + pkg
+        if (blocked.contains(pkg)) selected = selected - pkg
     }
 
     override fun onDestroy() {
-        // 返回自动保存(sockstun 式):批写模式 + 应用列表;不重启,下次连接生效。
+        // 返回自动保存(sockstun 式):批写模式 + 应用列表 + 拦截列表;不重启,下次连接生效。
         AppPrefs.setGlobalMode(this, mode)
         AppPrefs.setSelectedApps(this, selected)
+        AppPrefs.setBlockedApps(this, blocked)
         super.onDestroy()
     }
 }
@@ -144,6 +163,7 @@ private val PlaceholderBg get() = if (ThemeState.isDark) Color(0xFF2A2234) else 
 private val CardBg get() = if (ThemeState.isDark) Color(0xFF2B2436) else Color.White
 private val ProxyGreen = Color(0xFF4CAF50)
 private val ExcludeRed = Color(0xFFFF6B6B)
+private val BlockRed = Color(0xFFFF3B30)
 
 private val AppSelectionColors get() =
     if (ThemeState.isDark) darkColorScheme(primary = PurpleText)
@@ -153,8 +173,10 @@ private val AppSelectionColors get() =
 private fun AppSelectionScreen(
     mode: Boolean,
     selected: Set<String>,
+    blocked: Set<String>,
     onModeChange: (Boolean) -> Unit,
     onToggle: (String, Boolean) -> Unit,
+    onToggleBlock: (String) -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -265,6 +287,16 @@ private fun AppSelectionScreen(
                                 fontSize = 12.sp,
                                 color = GreyText
                             )
+                            // §5 第一期:禁止联网仅在仅绕过(黑名单)模式提供;白名单模式隐藏
+                            // 拦截入口并说明原因。
+                            if (proxyMode) {
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    "仅代理模式不支持「禁止联网」拦截,请切换至「仅绕过」模式",
+                                    fontSize = 11.sp,
+                                    color = ExcludeRed
+                                )
+                            }
                         }
                     }
                     Spacer(Modifier.height(12.dp))
@@ -298,7 +330,10 @@ private fun AppSelectionScreen(
 
             // ── 统计条 ──────────────────────────────────────────
             Text(
-                "共 ${allApps.size} · 显示 ${visible.size} · 已选 ${selected.size}（$modeLabel）",
+                buildString {
+                    append("共 ${allApps.size} · 显示 ${visible.size} · 已选 ${selected.size}（$modeLabel）")
+                    if (mode) append(" · 已拦截 ${blocked.size}")
+                },
                 fontSize = 12.sp,
                 color = GreyText
             )
@@ -323,8 +358,11 @@ private fun AppSelectionScreen(
                         AppRow(
                             app = app,
                             checked = selected.contains(app.pkg),
+                            blocked = blocked.contains(app.pkg),
+                            blockable = mode,
                             proxyMode = proxyMode,
-                            onToggle = onToggle
+                            onToggle = onToggle,
+                            onToggleBlock = onToggleBlock
                         )
                     }
                 }
@@ -344,13 +382,18 @@ private fun AppSelectionScreen(
     }
 }
 
-/** 应用行:方形图标 + label/pkg·uid + 状态角标 + 勾选框;整行可点切换。 */
+/** 应用行:方形图标 + label/pkg·uid + 状态角标 + 拦截按钮 + 勾选框;整行可点切换。
+ *  §5 三态:仅绕过模式下可勾选(已排除)或拦截(已拦截),二者互斥;拦截优先级更高。
+ *  blockable=false(仅代理/白名单)时隐藏拦截按钮。 */
 @Composable
 private fun AppRow(
     app: AppEnumerator.AppInfo,
     checked: Boolean,
+    blocked: Boolean,
+    blockable: Boolean,
     proxyMode: Boolean,
-    onToggle: (String, Boolean) -> Unit
+    onToggle: (String, Boolean) -> Unit,
+    onToggleBlock: (String) -> Unit
 ) {
     val context = LocalContext.current
     val icon = remember(app.pkg) { AppEnumerator.iconBitmap(context, app.pkg) }
@@ -395,10 +438,21 @@ private fun AppRow(
                 overflow = TextOverflow.Ellipsis
             )
         }
-        if (checked) {
-            Surface(color = if (proxyMode) ProxyGreen else ExcludeRed, shape = RoundedCornerShape(999.dp)) {
+        if (checked || blocked) {
+            Surface(
+                color = when {
+                    blocked -> BlockRed
+                    proxyMode -> ProxyGreen
+                    else -> ExcludeRed
+                },
+                shape = RoundedCornerShape(999.dp)
+            ) {
                 Text(
-                    if (proxyMode) "仅代理" else "已排除",
+                    when {
+                        blocked -> "已拦截"
+                        proxyMode -> "仅代理"
+                        else -> "已排除"
+                    },
                     color = Color.White,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
@@ -406,6 +460,17 @@ private fun AppRow(
                 )
             }
             Spacer(Modifier.width(4.dp))
+        }
+        // 禁止联网按钮(仅绕过/黑名单模式显示;白名单隐藏,模式卡内已说明)。点它切换拦截态,
+        // 与勾选框互斥(勾选会清拦截,拦截会清勾选)。
+        if (blockable) {
+            IconButton(onClick = { onToggleBlock(app.pkg) }) {
+                Icon(
+                    Icons.Filled.Block,
+                    contentDescription = "禁止联网",
+                    tint = if (blocked) BlockRed else GreyText
+                )
+            }
         }
         // 整行已可点;Checkbox 自身也响应(命中其区域只触发一次,不重复切换)。
         Checkbox(checked = checked, onCheckedChange = { onToggle(app.pkg, it) })

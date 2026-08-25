@@ -288,6 +288,22 @@ class SmartProxyVpnService : VpnService() {
                 Log.i(TAG, "[establishVpn] Whitelist: $allowedCount app(s) will be proxied.")
             }
 
+            // 「禁止联网」(per-app block,§5 第一期仅在仅绕过/黑名单模式提供):被拦应用
+            // 不进 addDisallowed(仍进 TUN),由 Go 侧按连接反查 UID 丢弃;UID 集合写
+            // config.json tun.blocked_uids(引擎 StartRouter 读同一份)。白名单模式不启用
+            // (UI 已禁用拦截),显式清空避免陈旧偏好残留拦截规则。
+            val blockedPkgs = AppPrefs.blockedApps(this)
+            if (AppPrefs.globalMode(this)) {
+                val blockedUids = resolveBlockedUids(blockedPkgs)
+                ConfigProvider.setBlockedUids(this, blockedUids)
+                Log.i(TAG, "[establishVpn] Blocked apps written to tun.blocked_uids: ${blockedUids.size} uid(s) $blockedUids")
+            } else {
+                ConfigProvider.setBlockedUids(this, emptyList())
+                if (blockedPkgs.isNotEmpty()) {
+                    Log.w(TAG, "[establishVpn] Whitelist mode: ignoring ${blockedPkgs.size} blocked app(s) (block disabled).")
+                }
+            }
+
             Log.i(TAG, "[establishVpn] Step 2: Executing Builder.establish()...")
             val pfd = builder.establish()
             if (pfd == null) {
@@ -309,6 +325,10 @@ class SmartProxyVpnService : VpnService() {
                 // 拆 VPN 的唯一干净信号,图标即刻消失。
                 val dupPfd = pfd.dup()
                 val goFd = dupPfd.detachFd()
+                // 注册 UID 反查回调(per-app「禁止联网」):Go TUN 路径按连接回问 Android
+                // 连接所属 UID,命中 tun.blocked_uids 即丢弃。必须在 startRouter 前注册,
+                // 引擎启动时注入 TUN handler。
+                smartproxy.mobile.Mobile.setUIDResolver(UIDResolver(this))
                 smartproxy.mobile.Mobile.startRouter(configPath, goFd.toLong(), true)
                 Log.i(TAG, "[establishVpn] Mobile.startRouter() returned successfully in ${System.currentTimeMillis() - t0} ms. (goFd=$goFd, kotlinPfd=${pfd.fd}, tunFds=${tunFdCount()})")
                 tunPfd = pfd
@@ -371,6 +391,19 @@ class SmartProxyVpnService : VpnService() {
         } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
             Log.w(TAG, "[establishVpn] Skipping allowed '$pkg': not installed")
             false
+        }
+    }
+
+    /** 把「禁止联网」包名解析成 uid(建立时快照);已卸载/不可见的包跳过并告警,
+     *  不让一个陈旧包名拖垮 establish(与 applyDisallowedApp 同策略)。 */
+    private fun resolveBlockedUids(pkgs: Set<String>): List<Int> {
+        return pkgs.mapNotNull { pkg ->
+            try {
+                packageManager.getApplicationInfo(pkg, 0).uid
+            } catch (e: android.content.pm.PackageManager.NameNotFoundException) {
+                Log.w(TAG, "[establishVpn] Skipping blocked '$pkg': not installed")
+                null
+            }
         }
     }
 

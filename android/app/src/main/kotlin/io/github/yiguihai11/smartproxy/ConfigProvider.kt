@@ -110,6 +110,18 @@ object ConfigProvider {
         readRaw(context)?.optJSONObject("listen")
             ?.optInt("admin_port", DEFAULT_ADMIN_PORT) ?: DEFAULT_ADMIN_PORT
 
+    /** 写 tun.blocked_uids(「禁止联网」应用 UID,仅绕过/黑名单模式):establish 前写入,
+     *  引擎 StartRouter 读同一份 config.json(经 engine.SetUIDResolver 反查连接 UID,命中即拦)。
+     *  空列表写 [] 自文档化(与 setIpv4 的 [] 语义一致);watch 未启动时写入不触发热重载,
+     *  运行中的变更随下次连接生效。 */
+    fun setBlockedUids(context: Context, uids: List<Int>) {
+        val json = readConfig(context)
+        val tun = json.optJSONObject("tun") ?: JSONObject().also { json.put("tun", it) }
+        tun.put("blocked_uids", JSONArray(uids))
+        json.put("tun", tun)
+        writeConfig(context, json)
+    }
+
     /** 面板是否 HTTPS:读 filesDir/config.json 的 listen.admin_https(默认 true),
      *  首页链接据此决定 http/https 前缀。只读,不触发写盘。 */
     fun adminHttps(context: Context): Boolean =

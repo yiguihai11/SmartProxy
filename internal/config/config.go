@@ -37,6 +37,10 @@ type TUNConfig struct {
 	// RouteExcludePorts lists local ports excluded by OutputMark (default [22] SSH),
 	// effective only when auto_route=true and output_mark>0.
 	RouteExcludePorts []int `json:"route_exclude_ports"`
+	// BlockedUIDs lists app UIDs whose traffic is dropped (per-app "禁止联网").
+	// Android 侧 establish 时由 AppPrefs.blockedApps 解析成 UID 写进 config.json;
+	// TUN 路径按连接经 UIDResolver 反查 UID,命中即拦截。空/缺省 = 不启用。
+	BlockedUIDs []int32 `json:"blocked_uids"`
 }
 
 // MarshalJSON renders a TUNConfig with nil slice fields as empty arrays ("[]")
@@ -54,6 +58,9 @@ func (t TUNConfig) MarshalJSON() ([]byte, error) {
 	}
 	if t.RouteExcludePorts == nil {
 		t.RouteExcludePorts = []int{}
+	}
+	if t.BlockedUIDs == nil {
+		t.BlockedUIDs = []int32{}
 	}
 	return json.Marshal(alias(t))
 }
