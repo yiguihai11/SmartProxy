@@ -1,7 +1,7 @@
 package io.github.yiguihai11.smartproxy
 
 import android.os.Bundle
-import android.os.Process
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -51,18 +51,22 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 日志查看页(侧边栏「日志查看」):调 logcat 命令读本进程的全部日志,详细到 Debug 级。
+ * 日志查看页(侧边栏「日志查看」):调 logcat 命令读 App 自己的 Kotlin 层日志
+ * (SmartProxyVpn tag),详细到 Debug 级。
  *
- * - 命令:logcat -d -v threadtime --pid=<自身 pid> *:D
- *   `--pid` 让 App 无需 READ_LOGS 权限即可读自己的日志(Android 4.1+);Go 侧 gomobile
- *   把 stdout 重定向到 logcat 的 GoLog tag(同一 pid),Kotlin 侧日志是 SmartProxyVpn tag,
- *   全部可见。
+ * - 命令:logcat -d -v threadtime -s SmartProxyVpn:V
+ *   故意不带 --pid:logd 对无 READ_LOGS 的调用方只回本 UID 的条目,天然只有本 App
+ *   的日志,且跨进程重启(pid 变化)的历史都在;--pid 只捞当前进程代,进程重启后
+ *   会整页空白。-s 只留 Kotlin 层 tag,Go 引擎的 GoLog 不混入(本页定位 = App 自己
+ *   的日志)。
+ * - 打开时写一条 SmartProxyVpn 标记日志,保证首次 dump 至少有一行可验证管线。
  * - 自动刷新:默认开,2s 一次 dump(io.logcat 是一次性 dump,非流式,简单可靠)。
  * - 行数上限 2000,超出丢最旧;底部跟随(用户手动上翻时暂停跟随)。
  */
 class LogcatActivity : ComponentActivity() {
 
     companion object {
+        private const val TAG = "SmartProxyVpn"
         private const val MAX_LINES = 2000
         private const val REFRESH_MS = 2000L
     }
@@ -73,6 +77,8 @@ class LogcatActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 标记日志:保证首次 dump 缓冲里至少有一条本 App 的日志,可验证查看管线。
+        Log.i(TAG, "[Logcat] 查看器已打开")
         enableEdgeToEdge()
         setContent {
             AutoSystemBarStyle(AppPrefs.themeMode(this))
@@ -117,9 +123,10 @@ class LogcatActivity : ComponentActivity() {
     private suspend fun refresh() {
         val result = withContext(Dispatchers.IO) {
             runCatching {
-                val pid = Process.myPid()
+                // 不带 --pid、只留本 App 的 Kotlin tag:详见类注释。logd 对无 READ_LOGS
+                // 的调用方只回本 UID 条目,天然只有本 App 日志,跨进程代都可见。
                 val process = Runtime.getRuntime().exec(
-                    arrayOf("logcat", "-d", "-v", "threadtime", "--pid=$pid", "*:D")
+                    arrayOf("logcat", "-d", "-v", "threadtime", "-s", "SmartProxyVpn:V")
                 )
                 process.inputStream.bufferedReader().use { it.readText() }
             }
@@ -227,6 +234,14 @@ private fun LogcatScreen(
                 }
             }
 
+            if (lines.isEmpty() && error == null) {
+                Text(
+                    "暂无日志 — 连接 VPN 后 SmartProxyVpn 日志会出现在这里",
+                    fontSize = 12.sp,
+                    color = GreyText,
+                    modifier = Modifier.padding(vertical = 6.dp)
+                )
+            }
             if (error != null) {
                 Text(
                     "读取日志失败: $error",
