@@ -12,10 +12,10 @@ import java.net.InetSocketAddress
  * 供「禁止联网」(per-app block)判定。实现 mobile.UIDResolver(Go 接口 → Java 接口),
  * 由 SmartProxyVpnService 在 establish 前注册:Mobile.setUIDResolver(this)。
  *
- * - API 30+:ConnectivityManager.getConnectionOwnerUid(protocol, localPort, remotePort)
- *   —— 只按端口反查,不依赖 tun 内源 IP(内核 socket 跟踪的源 IP 与包内源 IP
- *   在 VPN 隧道下可能不一致,端口才是稳定标识)。
- * - API 29:getConnectionOwnerUid(protocol, local, remote) 四元组。
+ * - API 29+:ConnectivityManager.getConnectionOwnerUid(protocol, local, remote)
+ *   四元组(公开 API 只有这一种重载;网上常传的 (protocol, localPort,
+ *   remotePort) 端口版并不存在——compileSdk 35 编译期实测,传 int×3 会
+ *   被解析到四元组报类型不匹配)。
  * - API 26-28:解析 /proc/net/{tcp,tcp6,udp,udp6}(uid 列),失败返回 -1。
  *
  * 返回 -1(未知)时 Go 侧放行(不误拦系统/自身流量);被拦应用只在明确命中时断网。
@@ -37,14 +37,12 @@ class UIDResolver(private val context: Context) : smartproxy.mobile.UIDResolver 
     ): Int {
         return try {
             val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            val remote = InetSocketAddress(remoteIP, remotePort)
             when {
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> {
-                    // API 30+:端口三整型重载,避开源 IP 匹配问题。
-                    cm.getConnectionOwnerUid(proto, localPort, remotePort)
-                }
                 Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q -> {
+                    // API 29+ 唯一公开重载:四元组 (protocol, local, remote)。
+                    // local 用 tunnel 分配给应用的 IP+端口(即内核 socket 的源地址)。
                     val local = InetSocketAddress(localIP, localPort)
+                    val remote = InetSocketAddress(remoteIP, remotePort)
                     cm.getConnectionOwnerUid(proto, local, remote)
                 }
                 else -> resolveViaProcNet(proto, localPort)
