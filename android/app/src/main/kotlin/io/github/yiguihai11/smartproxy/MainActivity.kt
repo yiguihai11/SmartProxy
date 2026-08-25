@@ -155,6 +155,26 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // 方案 A(温和补挂):Android 14+ 允许用户划掉 specialUse 类型的前台服务通知。
+        // 不在划掉瞬间立即重发(那是与平台对抗、且时机不可靠),而是在用户回到 App 时检查——
+        // 隧道在跑但保活通知不在了,就补挂一次 startForeground。服务若还活着,这只是重刷
+        // 通知;服务已被系统收掉,refreshForeground 守卫(startedEngine)不会空拉起。
+        // Android 13+ 需通知权限,未授权时通知本就被压住,补挂无意义,交给授权回调。
+        if (SmartProxyVpnService.isRunning.value &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED &&
+            !NotificationHelper.isForegroundNotificationVisible(this)
+        ) {
+            android.util.Log.i(
+                "SmartProxyVpn",
+                "[MainActivity] onResume: VPN running but keepalive notification gone, reposting foreground."
+            )
+            SmartProxyVpnService.refreshForeground(this)
+        }
+    }
+
     private fun onToggleClicked() {
         val currentRunning = SmartProxyVpnService.isRunning.value
         android.util.Log.i("SmartProxyVpn", "[MainActivity] onToggleClicked() called. Current isRunning=$currentRunning")

@@ -99,4 +99,20 @@ object NotificationHelper {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         )
     }
+
+    /**
+     * 保活通知当前是否还在通知栏里。
+     *
+     * 用途:Android 14+ 允许用户划掉 specialUse 类型的前台服务通知。用户划掉后服务可能仍
+     * 在跑(也可能已被系统收掉,但 VPN 引擎状态由 SmartProxyVpnService._isRunning 单独反映)。
+     * MainActivity.onResume() 用它判断"隧道在跑但通知不在了",再补挂一次 startForeground
+     * (方案 A:不立即重发,只在用户回到 App 时补,尊重用户当时划除意图)。
+     *
+     * 注意:activeNotifications 在 Android 13+ 需要 POST_NOTIFICATIONS 权限,未授权时返回
+     * 空列表——此时通知本就被系统压住,补挂也无意义,由授权回调里的 refreshForeground 负责。
+     */
+    fun isForegroundNotificationVisible(context: Context): Boolean {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        return nm.activeNotifications.any { it.id == NOTIFICATION_ID }
+    }
 }
