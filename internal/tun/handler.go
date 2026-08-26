@@ -51,6 +51,9 @@ type TUNHandler struct {
 	// config.TUN.BlockedUIDs 即拦截。startRouter 时注入一次,之后只读。
 	uidResolverFn atomic.Pointer[UIDResolverFunc]
 
+	// connStats 连接监控(「联网状态」页数据源):懒开关,页面打开才采集。
+	connStats ConnStats
+
 	udpSessions   sync.Map
 	cleanerOnce   sync.Once
 	cleanerStopCh chan struct{}
@@ -77,6 +80,7 @@ func NewHandler(cfg *config.Config, r *route.Router, re *rules.Engine, um *upstr
 		ruleEng:       re,
 		upstreamMgr:   um,
 		dnsHandler:    dh,
+		connStats:     NewConnStats(),
 		cleanerStopCh: make(chan struct{}),
 	}
 	h.config.Store(cfg)
@@ -152,6 +156,16 @@ func (h *TUNHandler) SetUIDResolver(f UIDResolverFunc) {
 	h.uidResolverFn.Store(&f)
 }
 
+// resolveUID 反查连接所属 app UID;-1 = 未知 / 不可解析。拦截与连接监控共用:
+// 监控需要它在名单为空时也解析(联网状态页),所以独立成原语。
+func (h *TUNHandler) resolveUID(proto int32, source, destination M.Socksaddr) int32 {
+	fn := h.uidResolverFn.Load()
+	if fn == nil {
+		return -1
+	}
+	return (*fn)(proto, source.Addr.String(), int32(source.Port), destination.Addr.String(), int32(destination.Port))
+}
+
 // isUIDBlocked 判断连接是否属于被「禁止联网」的应用:先查 config.TUN.BlockedUIDs(空 = 关),
 // 再经 Android 回调反查连接所属 UID。解析失败 / 无回调返回 false(放行),避免把系统或
 // 引擎自身流量误拦;只有明确命中已配置 UID 才拦截。
@@ -160,11 +174,7 @@ func (h *TUNHandler) isUIDBlocked(proto int32, source, destination M.Socksaddr) 
 	if len(cfg.TUN.BlockedUIDs) == 0 {
 		return false
 	}
-	fn := h.uidResolverFn.Load()
-	if fn == nil {
-		return false
-	}
-	uid := (*fn)(proto, source.Addr.String(), int32(source.Port), destination.Addr.String(), int32(destination.Port))
+	uid := h.resolveUID(proto, source, destination)
 	if uid <= 0 {
 		return false // -1 未知 / 0 系统进程,不放行黑名单拦截语义下误伤
 	}
@@ -174,6 +184,17 @@ func (h *TUNHandler) isUIDBlocked(proto int32, source, destination M.Socksaddr) 
 		}
 	}
 	return false
+}
+
+// SetConnStatsEnabled 开关连接监控(「联网状态」页):页面打开采集、关闭即停。
+// 关闭时数据路径零开销(handler 只在 enabled 时登记/包装连接)。
+func (h *TUNHandler) SetConnStatsEnabled(on bool) {
+	h.connStats.SetEnabled(on)
+}
+
+// ConnectionStats 返回按 app(uid)分组的连接快照 JSON(供 UI 每秒轮询)。
+func (h *TUNHandler) ConnectionStats() string {
+	return h.connStats.Snapshot()
 }
 
 func (h *TUNHandler) PrepareConnection(network string, source M.Socksaddr, destination M.Socksaddr, routeContext singtun.DirectRouteContext, timeout time.Duration) (singtun.DirectRouteDestination, error) {
@@ -231,6 +252,18 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 		return
 	}
 
+	// 连接监控(「联网状态」页):懒开启,仅页面打开时采集。resolveUID 一次;
+	// 与 isUIDBlocked 重复回调仅发生在「页面开着 + 名单非空」,连接建立频率低可接受。
+	// 包装后 conn 交由下游(smart/普通转发)复用,字节全程计数。
+	var rec *connRecord
+	if h.connStats.Enabled() {
+		uid := h.resolveUID(6, source, destination)
+		rec = h.connStats.begin(uid, 6, host, port)
+		if rec != nil {
+			conn = h.connStats.wrapTCP(conn, rec)
+		}
+	}
+
 	smartEnabled := h.config.Load().SmartProxy.Enabled && netutil.ContainsInt(h.config.Load().SmartProxy.Ports, port)
 
 	if !smartEnabled {
@@ -255,14 +288,14 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 	}
 
 	safego.Go("tun.handleSmartConnect", func() {
-		h.handleSmartConnect(ctx, conn, host, port)
+		h.handleSmartConnect(ctx, conn, host, port, rec)
 		if onClose != nil {
 			onClose(nil)
 		}
 	})
 }
 
-func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host string, port int) {
+func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host string, port int, rec *connRecord) {
 	defer conn.Close()
 
 	firstPkt, err := ReadClientHello(conn, 3*time.Second)
@@ -274,6 +307,7 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 	}
 
 	domain := ExtractDomain(firstPkt)
+	h.connStats.setHost(rec, domain)
 	if domain != "" {
 		// Logged once per connection; the hot path is demoted to Debug
 		slog.Debug("extracted domain", "domain", domain)
@@ -364,6 +398,15 @@ func (h *TUNHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketCon
 			onClose(nil)
 		}
 		return
+	}
+
+	// 连接监控(同 TCP):UDP 一律不解析域名(设计定稿),host 落目标 IP。
+	if h.connStats.Enabled() {
+		uid := h.resolveUID(17, source, destination)
+		rec := h.connStats.begin(uid, 17, host, port)
+		if rec != nil {
+			conn = h.connStats.wrapUDP(conn, rec)
+		}
 	}
 
 	safego.Go("tun.handleGenericUDP", func() {

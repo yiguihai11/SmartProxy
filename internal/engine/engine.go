@@ -122,6 +122,16 @@ func (e *Engine) SetUIDResolver(f tun.UIDResolverFunc) {
 	e.TUNHandler.SetUIDResolver(f)
 }
 
+// SetConnStatsEnabled 开关连接监控(「联网状态」页):页面打开采集、关闭即停。
+func (e *Engine) SetConnStatsEnabled(on bool) {
+	e.TUNHandler.SetConnStatsEnabled(on)
+}
+
+// ConnectionStats 返回按 app(uid)分组的连接快照 JSON(供 UI 每秒轮询)。
+func (e *Engine) ConnectionStats() string {
+	return e.TUNHandler.ConnectionStats()
+}
+
 // maxConcurrentClients bounds the SOCKS5 client handler goroutines (see clientSem).
 const maxConcurrentClients = 1024
 
