@@ -1,5 +1,6 @@
 # build artifacts
 /build/
+/dist/
 
 # stale binaries at repo root
 /socks5-router
