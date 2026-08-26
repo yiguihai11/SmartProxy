@@ -10,6 +10,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -357,11 +358,15 @@ private fun AppSelectionScreen(
 
             // ── 应用列表 ────────────────────────────────────────
             when {
-                !loaded -> Box(
+                // 全量应用枚举 + 图标解码耗时(首次更慢):转圈 + 文案提示,避免"卡住"错觉。
+                !loaded -> Column(
                     Modifier.fillMaxWidth().weight(1f),
-                    contentAlignment = Alignment.Center
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
                 ) {
                     CircularProgressIndicator(color = PurpleText)
+                    Spacer(Modifier.height(12.dp))
+                    Text("正在加载应用列表… 首次可能较慢", fontSize = 13.sp, color = GreyText)
                 }
                 visible.isEmpty() -> Box(
                     Modifier.fillMaxWidth().weight(1f),
