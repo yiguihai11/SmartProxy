@@ -1,0 +1,194 @@
+version: 2.1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Port of .github/workflows/android-build.yml → CircleCI.
+#
+# 背景:2026-08-26 GitHub Actions 全球性故障(major_outage),托管 runner 长时间
+# 排队拉不起来,故把 Android 构建移植到 CircleCI,获得独立于 GH Actions 的构建通道。
+#
+# 与 GitHub Actions 版的差异:
+#  - v1 不做路径过滤:CircleCI push 后 checkout 时 origin/main 已指向本次新提交,
+#    diff base 不可用,强行过滤会把所有构建都跳过。省 credits 的路径过滤后续用
+#    path-filtering orb(第二 pipeline 参数化)再补。
+#  - executor 用 cimg/android 镜像(自带 Android SDK / cmdline-tools),SDK 组件
+#    仍显式 sdkmanager 幂等补齐(compileSdk=35 需要 platforms;android-35)。
+#  - 环境变量跨步骤用 $BASH_ENV(GH 用 $GITHUB_ENV)。
+#  - APK 产物用 store_artifacts 暴露到 CircleCI Artifacts 页。
+# ─────────────────────────────────────────────────────────────────────────────
+
+executors:
+  android:
+    docker:
+      - image: cimg/android:2024.01
+    resource_class: medium
+    environment:
+      # cimg/android 镜像内置 SDK 就在这个路径;显式再写一遍,对齐 AGP 的
+      # "SDK 双路径不一致"检查(GH runner 曾因 ANDROID_SDK_ROOT 指向别处报错)。
+      ANDROID_HOME: /home/circleci/android-sdk
+      ANDROID_SDK_ROOT: /home/circleci/android-sdk
+
+jobs:
+  build:
+    executor: android
+    steps:
+      - checkout
+
+      # 版本从 git tag 派生(M4,对齐 Makefile / app/build.gradle.kts):
+      # 只认 v[0-9]* 发布 tag(排除 backup-*),无 tag 回退提交哈希。
+      - run:
+          name: Derive version from git tag
+          command: |
+            V=$(git describe --tags --match 'v[0-9]*' --always --dirty | sed 's/^v//')
+            echo "export VERSION=$V" >> "$BASH_ENV"
+
+      - restore_cache:
+          keys:
+            - go-v1-{{ checksum "go.sum" }}
+            - go-v1-
+      - restore_cache:
+          keys:
+            - gradle-v1-{{ checksum "android/gradle/wrapper/gradle-wrapper.properties" }}-{{ checksum "android/app/build.gradle.kts" }}
+
+      # 系统工具兜底(make/unzip:gomobile init 解 NDK 用 zip,make 跑 Makefile)。
+      - run:
+          name: Ensure system tools (make, unzip)
+          command: |
+            set -e
+            missing=""
+            command -v make   >/dev/null 2>&1 || missing="$missing make"
+            command -v unzip  >/dev/null 2>&1 || missing="$missing unzip"
+            if [ -n "$missing" ]; then
+              sudo apt-get update -qq && sudo apt-get install -y -qq $missing
+            fi
+            command -v make; command -v unzip
+
+      # 显式装 Go 1.27(对齐 go.mod 的 go directive;gomobile init 内部会
+      # `go install gobind@latest`,go directive 漂移会导致失败,工具链必须匹配)。
+      - run:
+            name: Install Go 1.27
+            command: |
+              if [ -x /usr/local/go/bin/go ] && [ "$(/usr/local/go/bin/go version)" = "go version go1.27.0 linux/amd64" ]; then
+                echo "go 1.27 already present"
+              else
+                curl -fsSL -o /tmp/go.tgz https://go.dev/dl/go1.27.0.linux-amd64.tar.gz
+                sudo rm -rf /usr/local/go
+                sudo tar -C /usr/local -xzf /tmp/go.tgz
+              fi
+              echo 'export PATH=/usr/local/go/bin:$HOME/go/bin:$PATH' >> "$BASH_ENV"
+
+      # AGP 需要 JDK 17+ 来跑 Gradle;cimg/android 镜像默认若是低版本 JDK,
+      # 自动换到镜像内置的 JDK17(cimg 镜像内置在 /usr/local/openjdk-17 或
+      # /usr/lib/jvm 下),并打印实际版本便于排查。
+      - run:
+          name: Ensure JDK 17+ for Gradle
+          command: |
+            ver() { java -version 2>&1 | head -1 | sed -E 's/.*version "([0-9]+).*/\1/'; }
+            if [ "$(ver)" -ge 17 ] 2>/dev/null; then
+              echo "JDK OK: $(java -version 2>&1 | head -1)"
+              exit 0
+            fi
+            for j in /usr/local/openjdk-17 /usr/lib/jvm/*17* /usr/local/openjdk-21 /usr/lib/jvm/*21*; do
+              if [ -x "$j/bin/java" ]; then
+                echo "export JAVA_HOME=$j" >> "$BASH_ENV"
+                echo "JDK switched to: $j ($( "$j/bin/java" -version 2>&1 | head -1 ))"
+                exit 0
+              fi
+            done
+            echo "No JDK 17+ found; using image default $(java -version 2>&1 | head -1)"; exit 1
+
+      - run:
+          name: Install gomobile (latest)
+          command: |
+            set -euxo pipefail
+            export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
+            go install golang.org/x/mobile/cmd/gomobile@latest
+
+      # 确保 SDK 组件就位(cimg 镜像自带一部分;platforms;android-35 和
+      # build-tools;35.0.0 幂等补齐,compileSdk=35 必需)。
+      - run:
+          name: Ensure Android SDK components
+          command: |
+            set -euxo pipefail
+            SDKMAN="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+            if [ ! -x "$SDKMAN" ]; then SDKMAN="$(command -v sdkmanager || true)"; fi
+            if [ -z "$SDKMAN" ] || [ ! -x "$SDKMAN" ]; then
+              echo "sdkmanager not found under ANDROID_HOME=$ANDROID_HOME"; exit 1
+            fi
+            # `yes | sdkmanager --licenses` 会因 yes 收 SIGPIPE(141) 而"失败",
+            # 但许可此时已接受,`|| true` 吞掉即可(与 GH workflow 同)。
+            yes | "$SDKMAN" --licenses >/dev/null 2>&1 || true
+            "$SDKMAN" "platform-tools" "platforms;android-35" "build-tools;35.0.0" >/dev/null
+
+      - run:
+          name: Build Go engine AAR
+          command: |
+            set -euxo pipefail
+            export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
+            # 首次会下载 Android NDK 到 gomobile 缓存(约 1 GB,仅第一次慢)。
+            gomobile init
+            make android
+            mkdir -p android/app/libs
+            cp build/smartproxy.aar android/app/libs/smartproxy.aar
+
+      # Throwaway keystore for the temporary signed release build (debug signing
+      # convention, no secrets). Signature differs per build — uninstall before
+      # installing a newer one.
+      - run:
+          name: Generate debug signing keystore
+          command: |
+            keytool -genkeypair -v -keystore debug.keystore -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass android -keypass android \
+              -dname "CN=SmartProxy, OU=Dev, O=SmartProxy, L=Beijing, ST=Beijing, C=CN"
+
+      - run:
+          name: Build signed release APK
+          command: |
+            cd android
+            KEYSTORE_FILE="$CIRCLE_WORKING_DIRECTORY/debug.keystore" \
+            KEYSTORE_PASSWORD=android KEY_ALIAS=androiddebugkey KEY_PASSWORD=android \
+            ./gradlew assembleRelease --no-daemon
+
+      - run:
+          name: Verify signed APKs (per-ABI)
+          command: |
+            ls -l android/app/build/outputs/apk/release/
+            for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+              test -f "android/app/build/outputs/apk/release/app-${abi}-release.apk" \
+                || { echo "missing per-ABI APK: ${abi}"; exit 1; }
+            done
+            echo "All 4 per-ABI signed release APKs OK"
+
+      - save_cache:
+          key: go-v1-{{ checksum "go.sum" }}
+          paths:
+            - ~/go/pkg/mod
+            - ~/.cache/go-build
+      - save_cache:
+          key: gradle-v1-{{ checksum "android/gradle/wrapper/gradle-wrapper.properties" }}-{{ checksum "android/app/build.gradle.kts" }}
+          paths:
+            - ~/.gradle/caches
+            - ~/.gradle/wrapper
+
+      # 每个 ABI 一个独立 artifact:Artifacts 页 4 条,用户按设备只下对应那个
+      # (~9MB),不用打 zip。
+      - store_artifacts:
+          path: android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
+          destination: apk/app-arm64-v8a-release.apk
+      - store_artifacts:
+          path: android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk
+          destination: apk/app-armeabi-v7a-release.apk
+      - store_artifacts:
+          path: android/app/build/outputs/apk/release/app-x86_64-release.apk
+          destination: apk/app-x86_64-release.apk
+      - store_artifacts:
+          path: android/app/build/outputs/apk/release/app-x86-release.apk
+          destination: apk/app-x86-release.apk
+
+workflows:
+  main:
+    jobs:
+      - build:
+          filters:
+            branches:
+              only: main
