@@ -60,8 +60,8 @@ import org.json.JSONObject
 /**
  * 联网状态页(侧边栏「联网状态」,仅绕过模式 + VPN 运行中):按应用分组显示实时连接明细。
  *
- *  - 懒开关:onCreate 打开采集(Mobile.setConnStatsEnabled(true)),onDestroy 关闭;
- *    页面以外引擎零开销(连接监控只在 enabled 时登记/计数)。
+ *  - 懒开关:onResume 打开采集(Mobile.setConnStatsEnabled(true)),onPause 关闭;
+ *    返回上个页 / 切后台即停采集 + 停轮询,引擎零开销(连接监控只在 enabled 时登记/计数)。
  *  - 每秒轮询 Mobile.getConnectionStats()(gomobile 调用阻塞调用线程,走 Dispatchers.IO;
  *    与 [[gomobile-error-throws]] 约定一致,error 走异常抛)。
  *  - 首个数据到 → loading 消失;空 = "暂无联网应用"(无活动的 app 天然不进表)。
@@ -96,15 +96,16 @@ class NetworkStatusActivity : ComponentActivity() {
     private var error by mutableStateOf<String?>(null)
     private var expandedUids by mutableStateOf<Set<Int>>(emptySet())
 
+    /** 页面是否处于前台(onResume/onPause 驱动):离开页面(返回/切后台)即 false,
+     *  停采集 + 停轮询;回到前台恢复。后台零 CPU/零引擎开销。 */
+    private var active by mutableStateOf(false)
+
     /** 上次轮询的 app 累计基准(算 δ 网速);uid 表 + 图标缓存在轮询线程访问。 */
     private val prevTotals = HashMap<Int, Pair<Long, Long>>()
     private val metaCache = HashMap<Int, AppMeta>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 懒开关:页面打开即采集;onDestroy 关闭,不开页面引擎零开销。
-        runCatching { smartproxy.mobile.Mobile.setConnStatsEnabled(true) }
-            .onFailure { Log.e(TAG, "[NetworkStatus] setConnStatsEnabled(true) failed", it) }
         enableEdgeToEdge()
         setContent {
             AutoSystemBarStyle(AppPrefs.themeMode(this))
@@ -132,6 +133,7 @@ class NetworkStatusActivity : ComponentActivity() {
                         loaded = loaded,
                         error = error,
                         expandedUids = expandedUids,
+                        active = active,
                         onToggleExpand = { uid ->
                             expandedUids = if (uid in expandedUids) expandedUids - uid else expandedUids + uid
                         },
@@ -143,8 +145,28 @@ class NetworkStatusActivity : ComponentActivity() {
         }
     }
 
+    /** 回到前台:开采集 + 恢复轮询。onPause 期间采集已关,重开即零成本。 */
+    override fun onResume() {
+        super.onResume()
+        active = true
+        runCatching { smartproxy.mobile.Mobile.setConnStatsEnabled(true) }
+            .onFailure { Log.e(TAG, "[NetworkStatus] setConnStatsEnabled(true) failed", it) }
+    }
+
+    /** 离开页面(返回上个页 / 切后台 / 被覆盖):立刻停采集 + 停轮询,
+     *  引擎恢复零开销;返回时 onResume 重新开启。
+     *  不手动清 prevTotals:引擎表已随 setConnStatsEnabled(false) 清空,恢复后累计从 0 重计,
+     *  buildItems 的 coerceAtLeast(0) 会把旧基准的负 δ 钳成 0,天然不虚高;且 prevTotals 只由
+     *  IO 线程的 buildItems 写,主线程勿动,避免并发写。 */
+    override fun onPause() {
+        active = false
+        runCatching { smartproxy.mobile.Mobile.setConnStatsEnabled(false) }
+            .onFailure { Log.e(TAG, "[NetworkStatus] setConnStatsEnabled(false) failed", it) }
+        super.onPause()
+    }
+
     override fun onDestroy() {
-        // 页面关闭即停采集:引擎恢复零开销;轮询 LaunchedEffect 随 composition 一并取消。
+        // 兜底(正常 onPause 已关):确保销毁后引擎零开销;轮询随 composition 一并取消。
         runCatching { smartproxy.mobile.Mobile.setConnStatsEnabled(false) }
             .onFailure { Log.e(TAG, "[NetworkStatus] setConnStatsEnabled(false) failed", it) }
         super.onDestroy()
@@ -250,13 +272,14 @@ private fun NetworkStatusScreen(
     loaded: Boolean,
     error: String?,
     expandedUids: Set<Int>,
+    active: Boolean,
     onToggleExpand: (Int) -> Unit,
     onPoll: suspend () -> Unit,
     onBack: () -> Unit
 ) {
-    // 每秒轮询;页面销毁 composition 取消,循环自然停。
-    LaunchedEffect(Unit) {
-        while (true) {
+    // 每秒轮询;key 绑 active —— active=false(返回/切后台)即取消循环,回前台重启。
+    LaunchedEffect(active) {
+        while (active) {
             onPoll()
             delay(1000)
         }
@@ -323,7 +346,7 @@ private fun NetworkStatusScreen(
             // ── 底部提示:懒采集 + 每秒刷新 ──────────────────────
             Spacer(Modifier.height(8.dp))
             Text(
-                "仅显示有联网活动的应用 · 每秒刷新 · 关闭页面即停止采集",
+                "仅显示有联网活动的应用 · 每秒刷新 · 离开页面即停止采集",
                 fontSize = 11.sp,
                 color = GreyText,
                 textAlign = TextAlign.Center,

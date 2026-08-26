@@ -46,7 +46,7 @@
             android:theme="@style/Theme.SmartProxy" />
 
         <!-- 联网状态页(仅绕过模式 + VPN 运行中):App 内启动,不导出。
-             懒采集:onCreate 开监控、onDestroy 关,不开页面引擎零开销。 -->
+             懒采集:onResume 开监控、onPause 关,返回上个页/切后台即停,引擎零开销。 -->
         <activity
             android:name=".NetworkStatusActivity"
             android:exported="false"

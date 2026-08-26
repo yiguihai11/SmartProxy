@@ -96,10 +96,11 @@ map[uid] → []connRecord{ proto, host, ip, port, upBytes, downBytes, lastSeen }
 ### 6.1 联网状态页(新 `NetworkStatusActivity`)
 
 - **抽屉入口「联网状态」**:`AppDrawerContent` 加一项,门控 = `Mobile.isRunning() && 模式 == 仅绕过`(对齐现有入口门控写法)
-- **onCreate**:`Mobile.setConnStatsEnabled(true)` + loading(转圈 + "正在采集连接数据…")
-- **每秒轮询** `getConnectionStats`(复用 LogcatActivity 轮询模式,1s)
+- **onResume**:`Mobile.setConnStatsEnabled(true)` + loading(转圈 + "正在采集连接数据…")
+- **每秒轮询** `getConnectionStats`(复用 LogcatActivity 轮询模式,1s;`LaunchedEffect(active)` 门控,`active=false` 即取消)
 - **首个数据到 → loading 消失**,渲染 app 分组树
-- **onDestroy**:`Mobile.setConnStatsEnabled(false)`
+- **onPause**(返回上个页 / 切后台 / 被覆盖):`Mobile.setConnStatsEnabled(false)` + 停轮询,引擎零开销;onResume 恢复
+- **onDestroy**:兜底 `Mobile.setConnStatsEnabled(false)`(正常 onPause 已关)
 - 组头:应用图标 + 名 + ↑/↓ 实时速度(KB/s,δ)
 - 点击展开:连接明细行 —— host(域名或 IP):端口 + TCP/UDP 徽标 + 累计上下行
 - 空态:"暂无联网应用"(无联网 app 天然不进表)
