@@ -19,7 +19,7 @@ version: 2.1
 executors:
   android:
     docker:
-      - image: cimg/android:2026.08
+      - image: cimg/android:2026.08-ndk
     resource_class: medium
     environment:
       # cimg/android 镜像内置 SDK 就在这个路径;显式再写一遍,对齐 AGP 的
@@ -118,6 +118,14 @@ jobs:
             # 但许可此时已接受,`|| true` 吞掉即可(与 GH workflow 同)。
             yes | "$SDKMAN" --licenses >/dev/null 2>&1 || true
             "$SDKMAN" "platform-tools" "platforms;android-35" "build-tools;35.0.0" >/dev/null
+            # gomobile bind 需要 NDK(普通 cimg/android 不带,报 no usable NDK)。
+            # 本镜像用 -ndk 变体预装,探测路径并导出 ANDROID_NDK_HOME 给 gomobile。
+            NDK_DIR=$(ls -d "$ANDROID_HOME/ndk/"* 2>/dev/null | head -1)
+            if [ -z "$NDK_DIR" ]; then
+              echo "NDK not found under $ANDROID_HOME/ndk"; exit 1
+            fi
+            echo "export ANDROID_NDK_HOME=$NDK_DIR" >> "$BASH_ENV"
+            echo "using NDK: $NDK_DIR"
 
       - run:
           name: Build Go engine AAR
