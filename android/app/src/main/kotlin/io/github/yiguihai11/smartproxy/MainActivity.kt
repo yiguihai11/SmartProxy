@@ -338,6 +338,10 @@ private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme:
                 onOpenLogcat = {
                     scope.launch { drawerState.close() }
                     context.startActivity(Intent(context, LogcatActivity::class.java))
+                },
+                onOpenNetworkStatus = {
+                    scope.launch { drawerState.close() }
+                    context.startActivity(Intent(context, NetworkStatusActivity::class.java))
                 }
             )
         }
@@ -396,9 +400,13 @@ private fun AppDrawerContent(
     onOpenDns: () -> Unit,
     onOpenExclude: () -> Unit,
     onOpenServiceMode: () -> Unit,
-    onOpenLogcat: () -> Unit
+    onOpenLogcat: () -> Unit,
+    onOpenNetworkStatus: () -> Unit
 ) {
     val context = LocalContext.current
+    // 联网状态门控 = VPN 运行中 && 仅绕过(黑名单)模式:仅绕过下应用分流行为与「联网状态」
+    // 的按应用维度展示最相关;白名单模式隐藏入口(设计定稿 §6.1)。
+    val vpnRunning by SmartProxyVpnService.isRunning.collectAsState()
     ModalDrawerSheet(
         drawerContainerColor = DrawerSurface,
         drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
@@ -484,6 +492,15 @@ private fun AppDrawerContent(
                 subtitle = "当前: ${serviceModeLabel(AppPrefs.serviceMode(context))}",
                 onClick = onOpenServiceMode
             )
+
+            // 侧边栏菜单项：联网状态(仅绕过模式 + VPN 运行中才出现;懒采集,页面开才统计)
+            if (vpnRunning && AppPrefs.globalMode(context)) {
+                DrawerMenuItem(
+                    title = "联网状态",
+                    subtitle = "按应用的实时连接与网速",
+                    onClick = onOpenNetworkStatus
+                )
+            }
 
             // 侧边栏菜单项：日志查看(本进程 logcat,Debug 级)
             DrawerMenuItem(

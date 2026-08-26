@@ -45,6 +45,13 @@
             android:exported="false"
             android:theme="@style/Theme.SmartProxy" />
 
+        <!-- 联网状态页(仅绕过模式 + VPN 运行中):App 内启动,不导出。
+             懒采集:onCreate 开监控、onDestroy 关,不开页面引擎零开销。 -->
+        <activity
+            android:name=".NetworkStatusActivity"
+            android:exported="false"
+            android:theme="@style/Theme.SmartProxy" />
+
         <!-- VPN 入口:系统以 BIND_VPN_SERVICE 权限绑定;Android 14+ 用 specialUse 类型
              (manifest 无法声明 `vpn` 类型,见上方权限注释)。
              PROPERTY_SPECIAL_USE_FGS_SUBTYPE 是声明用途所必需的。 -->
