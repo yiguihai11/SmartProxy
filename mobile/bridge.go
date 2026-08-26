@@ -322,3 +322,25 @@ func GetStatus() (string, error) {
 	}
 	return string(data), nil
 }
+
+// SetConnStatsEnabled 开关连接监控(「联网状态」页):页面打开采集、关闭即停。
+// 不开页面引擎零开销;由联网状态页 onCreate/onDestroy 调用。
+func SetConnStatsEnabled(enabled bool) {
+	engineMu.Lock()
+	defer engineMu.Unlock()
+	if globalEngine == nil {
+		return
+	}
+	globalEngine.SetConnStatsEnabled(enabled)
+}
+
+// GetConnectionStats 返回按 app(uid)分组的连接快照 JSON,供「联网状态」页每秒轮询。
+// 引擎未运行返回 {"apps":[]}。
+func GetConnectionStats() (string, error) {
+	engineMu.Lock()
+	defer engineMu.Unlock()
+	if globalEngine == nil {
+		return `{"apps":[]}`, nil
+	}
+	return globalEngine.ConnectionStats(), nil
+}
