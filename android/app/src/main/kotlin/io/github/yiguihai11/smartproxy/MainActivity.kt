@@ -470,15 +470,20 @@ private fun AppDrawerContent(
                 onClick = onOpenApps
             )
 
-            // 侧边栏菜单项：DNS 服务器(启动时 addDnsServer 注入的 v4/v6)
-            DrawerMenuItem(
-                title = "DNS 服务器",
-                subtitle = "启动时注入的 IPv4 / IPv6 DNS",
-                onClick = onOpenDns
-            )
+            // 侧边栏菜单项：DNS 服务器(builder.addDnsServer,仅 VPN 隧道模式生效;仅代理
+            // SOCKS5 无 VpnService,注入不发生,入口一并隐藏(§6.1))。设置存 AppPrefs,
+            // 切换服务模式不丢,回 VPN 模式照常注入。
+            if (AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN) {
+                DrawerMenuItem(
+                    title = "DNS 服务器",
+                    subtitle = "启动时注入的 IPv4 / IPv6 DNS",
+                    onClick = onOpenDns
+                )
+            }
 
-            // 侧边栏菜单项：排除路由(builder.excludeRoute,API 33+ 特性,低版本不显示)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // 侧边栏菜单项：排除路由(builder.excludeRoute,仅 VPN 隧道模式 + API 33+ 特性;
+            // 仅代理 SOCKS5 无 VpnService,excludeRoute 不生效,入口一并隐藏(§6.1))。
+            if (AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 DrawerMenuItem(
                     title = "排除路由",
                     subtitle = "不走 VPN 隧道直连的网段 (API 33+)",
@@ -493,8 +498,9 @@ private fun AppDrawerContent(
                 onClick = onOpenServiceMode
             )
 
-            // 侧边栏菜单项：联网状态(仅绕过模式 + VPN 运行中才出现;懒采集,页面开才统计)
-            if (vpnRunning && AppPrefs.globalMode(context)) {
+            // 侧边栏菜单项：联网状态(仅 VPN 隧道服务模式 + 仅绕过 + 运行中才出现;懒采集,页面开才统计)
+            // 连接监控只挂在 TUN 数据路径,仅代理(SOCKS5)模式监控恒空,入口一并隐藏(§6.1)。
+            if (AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN && vpnRunning && AppPrefs.globalMode(context)) {
                 DrawerMenuItem(
                     title = "联网状态",
                     subtitle = "按应用的实时连接与网速",
@@ -689,12 +695,20 @@ private fun HomeLauncher(
             Spacer(Modifier.height(30.dp))
 
             // ── 开关卡:IPv4 / IPv6 左右各半;开机自启(Apps 已移至侧边栏菜单)──
-            // 守卫:两个族不能同时关。VpnService.Builder 至少要一个 addAddress,否则 establish()
-            // 抛 IllegalArgumentException 启动必败;运行中关最后一个还会让 restart() 重建失败、
-            // 连隧道一起收掉。拦在开关这一层,checked 是受控 state,不更新即回弹。
+            // 拦截是 TUN 特性,仅 VPN 隧道模式生效(§8);仅代理(SOCKS5)无 VpnService,
+            // 开关置灰不可拨,点击整卡 Toast 提示。守卫:两个族不能同时关——
+            // VpnService.Builder 至少要一个 addAddress,否则 establish() 抛
+            // IllegalArgumentException 启动必败;运行中关最后一个还会让 restart() 重建
+            // 失败、连隧道一起收掉。拦在开关这一层,checked 是受控 state,不更新即回弹。
+            val interceptionEnabled = AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN
+            val interceptionHint: () -> Unit = {
+                Toast.makeText(context, "IPv4/IPv6 拦截仅 VPN 隧道模式生效", Toast.LENGTH_SHORT).show()
+            }
             Row(modifier = Modifier.fillMaxWidth()) {
                 SwitchCard(
                     title = "IPv4 拦截", subtitle = "接管 IPv4 流量", checked = ipv4,
+                    enabled = interceptionEnabled,
+                    onDisabledClick = interceptionHint,
                     onCheckedChange = { v ->
                         if (!v && !ipv6) {
                             Toast.makeText(context, "至少需开启 IPv4 或 IPv6 其中一个", Toast.LENGTH_SHORT).show()
@@ -711,6 +725,8 @@ private fun HomeLauncher(
                 Spacer(Modifier.width(8.dp))
                 SwitchCard(
                     title = "IPv6 拦截", subtitle = "接管 IPv6 流量", checked = ipv6,
+                    enabled = interceptionEnabled,
+                    onDisabledClick = interceptionHint,
                     onCheckedChange = { v ->
                         if (!v && !ipv4) {
                             Toast.makeText(context, "至少需开启 IPv4 或 IPv6 其中一个", Toast.LENGTH_SHORT).show()
@@ -724,7 +740,10 @@ private fun HomeLauncher(
                 )
             }
             SwitchCard(
-                title = "开机自启", subtitle = "开机后自动启动 VPN(需已授权)", checked = bootAuto,
+                title = "开机自启",
+                subtitle = if (AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN)
+                    "开机后自动启动 VPN(需已授权)" else "开机后自动启动仅代理服务",
+                checked = bootAuto,
                 onCheckedChange = { v ->
                     bootAuto = v
                     AppPrefs.setBootAutoStart(context, v)
@@ -733,7 +752,8 @@ private fun HomeLauncher(
             )
             Spacer(Modifier.height(24.dp))
 
-            // ── 管理面板卡(仅 VPN 运行时显示:连接后才有可扫的 QR 面板)────────
+            // ── 管理面板卡(服务运行中显示)。仅代理模式 URL=127.0.0.1,QR 跨设备扫到的是
+            // 扫描机自己,只能本机开面板;VPN 模式 smartproxy.lan 可跨设备扫 QR。────────
             if (running) {
                 PanelCard(url = panelUrl, auth = adminAuth, onCopy = { url -> copyPanelUrl(context, url) }, onOpen = { url -> openPanel(context, url) })
                 Spacer(Modifier.height(8.dp))
@@ -975,27 +995,36 @@ private fun SwitchCard(
     title: String,
     subtitle: String,
     checked: Boolean,
+    enabled: Boolean = true,
+    onDisabledClick: (() -> Unit)? = null,
     onCheckedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // 禁用态(onDisabledClick 提供):开关置灰不可拨,整卡可点弹提示(拦截开关在仅代理
+    // 模式点不动,Toast 提示仅 VPN 隧道模式生效;enabled=true 时本 modifier 为空,零开销)。
+    val tapModifier = if (!enabled && onDisabledClick != null) {
+        Modifier.clickable { onDisabledClick() }
+    } else Modifier
     Surface(
         shape = RoundedCornerShape(20.dp),
         color = CardSurface,
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
+            .then(tapModifier)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
-                Text(title, fontSize = 16.sp, color = PurpleDark, fontWeight = FontWeight.Medium)
+                Text(title, fontSize = 16.sp, color = if (enabled) PurpleDark else GreyText, fontWeight = FontWeight.Medium)
                 Text(subtitle, fontSize = 12.sp, color = GreyText)
             }
             Switch(
                 checked = checked,
                 onCheckedChange = onCheckedChange,
+                enabled = enabled,
                 // ON/OFF 对比分明:ON = 实心紫轨道 + 白拇指;OFF = 浅紫灰轨道 + 白拇指。
                 // 此前 ON 轨道用默认浅紫(≈#E8DEF8)+ 中紫拇指,白卡上浅紫对浅紫糊成一团。
                 colors = SwitchDefaults.colors(

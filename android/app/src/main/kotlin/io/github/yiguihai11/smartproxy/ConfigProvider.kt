@@ -142,8 +142,11 @@ object ConfigProvider {
 
     private fun applyInvariants(context: Context, base: JSONObject): JSONObject {
         val tun = base.optJSONObject("tun") ?: JSONObject().also { base.put("tun", it) }
-        // fd 模式写死(与 mobile/bridge.go 强制一致):引擎从 VpnService.establish 的 fd 读包。
-        tun.put("enabled", true)
+        // tun.enabled 如实反映服务模式(与 mobile/bridge.go 的 tunEnabled 入参一致):
+        // VPN 隧道=true;仅代理(SOCKS5)=false。bridge StartRouter 入参会再覆盖一次,
+        // 但 config.json 应说真话 —— 否则仅代理模式下文件里躺着 true,watcher 热重载后
+        // eng.Config.TUN.Enabled 撒谎(ReloadConfig 只 Store 不读,暂时无害,但是脏的)。
+        tun.put("enabled", AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN)
         tun.put("auto_route", false)
         base.put("tun", tun)
 

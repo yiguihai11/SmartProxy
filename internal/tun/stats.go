@@ -251,7 +251,7 @@ func (cs *ConnStats) evictOneLocked() {
 }
 
 // Remove 立即移除一条连接记录(「封禁」掐断连接时调用):字节并入该 app 累计,
-// 行即刻从活跃明细消失,不等 30s idle 淘汰。rec 必须来自本 ConnStats 的 begin。
+// 行即刻从活跃明细消失,不等 5s idle 淘汰。rec 必须来自本 ConnStats 的 begin。
 // 锁序与 Snapshot / evictOneLocked 一致(cs.mu → us.mu)。
 func (cs *ConnStats) Remove(rec *connRecord) {
 	if rec == nil {
