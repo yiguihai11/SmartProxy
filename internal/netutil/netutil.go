@@ -56,6 +56,16 @@ func SendEnhancedBlock(conn net.Conn, port int) {
 	conn.Close()
 }
 
+// ResetConn 以 RST 语义强制关闭连接(任意端口,区别于 SendEnhancedBlock 仅 80/443):
+// 真实内核 socket / 代理连接(getTCPConn 可解包)先 SetLinger(0) 让对端收到 RST,
+// 其余类型(如 gVisor 应用侧连接)退化为普通 Close。用于「联网状态」页的主动掐断。
+func ResetConn(conn net.Conn) {
+	if tcp, ok := getTCPConn(conn); ok {
+		tcp.SetLinger(0)
+	}
+	conn.Close()
+}
+
 func getTCPConn(conn net.Conn) (*net.TCPConn, bool) {
 	if tcp, ok := conn.(*net.TCPConn); ok {
 		return tcp, true

@@ -2,6 +2,7 @@ package io.github.yiguihai11.smartproxy
 
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -26,19 +27,23 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -104,10 +110,14 @@ class NetworkStatusActivity : ComponentActivity() {
     private val prevTotals = HashMap<Int, Pair<Long, Long>>()
     private val metaCache = HashMap<Int, AppMeta>()
 
+    /** 待确认封禁的连接(点连接行的封禁图标后置位,确认框消失时清空)。 */
+    private var pendingBlock by mutableStateOf<ConnStatsRec?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
+            val scope = rememberCoroutineScope()
             AutoSystemBarStyle(AppPrefs.themeMode(this))
             SmartProxyTheme(mode = AppPrefs.themeMode(this)) {
                 MaterialTheme(colorScheme = NetworkStatusColors) {
@@ -137,9 +147,42 @@ class NetworkStatusActivity : ComponentActivity() {
                         onToggleExpand = { uid ->
                             expandedUids = if (uid in expandedUids) expandedUids - uid else expandedUids + uid
                         },
+                        onBlockConn = { conn -> pendingBlock = conn },
                         onPoll = poll,
                         onBack = { finish() }
                     )
+                    // 封禁确认框:持久化 ACL + 掐断现有连接是破坏性操作,弹框确认再执行。
+                    pendingBlock?.let { conn ->
+                        AlertDialog(
+                            onDismissRequest = { pendingBlock = null },
+                            title = { Text("封禁该目标?") },
+                            text = {
+                                Text(
+                                    "${hostPort(conn.host, conn.port)}\n\n" +
+                                            "该目标后续连接将被拒绝,现有连接立即断开,重启后保留。"
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    val target = conn.host
+                                    pendingBlock = null
+                                    scope.launch {
+                                        val result = withContext(Dispatchers.IO) {
+                                            runCatching { smartproxy.mobile.Mobile.blockConnection(target) }
+                                        }
+                                        result
+                                            .onSuccess { Toast.makeText(this@NetworkStatusActivity, "已封禁 $target", Toast.LENGTH_SHORT).show() }
+                                            .onFailure { e ->
+                                                Toast.makeText(this@NetworkStatusActivity, "封禁失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                                            }
+                                    }
+                                }) { Text("封禁") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { pendingBlock = null }) { Text("取消") }
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -243,6 +286,7 @@ private val UpGreen = Color(0xFF4CAF50)
 private val DownBlue = Color(0xFF3E7BFA)
 private val TcpBadge = Color(0xFF7B5FA6)
 private val UdpBadge = Color(0xFF3E7BFA)
+private val BlockRed = Color(0xFFE53935)
 
 private val NetworkStatusColors get() =
     if (ThemeState.isDark) darkColorScheme(primary = PurpleText)
@@ -274,6 +318,7 @@ private fun NetworkStatusScreen(
     expandedUids: Set<Int>,
     active: Boolean,
     onToggleExpand: (Int) -> Unit,
+    onBlockConn: (ConnStatsRec) -> Unit,
     onPoll: suspend () -> Unit,
     onBack: () -> Unit
 ) {
@@ -337,7 +382,8 @@ private fun NetworkStatusScreen(
                         AppGroup(
                             item = item,
                             expanded = item.uid in expandedUids,
-                            onToggle = { onToggleExpand(item.uid) }
+                            onToggle = { onToggleExpand(item.uid) },
+                            onBlockConn = onBlockConn
                         )
                     }
                 }
@@ -359,7 +405,7 @@ private fun NetworkStatusScreen(
 
 /** 应用组:图标 + 名 + ↑/↓ 网速;整行点击展开/收起连接明细。 */
 @Composable
-private fun AppGroup(item: AppItem, expanded: Boolean, onToggle: () -> Unit) {
+private fun AppGroup(item: AppItem, expanded: Boolean, onToggle: () -> Unit, onBlockConn: (ConnStatsRec) -> Unit) {
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = CardBg,
@@ -423,7 +469,7 @@ private fun AppGroup(item: AppItem, expanded: Boolean, onToggle: () -> Unit) {
                     if (item.conns.isEmpty()) {
                         Text("暂无连接明细", fontSize = 11.sp, color = GreyText, modifier = Modifier.padding(vertical = 4.dp))
                     } else {
-                        item.conns.forEach { conn -> ConnRow(conn) }
+                        item.conns.forEach { conn -> ConnRow(conn, onBlock = { onBlockConn(conn) }) }
                     }
                 }
             }
@@ -431,9 +477,9 @@ private fun AppGroup(item: AppItem, expanded: Boolean, onToggle: () -> Unit) {
     }
 }
 
-/** 连接明细行:TCP/UDP 徽标 + host:port + 累计上下行。 */
+/** 连接明细行:TCP/UDP 徽标 + host:port + 累计上下行 + 封禁按钮(加入 ACL 并掐断)。 */
 @Composable
-private fun ConnRow(conn: ConnStatsRec) {
+private fun ConnRow(conn: ConnStatsRec, onBlock: () -> Unit) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -453,7 +499,7 @@ private fun ConnRow(conn: ConnStatsRec) {
             )
         }
         Spacer(Modifier.width(10.dp))
-        Column {
+        Column(Modifier.weight(1f)) {
             Text(
                 hostPort(conn.host, conn.port),
                 fontSize = 13.sp,
@@ -467,6 +513,14 @@ private fun ConnRow(conn: ConnStatsRec) {
                 color = GreyText,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
+            )
+        }
+        IconButton(onClick = onBlock, modifier = Modifier.size(28.dp)) {
+            Icon(
+                Icons.Filled.Block,
+                contentDescription = "封禁该目标",
+                tint = BlockRed,
+                modifier = Modifier.size(16.dp)
             )
         }
     }

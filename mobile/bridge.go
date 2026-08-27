@@ -224,6 +224,9 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 			slog.Error("failed to reload ACL", "error", err)
 		} else {
 			slog.Info("ACL rules reloaded")
+			// 规则变更对现存连接即时生效:掐断所有命中新封锁目标(域名/IP)的活跃连接。
+			// 幂等 —— 只掐命中项,reload 撤销某封锁不会误伤。
+			eng.TUNHandler.KillBlockedConnections()
 		}
 	})
 	watcher.SetChnRouteReloader(func() {
@@ -343,4 +346,16 @@ func GetConnectionStats() (string, error) {
 		return `{"apps":[]}`, nil
 	}
 	return globalEngine.ConnectionStats(), nil
+}
+
+// BlockConnection 把某条连接的目标(域名/IP)加入 ACL 封锁列表并立即生效:写 acl.txt
+// → fsnotify → RuleEng.Reload → KillBlockedConnections 掐断现存匹配连接。
+// 「联网状态」页「封禁」按钮调用;error 走 gomobile 抛 Java 异常约定。
+func BlockConnection(host string) error {
+	engineMu.Lock()
+	defer engineMu.Unlock()
+	if globalEngine == nil {
+		return fmt.Errorf("engine not running")
+	}
+	return globalEngine.BlockConnection(host)
 }

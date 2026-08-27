@@ -1,11 +1,13 @@
 package engine
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -130,6 +132,70 @@ func (e *Engine) SetConnStatsEnabled(on bool) {
 // ConnectionStats 返回按 app(uid)分组的连接快照 JSON(供 UI 每秒轮询)。
 func (e *Engine) ConnectionStats() string {
 	return e.TUNHandler.ConnectionStats()
+}
+
+// BlockConnection 把某条连接的目标(域名/IP)加入 ACL 封锁列表并立即生效:追加
+// `block domain <d>` / `block ip <ip>` 到 acl.txt(去重),fsnotify 触发 RuleEng.Reload,
+// reloader 回调随即 KillBlockedConnections 掐断现存匹配连接。域名小写化、去尾点;
+// IP 剥离 IPv6 方括号。持久化在 acl.txt,重启保留。
+func (e *Engine) BlockConnection(host string) error {
+	aclPath := e.Config.Load().Routing.ACLFile
+	if aclPath == "" {
+		return fmt.Errorf("acl_file not configured")
+	}
+	value := strings.Trim(strings.TrimSpace(host), "[]")
+	typ := "domain"
+	if net.ParseIP(value) != nil {
+		typ = "ip"
+	} else {
+		value = strings.ToLower(strings.TrimSuffix(value, "."))
+	}
+	line := "block " + typ + " " + value
+
+	// 去重:已存在的行直接返回(不写文件就不触发 reload,零副作用)。
+	exist, err := aclLineExists(aclPath, line)
+	if err != nil {
+		return err
+	}
+	if exist {
+		slog.Info("ACL block already present", "line", line)
+		return nil
+	}
+
+	f, err := os.OpenFile(aclPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open acl file for append: %w", err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString("\n" + line + "\n"); err != nil {
+		return fmt.Errorf("append acl entry: %w", err)
+	}
+	slog.Info("ACL block appended", "path", aclPath, "line", line)
+	return nil
+}
+
+// aclLineExists 检查 acl 文件是否已含该行(忽略首尾空白;文件不存在视为未含)。
+func aclLineExists(path, want string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		if strings.TrimSpace(sc.Text()) == want {
+			return true, nil
+		}
+	}
+	return false, sc.Err()
+}
+
+// KillBlockedConnections 透传给 TUN handler:ACL 变更后掐断现存命中封锁目标的连接。
+func (e *Engine) KillBlockedConnections() {
+	e.TUNHandler.KillBlockedConnections()
 }
 
 // maxConcurrentClients bounds the SOCKS5 client handler goroutines (see clientSem).

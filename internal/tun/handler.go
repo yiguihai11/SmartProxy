@@ -54,6 +54,10 @@ type TUNHandler struct {
 	// connStats 连接监控(「联网状态」页数据源):懒开关,页面打开才采集。
 	connStats ConnStats
 
+	// liveTCP 活跃 TCP 连接句柄注册表(「联网状态」页封禁时按 ACL 扫描掐断)。
+	// 与 connStats 共享同一 ConnStats,掐断时可即时移除统计记录。
+	liveTCP *liveTCP
+
 	udpSessions   sync.Map
 	cleanerOnce   sync.Once
 	cleanerStopCh chan struct{}
@@ -80,9 +84,12 @@ func NewHandler(cfg *config.Config, r *route.Router, re *rules.Engine, um *upstr
 		ruleEng:       re,
 		upstreamMgr:   um,
 		dnsHandler:    dh,
-		connStats:     NewConnStats(),
 		cleanerStopCh: make(chan struct{}),
 	}
+	// connStats 是值字段,须先赋好再取地址,确保 liveTCP 与 handler 共享同一实例
+	// (掐断时 Remove 统计记录才作用在同一张表上)。
+	h.connStats = NewConnStats()
+	h.liveTCP = newLiveTCP(&h.connStats)
 	h.config.Store(cfg)
 	return h
 }
@@ -197,6 +204,30 @@ func (h *TUNHandler) ConnectionStats() string {
 	return h.connStats.Snapshot()
 }
 
+// KillBlockedConnections 在 ACL 规则变更(Reload)后扫描现存连接,命中新封锁目标
+// (域名/IP)的立即掐断 —— 让「加入 ACL」除了拒绝新连接,对现存连接也即时生效。
+// 由 ACL reloader 回调调用(任何 ACL 变更都触发,幂等:只掐命中的)。
+func (h *TUNHandler) KillBlockedConnections() {
+	for _, hd := range h.liveTCP.snapshot() {
+		host := hd.hostValue()
+		blocked := (host != "" && h.ruleEng.IsDomainBlocked(host)) || h.ruleEng.IsIPBlocked(hd.ip)
+		if blocked {
+			slog.Info("TUN killed connection blocked by ACL", "host", host, "ip", hd.ip, "port", hd.port)
+			hd.kill()
+			// 立即注销,不等 relay 返回;relay 侧的 defer remove 幂等(已删则无操作)。
+			h.liveTCP.remove(hd)
+		}
+	}
+	h.udpSessions.Range(func(key, value any) bool {
+		sess := value.(*tunUdpSession)
+		if h.ruleEng.IsIPBlocked(sess.ip) {
+			slog.Info("TUN killed UDP session blocked by ACL", "ip", sess.ip)
+			sess.signalClose()
+		}
+		return true
+	})
+}
+
 func (h *TUNHandler) PrepareConnection(network string, source M.Socksaddr, destination M.Socksaddr, routeContext singtun.DirectRouteContext, timeout time.Duration) (singtun.DirectRouteDestination, error) {
 	return nil, nil
 }
@@ -263,6 +294,9 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 			conn = h.connStats.wrapTCP(conn, rec)
 		}
 	}
+	// 活跃连接登记(「联网状态」页封禁时按 ACL 扫描掐断):必须在 wrap 之后,
+	// 句柄持有的 app conn 与下游 relay 用的是同一个对象。rec 可空(页面未开)。
+	hd := h.liveTCP.add(conn, host, port, rec)
 
 	smartEnabled := h.config.Load().SmartProxy.Enabled && netutil.ContainsInt(h.config.Load().SmartProxy.Ports, port)
 
@@ -277,6 +311,8 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 			return
 		}
 		safego.Go("tun.handleConnect", func() {
+			hd.setRemote(remote)
+			defer h.liveTCP.remove(hd)
 			relay.TCPRelay(ctx, conn, remote, isProxy, nil)
 			conn.Close()
 			remote.Close()
@@ -288,15 +324,16 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 	}
 
 	safego.Go("tun.handleSmartConnect", func() {
-		h.handleSmartConnect(ctx, conn, host, port, rec)
+		h.handleSmartConnect(ctx, conn, host, port, rec, hd)
 		if onClose != nil {
 			onClose(nil)
 		}
 	})
 }
 
-func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host string, port int, rec *connRecord) {
+func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host string, port int, rec *connRecord, hd *tcpHandle) {
 	defer conn.Close()
+	defer h.liveTCP.remove(hd)
 
 	firstPkt, err := ReadClientHello(conn, 3*time.Second)
 	if err != nil {
@@ -308,6 +345,7 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 
 	domain := ExtractDomain(firstPkt)
 	h.connStats.setHost(rec, domain)
+	hd.setHost(domain)
 	if domain != "" {
 		// Logged once per connection; the hot path is demoted to Debug
 		slog.Debug("extracted domain", "domain", domain)
@@ -326,6 +364,7 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 			return
 		}
 		defer remote.Close()
+		hd.setRemote(remote)
 		if len(firstPkt) > 0 {
 			if _, err := remote.Write(firstPkt); err != nil {
 				slog.Debug("TUN error forwarding first packet", "error", err)
@@ -343,6 +382,7 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 		return
 	}
 	defer remote.Close()
+	hd.setRemote(remote)
 	slog.Info("TUN smart connection established", "host", host, "port", port, "domain", domain)
 	relay.TCPRelay(ctx, conn, remote, isProxy, prefix)
 }
@@ -422,6 +462,7 @@ type tunUdpSession struct {
 	timeout    time.Duration
 	closeCh    chan struct{}
 	closeOnce  sync.Once
+	ip         string // 目标 IP(「封禁」按 ACL 扫描掐断用)
 }
 
 func (s *tunUdpSession) signalClose() {
@@ -483,6 +524,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, de
 
 	timeout := h.getUDPTimeout(int(destination.Port))
 	sess := &tunUdpSession{
+		ip:      destination.Addr.String(),
 		timeout: timeout,
 		closeCh: make(chan struct{}),
 	}

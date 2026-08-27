@@ -211,6 +211,36 @@ func (cs *ConnStats) evictOneLocked() {
 	cs.total--
 }
 
+// Remove 立即移除一条连接记录(「封禁」掐断连接时调用):字节并入该 app 累计,
+// 行即刻从活跃明细消失,不等 30s idle 淘汰。rec 必须来自本 ConnStats 的 begin。
+// 锁序与 Snapshot / evictOneLocked 一致(cs.mu → us.mu)。
+func (cs *ConnStats) Remove(rec *connRecord) {
+	if rec == nil {
+		return
+	}
+	cs.mu.Lock()
+	us := cs.byUID[rec.uid]
+	if us == nil {
+		cs.mu.Unlock()
+		return
+	}
+	us.mu.Lock()
+	for i, r := range us.conns {
+		if r == rec {
+			us.conns = append(us.conns[:i], us.conns[i+1:]...)
+			break
+		}
+	}
+	if len(us.conns) == 0 {
+		delete(cs.byUID, rec.uid)
+	}
+	us.up.Add(rec.up.Load())
+	us.down.Add(rec.down.Load())
+	us.mu.Unlock()
+	cs.total--
+	cs.mu.Unlock()
+}
+
 // ── 计数 wrapper ──────────────────────────────────────────────────────────
 
 // countingConn 包 net.Conn 计字节:客户端写的(引擎 Read)= 上行,引擎写的(客户端
