@@ -243,3 +243,105 @@ func TestConnStatsReset_Clears(t *testing.T) {
 	cs.mu.Unlock()
 	assert.Equal(t, `{"apps":[]}`, cs.Snapshot())
 }
+
+func TestConnStatsIdleRemoval_FiveSeconds(t *testing.T) {
+	cs := NewConnStats()
+	cs.SetEnabled(true)
+	defer cs.SetEnabled(false)
+
+	// idle 阈值已从 30s 收到 5s:「最后流量后 5 秒再消失」。快照对 idle=5s 的移除,
+	// 对 3s 的保留(用户要求 5 秒宽限)。
+	fresh := cs.begin(10123, 6, "1.2.3.4", 80)
+	aged := cs.begin(10123, 6, "1.2.3.5", 81)
+	fresh.lastSeen.Store(time.Now().Add(-3 * time.Second).Unix()) // < 5s:仍显示
+	aged.lastSeen.Store(time.Now().Add(-10 * time.Second).Unix()) // > 5s:淡出
+
+	apps := parseSnapshot(t, cs.Snapshot())
+	require.Len(t, apps, 1)
+	require.Len(t, apps[0].Conns, 1, "5s 内仍保留,超过 5s 淡出")
+	assert.Equal(t, "1.2.3.4", apps[0].Conns[0].Host)
+}
+
+func TestConnStatsPin_KeepsIdleConn(t *testing.T) {
+	cs := NewConnStats()
+	cs.SetEnabled(true)
+	defer cs.SetEnabled(false)
+
+	recA := cs.begin(10123, 6, "1.2.3.4", 443) // 被查看的 app
+	recB := cs.begin(20234, 6, "1.2.3.5", 443) // 未查看的 app
+	recA.lastSeen.Store(time.Now().Add(-2 * connStatsIdleRemove).Unix())
+	recB.lastSeen.Store(time.Now().Add(-2 * connStatsIdleRemove).Unix())
+
+	// 未 pin:两条都 idle → 都淡出,快照空。
+	apps := parseSnapshot(t, cs.Snapshot())
+	assert.Empty(t, apps, "未 pin 时 idle 连接照常淡出")
+
+	// pin 后重新登记一条 idle 连接:该 app 不淡出,其余(此处无)照常。
+	recA2 := cs.begin(10123, 6, "1.2.3.4", 443)
+	recA2.lastSeen.Store(time.Now().Add(-2 * connStatsIdleRemove).Unix())
+	cs.SetPin(10123)
+	apps = parseSnapshot(t, cs.Snapshot())
+	require.Len(t, apps, 1, "被 pin 的 app 应保留")
+	assert.Equal(t, int32(10123), apps[0].UID)
+	require.Len(t, apps[0].Conns, 1)
+	assert.Equal(t, "1.2.3.4", apps[0].Conns[0].Host)
+}
+
+func TestConnStatsPin_UnpinFades(t *testing.T) {
+	cs := NewConnStats()
+	cs.SetEnabled(true)
+	defer cs.SetEnabled(false)
+
+	rec := cs.begin(10123, 6, "1.2.3.4", 443)
+	rec.lastSeen.Store(time.Now().Add(-2 * connStatsIdleRemove).Unix())
+	cs.SetPin(10123)
+
+	// pin 中:不淡出。
+	apps := parseSnapshot(t, cs.Snapshot())
+	require.Len(t, apps, 1)
+	require.Len(t, apps[0].Conns, 1)
+
+	// 解除 pin:下次快照按 idle 淡出。
+	cs.SetPin(-1)
+	apps = parseSnapshot(t, cs.Snapshot())
+	assert.Empty(t, apps, "解除 pin 后 idle 连接应淡出")
+}
+
+func TestConnStatsPin_ResetOnDisable(t *testing.T) {
+	cs := NewConnStats()
+	cs.SetEnabled(true)
+	cs.SetPin(10123)
+	cs.SetEnabled(false)
+	assert.Equal(t, int32(-1), cs.pinUID.Load(), "关闭监控应复位 pin")
+}
+
+func TestConnStatsEviction_PinnedSurvives(t *testing.T) {
+	cs := NewConnStats()
+	cs.SetEnabled(true)
+	defer cs.SetEnabled(false)
+
+	// 塞满:普通 uid 的 lastSeen=now;最后一条是 pin 的 uid 的旧连接。
+	for i := 0; i < connStatsMaxRecords-1; i++ {
+		cs.begin(int32(1000+i%7), 6, "1.2.3.4", 80)
+	}
+	pinnedOld := cs.begin(9999, 6, "1.2.3.4", 80)
+	pinnedOld.lastSeen.Store(time.Now().Add(-10 * time.Second).Unix())
+	cs.SetPin(9999)
+
+	// 新连接触发淘汰:应逐出普通 uid 里最旧的,而不是被 pin 的 9999。
+	_ = cs.begin(7777, 6, "5.6.7.8", 443)
+
+	cs.mu.Lock()
+	found := false
+	for _, us := range cs.byUID {
+		us.mu.Lock()
+		for _, r := range us.conns {
+			if r == pinnedOld {
+				found = true
+			}
+		}
+		us.mu.Unlock()
+	}
+	cs.mu.Unlock()
+	assert.True(t, found, "被 pin 的连接不应被逐出")
+}

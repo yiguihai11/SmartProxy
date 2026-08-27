@@ -337,6 +337,18 @@ func SetConnStatsEnabled(enabled bool) {
 	globalEngine.SetConnStatsEnabled(enabled)
 }
 
+// SetConnStatsPin 固定某 app(uid)的连接不被 idle 清扫(「联网状态」页展开该应用
+// 明细时):正在查看的明细无流量也不消失,收起 / 切到别处后按 5s 宽限淡出。
+// -1 解除。引擎未运行是 no-op。
+func SetConnStatsPin(uid int32) {
+	engineMu.Lock()
+	defer engineMu.Unlock()
+	if globalEngine == nil {
+		return
+	}
+	globalEngine.SetConnStatsPin(uid)
+}
+
 // GetConnectionStats 返回按 app(uid)分组的连接快照 JSON,供「联网状态」页每秒轮询。
 // 引擎未运行返回 {"apps":[]}。
 func GetConnectionStats() (string, error) {

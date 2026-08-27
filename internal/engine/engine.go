@@ -134,6 +134,12 @@ func (e *Engine) ConnectionStats() string {
 	return e.TUNHandler.ConnectionStats()
 }
 
+// SetConnStatsPin 固定「正在查看」的 app 的连接不被 idle 清扫(「联网状态」页
+// 展开某应用明细时);-1 解除,解除后按 5s 宽限正常淡出。
+func (e *Engine) SetConnStatsPin(uid int32) {
+	e.TUNHandler.SetConnStatsPin(uid)
+}
+
 // BlockConnection 把某条连接的目标(域名/IP)加入 ACL 封锁列表并立即生效:追加
 // `block domain <d>` / `block ip <ip>` 到 acl.txt(去重),fsnotify 触发 RuleEng.Reload,
 // reloader 回调随即 KillBlockedConnections 掐断现存匹配连接。域名小写化、去尾点;

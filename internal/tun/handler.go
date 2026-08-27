@@ -204,6 +204,12 @@ func (h *TUNHandler) ConnectionStats() string {
 	return h.connStats.Snapshot()
 }
 
+// SetConnStatsPin 固定某 app(uid)的连接不被 idle 清扫(「联网状态」页展开某应用
+// 明细时);-1 解除,解除后按 connStatsIdleRemove(5s)正常淡出。
+func (h *TUNHandler) SetConnStatsPin(uid int32) {
+	h.connStats.SetPin(uid)
+}
+
 // KillBlockedConnections 在 ACL 规则变更(Reload)后扫描现存连接,命中新封锁目标
 // (域名/IP)的立即掐断 —— 让「加入 ACL」除了拒绝新连接,对现存连接也即时生效。
 // 由 ACL reloader 回调调用(任何 ACL 变更都触发,幂等:只掐命中的)。

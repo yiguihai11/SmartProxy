@@ -22,9 +22,13 @@ import (
 // connStatsIdleRemove 在 Snapshot 时懒清扫(调用方 = UI 1s 轮询,天然只在页面
 // 打开时发生),移除时并入该 app 累计。某 app 全部连接都被移除后,该 app 一并
 // 从快照消失 ——「无活动的应用不显示」;快照里先报出它最后的累计总量再淡出。
+// 被 pin(正在查看)的 app 连接跳过 idle 清扫,查看期间不淡出。
 const (
 	connStatsMaxRecords = 2000
-	connStatsIdleRemove = 30 * time.Second
+	// 连接最后一次有流量后保留的时间:超过即视为「已 idle」,Snapshot 懒清扫移除。
+	// 用户反馈无流量后消失太快,想要「最后流量后 5 秒再消失」—— 从 30s 收到 5s,
+	// 列表只留最近 5 秒仍在动的东西。被 pin 查看的 app 不受此限。
+	connStatsIdleRemove = 5 * time.Second
 )
 
 // connRecord 是监控里的一条连接(生命周期 = 该连接的观察窗口)。
@@ -55,24 +59,38 @@ type uidStats struct {
 type ConnStats struct {
 	enabled atomic.Bool
 
+	// pinUID:正在查看(展开明细)的 app,其连接不被 idle 清扫 / 不参与逐出
+	// (「查看某条明细时不消失」);-1 = 无。查看期间可以没有流量但行保留,
+	// 解除 pin 后按 connStatsIdleRemove 正常淡出。页面关闭时一并复位。
+	pinUID atomic.Int32
+
 	mu    sync.Mutex
 	byUID map[int32]*uidStats
 	total int // 存活记录数(上限 connStatsMaxRecords)
 }
 
 func NewConnStats() ConnStats {
-	return ConnStats{byUID: make(map[int32]*uidStats)}
+	cs := ConnStats{byUID: make(map[int32]*uidStats)}
+	cs.pinUID.Store(-1)
+	return cs
 }
 
 func (cs *ConnStats) Enabled() bool { return cs.enabled.Load() }
 
-// SetEnabled 开/关监控。关闭时清空全部记录:页面重新打开 = 干净重来。
+// SetPin 固定某 app(uid)的连接不被 idle 清扫 / 逐出;-1 解除。「联网状态」页
+// 展开某应用明细时 pin 它:正在查看的连接无流量也不消失,收起 / 切到别处后
+// 按 5s 宽限淡出。
+func (cs *ConnStats) SetPin(uid int32) { cs.pinUID.Store(uid) }
+
+// SetEnabled 开/关监控。关闭时清空全部记录 + 复位 pin:页面重新打开 = 干净重来,
+// 防过期 pin 误保留下个会话的连接。
 func (cs *ConnStats) SetEnabled(on bool) {
 	if on {
 		cs.enabled.Store(true)
 		return
 	}
 	cs.enabled.Store(false)
+	cs.pinUID.Store(-1)
 	cs.mu.Lock()
 	cs.byUID = make(map[int32]*uidStats)
 	cs.total = 0
@@ -129,11 +147,16 @@ func (cs *ConnStats) Snapshot() string {
 	defer cs.mu.Unlock()
 
 	now := time.Now().Unix()
+	pin := cs.pinUID.Load()
 	out := connStatsJSON{Apps: make([]appStatsJSON, 0, len(cs.byUID))}
 	for uid, us := range cs.byUID {
 		us.mu.Lock()
 		kept := us.conns[:0]
 		for _, r := range us.conns {
+			if r.uid == pin {
+				kept = append(kept, r) // 正在查看的 app:无流量也不淡出
+				continue
+			}
 			if now-r.lastSeen.Load() > int64(connStatsIdleRemove.Seconds()) {
 				us.up.Add(r.up.Load())
 				us.down.Add(r.down.Load())
@@ -181,15 +204,31 @@ func (cs *ConnStats) evictOneLocked() {
 	var victimUs *uidStats
 	var victim *connRecord
 	var oldest int64 = 1<<62 - 1
+	var anyUs *uidStats
+	var any *connRecord
+	var oldestAny int64 = 1<<62 - 1
+	pin := cs.pinUID.Load()
 	for _, us := range cs.byUID {
 		us.mu.Lock()
 		for _, r := range us.conns {
-			if ls := r.lastSeen.Load(); ls < oldest {
+			ls := r.lastSeen.Load()
+			if ls < oldestAny {
+				oldestAny = ls
+				any, anyUs = r, us
+			}
+			if r.uid == pin {
+				continue // 正在查看的 app 不参与逐出
+			}
+			if ls < oldest {
 				oldest = ls
 				victim, victimUs = r, us
 			}
 		}
 		us.mu.Unlock()
+	}
+	if victimUs == nil || victim == nil {
+		// 全部被 pin(罕见)→ 兜底逐出全局最旧,保持表有界。
+		victim, victimUs = any, anyUs
 	}
 	if victimUs == nil || victim == nil {
 		return

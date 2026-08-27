@@ -73,6 +73,9 @@ import org.json.JSONObject
  *  - 每秒轮询 Mobile.getConnectionStats()(gomobile 调用阻塞调用线程,走 Dispatchers.IO;
  *    与 [[gomobile-error-throws]] 约定一致,error 走异常抛)。
  *  - 首个数据到 → loading 消失;空 = "暂无联网应用"(无活动的 app 天然不进表)。
+ *  - 消失节奏:引擎对「最后流量后 5 秒」的连接做 idle 清扫(连接无流量 5 秒后淡出,
+ *    字节并入该 app 累计);展开查看某应用时引擎 pin 它 —— 正在查看的明细无流量
+ *    也不消失,收起 / 切到别处才按 5s 宽限淡出。
  *  - 组头:应用图标 + 名 + ↑/↓ 实时网速(δ(当前-上次)/1s,KB/s);点击展开连接明细。
  *  - 连接行:host(域名或 IP):端口 + TCP/UDP 徽标 + 累计上下行;smart TCP 才显示域名,
  *    UDP / 非 smart 一律 IP(引擎设计定稿,零新增解析开销)。
@@ -115,6 +118,10 @@ class NetworkStatusActivity : ComponentActivity() {
     /** 待确认封禁的连接(点连接行的封禁图标后置位,确认框消失时清空)。 */
     private var pendingBlock by mutableStateOf<ConnStatsRec?>(null)
 
+    /** 当前 pin 到引擎的 uid(-1 = 无):最近展开的应用。展开即 pin —— 正在查看的
+     *  应用连接无流量也不被引擎淡出;收起该应用 / 展开别的才解除。 */
+    private var pinnedUid by mutableStateOf(-1)
+
     /** onPause 排起的「延迟关采集」任务:离开页面先不立刻清空统计,给 5 秒宽限,
      *  5 秒内切回来则取消它、数据原样保留;超时才真正 setConnStatsEnabled(false) 清表。 */
     private var statsCloseJob: Job? = null
@@ -151,7 +158,20 @@ class NetworkStatusActivity : ComponentActivity() {
                         expandedUids = expandedUids,
                         active = active,
                         onToggleExpand = { uid ->
-                            expandedUids = if (uid in expandedUids) expandedUids - uid else expandedUids + uid
+                            val expanded = uid !in expandedUids
+                            expandedUids = if (expanded) expandedUids + uid else expandedUids - uid
+                            // pin 跟随「正在查看」的应用:展开即 pin(明细不因无流量淡出),
+                            // 收起且正 pin 着它才解除;收起别的应用不影响当前 pin(允许多开,保最新)。
+                            val newPin = when {
+                                expanded -> uid
+                                pinnedUid == uid -> -1
+                                else -> pinnedUid
+                            }
+                            if (newPin != pinnedUid) {
+                                pinnedUid = newPin
+                                runCatching { smartproxy.mobile.Mobile.setConnStatsPin(newPin) }
+                                    .onFailure { Log.e(TAG, "[NetworkStatus] setConnStatsPin failed", it) }
+                            }
                         },
                         onBlockConn = { conn -> pendingBlock = conn },
                         onPoll = poll,
@@ -202,6 +222,10 @@ class NetworkStatusActivity : ComponentActivity() {
         statsCloseJob = null
         runCatching { smartproxy.mobile.Mobile.setConnStatsEnabled(true) }
             .onFailure { Log.e(TAG, "[NetworkStatus] setConnStatsEnabled(true) failed", it) }
+        // 后台延迟关采集可能已把引擎 pin 复位(-1):回来按当前展开状态重新 pin,
+        // 防正在查看的应用因 pin 失同步而无流量淡出(-1 时是 no-op)。
+        runCatching { smartproxy.mobile.Mobile.setConnStatsPin(pinnedUid) }
+            .onFailure { Log.e(TAG, "[NetworkStatus] setConnStatsPin failed", it) }
     }
 
     /** 离开页面(返回上个页 / 切后台 / 被覆盖):停轮询,但采集延迟 5 秒再关。
