@@ -1,6 +1,7 @@
 package io.github.yiguihai11.smartproxy
 
 import android.content.Context
+import android.content.SharedPreferences
 
 /**
  * App 级偏好(§4.4)。纯 Go 面板还原后,IPv4/IPv6 拦截、DNS、管理密码等配置字段的
@@ -113,6 +114,20 @@ object AppPrefs {
 
     fun setServiceMode(context: Context, mode: String) {
         sp(context).edit().putString(KEY_SERVICE_MODE, mode).apply()
+    }
+
+    /**
+     * 注册 serviceMode 变化回调(UI 把 SharedPreferences 变化接成 Compose state,§8):
+     * 侧边栏菜单显示条件、监听开关副标题等直接读 serviceMode 的 UI 依赖它,否则切模式后
+     * Compose 不重组,隐藏菜单不恢复、副标题不刷新。返回 () -> Unit 注销函数,配 DisposableEffect。
+     */
+    fun observeServiceMode(context: Context, onChange: () -> Unit): () -> Unit {
+        val sp = sp(context)
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == KEY_SERVICE_MODE) onChange()
+        }
+        sp.registerOnSharedPreferenceChangeListener(listener)
+        return { sp.unregisterOnSharedPreferenceChangeListener(listener) }
     }
 
     /** 电池优化豁免引导已弹次数:仅代理(SOCKS5)模式后台连通性依赖「忽略电池优化」,

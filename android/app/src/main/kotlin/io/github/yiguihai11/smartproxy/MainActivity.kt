@@ -345,6 +345,25 @@ private val IconFont = FontFamily(Font(R.font.iconfont))
 /** 项目主页(抽屉底部版本行点击跳转)。 */
 private const val PROJECT_URL = "https://github.com/yiguihai11/SmartProxy"
 
+/**
+ * 服务模式(§8)的可观察 Compose state:SharedPreferences 变化 → OnSharedPreferenceChangeListener
+ * → state 更新 → 重组。侧边栏菜单显示条件(代理应用 / DNS / 排除路由 / 联网状态)、监听开关
+ * 副标题等直接读 AppPrefs.serviceMode 的 UI 都依赖它:否则切模式后 drawerContent 被 Compose
+ * skipping 跳过,隐藏菜单不恢复、副标题不刷新。返回 () -> Unit 注销,DisposableEffect 管生命周期。
+ */
+@Composable
+private fun rememberServiceMode(): String {
+    val context = LocalContext.current
+    var serviceMode by remember { mutableStateOf(AppPrefs.serviceMode(context)) }
+    DisposableEffect(context) {
+        val unregister = AppPrefs.observeServiceMode(context) {
+            serviceMode = AppPrefs.serviceMode(context)
+        }
+        onDispose { unregister() }
+    }
+    return serviceMode
+}
+
 @Composable
 private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme: () -> Unit) {
     val context = LocalContext.current
@@ -471,6 +490,9 @@ private fun AppDrawerContent(
     onOpenNetworkStatus: () -> Unit
 ) {
     val context = LocalContext.current
+    // 服务模式做成可观察 state(见 rememberServiceMode):切模式后抽屉菜单/副标题实时刷新,
+    // 否则 drawerContent 被 Compose 跳过(skipping),隐藏菜单不恢复、副标题不更新(§8)。
+    val serviceMode = rememberServiceMode()
     // 联网状态门控 = VPN 运行中 && 仅绕过(黑名单)模式:仅绕过下应用分流行为与「联网状态」
     // 的按应用维度展示最相关;白名单模式隐藏入口(设计定稿 §6.1)。
     val vpnRunning by SmartProxyVpnService.isRunning.collectAsState()
@@ -533,7 +555,7 @@ private fun AppDrawerContent(
             // 侧边栏菜单项：代理应用 (Apps)(per-app 分流走 VpnService.Builder、禁止联网
             // 走 TUN 数据路径,仅 VPN 隧道模式生效;仅代理 SOCKS5 无 VpnService,入口一并
             // 隐藏(§8)。规则仍留在 AppPrefs,切回 VPN 模式照常生效。)
-            if (AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN) {
+            if (serviceMode == AppPrefs.MODE_VPN) {
                 DrawerMenuItem(
                     title = "代理应用 (Apps)",
                     subtitle = "选择各应用的代理 / 绕过规则",
@@ -544,7 +566,7 @@ private fun AppDrawerContent(
             // 侧边栏菜单项：DNS 服务器(builder.addDnsServer,仅 VPN 隧道模式生效;仅代理
             // SOCKS5 无 VpnService,注入不发生,入口一并隐藏(§6.1))。设置存 AppPrefs,
             // 切换服务模式不丢,回 VPN 模式照常注入。
-            if (AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN) {
+            if (serviceMode == AppPrefs.MODE_VPN) {
                 DrawerMenuItem(
                     title = "DNS 服务器",
                     subtitle = "启动时注入的 IPv4 / IPv6 DNS",
@@ -554,7 +576,7 @@ private fun AppDrawerContent(
 
             // 侧边栏菜单项：排除路由(builder.excludeRoute,仅 VPN 隧道模式 + API 33+ 特性;
             // 仅代理 SOCKS5 无 VpnService,excludeRoute 不生效,入口一并隐藏(§6.1))。
-            if (AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (serviceMode == AppPrefs.MODE_VPN && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 DrawerMenuItem(
                     title = "排除路由",
                     subtitle = "不走 VPN 隧道直连的网段 (API 33+)",
@@ -565,13 +587,13 @@ private fun AppDrawerContent(
             // 侧边栏菜单项：服务模式(VPN 隧道 / 仅代理 SOCKS5,§8)。副标题实时显示当前模式。
             DrawerMenuItem(
                 title = "服务模式",
-                subtitle = "当前: ${serviceModeLabel(AppPrefs.serviceMode(context))}",
+                subtitle = "当前: ${serviceModeLabel(serviceMode)}",
                 onClick = onOpenServiceMode
             )
 
             // 侧边栏菜单项：联网状态(仅 VPN 隧道服务模式 + 仅绕过 + 运行中才出现;懒采集,页面开才统计)
             // 连接监控只挂在 TUN 数据路径,仅代理(SOCKS5)模式监控恒空,入口一并隐藏(§6.1)。
-            if (AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN && vpnRunning && AppPrefs.globalMode(context)) {
+            if (serviceMode == AppPrefs.MODE_VPN && vpnRunning && AppPrefs.globalMode(context)) {
                 DrawerMenuItem(
                     title = "联网状态",
                     subtitle = "按应用的实时连接与网速",
@@ -661,10 +683,14 @@ private fun HomeLauncher(
     val context = LocalContext.current
     val running by SmartProxyVpnService.isRunning.collectAsState()
 
+    // 服务模式做成可观察 state(见 rememberServiceMode):切模式后监听开关的语义副标题
+    // (开机自启文案等)实时刷新,否则 HomeLauncher 组合被跳过时读旧值(§8)。
+    val serviceMode = rememberServiceMode()
+
     // 开关语义随服务模式(§8):VPN 隧道 = 拦截(tun.inet4/6_address,config.json 真源);
     // 仅代理(SOCKS5) = 监听(AppPrefs.socksListen → listen.host,首页与面板同源)。
     // remember 以 socksMode 为 key:切换服务模式时重新读真源,不残留旧模式的显示态。
-    val socksMode = AppPrefs.serviceMode(context) == AppPrefs.MODE_SOCKS5
+    val socksMode = serviceMode == AppPrefs.MODE_SOCKS5
     var ipv4 by remember(socksMode) { mutableStateOf(
         if (socksMode) AppPrefs.socksListen(context) != AppPrefs.SOCKS_LISTEN_V6
         else ConfigProvider.ipv4(context)
@@ -835,7 +861,7 @@ private fun HomeLauncher(
             }
             SwitchCard(
                 title = "开机自启",
-                subtitle = if (AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN)
+                subtitle = if (serviceMode == AppPrefs.MODE_VPN)
                     "开机后自动启动 VPN(需已授权)" else "开机后自动启动仅代理服务",
                 checked = bootAuto,
                 onCheckedChange = { v ->
