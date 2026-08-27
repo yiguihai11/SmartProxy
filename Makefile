@@ -129,7 +129,7 @@ android:
 	# -androidapi:gomobile 默认 16,而 CI runner 预装 NDK 27 只支持 21..35,必须 >=21。
 	# 用 26 = app 的 minSdk:该值同时写进 AAR 的 minSdkVersion(manifestFmt),若用 35 会
 	# 和 app 的 minSdk 26 冲突导致 manifest 合并失败。AndroidAPIPath(26) 会选已装的
-	# platforms/android-35(>=26 的最高版)当编译用的 android.jar。
+	# platforms/android-36(>=26 的最高版)当编译用的 android.jar。
 	# -ldflags="-s -w" -trimpath:剥掉 Go .so 的 DWARF 调试信息与符号表,显著瘦身
 	# (gvisor 栈的 .so 是 APK 体积大头,配合 ABI 分包 + APK 内 .so 压缩)。
 	gomobile bind -tags with_gvisor -target=android -androidapi=26 -javapkg=smartproxy \

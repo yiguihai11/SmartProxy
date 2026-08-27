@@ -18,7 +18,9 @@ fun deriveVersionCode(version: String): Int {
 
 android {
     namespace = "io.github.yiguihai11.smartproxy"
-    compileSdk = 35
+    // 编译用最新 API(Android 16 = API 36);targetSdk 暂留 35 —— Android 16 对
+    // targetSdk 36 强制 edge-to-edge 等运行时行为,单独评估后再升。
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "io.github.yiguihai11.smartproxy"
@@ -72,9 +74,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
     buildFeatures {
         compose = true
     }
@@ -87,12 +86,20 @@ android {
     }
 }
 
+// KGP 2.x 推荐 DSL:android{} 里的 kotlinOptions 已废弃(2.4 可能移除),jvmTarget 移这里。
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
 dependencies {
     // Go engine AAR (built by `make android` → build/smartproxy.aar, copied to
     // app/libs/ during CI). Not committed; see scripts/README or the workflow.
     implementation(files("libs/smartproxy.aar"))
 
-    implementation(platform("androidx.compose:compose-bom:2024.09.03"))
+    // 2026-08 最新稳定 BOM(Compose 1.11);Kotlin 2.4 的 compose 编译器要求 runtime 匹配,必须连带升。
+    implementation(platform("androidx.compose:compose-bom:2026.05.01"))
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")

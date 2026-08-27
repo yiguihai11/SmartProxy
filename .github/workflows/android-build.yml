@@ -33,11 +33,12 @@ jobs:
         run: |
           echo "VERSION=$(git describe --tags --match 'v[0-9]*' --always --dirty | sed 's/^v//')" >> "$GITHUB_ENV"
 
-      - name: Set up JDK 17
+      # JDK 21 (LTS):AGP 8.13 / Gradle 8.14 都支持,比 17 新的 LTS。
+      - name: Set up JDK 21
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
       # x/mobile@latest 要求 go 跟随 go.mod 的 go directive(当前 1.27),gomobile init
       # 内部又会 `go install gobind@latest`,故工具链必须跟到 1.27,且 gomobile 也用
@@ -65,7 +66,7 @@ jobs:
           # 所以 `|| true` 吞掉即可;真正拦路的包安装行在后面。
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platform-tools" "platforms;android-35" "build-tools;35.0.0" >/dev/null
+            "platform-tools" "platforms;android-36" "build-tools;35.0.0" >/dev/null
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           # runner 预置 ANDROID_SDK_ROOT=/usr/local/lib/android/sdk,与我们的 SDK 不同,
           # AGP 会报 "different paths to the SDK" 而拒绝构建。对齐成同一个。

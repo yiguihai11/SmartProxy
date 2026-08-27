@@ -11,7 +11,7 @@ version: 2.1
 #    diff base 不可用,强行过滤会把所有构建都跳过。省 credits 的路径过滤后续用
 #    path-filtering orb(第二 pipeline 参数化)再补。
 #  - executor 用 cimg/android 镜像(自带 Android SDK / cmdline-tools),SDK 组件
-#    仍显式 sdkmanager 幂等补齐(compileSdk=35 需要 platforms;android-35)。
+#    仍显式 sdkmanager 幂等补齐(compileSdk=36 需要 platforms;android-36)。
 #  - 环境变量跨步骤用 $BASH_ENV(GH 用 $GITHUB_ENV)。
 #  - APK 产物用 store_artifacts 暴露到 CircleCI Artifacts 页。
 # ─────────────────────────────────────────────────────────────────────────────
@@ -103,8 +103,8 @@ jobs:
             export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
             go install golang.org/x/mobile/cmd/gomobile@latest
 
-      # 确保 SDK 组件就位(cimg 镜像自带一部分;platforms;android-35 和
-      # build-tools;35.0.0 幂等补齐,compileSdk=35 必需)。
+      # 确保 SDK 组件就位(cimg 镜像自带一部分;platforms;android-36 和
+      # build-tools;35.0.0 幂等补齐,compileSdk=36 必需)。
       - run:
           name: Ensure Android SDK components
           command: |
@@ -117,7 +117,7 @@ jobs:
             # `yes | sdkmanager --licenses` 会因 yes 收 SIGPIPE(141) 而"失败",
             # 但许可此时已接受,`|| true` 吞掉即可(与 GH workflow 同)。
             yes | "$SDKMAN" --licenses >/dev/null 2>&1 || true
-            "$SDKMAN" "platform-tools" "platforms;android-35" "build-tools;35.0.0" >/dev/null
+            "$SDKMAN" "platform-tools" "platforms;android-36" "build-tools;35.0.0" >/dev/null
             # gomobile bind 需要 NDK(普通 cimg/android 不带,报 no usable NDK)。
             # 本镜像用 -ndk 变体预装,探测路径并导出 ANDROID_NDK_HOME 给 gomobile。
             NDK_DIR=$(ls -d "$ANDROID_HOME/ndk/"* 2>/dev/null | head -1)
