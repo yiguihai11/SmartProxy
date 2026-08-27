@@ -3,6 +3,7 @@
 [![go-test](https://github.com/yiguihai11/SmartProxy/actions/workflows/go-test.yml/badge.svg?branch=main&label=go-test)](https://github.com/yiguihai11/SmartProxy/actions/workflows/go-test.yml)
 [![android-build](https://github.com/yiguihai11/SmartProxy/actions/workflows/android-build.yml/badge.svg?branch=main&label=android-build)](https://github.com/yiguihai11/SmartProxy/actions/workflows/android-build.yml)
 [![update-chnroute](https://github.com/yiguihai11/SmartProxy/actions/workflows/update-chnroute.yml/badge.svg?branch=main&label=update-chnroute)](https://github.com/yiguihai11/SmartProxy/actions/workflows/update-chnroute.yml)
+[![CodeQL](https://github.com/yiguihai11/SmartProxy/actions/workflows/codeql.yml/badge.svg?branch=main&label=CodeQL)](https://github.com/yiguihai11/SmartProxy/security/code-scanning)
 [![CircleCI](https://circleci.com/gh/yiguihai11/SmartProxy.svg?style=shield)](https://app.circleci.com/pipelines/github/yiguihai11/SmartProxy)
 [![Go Report Card](https://goreportcard.com/badge/github.com/yiguihai11/SmartProxy)](https://goreportcard.com/report/github.com/yiguihai11/SmartProxy)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/yiguihai11/SmartProxy)](https://github.com/yiguihai11/SmartProxy/blob/main/go.mod)

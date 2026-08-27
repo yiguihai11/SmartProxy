@@ -1,0 +1,53 @@
+name: "CodeQL"
+
+# 代码安全扫描:Go 源码级 CodeQL 分析(extractor 直接从源码提取,不依赖编译,
+# 无需特殊 build tag)。产物 = GitHub Security → Code scanning alerts + README 徽章。
+# 触发:main 每次 push + PR + 每周调度兜底(CodeQL 规则包定期更新,重跑历史提交
+# 才能吃到新规则)。权限:security-events: write 是写入 code scanning alerts 所必需。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '37 5 * * 1'   # 每周一 05:37(避开 :00 整点)
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ['go']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Go 的 CodeQL 需要标准库快照,setup-go 保持一致(go-test / android-build 同 1.27)。
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27'
+          cache: true
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
