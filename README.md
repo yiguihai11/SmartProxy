@@ -5,8 +5,8 @@
 [![update-chnroute](https://github.com/yiguihai11/SmartProxy/actions/workflows/update-chnroute.yml/badge.svg?branch=main&label=update-chnroute)](https://github.com/yiguihai11/SmartProxy/actions/workflows/update-chnroute.yml)
 [![CodeQL](https://github.com/yiguihai11/SmartProxy/actions/workflows/codeql.yml/badge.svg?branch=main&label=CodeQL)](https://github.com/yiguihai11/SmartProxy/security/code-scanning)
 [![CircleCI](https://circleci.com/gh/yiguihai11/SmartProxy.svg?style=shield)](https://app.circleci.com/pipelines/github/yiguihai11/SmartProxy)
-[![Go Report Card](https://goreportcard.com/badge/github.com/yiguihai11/SmartProxy)](https://goreportcard.com/report/github.com/yiguihai11/SmartProxy)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/yiguihai11/SmartProxy)](https://github.com/yiguihai11/SmartProxy/blob/main/go.mod)
+[![codecov](https://img.shields.io/codecov/c/github/yiguihai11/SmartProxy)](https://codecov.io/gh/yiguihai11/SmartProxy)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 高性能智能路由代理：TUN 全局透明代理 + 标准 SOCKS5 服务双入口，自动国内外分流、DNS 反污染与 IP 优选、DPI 域名识别、多上游负载与健康检查、配置热重载。

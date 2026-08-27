@@ -39,8 +39,8 @@ jobs:
       # 不带只编译 stack_gvisor_stub。与 Makefile 的构建配置保持一致,保证 TUN 代码
       # 路径在 CI 上真实被编译、被测到(托管 runner 无 /dev/net/tun 时 TUN 用例自动 Skip,
       # 但编译正确性由本工作流保证)。
-      - name: Test (all packages)
-        run: go test -tags with_gvisor ./... -count=1
+      - name: Test (all packages, with coverage)
+        run: go test -tags with_gvisor -coverprofile=coverage.out -count=1 ./...
 
       # 并发热点包再跑一遍 race:engine 端到端回归(直连/代理/ACL/TUN)、
       # relay/udp 计数器与转发、upstream 会话管理。
@@ -52,3 +52,14 @@ jobs:
 
       - name: Build
         run: go build -tags with_gvisor ./...
+
+      # Codecov 覆盖率徽章的数据源。CODECOV_TOKEN 需在 repo Settings→Secrets and
+      # variables→Actions 配好(codecov.io 用 GitHub 登录后在仓库页拿 token)。
+      # token 未配时上传失败但不打断本 job(fail_ci_if_error: false),避免外部
+      # 服务未就绪把构建卡黄 —— 配好 token 后下一次 Go 改动自动出覆盖率徽章。
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.out
+          fail_ci_if_error: false
