@@ -182,7 +182,9 @@ class LogcatActivity : ComponentActivity() {
         result
             .onSuccess { text ->
                 val newLines = text.lines().filter { it.isNotBlank() }
-                lines = (lines + newLines).takeLast(MAX_LINES)
+                // 替换而非追加:logcat -d 每次返回完整缓冲,追加会把历史行连同
+                // "beginning of main" 头每轮重复一遍(列表全是重复项、信息一直跳)。
+                lines = newLines.takeLast(MAX_LINES)
                 error = null
             }
             .onFailure { e ->
