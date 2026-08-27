@@ -56,7 +56,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -66,8 +68,8 @@ import org.json.JSONObject
 /**
  * 联网状态页(侧边栏「联网状态」,仅绕过模式 + VPN 运行中):按应用分组显示实时连接明细。
  *
- *  - 懒开关:onResume 打开采集(Mobile.setConnStatsEnabled(true)),onPause 关闭;
- *    返回上个页 / 切后台即停采集 + 停轮询,引擎零开销(连接监控只在 enabled 时登记/计数)。
+ *  - 懒开关:onResume 打开采集(Mobile.setConnStatsEnabled(true));onPause 停轮询但采集
+ *    延迟 5 秒才关(快速切换回来数据仍在,超时才清空引擎统计表),引擎只在 enabled 时登记/计数。
  *  - 每秒轮询 Mobile.getConnectionStats()(gomobile 调用阻塞调用线程,走 Dispatchers.IO;
  *    与 [[gomobile-error-throws]] 约定一致,error 走异常抛)。
  *  - 首个数据到 → loading 消失;空 = "暂无联网应用"(无活动的 app 天然不进表)。
@@ -112,6 +114,10 @@ class NetworkStatusActivity : ComponentActivity() {
 
     /** 待确认封禁的连接(点连接行的封禁图标后置位,确认框消失时清空)。 */
     private var pendingBlock by mutableStateOf<ConnStatsRec?>(null)
+
+    /** onPause 排起的「延迟关采集」任务:离开页面先不立刻清空统计,给 5 秒宽限,
+     *  5 秒内切回来则取消它、数据原样保留;超时才真正 setConnStatsEnabled(false) 清表。 */
+    private var statsCloseJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -188,28 +194,39 @@ class NetworkStatusActivity : ComponentActivity() {
         }
     }
 
-    /** 回到前台:开采集 + 恢复轮询。onPause 期间采集已关,重开即零成本。 */
+    /** 回到前台:取消未触发的延迟关采集 + 开采集 + 恢复轮询。 */
     override fun onResume() {
         super.onResume()
         active = true
+        statsCloseJob?.cancel() // 5 秒宽限内切回来:取消延迟清空,统计原样保留
+        statsCloseJob = null
         runCatching { smartproxy.mobile.Mobile.setConnStatsEnabled(true) }
             .onFailure { Log.e(TAG, "[NetworkStatus] setConnStatsEnabled(true) failed", it) }
     }
 
-    /** 离开页面(返回上个页 / 切后台 / 被覆盖):立刻停采集 + 停轮询,
-     *  引擎恢复零开销;返回时 onResume 重新开启。
-     *  不手动清 prevTotals:引擎表已随 setConnStatsEnabled(false) 清空,恢复后累计从 0 重计,
-     *  buildItems 的 coerceAtLeast(0) 会把旧基准的负 δ 钳成 0,天然不虚高;且 prevTotals 只由
-     *  IO 线程的 buildItems 写,主线程勿动,避免并发写。 */
+    /** 离开页面(返回上个页 / 切后台 / 被覆盖):停轮询,但采集延迟 5 秒再关。
+     *  原来 onPause 立刻 setConnStatsEnabled(false) 会瞬时清空整张统计表 —— 快速切换
+     *  (返回 <1s 再进来)回来就一片空白。现在轮询已随 active=false 停止,引擎只在 5 秒
+     *  宽限耗尽仍处于后台时才真正关采集清表;宽限内 onResume 回来则数据仍在。
+     *  不手动清 prevTotals:超时清表后恢复累计从 0 重计,buildItems 的 coerceAtLeast(0)
+     *  会把旧基准的负 δ 钳成 0,天然不虚高;且 prevTotals 只由 IO 线程的 buildItems 写,
+     *  主线程勿动,避免并发写。 */
     override fun onPause() {
         active = false
-        runCatching { smartproxy.mobile.Mobile.setConnStatsEnabled(false) }
-            .onFailure { Log.e(TAG, "[NetworkStatus] setConnStatsEnabled(false) failed", it) }
+        statsCloseJob = lifecycleScope.launch {
+            delay(5_000)
+            if (!active) { // 5 秒后仍不在前台才真正清空
+                runCatching { smartproxy.mobile.Mobile.setConnStatsEnabled(false) }
+                    .onFailure { Log.e(TAG, "[NetworkStatus] delayed setConnStatsEnabled(false) failed", it) }
+            }
+        }
         super.onPause()
     }
 
     override fun onDestroy() {
-        // 兜底(正常 onPause 已关):确保销毁后引擎零开销;轮询随 composition 一并取消。
+        statsCloseJob?.cancel() // 取消未触发的延迟任务,防销毁后仍碰 Mobile
+        statsCloseJob = null
+        // 兜底(正常 onPause 已延迟关闭 / 宽限内销毁):确保销毁后引擎零开销;轮询随 composition 一并取消。
         runCatching { smartproxy.mobile.Mobile.setConnStatsEnabled(false) }
             .onFailure { Log.e(TAG, "[NetworkStatus] setConnStatsEnabled(false) failed", it) }
         super.onDestroy()
