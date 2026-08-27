@@ -30,7 +30,7 @@ class SmartProxyVpnService : VpnService() {
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning
 
-        /** DNS 硬编码默认(§6 用户要求应用内不提供 DNS UI):AppPrefs 自定义留空时回退。 */
+        /** DNS 缺省值(§6 抽屉 DNS 设置存 AppPrefs,自定义留空时回退这里)。 */
         private const val DEFAULT_DNS_V4 = "223.5.5.5"
         private const val DEFAULT_DNS_V6 = "2400:3200::1"
 

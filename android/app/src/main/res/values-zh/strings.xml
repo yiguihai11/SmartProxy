@@ -67,7 +67,7 @@
     <string name="panel_no_url">未获取到局域网地址\n请连接 Wi-Fi 后重试</string>
 
     <!-- Dialogs -->
-    <string name="dialog_dns_help">启动 VPN 时注入的 DNS(addDnsServer),留空 = 默认。\n须填国内 DNS(默认 223.5.5.5 / 2400:3200::1):引擎要截获\nDNS 查询做国内外域名检测分流,国外 DNS 截不到且报错。\n修改后需重启 VPN 生效。</string>
+    <string name="dialog_dns_help">启动 VPN 时注入的 DNS(addDnsServer),留空 = 默认。\n推荐填国内 DNS(默认 223.5.5.5 / 2400:3200::1):引擎直连它\n并做反污染检测(国内 DNS 才可能回污染答案),国外域名自动\n回退国外 DNS 走代理。填国外 DNS 也能用,但每次查询都走上游\n代理,需上游支持 UDP。修改后需重启 VPN 生效。</string>
     <string name="toast_invalid_dns">DNS 地址格式不正确</string>
     <string name="dialog_exclude_title">排除路由 (API 33+)</string>
     <string name="dialog_exclude_hint">每行一个 CIDR,如 192.168.1.0/24</string>

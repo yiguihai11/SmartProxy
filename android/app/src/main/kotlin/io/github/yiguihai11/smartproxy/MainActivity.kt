@@ -883,8 +883,9 @@ private fun HomeLauncher(
 }
 
 /** DNS 服务器设置对话框(§6):启动 VPN 时 addDnsServer 注入的 IPv4 / IPv6,留空 = 默认。
- *  必须填国内 DNS:引擎截获 DNS 查询做国内外域名检测/分流,国外 DNS 截不到且报错
- *  (no default UDP proxy available)。 */
+ *  推荐填国内 DNS:引擎拦截所有 DNS 查询,对国内 DNS 直连查询并做反污染检测
+ *  (只有它可能回污染答案),国外域名自动回退国外 DNS 走代理;填国外 DNS 也能用,
+ *  但查询走上游代理需上游支持 UDP。改动后需重启 VPN 生效。 */
 @Composable
 private fun DnsDialog(
     initialV4: String,

@@ -67,7 +67,7 @@
     <string name="panel_no_url">Could not get LAN address\nConnect to Wi-Fi and retry</string>
 
     <!-- Dialogs -->
-    <string name="dialog_dns_help">DNS injected when VPN starts (addDnsServer); empty = default.\nMust use domestic DNS (default 223.5.5.5 / 2400:3200::1): the engine\nintercepts DNS for CN/foreign detection &amp; routing — foreign DNS\nwon\'t be intercepted and errors out.\nRestart VPN to apply.</string>
+    <string name="dialog_dns_help">DNS injected when VPN starts (addDnsServer); empty = default.\nDomestic DNS recommended (default 223.5.5.5 / 2400:3200::1):\nthe engine queries it directly and anti-pollution-checks the\nreply (domestic DNS is the one that can return poisoned answers);\nforeign domains fall back to foreign DNS via the proxy.\nA foreign DNS also works, but every query then rides the\nupstream proxy, which must support UDP.\nRestart VPN to apply.</string>
     <string name="toast_invalid_dns">Invalid DNS address format</string>
     <string name="dialog_exclude_title">Excluded routes (API 33+)</string>
     <string name="dialog_exclude_hint">One CIDR per line, e.g. 192.168.1.0/24</string>
