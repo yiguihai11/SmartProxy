@@ -77,6 +77,8 @@ android {
     buildFeatures {
         compose = true
         aidl = true
+        // AGP 8 默认不生成 BuildConfig;Shizuku 用户服务要用 APPLICATION_ID / DEBUG。
+        buildConfig = true
     }
     packaging {
         jniLibs {

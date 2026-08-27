@@ -173,7 +173,7 @@ class SmartProxyVpnService : VpnService() {
         if (started) {
             startedEngine = true
             _isRunning.value = true
-            io.github.yiguihai11.smartproxy.shizuku.TetheringCoreSync.onStarted(this, ConfigProvider.readConfig(this))
+            io.github.yiguihai11.smartproxy.shizuku.TetheringCoreSync.onStarted(this, ConfigProvider.readConfig(this).toString())
             Log.i(TAG, "[startInternal] Start SUCCESS (socks=$socksOnly)! startedEngine=true, _isRunning=true. Returning START_STICKY.")
             return START_STICKY
         }
