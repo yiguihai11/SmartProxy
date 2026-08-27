@@ -1,0 +1,56 @@
+# 每月多次自动更新 chnroute.txt(mayaxcn/china-ip-list)。
+#
+# 与 android-build / go-test 独立:只生成数据、把两处 chnroute 推回 main,不编译。
+# 编译由 CircleCI 承担 —— CircleCI 独立监听 push webhook 且无路径过滤(见
+# .circleci/config.yml workflow main),bot 每次 push 到 main 都会自动跑 Android
+# 全量构建,即「每月更新 + 编译一次」。
+#
+# 注意:
+#  - 用 GITHUB_TOKEN 推回的提交不会重新触发本仓库任何 GH Actions 工作流
+#    (GitHub 的递归保护),所以不会与 android-build/go-test 形成循环。
+#  - 若改用 PAT 推回会额外触发 android-build(assets 属 android/**),造成
+#    CircleCI+GH 双编译,故坚持 GITHUB_TOKEN。
+#  - schedule 只在默认分支生效;仓库 60 天无 push 会被 GH 自动禁用(本工作流
+#    每月多次 bot push 自带重置)。
+name: update-chnroute
+
+on:
+  schedule:
+    # 每月 1/15/30 日 01:23 UTC = 北京 09:23。非整点避开 GH 定时高峰;
+    # dow 用 * 避免 day-of-month 与 day-of-week 的 cron OR 语义歧义。
+    # 2 月无 30 日,GH 对不存在的日期自动跳过该次,无副作用。
+    - cron: '23 1 1,15,30 * *'
+  workflow_dispatch: # 手动触发,用于首次验证/补跑
+
+permissions:
+  contents: write # GITHUB_TOKEN 推回 main 必需(新版默认只读,不声明 push 会 403)
+
+concurrency:
+  group: update-chnroute
+  cancel-in-progress: false # schedule 与手动触发串行,防两 job 同时写同一文件
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        # persist-credentials 默认 true:checkout 把远端设为 https 并把 GITHUB_TOKEN
+        # 写入 git http.extraheader,后续 git push 自动携带,命令里无需也不应出现 token。
+
+      - name: Generate chnroute.txt
+        run: bash scripts/update-chnroute.sh
+
+      - name: Commit and push if changed
+        run: |
+          set -euo pipefail
+          if git diff --exit-code -- chnroute.txt android/app/src/main/assets/chnroute.txt; then
+            echo "chnroute.txt up to date; skip commit"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # 只 commit 两处 chnroute,绝不 git add -A,防误提交其它工作区改动。
+          git add -- chnroute.txt android/app/src/main/assets/chnroute.txt
+          git commit -m "chore(chnroute): update $(date -u +%Y-%m-%d)"
+          git pull --rebase origin main # 兜底 push 前远端已前进(冲突概率极低)
+          git push origin HEAD:main
