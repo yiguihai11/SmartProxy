@@ -100,18 +100,19 @@ dependencies {
 
     // 2026-08 最新稳定 BOM(Compose 1.11);Kotlin 2.4 的 compose 编译器要求 runtime 匹配,必须连带升。
     implementation(platform("androidx.compose:compose-bom:2026.05.01"))
-    implementation("androidx.activity:activity-compose:1.9.2")
+    implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core") // 首页 Apps 卡 / 应用选择页导航图标
     implementation("androidx.compose.material:material-icons-extended") // 主题切换太阳/月亮/自动图标(release 有 R8 裁剪,不涨包)
     implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6") // LocalLifecycleOwner 新归宿(compose.ui.platform 版已弃用)
+    // core-ktx 1.19 / lifecycle 2.11 要求 minCompileSdk=37(API 37 未发布),用不上,停在新版兼容线。
+    implementation("androidx.core:core-ktx:1.18.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0") // LocalLifecycleOwner 新归宿(compose.ui.platform 版已弃用)
 
     // 面板入口二维码(M2):直接用 QRCodeWriter 编码,无反射路径,R8 安全。
-    implementation("com.google.zxing:core:3.5.3")
+    implementation("com.google.zxing:core:3.5.4")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
