@@ -53,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -203,7 +204,7 @@ class LogcatActivity : ComponentActivity() {
 
     private fun copyText(text: String) {
         (getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager)?.setPrimaryClip(
-            ClipData.newPlainText("SmartProxy 日志", text)
+            ClipData.newPlainText(getString(R.string.logcat_clip_label), text)
         )
     }
 
@@ -224,7 +225,7 @@ class LogcatActivity : ComponentActivity() {
             val uri = pair?.first
             val name = pair?.second
             if (uri == null || name == null) {
-                error = "导出日志失败"
+                error = getString(R.string.logcat_export_fail)
                 return@launch
             }
             val send = Intent(Intent.ACTION_SEND).apply {
@@ -235,7 +236,7 @@ class LogcatActivity : ComponentActivity() {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 clipData = ClipData.newUri(contentResolver, name, uri)
             }
-            startActivity(Intent.createChooser(send, "分享日志"))
+            startActivity(Intent.createChooser(send, getString(R.string.cd_share_logs)))
         }
     }
 }
@@ -285,33 +286,33 @@ private fun LogcatScreen(
             ) {
                 if (showSearch) {
                     IconButton(onClick = onToggleSearch) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "退出搜索", tint = PurpleText)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.cd_exit_search), tint = PurpleText)
                     }
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = onSearchQueryChange,
-                        placeholder = { Text("搜索日志关键字", fontSize = 13.sp) },
+                        placeholder = { Text(stringResource(R.string.logcat_search_placeholder), fontSize = 13.sp) },
                         singleLine = true,
                         modifier = Modifier.weight(1f)
                     )
                 } else {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = PurpleText)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.cd_back), tint = PurpleText)
                     }
                     Spacer(Modifier.width(4.dp))
-                    Text("日志查看", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = PurpleText)
+                    Text(stringResource(R.string.logcat_title), fontSize = 20.sp, fontWeight = FontWeight.Bold, color = PurpleText)
                     Spacer(Modifier.weight(1f))
                     IconButton(onClick = onToggleSearch) {
-                        Icon(Icons.Filled.Search, contentDescription = "搜索", tint = PurpleText)
+                        Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.cd_search), tint = PurpleText)
                     }
                     IconButton(onClick = onCopyAll) {
-                        Icon(Icons.Filled.ContentCopy, contentDescription = "复制全部", tint = PurpleText)
+                        Icon(Icons.Filled.ContentCopy, contentDescription = stringResource(R.string.cd_copy_all), tint = PurpleText)
                     }
                     IconButton(onClick = onShare) {
-                        Icon(Icons.Filled.Share, contentDescription = "分享日志", tint = PurpleText)
+                        Icon(Icons.Filled.Share, contentDescription = stringResource(R.string.cd_share_logs), tint = PurpleText)
                     }
                     IconButton(onClick = onClear) {
-                        Icon(Icons.Filled.Delete, contentDescription = "清空", tint = PurpleText)
+                        Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.cd_clear), tint = PurpleText)
                     }
                 }
             }
@@ -322,7 +323,7 @@ private fun LogcatScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("自动刷新", fontSize = 13.sp, color = TextDark)
+                Text(stringResource(R.string.logcat_auto_refresh), fontSize = 13.sp, color = TextDark)
                 Spacer(Modifier.width(8.dp))
                 Switch(
                     checked = autoRefresh,
@@ -334,7 +335,10 @@ private fun LogcatScreen(
                 )
                 Spacer(Modifier.weight(1f))
                 Text(
-                    if (searchQuery.isBlank()) "$totalLines 行" else "${lines.size}/$totalLines 行",
+                    if (searchQuery.isBlank())
+                        stringResource(R.string.logcat_count, totalLines)
+                    else
+                        stringResource(R.string.logcat_count_filtered, lines.size, totalLines),
                     fontSize = 12.sp,
                     color = GreyText,
                     maxLines = 1,
@@ -370,9 +374,9 @@ private fun LogcatScreen(
             if (lines.isEmpty() && error == null) {
                 Text(
                     if (searchQuery.isBlank())
-                        "暂无日志 — 连接 VPN 后 SmartProxyVpn 日志会出现在这里"
+                        stringResource(R.string.logcat_empty)
                     else
-                        "无匹配日志",
+                        stringResource(R.string.logcat_empty_search),
                     fontSize = 12.sp,
                     color = GreyText,
                     modifier = Modifier.padding(vertical = 6.dp)
@@ -380,7 +384,7 @@ private fun LogcatScreen(
             }
             if (error != null) {
                 Text(
-                    "读取日志失败: $error",
+                    stringResource(R.string.logcat_read_fail, error),
                     fontSize = 12.sp,
                     color = Color(0xFFFF6B6B),
                     modifier = Modifier.padding(vertical = 6.dp)
@@ -398,7 +402,7 @@ private fun LogcatScreen(
                 .align(Alignment.BottomEnd)
                 .padding(16.dp)
         ) {
-            Icon(Icons.Filled.Refresh, contentDescription = "立即刷新")
+            Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.cd_refresh))
         }
     }
 }

@@ -1,12 +1,152 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">SmartProxy</string>
-    <string name="notification_channel_vpn">VPN 服务</string>
-    <string name="notification_running">正在运行</string>
-    <string name="notification_disconnected">VPN 已被系统断开</string>
-    <string name="notification_stop">停止</string>
-    <string name="vpn_start">启动 VPN</string>
-    <string name="vpn_stop">停止 VPN</string>
-    <string name="vpn_running">运行中</string>
-    <string name="vpn_stopped">未运行</string>
+
+    <!-- Notification / VPN state -->
+    <string name="notification_channel_vpn">VPN service</string>
+    <string name="notification_running">Running</string>
+    <string name="notification_disconnected">VPN disconnected by system</string>
+    <string name="notification_stop">Stop</string>
+    <string name="vpn_start">Start VPN</string>
+    <string name="vpn_stop">Stop VPN</string>
+    <string name="vpn_running">Running</string>
+    <string name="vpn_stopped">Not running</string>
+
+    <!-- Common -->
+    <string name="btn_save">Save</string>
+    <string name="btn_cancel">Cancel</string>
+    <string name="cd_back">Back</string>
+
+    <!-- Service mode labels -->
+    <string name="mode_proxy_only">Proxy only (SOCKS5)</string>
+    <string name="mode_vpn_tunnel">VPN tunnel</string>
+
+    <!-- Drawer -->
+    <string name="drawer_tagline">Smart split proxy</string>
+    <string name="drawer_section_menu">Menu</string>
+    <string name="drawer_apps">Proxy apps</string>
+    <string name="drawer_apps_subtitle">Per-app proxy / bypass rules</string>
+    <string name="drawer_dns">DNS servers</string>
+    <string name="drawer_dns_subtitle">IPv4 / IPv6 DNS injected on start</string>
+    <string name="drawer_exclude">Excluded routes</string>
+    <string name="drawer_exclude_subtitle">Networks bypassing the VPN tunnel (API 33+)</string>
+    <string name="drawer_service_mode">Service mode</string>
+    <string name="drawer_service_mode_subtitle">Current: %1$s</string>
+    <string name="drawer_network_status">Network status</string>
+    <string name="drawer_network_status_subtitle">Per-app live connections &amp; speed</string>
+    <string name="drawer_logcat">Log viewer</string>
+    <string name="drawer_logcat_subtitle">App logs (Debug level)</string>
+    <string name="drawer_footer_tagline">Go core · light &amp; fast</string>
+
+    <!-- Home -->
+    <string name="cd_open_menu">Open menu</string>
+    <string name="cd_theme_mode">Theme: %1$s</string>
+    <string name="home_status">Status:</string>
+    <string name="home_disconnected">Disconnected</string>
+    <string name="home_connecting">Connecting…</string>
+    <string name="home_connected">Connected</string>
+    <string name="home_ipv4_intercept">IPv4 interception</string>
+    <string name="home_ipv4_listen">IPv4 listening</string>
+    <string name="home_ipv4_intercept_sub">Intercept IPv4 traffic</string>
+    <string name="home_ipv4_listen_sub">SOCKS5 listening on IPv4</string>
+    <string name="home_ipv6_intercept">IPv6 interception</string>
+    <string name="home_ipv6_listen">IPv6 listening</string>
+    <string name="home_ipv6_intercept_sub">Intercept IPv6 traffic</string>
+    <string name="home_ipv6_listen_sub">SOCKS5 listening on IPv6</string>
+    <string name="toast_need_ipv46">Enable at least IPv4 or IPv6</string>
+    <string name="home_boot_autostart">Start on boot</string>
+    <string name="home_boot_autostart_sub_vpn">Auto-start VPN after boot (needs authorization)</string>
+    <string name="home_boot_autostart_sub_socks">Auto-start proxy-only service after boot</string>
+
+    <!-- Admin panel card -->
+    <string name="panel_title">Admin panel</string>
+    <string name="panel_user">User: %1$s</string>
+    <string name="panel_pass">Password: %1$s</string>
+    <string name="panel_copy">Copy address</string>
+    <string name="panel_open">Open in browser</string>
+    <string name="cd_panel_qr">Admin panel QR code</string>
+    <string name="panel_scan_hint">Scan to open, or tap above to open in browser</string>
+    <string name="cd_qr_collapse">Collapse QR</string>
+    <string name="cd_qr_expand">Expand QR</string>
+    <string name="panel_no_url">Could not get LAN address\nConnect to Wi-Fi and retry</string>
+
+    <!-- Dialogs -->
+    <string name="dialog_dns_help">DNS injected when VPN starts (addDnsServer); empty = default.\nMust use domestic DNS (default 223.5.5.5 / 2400:3200::1): the engine\nintercepts DNS for CN/foreign detection &amp; routing — foreign DNS\nwon\'t be intercepted and errors out.\nRestart VPN to apply.</string>
+    <string name="toast_invalid_dns">Invalid DNS address format</string>
+    <string name="dialog_exclude_title">Excluded routes (API 33+)</string>
+    <string name="dialog_exclude_hint">One CIDR per line, e.g. 192.168.1.0/24</string>
+    <string name="dialog_exclude_help">These networks bypass the VPN tunnel (split tunnel); restart VPN to apply.</string>
+    <string name="cd_choose_service_mode">Choose service mode</string>
+    <string name="dialog_service_help">VPN tunnel: takes over system traffic for smart routing (default).\nProxy only: no VPN mode; runs the engine\'s SOCKS5 proxy (:1080, LAN-accessible).\nSwitching while running auto-restarts.</string>
+
+    <!-- Toasts / platform dialogs -->
+    <string name="toast_no_upstream">No upstream proxy configured. Traffic cannot be forwarded — configure one in the admin panel.</string>
+    <string name="battery_title">Allow background running</string>
+    <string name="battery_message">Proxy-only mode provides SOCKS5 &amp; the panel from the background. System power policies (smart freeze) may cut this app\'s network in the background, breaking the proxy.\n\nGo to: Settings → Apps → SmartProxy → Battery management → Allow background running, and disable \"smart freeze\".</string>
+    <string name="battery_settings">Go to settings</string>
+    <string name="battery_dismiss">Got it</string>
+    <string name="toast_copy_url">Copied: %1$s</string>
+    <string name="chooser_open_panel">Open admin panel with browser</string>
+
+    <!-- App selection -->
+    <string name="toast_min_one_app">Select at least 1 app in proxy-only mode</string>
+    <string name="appsel_mode_proxy">Proxy only</string>
+    <string name="appsel_mode_bypass">Bypass only</string>
+    <string name="appsel_title">App selection</string>
+    <string name="appsel_mode_card">Traffic mode</string>
+    <string name="appsel_proxy_desc">Only proxy the checked apps below; others connect directly</string>
+    <string name="appsel_bypass_desc">Proxy everything; bypass the checked apps below</string>
+    <string name="appsel_warn_block">Proxy-only mode doesn\'t support \"Block network\" — switch to bypass-only mode</string>
+    <string name="appsel_search">Search apps…</string>
+    <string name="appsel_tab_all">All</string>
+    <string name="appsel_tab_user">User</string>
+    <string name="appsel_tab_system">System</string>
+    <string name="appsel_stats">Total %1$d · Shown %2$d · Selected %3$d (%4$s)</string>
+    <string name="appsel_stats_blocked"> · Blocked %1$d</string>
+    <string name="appsel_loading">Loading app list… first time may be slow</string>
+    <string name="appsel_empty">No matching apps</string>
+    <string name="appsel_footer">Exiting saves · changes apply on next connection</string>
+    <string name="appsel_badge_blocked">Blocked</string>
+    <string name="appsel_badge_excluded">Excluded</string>
+    <string name="cd_block_network">Block network</string>
+
+    <!-- Log viewer -->
+    <string name="logcat_clip_label">SmartProxy logs</string>
+    <string name="logcat_export_fail">Failed to export logs</string>
+    <string name="cd_share_logs">Share logs</string>
+    <string name="cd_exit_search">Exit search</string>
+    <string name="logcat_search_placeholder">Search log keywords</string>
+    <string name="logcat_title">Log viewer</string>
+    <string name="cd_search">Search</string>
+    <string name="cd_copy_all">Copy all</string>
+    <string name="cd_clear">Clear</string>
+    <string name="logcat_auto_refresh">Auto refresh</string>
+    <string name="logcat_count">%1$d lines</string>
+    <string name="logcat_count_filtered">%1$d/%2$d lines</string>
+    <string name="logcat_empty">No logs yet — connect VPN and SmartProxyVpn logs appear here</string>
+    <string name="logcat_empty_search">No matching logs</string>
+    <string name="logcat_read_fail">Failed to read logs: %1$s</string>
+    <string name="cd_refresh">Refresh now</string>
+
+    <!-- Network status -->
+    <string name="net_read_fail">Failed to read connection data</string>
+    <string name="net_block_title">Block this target?</string>
+    <string name="net_block_message">Future connections to this target will be rejected; existing ones disconnect now. Persists across restarts.</string>
+    <string name="toast_blocked">Blocked %1$s</string>
+    <string name="toast_block_fail">Block failed: %1$s</string>
+    <string name="btn_block">Block</string>
+    <string name="net_loading">Collecting connection data…</string>
+    <string name="net_empty">No active apps</string>
+    <string name="net_empty_sub">Apps appear here once they use the network</string>
+    <string name="net_footer">Only apps with activity · refreshes every second · stops when leaving</string>
+    <string name="net_conn_count">%1$d connections</string>
+    <string name="cd_collapse_conn">Collapse connections</string>
+    <string name="cd_expand_conn">Expand connections</string>
+    <string name="net_conn_empty">No connection details</string>
+    <string name="cd_block_target">Block this target</string>
+
+    <!-- Theme mode -->
+    <string name="theme_light">Light</string>
+    <string name="theme_dark">Dark</string>
+    <string name="theme_auto">Auto</string>
 </resources>

@@ -91,6 +91,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -213,7 +214,7 @@ class MainActivity : ComponentActivity() {
     private fun warnNoUpstream() {
         if (ConfigProvider.hasUpstreamProxy(this)) return
         android.util.Log.w("SmartProxyVpn", "[MainActivity] No upstream proxy configured, prompting user to configure in panel.")
-        Toast.makeText(this, "未配置上游代理节点,流量无法转发,请到管理面板配置", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, getString(R.string.toast_no_upstream), Toast.LENGTH_LONG).show()
     }
 
     private fun ensureNotifyPermission() {
@@ -264,16 +265,14 @@ class MainActivity : ComponentActivity() {
             Uri.parse("package:$packageName")
         )
         AlertDialog.Builder(this)
-            .setTitle("允许后台运行")
-            .setMessage("仅代理模式由本应用在后台提供 SOCKS5 与面板服务。系统的省电策略(智能冻结)" +
-                "会在后台掐掉本应用的网络,导致代理后台断连。\n\n请到:设置 → 应用 → SmartProxy →" +
-                " 耗电管理 → 允许后台运行,并关闭「智能冻结」。")
-            .setPositiveButton("去设置") { _, _ ->
+            .setTitle(getString(R.string.battery_title))
+            .setMessage(getString(R.string.battery_message))
+            .setPositiveButton(getString(R.string.battery_settings)) { _, _ ->
                 runCatching { startActivity(intent) }.onFailure {
                     android.util.Log.w("SmartProxyVpn", "[MainActivity] App-details settings unavailable: ${it.message}")
                 }
             }
-            .setNegativeButton("知道了", null)
+            .setNegativeButton(getString(R.string.battery_dismiss), null)
             .show()
     }
 
@@ -292,13 +291,13 @@ private const val MAX_BATTERY_OPT_ASKS = 3
 private fun copyPanelUrl(context: Context, url: String) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     cm.setPrimaryClip(ClipData.newPlainText("smartproxy_panel_url", url))
-    Toast.makeText(context, "已复制: $url", Toast.LENGTH_SHORT).show()
+    Toast.makeText(context, context.getString(R.string.toast_copy_url, url), Toast.LENGTH_SHORT).show()
 }
 
 /** §4.4:点击用 Intent.createChooser 弹浏览器选择器,不锁系统默认浏览器。 */
 private fun openPanel(context: Context, url: String) {
     val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-    context.startActivity(Intent.createChooser(intent, "选择浏览器打开管理面板"))
+    context.startActivity(Intent.createChooser(intent, context.getString(R.string.chooser_open_panel)))
 }
 
 /** 抽屉底部「SmartProxy for Android」点击跳转项目主页。 */
@@ -307,10 +306,11 @@ private fun openProjectUrl(context: Context) {
 }
 
 /** 服务模式名(抽屉副标题 / 对话框下拉项)。注意与流量模式(AppSelectionActivity 的
- *  「仅代理」白名单)区分:这里指引擎运行形态——VPN 隧道 vs 纯 SOCKS5。 */
-private fun serviceModeLabel(mode: String): String = when (mode) {
-    AppPrefs.MODE_SOCKS5 -> "仅代理 (SOCKS5)"
-    else -> "VPN 隧道"
+ *  「仅代理」白名单)区分:这里指引擎运行形态——VPN 隧道 vs 纯 SOCKS5。
+ *  非 composable,接收 context 用 getString 取 i18n 文案。 */
+private fun serviceModeLabel(context: Context, mode: String): String = when (mode) {
+    AppPrefs.MODE_SOCKS5 -> context.getString(R.string.mode_proxy_only)
+    else -> context.getString(R.string.mode_vpn_tunnel)
 }
 
 /** 主题切换图标(§7):auto = 自动(brightness-auto 半亮半暗),light = 太阳,dark = 月亮。
@@ -532,7 +532,7 @@ private fun AppDrawerContent(
                         color = PurpleDark
                     )
                     Text(
-                        text = "智能分流代理",
+                        text = stringResource(R.string.drawer_tagline),
                         fontSize = 12.sp,
                         color = GreyText
                     )
@@ -544,7 +544,7 @@ private fun AppDrawerContent(
             Spacer(Modifier.height(16.dp))
 
             Text(
-                text = "功能菜单",
+                text = stringResource(R.string.drawer_section_menu),
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = PurpleSoft,
@@ -557,8 +557,8 @@ private fun AppDrawerContent(
             // 隐藏(§8)。规则仍留在 AppPrefs,切回 VPN 模式照常生效。)
             if (serviceMode == AppPrefs.MODE_VPN) {
                 DrawerMenuItem(
-                    title = "代理应用 (Apps)",
-                    subtitle = "选择各应用的代理 / 绕过规则",
+                    title = stringResource(R.string.drawer_apps),
+                    subtitle = stringResource(R.string.drawer_apps_subtitle),
                     onClick = onOpenApps
                 )
             }
@@ -568,8 +568,8 @@ private fun AppDrawerContent(
             // 切换服务模式不丢,回 VPN 模式照常注入。
             if (serviceMode == AppPrefs.MODE_VPN) {
                 DrawerMenuItem(
-                    title = "DNS 服务器",
-                    subtitle = "启动时注入的 IPv4 / IPv6 DNS",
+                    title = stringResource(R.string.drawer_dns),
+                    subtitle = stringResource(R.string.drawer_dns_subtitle),
                     onClick = onOpenDns
                 )
             }
@@ -578,16 +578,16 @@ private fun AppDrawerContent(
             // 仅代理 SOCKS5 无 VpnService,excludeRoute 不生效,入口一并隐藏(§6.1))。
             if (serviceMode == AppPrefs.MODE_VPN && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 DrawerMenuItem(
-                    title = "排除路由",
-                    subtitle = "不走 VPN 隧道直连的网段 (API 33+)",
+                    title = stringResource(R.string.drawer_exclude),
+                    subtitle = stringResource(R.string.drawer_exclude_subtitle),
                     onClick = onOpenExclude
                 )
             }
 
             // 侧边栏菜单项：服务模式(VPN 隧道 / 仅代理 SOCKS5,§8)。副标题实时显示当前模式。
             DrawerMenuItem(
-                title = "服务模式",
-                subtitle = "当前: ${serviceModeLabel(serviceMode)}",
+                title = stringResource(R.string.drawer_service_mode),
+                subtitle = stringResource(R.string.drawer_service_mode_subtitle, serviceModeLabel(context, serviceMode)),
                 onClick = onOpenServiceMode
             )
 
@@ -595,16 +595,16 @@ private fun AppDrawerContent(
             // 连接监控只挂在 TUN 数据路径,仅代理(SOCKS5)模式监控恒空,入口一并隐藏(§6.1)。
             if (serviceMode == AppPrefs.MODE_VPN && vpnRunning && AppPrefs.globalMode(context)) {
                 DrawerMenuItem(
-                    title = "联网状态",
-                    subtitle = "按应用的实时连接与网速",
+                    title = stringResource(R.string.drawer_network_status),
+                    subtitle = stringResource(R.string.drawer_network_status_subtitle),
                     onClick = onOpenNetworkStatus
                 )
             }
 
             // 侧边栏菜单项：日志查看(本进程 logcat,Debug 级)
             DrawerMenuItem(
-                title = "日志查看",
-                subtitle = "程序运行日志 (Debug 级)",
+                title = stringResource(R.string.drawer_logcat),
+                subtitle = stringResource(R.string.drawer_logcat_subtitle),
                 onClick = onOpenLogcat
             )
 
@@ -625,7 +625,7 @@ private fun AppDrawerContent(
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "Go 内核 · 轻量高效",
+                text = stringResource(R.string.drawer_footer_tagline),
                 fontSize = 11.sp,
                 color = GreyText.copy(alpha = 0.7f),
                 textAlign = TextAlign.Center,
@@ -749,7 +749,7 @@ private fun HomeLauncher(
                     onClick = onOpenDrawer,
                     modifier = Modifier.align(Alignment.CenterStart)
                 ) {
-                    Icon(Icons.Filled.Menu, contentDescription = "打开菜单", tint = PurpleText)
+                    Icon(Icons.Filled.Menu, contentDescription = stringResource(R.string.cd_open_menu), tint = PurpleText)
                 }
                 Text(
                     text = "SmartProxy",
@@ -767,7 +767,7 @@ private fun HomeLauncher(
                 ) {
                     Icon(
                         imageVector = themeIcon(themeMode),
-                        contentDescription = "主题模式:${themeModeLabel(themeMode)}",
+                        contentDescription = stringResource(R.string.cd_theme_mode, themeModeLabel(context, themeMode)),
                         tint = PurpleText,
                         modifier = Modifier.size(22.dp)
                     )
@@ -777,13 +777,13 @@ private fun HomeLauncher(
 
             // ── 状态行:「状态: 未连接/连接中/已连接」────────────────
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("状态:", fontSize = 18.sp, color = GreyText)
+                Text(stringResource(R.string.home_status), fontSize = 18.sp, color = GreyText)
                 Spacer(Modifier.width(8.dp))
                 Text(
                     text = when {
-                        !running -> "未连接"
-                        connecting -> "连接中…"
-                        else -> "已连接"
+                        !running -> stringResource(R.string.home_disconnected)
+                        connecting -> stringResource(R.string.home_connecting)
+                        else -> stringResource(R.string.home_connected)
                     },
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
@@ -811,12 +811,12 @@ private fun HomeLauncher(
             val vpnIntercept = !socksMode
             Row(modifier = Modifier.fillMaxWidth()) {
                 SwitchCard(
-                    title = if (vpnIntercept) "IPv4 拦截" else "IPv4 监听",
-                    subtitle = if (vpnIntercept) "接管 IPv4 流量" else "SOCKS5 监听 IPv4",
+                    title = if (vpnIntercept) stringResource(R.string.home_ipv4_intercept) else stringResource(R.string.home_ipv4_listen),
+                    subtitle = if (vpnIntercept) stringResource(R.string.home_ipv4_intercept_sub) else stringResource(R.string.home_ipv4_listen_sub),
                     checked = ipv4,
                     onCheckedChange = { v ->
                         if (!v && !ipv6) {
-                            Toast.makeText(context, "至少需开启 IPv4 或 IPv6 其中一个", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, context.getString(R.string.toast_need_ipv46), Toast.LENGTH_SHORT).show()
                             return@SwitchCard
                         }
                         ipv4 = v
@@ -836,12 +836,12 @@ private fun HomeLauncher(
                 )
                 Spacer(Modifier.width(8.dp))
                 SwitchCard(
-                    title = if (vpnIntercept) "IPv6 拦截" else "IPv6 监听",
-                    subtitle = if (vpnIntercept) "接管 IPv6 流量" else "SOCKS5 监听 IPv6",
+                    title = if (vpnIntercept) stringResource(R.string.home_ipv6_intercept) else stringResource(R.string.home_ipv6_listen),
+                    subtitle = if (vpnIntercept) stringResource(R.string.home_ipv6_intercept_sub) else stringResource(R.string.home_ipv6_listen_sub),
                     checked = ipv6,
                     onCheckedChange = { v ->
                         if (!v && !ipv4) {
-                            Toast.makeText(context, "至少需开启 IPv4 或 IPv6 其中一个", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, context.getString(R.string.toast_need_ipv46), Toast.LENGTH_SHORT).show()
                             return@SwitchCard
                         }
                         ipv6 = v
@@ -860,9 +860,9 @@ private fun HomeLauncher(
                 )
             }
             SwitchCard(
-                title = "开机自启",
+                title = stringResource(R.string.home_boot_autostart),
                 subtitle = if (serviceMode == AppPrefs.MODE_VPN)
-                    "开机后自动启动 VPN(需已授权)" else "开机后自动启动仅代理服务",
+                    stringResource(R.string.home_boot_autostart_sub_vpn) else stringResource(R.string.home_boot_autostart_sub_socks),
                 checked = bootAuto,
                 onCheckedChange = { v ->
                     bootAuto = v
@@ -897,7 +897,7 @@ private fun DnsDialog(
     val context = LocalContext.current
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("DNS 服务器") },
+        title = { Text(stringResource(R.string.drawer_dns)) },
         text = {
             Column {
                 OutlinedTextField(
@@ -917,7 +917,7 @@ private fun DnsDialog(
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "启动 VPN 时注入的 DNS(addDnsServer),留空 = 默认。\n须填国内 DNS(默认 223.5.5.5 / 2400:3200::1):引擎要截获\nDNS 查询做国内外域名检测分流,国外 DNS 截不到且报错。\n修改后需重启 VPN 生效。",
+                    text = stringResource(R.string.dialog_dns_help),
                     fontSize = 12.sp,
                     color = GreyText
                 )
@@ -932,10 +932,10 @@ private fun DnsDialog(
                         return@TextButton
                     }
                 }
-                Toast.makeText(context, "DNS 地址格式不正确", Toast.LENGTH_SHORT).show()
-            }) { Text("保存") }
+                Toast.makeText(context, context.getString(R.string.toast_invalid_dns), Toast.LENGTH_SHORT).show()
+            }) { Text(stringResource(R.string.btn_save)) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.btn_cancel)) } }
     )
 }
 
@@ -949,18 +949,18 @@ private fun ExcludeRoutesDialog(
     var text by remember { mutableStateOf(initialRoutes.joinToString("\n")) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("排除路由 (API 33+)") },
+        title = { Text(stringResource(R.string.dialog_exclude_title)) },
         text = {
             Column {
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
-                    label = { Text("每行一个 CIDR,如 192.168.1.0/24") },
+                    label = { Text(stringResource(R.string.dialog_exclude_hint)) },
                     modifier = Modifier.fillMaxWidth().height(160.dp)
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "这些网段不走 VPN 隧道(分隧道直连);修改后需重启 VPN 生效。",
+                    text = stringResource(R.string.dialog_exclude_help),
                     fontSize = 12.sp,
                     color = GreyText
                 )
@@ -969,9 +969,9 @@ private fun ExcludeRoutesDialog(
         confirmButton = {
             TextButton(onClick = {
                 onSave(text.lines().map { it.trim() }.filter { it.isNotBlank() }.toSet())
-            }) { Text("保存") }
+            }) { Text(stringResource(R.string.btn_save)) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.btn_cancel)) } }
     )
 }
 
@@ -986,10 +986,11 @@ private fun ServiceModeDialog(
 ) {
     var selected by remember { mutableStateOf(initial) }
     var expanded by remember { mutableStateOf(false) }
+    val context = LocalContext.current
     val options = listOf(AppPrefs.MODE_VPN, AppPrefs.MODE_SOCKS5)
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("服务模式") },
+        title = { Text(stringResource(R.string.drawer_service_mode)) },
         text = {
             Column {
                 // 下拉:点击 Surface 展开稳定版 DropdownMenu。不用 ExposedDropdownMenuBox——
@@ -1008,14 +1009,14 @@ private fun ServiceModeDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                serviceModeLabel(selected),
+                                serviceModeLabel(context, selected),
                                 fontSize = 14.sp,
                                 color = PurpleDark,
                                 modifier = Modifier.weight(1f)
                             )
                             Icon(
                                 Icons.Filled.KeyboardArrowDown,
-                                contentDescription = "选择服务模式",
+                                contentDescription = stringResource(R.string.cd_choose_service_mode),
                                 tint = PurpleSoft,
                                 modifier = Modifier.size(20.dp)
                             )
@@ -1024,7 +1025,7 @@ private fun ServiceModeDialog(
                     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                         options.forEach { mode ->
                             DropdownMenuItem(
-                                text = { Text(serviceModeLabel(mode)) },
+                                text = { Text(serviceModeLabel(context, mode)) },
                                 onClick = {
                                     selected = mode
                                     expanded = false
@@ -1035,14 +1036,14 @@ private fun ServiceModeDialog(
                 }
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    text = "VPN 隧道:接管系统流量智能分流(默认)。\n仅代理:不启动 VPN 模式,仅运行引擎 SOCKS5 代理(:1080,局域网可访问)。\n运行中切换将自动重启生效。",
+                    text = stringResource(R.string.dialog_service_help),
                     fontSize = 12.sp,
                     color = GreyText
                 )
             }
         },
-        confirmButton = { TextButton(onClick = { onSave(selected) }) { Text("保存") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+        confirmButton = { TextButton(onClick = { onSave(selected) }) { Text(stringResource(R.string.btn_save)) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.btn_cancel)) } }
     )
 }
 
@@ -1179,7 +1180,7 @@ private fun PanelCard(url: String?, auth: Pair<String, String>?, onCopy: (String
                 label = "qrArrow"
             )
             Text(
-                text = "管理面板",
+                text = stringResource(R.string.panel_title),
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
                 color = PurpleDark
@@ -1189,17 +1190,17 @@ private fun PanelCard(url: String?, auth: Pair<String, String>?, onCopy: (String
                 Text(url, fontSize = 13.sp, color = GreyText)
                 if (auth != null) {
                     Spacer(Modifier.height(6.dp))
-                    Text("登录账号: ${auth.first}", fontSize = 12.sp, color = GreyText)
-                    Text("登录密码: ${auth.second}", fontSize = 12.sp, color = GreyText)
+                    Text(stringResource(R.string.panel_user, auth.first), fontSize = 12.sp, color = GreyText)
+                    Text(stringResource(R.string.panel_pass, auth.second), fontSize = 12.sp, color = GreyText)
                 }
                 Spacer(Modifier.height(10.dp))
                 Row {
                     OutlinedButton(onClick = { onCopy(url) }, modifier = Modifier.weight(1f)) {
-                        Text("复制地址")
+                        Text(stringResource(R.string.panel_copy))
                     }
                     Spacer(Modifier.width(8.dp))
                     Button(onClick = { onOpen(url) }, modifier = Modifier.weight(1f)) {
-                        Text("用浏览器打开")
+                        Text(stringResource(R.string.panel_open))
                     }
                 }
                 Spacer(Modifier.height(12.dp))
@@ -1215,13 +1216,13 @@ private fun PanelCard(url: String?, auth: Pair<String, String>?, onCopy: (String
                         if (qr != null) {
                             Image(
                                 bitmap = qr.asImageBitmap(),
-                                contentDescription = "管理面板二维码",
+                                contentDescription = stringResource(R.string.cd_panel_qr),
                                 modifier = Modifier
                                     .size(180.dp)
                                     .clickable { onOpen(url) }
                             )
                             Text(
-                                text = "扫码打开,或点击上方用浏览器",
+                                text = stringResource(R.string.panel_scan_hint),
                                 fontSize = 12.sp,
                                 color = GreyText,
                                 textAlign = TextAlign.Center
@@ -1238,14 +1239,14 @@ private fun PanelCard(url: String?, auth: Pair<String, String>?, onCopy: (String
                 ) {
                     Icon(
                         imageVector = Icons.Filled.KeyboardArrowDown,
-                        contentDescription = if (showQr) "收起二维码" else "展开二维码",
+                        contentDescription = if (showQr) stringResource(R.string.cd_qr_collapse) else stringResource(R.string.cd_qr_expand),
                         tint = PurpleSoft,
                         modifier = Modifier.size(22.dp).rotate(rotation)
                     )
                 }
             } else {
                 Text(
-                    text = "未获取到局域网地址\n请连接 Wi-Fi 后重试",
+                    text = stringResource(R.string.panel_no_url),
                     fontSize = 13.sp,
                     color = GreyText
                 )

@@ -57,6 +57,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -121,7 +122,7 @@ class AppSelectionActivity : ComponentActivity() {
      *  命名 changeMode 而非 setMode:避免与 mode 属性生成的 JVM setter(setMode(Z)V)冲突。 */
     private fun changeMode(newMode: Boolean) {
         if (!newMode && selected.isEmpty()) {
-            Toast.makeText(this, "仅代理模式至少勾选 1 个应用", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.toast_min_one_app), Toast.LENGTH_SHORT).show()
             return
         }
         mode = newMode
@@ -131,7 +132,7 @@ class AppSelectionActivity : ComponentActivity() {
      *  拦截态(两者互斥,拦截优先)。 */
     private fun toggle(pkg: String, checked: Boolean) {
         if (!checked && !mode && selected.size == 1 && selected.contains(pkg)) {
-            Toast.makeText(this, "仅代理模式至少勾选 1 个应用", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, getString(R.string.toast_min_one_app), Toast.LENGTH_SHORT).show()
             return
         }
         selected = if (checked) selected + pkg else selected - pkg
@@ -236,7 +237,6 @@ private fun AppSelectionScreen(
 
     // 角标语义随模式翻转:仅代理=绿"仅代理",仅绕过=红"已排除"(sockstun 同款)。
     val proxyMode = !mode
-    val modeLabel = if (proxyMode) "仅代理" else "仅绕过"
 
     // 「禁止联网」只在 API 29+ 可用(getConnectionOwnerUid 唯一重载的起点);
     // 低于此隐藏全部相关 UI(按钮/白名单提示/统计),不误导用户。
@@ -264,10 +264,10 @@ private fun AppSelectionScreen(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
             ) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = PurpleText)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.cd_back), tint = PurpleText)
                 }
                 Spacer(Modifier.width(4.dp))
-                Text("应用选择", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = PurpleText)
+                Text(stringResource(R.string.appsel_title), fontSize = 20.sp, fontWeight = FontWeight.Bold, color = PurpleText)
             }
             Spacer(Modifier.height(8.dp))
 
@@ -281,26 +281,26 @@ private fun AppSelectionScreen(
                         colors = CardDefaults.cardColors(containerColor = CardBg)
                     ) {
                         Column(Modifier.padding(16.dp)) {
-                            Text("流量模式", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = PurpleText)
+                            Text(stringResource(R.string.appsel_mode_card), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = PurpleText)
                             Spacer(Modifier.height(8.dp))
                             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                                 SegmentedButton(
                                     selected = proxyMode,
                                     onClick = { onModeChange(false) },
                                     shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                                    label = { Text("仅代理", fontSize = 14.sp) }
+                                    label = { Text(stringResource(R.string.appsel_mode_proxy), fontSize = 14.sp) }
                                 )
                                 SegmentedButton(
                                     selected = !proxyMode,
                                     onClick = { onModeChange(true) },
                                     shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                                    label = { Text("仅绕过", fontSize = 14.sp) }
+                                    label = { Text(stringResource(R.string.appsel_mode_bypass), fontSize = 14.sp) }
                                 )
                             }
                             Spacer(Modifier.height(8.dp))
                             // 当前模式的一句说明(替代原 radio 副标题)。
                             Text(
-                                if (proxyMode) "只代理下方勾选的应用,其余直连" else "全局走代理,放行下方勾选的应用",
+                                if (proxyMode) stringResource(R.string.appsel_proxy_desc) else stringResource(R.string.appsel_bypass_desc),
                                 fontSize = 12.sp,
                                 color = GreyText
                             )
@@ -309,7 +309,7 @@ private fun AppSelectionScreen(
                             if (proxyMode && blockSupported) {
                                 Spacer(Modifier.height(6.dp))
                                 Text(
-                                    "仅代理模式不支持「禁止联网」拦截,请切换至「仅绕过」模式",
+                                    stringResource(R.string.appsel_warn_block),
                                     fontSize = 11.sp,
                                     color = ExcludeRed
                                 )
@@ -324,7 +324,7 @@ private fun AppSelectionScreen(
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
-                placeholder = { Text("搜索应用…") },
+                placeholder = { Text(stringResource(R.string.appsel_search)) },
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                 singleLine = true,
                 shape = RoundedCornerShape(14.dp),
@@ -334,12 +334,16 @@ private fun AppSelectionScreen(
 
             // ── 行内 tab:全部 / 用户 / 系统 ─────────────────────
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                listOf("全部", "用户", "系统").forEachIndexed { index, label ->
+                listOf(
+                    R.string.appsel_tab_all,
+                    R.string.appsel_tab_user,
+                    R.string.appsel_tab_system
+                ).forEachIndexed { index, res ->
                     SegmentedButton(
                         selected = tab == index,
                         onClick = { tab = index },
                         shape = SegmentedButtonDefaults.itemShape(index = index, count = 3),
-                        label = { Text(label) }
+                        label = { Text(stringResource(res)) }
                     )
                 }
             }
@@ -348,8 +352,19 @@ private fun AppSelectionScreen(
             // ── 统计条 ──────────────────────────────────────────
             Text(
                 buildString {
-                    append("共 ${allApps.size} · 显示 ${visible.size} · 已选 ${selected.size}（$modeLabel）")
-                    if (mode && blockSupported) append(" · 已拦截 ${blocked.size}")
+                    append(
+                        stringResource(
+                            R.string.appsel_stats,
+                            allApps.size,
+                            visible.size,
+                            selected.size,
+                            if (proxyMode) stringResource(R.string.appsel_mode_proxy)
+                            else stringResource(R.string.appsel_mode_bypass)
+                        )
+                    )
+                    if (mode && blockSupported) {
+                        append(stringResource(R.string.appsel_stats_blocked, blocked.size))
+                    }
                 },
                 fontSize = 12.sp,
                 color = GreyText
@@ -366,13 +381,13 @@ private fun AppSelectionScreen(
                 ) {
                     CircularProgressIndicator(color = PurpleText)
                     Spacer(Modifier.height(12.dp))
-                    Text("正在加载应用列表… 首次可能较慢", fontSize = 13.sp, color = GreyText)
+                    Text(stringResource(R.string.appsel_loading), fontSize = 13.sp, color = GreyText)
                 }
                 visible.isEmpty() -> Box(
                     Modifier.fillMaxWidth().weight(1f),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("没有匹配的应用", fontSize = 13.sp, color = GreyText)
+                    Text(stringResource(R.string.appsel_empty), fontSize = 13.sp, color = GreyText)
                 }
                 else -> LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
                     items(visible, key = { it.pkg }) { app ->
@@ -392,7 +407,7 @@ private fun AppSelectionScreen(
             // ── 保存提示:返回自动保存,下次连接生效 ──────────────
             Spacer(Modifier.height(8.dp))
             Text(
-                "退出即保存 · 改动在下次连接时生效",
+                stringResource(R.string.appsel_footer),
                 fontSize = 11.sp,
                 color = GreyText,
                 textAlign = TextAlign.Center,
@@ -470,9 +485,9 @@ private fun AppRow(
             ) {
                 Text(
                     when {
-                        blocked -> "已拦截联网"
-                        proxyMode -> "仅代理"
-                        else -> "已排除"
+                        blocked -> stringResource(R.string.appsel_badge_blocked)
+                        proxyMode -> stringResource(R.string.appsel_mode_proxy)
+                        else -> stringResource(R.string.appsel_badge_excluded)
                     },
                     color = Color.White,
                     fontSize = 10.sp,
@@ -488,7 +503,7 @@ private fun AppRow(
             IconButton(onClick = { onToggleBlock(app.pkg) }) {
                 Icon(
                     Icons.Filled.Block,
-                    contentDescription = "禁止联网",
+                    contentDescription = stringResource(R.string.cd_block_network),
                     tint = if (blocked) BlockRed else GreyText
                 )
             }

@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SmartProxy</string>
+
+    <!-- Notification / VPN state -->
+    <string name="notification_channel_vpn">VPN 服务</string>
+    <string name="notification_running">正在运行</string>
+    <string name="notification_disconnected">VPN 已被系统断开</string>
+    <string name="notification_stop">停止</string>
+    <string name="vpn_start">启动 VPN</string>
+    <string name="vpn_stop">停止 VPN</string>
+    <string name="vpn_running">运行中</string>
+    <string name="vpn_stopped">未运行</string>
+
+    <!-- Common -->
+    <string name="btn_save">保存</string>
+    <string name="btn_cancel">取消</string>
+    <string name="cd_back">返回</string>
+
+    <!-- Service mode labels -->
+    <string name="mode_proxy_only">仅代理 (SOCKS5)</string>
+    <string name="mode_vpn_tunnel">VPN 隧道</string>
+
+    <!-- Drawer -->
+    <string name="drawer_tagline">智能分流代理</string>
+    <string name="drawer_section_menu">功能菜单</string>
+    <string name="drawer_apps">代理应用 (Apps)</string>
+    <string name="drawer_apps_subtitle">选择各应用的代理 / 绕过规则</string>
+    <string name="drawer_dns">DNS 服务器</string>
+    <string name="drawer_dns_subtitle">启动时注入的 IPv4 / IPv6 DNS</string>
+    <string name="drawer_exclude">排除路由</string>
+    <string name="drawer_exclude_subtitle">不走 VPN 隧道直连的网段 (API 33+)</string>
+    <string name="drawer_service_mode">服务模式</string>
+    <string name="drawer_service_mode_subtitle">当前: %1$s</string>
+    <string name="drawer_network_status">联网状态</string>
+    <string name="drawer_network_status_subtitle">按应用的实时连接与网速</string>
+    <string name="drawer_logcat">日志查看</string>
+    <string name="drawer_logcat_subtitle">程序运行日志 (Debug 级)</string>
+    <string name="drawer_footer_tagline">Go 内核 · 轻量高效</string>
+
+    <!-- Home -->
+    <string name="cd_open_menu">打开菜单</string>
+    <string name="cd_theme_mode">主题模式:%1$s</string>
+    <string name="home_status">状态:</string>
+    <string name="home_disconnected">未连接</string>
+    <string name="home_connecting">连接中…</string>
+    <string name="home_connected">已连接</string>
+    <string name="home_ipv4_intercept">IPv4 拦截</string>
+    <string name="home_ipv4_listen">IPv4 监听</string>
+    <string name="home_ipv4_intercept_sub">接管 IPv4 流量</string>
+    <string name="home_ipv4_listen_sub">SOCKS5 监听 IPv4</string>
+    <string name="home_ipv6_intercept">IPv6 拦截</string>
+    <string name="home_ipv6_listen">IPv6 监听</string>
+    <string name="home_ipv6_intercept_sub">接管 IPv6 流量</string>
+    <string name="home_ipv6_listen_sub">SOCKS5 监听 IPv6</string>
+    <string name="toast_need_ipv46">至少需开启 IPv4 或 IPv6 其中一个</string>
+    <string name="home_boot_autostart">开机自启</string>
+    <string name="home_boot_autostart_sub_vpn">开机后自动启动 VPN(需已授权)</string>
+    <string name="home_boot_autostart_sub_socks">开机后自动启动仅代理服务</string>
+
+    <!-- Admin panel card -->
+    <string name="panel_title">管理面板</string>
+    <string name="panel_user">登录账号: %1$s</string>
+    <string name="panel_pass">登录密码: %1$s</string>
+    <string name="panel_copy">复制地址</string>
+    <string name="panel_open">用浏览器打开</string>
+    <string name="cd_panel_qr">管理面板二维码</string>
+    <string name="panel_scan_hint">扫码打开,或点击上方用浏览器</string>
+    <string name="cd_qr_collapse">收起二维码</string>
+    <string name="cd_qr_expand">展开二维码</string>
+    <string name="panel_no_url">未获取到局域网地址\n请连接 Wi-Fi 后重试</string>
+
+    <!-- Dialogs -->
+    <string name="dialog_dns_help">启动 VPN 时注入的 DNS(addDnsServer),留空 = 默认。\n须填国内 DNS(默认 223.5.5.5 / 2400:3200::1):引擎要截获\nDNS 查询做国内外域名检测分流,国外 DNS 截不到且报错。\n修改后需重启 VPN 生效。</string>
+    <string name="toast_invalid_dns">DNS 地址格式不正确</string>
+    <string name="dialog_exclude_title">排除路由 (API 33+)</string>
+    <string name="dialog_exclude_hint">每行一个 CIDR,如 192.168.1.0/24</string>
+    <string name="dialog_exclude_help">这些网段不走 VPN 隧道(分隧道直连);修改后需重启 VPN 生效。</string>
+    <string name="cd_choose_service_mode">选择服务模式</string>
+    <string name="dialog_service_help">VPN 隧道:接管系统流量智能分流(默认)。\n仅代理:不启动 VPN 模式,仅运行引擎 SOCKS5 代理(:1080,局域网可访问)。\n运行中切换将自动重启生效。</string>
+
+    <!-- Toasts / platform dialogs -->
+    <string name="toast_no_upstream">未配置上游代理节点,流量无法转发,请到管理面板配置</string>
+    <string name="battery_title">允许后台运行</string>
+    <string name="battery_message">仅代理模式由本应用在后台提供 SOCKS5 与面板服务。系统的省电策略(智能冻结)会在后台掐掉本应用的网络,导致代理后台断连。\n\n请到:设置 → 应用 → SmartProxy → 耗电管理 → 允许后台运行,并关闭「智能冻结」。</string>
+    <string name="battery_settings">去设置</string>
+    <string name="battery_dismiss">知道了</string>
+    <string name="toast_copy_url">已复制: %1$s</string>
+    <string name="chooser_open_panel">选择浏览器打开管理面板</string>
+
+    <!-- App selection -->
+    <string name="toast_min_one_app">仅代理模式至少勾选 1 个应用</string>
+    <string name="appsel_mode_proxy">仅代理</string>
+    <string name="appsel_mode_bypass">仅绕过</string>
+    <string name="appsel_title">应用选择</string>
+    <string name="appsel_mode_card">流量模式</string>
+    <string name="appsel_proxy_desc">只代理下方勾选的应用,其余直连</string>
+    <string name="appsel_bypass_desc">全局走代理,放行下方勾选的应用</string>
+    <string name="appsel_warn_block">仅代理模式不支持「禁止联网」拦截,请切换至「仅绕过」模式</string>
+    <string name="appsel_search">搜索应用…</string>
+    <string name="appsel_tab_all">全部</string>
+    <string name="appsel_tab_user">用户</string>
+    <string name="appsel_tab_system">系统</string>
+    <string name="appsel_stats">共 %1$d · 显示 %2$d · 已选 %3$d（%4$s）</string>
+    <string name="appsel_stats_blocked"> · 已拦截 %1$d</string>
+    <string name="appsel_loading">正在加载应用列表… 首次可能较慢</string>
+    <string name="appsel_empty">没有匹配的应用</string>
+    <string name="appsel_footer">退出即保存 · 改动在下次连接时生效</string>
+    <string name="appsel_badge_blocked">已拦截联网</string>
+    <string name="appsel_badge_excluded">已排除</string>
+    <string name="cd_block_network">禁止联网</string>
+
+    <!-- Log viewer -->
+    <string name="logcat_clip_label">SmartProxy 日志</string>
+    <string name="logcat_export_fail">导出日志失败</string>
+    <string name="cd_share_logs">分享日志</string>
+    <string name="cd_exit_search">退出搜索</string>
+    <string name="logcat_search_placeholder">搜索日志关键字</string>
+    <string name="logcat_title">日志查看</string>
+    <string name="cd_search">搜索</string>
+    <string name="cd_copy_all">复制全部</string>
+    <string name="cd_clear">清空</string>
+    <string name="logcat_auto_refresh">自动刷新</string>
+    <string name="logcat_count">%1$d 行</string>
+    <string name="logcat_count_filtered">%1$d/%2$d 行</string>
+    <string name="logcat_empty">暂无日志 — 连接 VPN 后 SmartProxyVpn 日志会出现在这里</string>
+    <string name="logcat_empty_search">无匹配日志</string>
+    <string name="logcat_read_fail">读取日志失败: %1$s</string>
+    <string name="cd_refresh">立即刷新</string>
+
+    <!-- Network status -->
+    <string name="net_read_fail">读取连接数据失败</string>
+    <string name="net_block_title">封禁该目标?</string>
+    <string name="net_block_message">该目标后续连接将被拒绝,现有连接立即断开,重启后保留。</string>
+    <string name="toast_blocked">已封禁 %1$s</string>
+    <string name="toast_block_fail">封禁失败: %1$s</string>
+    <string name="btn_block">封禁</string>
+    <string name="net_loading">正在采集连接数据…</string>
+    <string name="net_empty">暂无联网应用</string>
+    <string name="net_empty_sub">应用联网后会自动出现在这里</string>
+    <string name="net_footer">仅显示有联网活动的应用 · 每秒刷新 · 离开页面即停止采集</string>
+    <string name="net_conn_count">%1$d 条连接</string>
+    <string name="cd_collapse_conn">收起连接</string>
+    <string name="cd_expand_conn">展开连接</string>
+    <string name="net_conn_empty">暂无连接明细</string>
+    <string name="cd_block_target">封禁该目标</string>
+
+    <!-- Theme mode -->
+    <string name="theme_light">浅色</string>
+    <string name="theme_dark">深色</string>
+    <string name="theme_auto">自动</string>
+</resources>

@@ -35,11 +35,11 @@ fun cycleThemeMode(current: String): String = when (current) {
     else -> AppPrefs.THEME_AUTO
 }
 
-/** 首页右上角切换钮显示的当前模式名。 */
-fun themeModeLabel(mode: String): String = when (mode) {
-    AppPrefs.THEME_LIGHT -> "浅色"
-    AppPrefs.THEME_DARK -> "深色"
-    else -> "自动"
+/** 首页右上角切换钮显示的当前模式名。非 composable,接收 context 用 getString 取 i18n 文案。 */
+fun themeModeLabel(context: Context, mode: String): String = when (mode) {
+    AppPrefs.THEME_LIGHT -> context.getString(R.string.theme_light)
+    AppPrefs.THEME_DARK -> context.getString(R.string.theme_dark)
+    else -> context.getString(R.string.theme_auto)
 }
 
 /** 按模式(含跟随系统)解析是否深色。Activity 调 enableEdgeToEdge 定条栏图标色用;

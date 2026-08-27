@@ -51,6 +51,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -144,7 +145,7 @@ class NetworkStatusActivity : ComponentActivity() {
                             }.getOrNull()
                         }
                         if (parsed == null) {
-                            error = "读取连接数据失败"
+                            error = getString(R.string.net_read_fail)
                         } else {
                             appItems = parsed
                             loaded = true
@@ -181,11 +182,11 @@ class NetworkStatusActivity : ComponentActivity() {
                     pendingBlock?.let { conn ->
                         AlertDialog(
                             onDismissRequest = { pendingBlock = null },
-                            title = { Text("封禁该目标?") },
+                            title = { Text(stringResource(R.string.net_block_title)) },
                             text = {
                                 Text(
                                     "${hostPort(conn.host, conn.port)}\n\n" +
-                                            "该目标后续连接将被拒绝,现有连接立即断开,重启后保留。"
+                                            stringResource(R.string.net_block_message)
                                 )
                             },
                             confirmButton = {
@@ -197,15 +198,15 @@ class NetworkStatusActivity : ComponentActivity() {
                                             runCatching { smartproxy.mobile.Mobile.blockConnection(target) }
                                         }
                                         result
-                                            .onSuccess { Toast.makeText(this@NetworkStatusActivity, "已封禁 $target", Toast.LENGTH_SHORT).show() }
+                                            .onSuccess { Toast.makeText(this@NetworkStatusActivity, getString(R.string.toast_blocked, target), Toast.LENGTH_SHORT).show() }
                                             .onFailure { e ->
-                                                Toast.makeText(this@NetworkStatusActivity, "封禁失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(this@NetworkStatusActivity, getString(R.string.toast_block_fail, e.message), Toast.LENGTH_SHORT).show()
                                             }
                                     }
-                                }) { Text("封禁") }
+                                }) { Text(stringResource(R.string.btn_block)) }
                             },
                             dismissButton = {
-                                TextButton(onClick = { pendingBlock = null }) { Text("取消") }
+                                TextButton(onClick = { pendingBlock = null }) { Text(stringResource(R.string.btn_cancel)) }
                             }
                         )
                     }
@@ -384,10 +385,10 @@ private fun NetworkStatusScreen(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
             ) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回", tint = PurpleText)
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.cd_back), tint = PurpleText)
                 }
                 Spacer(Modifier.width(4.dp))
-                Text("联网状态", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = PurpleText)
+                Text(stringResource(R.string.drawer_network_status), fontSize = 20.sp, fontWeight = FontWeight.Bold, color = PurpleText)
             }
             Spacer(Modifier.height(8.dp))
 
@@ -400,7 +401,7 @@ private fun NetworkStatusScreen(
                 ) {
                     CircularProgressIndicator(color = PurpleText)
                     Spacer(Modifier.height(12.dp))
-                    Text("正在采集连接数据…", fontSize = 13.sp, color = GreyText)
+                    Text(stringResource(R.string.net_loading), fontSize = 13.sp, color = GreyText)
                 }
                 error != null -> Column(
                     Modifier.fillMaxWidth().weight(1f),
@@ -414,9 +415,9 @@ private fun NetworkStatusScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    Text("暂无联网应用", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = TextDark)
+                    Text(stringResource(R.string.net_empty), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = TextDark)
                     Spacer(Modifier.height(6.dp))
-                    Text("应用联网后会自动出现在这里", fontSize = 12.sp, color = GreyText)
+                    Text(stringResource(R.string.net_empty_sub), fontSize = 12.sp, color = GreyText)
                 }
                 else -> LazyColumn(modifier = Modifier.weight(1f)) {
                     items(appItems, key = { it.uid }) { item ->
@@ -433,7 +434,7 @@ private fun NetworkStatusScreen(
             // ── 底部提示:懒采集 + 每秒刷新 ──────────────────────
             Spacer(Modifier.height(8.dp))
             Text(
-                "仅显示有联网活动的应用 · 每秒刷新 · 离开页面即停止采集",
+                stringResource(R.string.net_footer),
                 fontSize = 11.sp,
                 color = GreyText,
                 textAlign = TextAlign.Center,
@@ -486,7 +487,7 @@ private fun AppGroup(item: AppItem, expanded: Boolean, onToggle: () -> Unit, onB
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        "${item.conns.size} 条连接",
+                        stringResource(R.string.net_conn_count, item.conns.size),
                         fontSize = 11.sp,
                         color = GreyText,
                         maxLines = 1,
@@ -500,7 +501,7 @@ private fun AppGroup(item: AppItem, expanded: Boolean, onToggle: () -> Unit, onB
                 Spacer(Modifier.width(8.dp))
                 Icon(
                     imageVector = Icons.Filled.KeyboardArrowDown,
-                    contentDescription = if (expanded) "收起连接" else "展开连接",
+                    contentDescription = if (expanded) stringResource(R.string.cd_collapse_conn) else stringResource(R.string.cd_expand_conn),
                     tint = PurpleSoft,
                     modifier = Modifier.size(20.dp).rotate(if (expanded) 180f else 0f)
                 )
@@ -508,7 +509,7 @@ private fun AppGroup(item: AppItem, expanded: Boolean, onToggle: () -> Unit, onB
             AnimatedVisibility(visible = expanded) {
                 Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)) {
                     if (item.conns.isEmpty()) {
-                        Text("暂无连接明细", fontSize = 11.sp, color = GreyText, modifier = Modifier.padding(vertical = 4.dp))
+                        Text(stringResource(R.string.net_conn_empty), fontSize = 11.sp, color = GreyText, modifier = Modifier.padding(vertical = 4.dp))
                     } else {
                         item.conns.forEach { conn -> ConnRow(conn, onBlock = { onBlockConn(conn) }) }
                     }
@@ -559,7 +560,7 @@ private fun ConnRow(conn: ConnStatsRec, onBlock: () -> Unit) {
         IconButton(onClick = onBlock, modifier = Modifier.size(28.dp)) {
             Icon(
                 Icons.Filled.Block,
-                contentDescription = "封禁该目标",
+                contentDescription = stringResource(R.string.cd_block_target),
                 tint = BlockRed,
                 modifier = Modifier.size(16.dp)
             )
