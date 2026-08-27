@@ -7,10 +7,6 @@
     <string name="notification_running">Running</string>
     <string name="notification_disconnected">VPN disconnected by system</string>
     <string name="notification_stop">Stop</string>
-    <string name="vpn_start">Start VPN</string>
-    <string name="vpn_stop">Stop VPN</string>
-    <string name="vpn_running">Running</string>
-    <string name="vpn_stopped">Not running</string>
 
     <!-- Common -->
     <string name="btn_save">Save</string>

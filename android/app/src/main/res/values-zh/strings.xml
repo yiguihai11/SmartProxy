@@ -7,10 +7,6 @@
     <string name="notification_running">正在运行</string>
     <string name="notification_disconnected">VPN 已被系统断开</string>
     <string name="notification_stop">停止</string>
-    <string name="vpn_start">启动 VPN</string>
-    <string name="vpn_stop">停止 VPN</string>
-    <string name="vpn_running">运行中</string>
-    <string name="vpn_stopped">未运行</string>
 
     <!-- Common -->
     <string name="btn_save">保存</string>
