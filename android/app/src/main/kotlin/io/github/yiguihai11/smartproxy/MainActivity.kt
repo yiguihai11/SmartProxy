@@ -2,6 +2,7 @@ package io.github.yiguihai11.smartproxy
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -224,24 +225,65 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 仅代理(SOCKS5)模式后台连通性依赖「忽略电池优化」豁免(§8):Android M+ 对后台
-     *  uid 施加网络限制,本地 SOCKS 监听的回环 SYN-ACK 会按 uid 规则被丢包 —— 前台
-     *  正常、后台超时(SS 安卓同款现象)。启动 socks 时引导一次系统「忽略电池优化」
-     *  弹框;已豁免或已引导满 MAX_BATTERY_OPT_ASKS 次则跳过,防误触无限弹。 */
+    /** 仅代理(SOCKS5)模式后台连通性依赖系统后台放行(§8):Android M+ 对后台 uid 施加
+     *  网络限制,本地 SOCKS/面板监听的回环 SYN-ACK 会按 uid 规则被丢 —— 前台正常、
+     *  后台超时(SS 安卓同款现象)。
+     *
+     *  AOSP 的「忽略电池优化」豁免在 OriginOS(vivo/iQOO)覆盖不到独立的「智能冻结/
+     *  后台冻结」省电机制(真机确认:后台仍被掐),且豁免后 isIgnoringBattery
+     *  Optimizations=true 会让 OriginOS 引导永远不出现。因此:
+     *   - OriginOS 系:弹自定义引导 + 深链本应用详情页(耗电管理→允许后台运行),
+     *     不看 AOSP 豁免状态(豁免与否都得引导,受 ask 上限约束);
+     *   - 其它厂商:AOSP「忽略电池优化」系统弹框,已豁免即跳过。
+     *  已引导满 MAX_BATTERY_OPT_ASKS 次则整体跳过,防误触无限弹。 */
     private fun maybeRequestBatteryOptimizationExemption() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        if (pm.isIgnoringBatteryOptimizations(packageName)) return
         if (AppPrefs.batteryOptAskCount(this) >= MAX_BATTERY_OPT_ASKS) return
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        if (!isOriginOS() && pm.isIgnoringBatteryOptimizations(packageName)) return
         AppPrefs.setBatteryOptAskCount(this, AppPrefs.batteryOptAskCount(this) + 1)
-        runCatching {
-            startActivity(Intent(
-                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                Uri.parse("package:$packageName")
-            ))
-        }.onFailure {
-            android.util.Log.w("SmartProxyVpn", "[MainActivity] Battery-optimization dialog unavailable: ${it.message}")
+        if (isOriginOS()) {
+            originOSBatteryGuidance()
+        } else {
+            runCatching {
+                startActivity(Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName")
+                ))
+            }.onFailure {
+                android.util.Log.w("SmartProxyVpn", "[MainActivity] Battery-optimization dialog unavailable: ${it.message}")
+            }
         }
+    }
+
+    /** OriginOS(vivo/iQOO,含 bbk 系)智能冻结独立于 AOSP 豁免,引导到本应用详情页
+     *  (耗电管理→允许后台运行)——无公共 Intent 直达省电策略,应用详情页是最可靠入口。 */
+    private fun originOSBatteryGuidance() {
+        val intent = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.parse("package:$packageName")
+        )
+        AlertDialog.Builder(this)
+            .setTitle("允许后台运行")
+            .setMessage("仅代理模式由本应用在后台提供 SOCKS5 与面板服务。系统的省电策略(智能冻结)" +
+                "会在后台掐掉本应用的网络,导致代理后台断连。\n\n请到:设置 → 应用 → SmartProxy →" +
+                " 耗电管理 → 允许后台运行,并关闭「智能冻结」。")
+            .setPositiveButton("去设置") { _, _ ->
+                runCatching { startActivity(intent) }.onFailure {
+                    android.util.Log.w("SmartProxyVpn", "[MainActivity] App-details settings unavailable: ${it.message}")
+                }
+            }
+            .setNegativeButton("知道了", null)
+            .show()
+    }
+
+    /** OriginOS 判定:厂商 vivo/bbk(iQOO 属 BBK 系,MANUFACTURER 常报 vivo/bbk)。
+     *  非 OriginOS 一律走 AOSP 豁免。 */
+    private fun isOriginOS(): Boolean {
+        val m = (Build.MANUFACTURER ?: "").lowercase()
+        val b = (Build.BRAND ?: "").lowercase()
+        return m.contains("vivo") || m.contains("bbk") ||
+            b.contains("vivo") || b.contains("iqoo")
     }
 }
 
