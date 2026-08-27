@@ -15,6 +15,8 @@
 - **DPI**：从首包提取 TLS SNI / HTTP Host，IP 阶段即可按域名分流
 - **热重载**：config.json / acl.txt / chnroute.txt 均支持事件驱动热更新，无需重启
 - **高性能**：COW 无锁读、sync.Pool 缓冲复用、TCP splice 零拷贝、并发全链路 race 测试
+- **Web 管理面板**：纯 Go dashboard（config / ACL / chnroute / 日志在线编辑），fsnotify 热重载即时生效，HTTPS + 可选 Basic Auth
+- **Android 客户端**：Kotlin + Compose 全功能 App —— VPN 隧道 / 仅代理（SOCKS5）双服务模式、按应用实时流量与单条封禁、per-app 分流、DNS 注入、排除路由、开机自启
 - **全平台**：Linux / Windows / Darwin 可编译；Android/iOS 通过 fd 模式接入（见下文）
 
 ## 🛠️ 快速开始
@@ -47,6 +49,25 @@ make build-all        # 交叉编译所有支持平台
 完整字段见 [docs/config.md](./docs/config.md)，示例见 [config.json](./config.json)。
 
 > 每个上游的 TCP/UDP 能力**自动辨识，无需配置**：`socks5`/`socks5h`/`ss` 才可能支持 UDP，`http`/`https`/`socks4` 恒为 `tcp_only`。对 UDP-capable 节点，探测与真实流量共同推导出三态 mode（`tcp_and_udp`/`tcp_only`/`udp_only`，由 TCP/UDP 双熔断自动推出，`udp_only` 即「TCP 挂了但 UDP 正常」）与 UDP 能力标记（`standard`=标准 ASSOCIATE / `raw`=裸中继 / `none`=无 UDP）。`socks5`/`socks5h` 的 UDP 先走标准 UDP ASSOCIATE，**任意失败**（含 rep=0x07）自动兜底裸 UDP relay 到 `host:port`；已辨识为 raw 的节点后续直连裸中继、跳过注定失败的 ASSOCIATE，但每 10 分钟重检一次 ASSOCIATE，上游升级后自动回到 standard。详见 [docs/upstream.md](./docs/upstream.md) §3.2。
+
+## 🖥️ Web 管理面板
+
+引擎启动即起管理服务（`listen.admin_port`，默认 9090，HTTPS + 可选 Basic Auth）。浏览器打开：
+
+- 桌面端：`https://127.0.0.1:9090`（或 `/dashboard`）
+- Android VPN 隧道模式：`https://smartproxy.lan:9090`（引擎接管 DNS，静态记录把域名解析到手机）
+- Android 仅代理模式：`https://127.0.0.1:9090`（本机开面板；QR 跨设备扫到的是扫描机自己）
+
+| 端点 | 能力 |
+|------|------|
+| `/` `/dashboard` | 纯 Web UI（config / ACL / chnroute / 日志在线编辑） |
+| `GET/PUT /config` | 读改配置，fsnotify 热重载即时生效 |
+| `/acl` `/acl/add` | ACL 规则编辑、追加 |
+| `/chnroute` | chnroute 上传校验落盘 |
+| `/logs` `/logs/clear` | 环形缓冲日志 + level 过滤 |
+| `/stats` `/blacklist` `/cache` `/route` `/health` | 运行统计、动态黑名单、缓存、选路、健康检查 |
+
+全量端点见 [docs/admin-api.md](./docs/admin-api.md)。
 
 ## 📖 ACL 规则速览
 
@@ -93,32 +114,33 @@ proxy port 22 direct                   # SSH 强制直连（"direct" 为特殊�
 | [Admin API](./docs/admin-api.md) | 全部管理端点说明 |
 | [性能优化](./docs/performance.md) | 无锁读、COW、缓冲池实践 |
 
-## 📱 Android / iOS 集成（fd 模式）
+## 📱 Android 客户端
 
-通过 `gomobile bind` 将引擎编译为 AAR / XCFramework。移动端使用 **fd 模式**：TUN 文件描述符由系统 VPN API 提供，Go 侧不再创建设备，路由也由 OS 管理。
+全功能独立 App（Kotlin + Jetpack Compose，`android/`）。引擎经 `gomobile bind` 编译为 AAR 集成；APK 由 GitHub Actions 构建，四 ABI（arm64-v8a / armeabi-v7a / x86_64 / x86），版本号取自 git tag。
+
+**两种服务模式**（抽屉 → 服务模式）：
+- **VPN 隧道**（默认）：`VpnService` 建 TUN，引擎以 **fd 模式**接管全部流量，全局透明代理。
+- **仅代理（SOCKS5）**：不建 VpnService，只跑引擎 SOCKS5（`:1080`，默认全接口双栈，局域网可达）。⚠️ 无 VpnService 就没有系统「后台占网络」护身符——Android 15+ 后台会按 uid 掐掉网络，本地 SOCKS 连接出现「前台正常、后台超时」（SS 安卓同款现象）；App 在仅代理模式启动时会引导开启「忽略电池优化」豁免。
+
+**功能**：
+- 首页：连接状态、IPv4/IPv6 开关、开机自启、管理面板入口（URL / 二维码 / 复制）。开关语义随服务模式切换：VPN 隧道 = 拦截（tun 接管该族流量）；仅代理 = SOCKS5 监听（双开/只 v6 = `::`、只 v4 = `0.0.0.0`）。
+- 抽屉：代理应用（per-app 分流与「禁止联网」，仅 VPN 隧道模式显示）、DNS 服务器注入（仅 VPN）、排除路由（仅 VPN + API 33+）、服务模式、联网状态、日志查看。
+- 联网状态：按应用的实时连接与网速，页面打开才采集；单条连接可封禁（掐断现存连接 + 写 ACL）。
+- 日志：应用内查看 `SmartProxyVpn` 标签；Go 引擎日志在 logcat 的 `GoLog` 标签（应用内有意排除）。
+
+**构建**：
 
 ```bash
-make android   # → build/smartproxy.aar
-make ios       # → build/Socks5Router.xcframework
+make android   # → build/smartproxy.aar（引擎库）
+# APK：GitHub Actions android-build 自动出包，或本地 cd android && ./gradlew assembleRelease
 ```
 
-核心调用：
+核心调用：`Mobile.startRouter(configPath, tunFd, tunEnabled)`。fd 模式下传 TUN fd + `true`；仅代理模式传 `0, false`。fd 模式下 `tun.file_descriptor` 不读 JSON（仅由 `startRouter` 传入）、`auto_route` 强制 `false`、`inet4/6_address` 必须与 `VpnService.Builder` 一致。
 
-```kotlin
-class ProxyVpnService : VpnService() {
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val tun = Builder()
-            .setMtu(1500).addAddress("172.19.0.1", 30).addRoute("0.0.0.0", "0")
-            .addDnsServer("1.1.1.1").establish() ?: return START_NOT_STICKY
-        protect(tun.fd)                                   // 防回环，先于启动
-        Mobile.startRouter(configJson, tun.fd)            // 启动 Go 引擎（异步）
-        return START_STICKY
-    }
-    override fun onDestroy() { Mobile.stopRouter(); super.onDestroy() }
-}
-```
-
-fd 模式下：`tun.file_descriptor` 不读 JSON（仅由 `startRouter(json, fd)` 传入）、`auto_route` 强制 `false`、`inet4/6_address` 必须与 `VpnService.Builder` 一致。
+**CI**：
+- `go-test`：全部包测试 + 并发热点 race + `go vet` + 编译（每次 Go 改动）。
+- `android-build`：Gradle `assembleRelease` 出四 ABI APK。
+- `update-chnroute`：每月 1/15/30 号自动拉取 china-ip-list 更新 `chnroute.txt` 并推回 main。
 
 ## ⚖️ 开源协议
 

@@ -9,7 +9,9 @@ import java.io.File
  * config.json 文件访问层(§4.6 单一真源)。
  *
  * 纯 Go 面板还原后,config.json 由应用与 Go 面板共同读写、引擎 fsnotify watcher 同步:
- *  - 应用:首页 IPv4/IPv6 拦截开关直接读写 filesDir/config.json(tun.inet4/6_address);
+ *  - 应用:首页 IPv4/IPv6 拦截开关(VPN 模式)直接读写 filesDir/config.json
+ *    (tun.inet4/6_address);仅代理模式 SOCKS5 监听族是 App 层设置(socksListen),
+ *    由 applyInvariants 派生 listen.host,面板不看到该开关;
  *  - Go 面板:dashboard.html 经 /config GET/PUT 写同一份文件,watcher 热重载。
  *
  * ensureConfig:每次启动幂等应用「不变量」——routing 文件绝对化到 cacheDir、
@@ -149,6 +151,15 @@ object ConfigProvider {
         tun.put("enabled", AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN)
         tun.put("auto_route", false)
         base.put("tun", tun)
+
+        // 仅代理(SOCKS5)模式:listen.host 由 AppPrefs.socksListen 派生(首页 v4/v6
+        // 监听开关,§8)——双开/只 v6 = "::"、只 v4 = "0.0.0.0"。VPN 模式不动:
+        // 隧道走 fd,listen.port 由 bridge 归零,SOCKS 不暴露,host 无意义。
+        if (AppPrefs.serviceMode(context) == AppPrefs.MODE_SOCKS5) {
+            val listen = base.optJSONObject("listen") ?: JSONObject().also { base.put("listen", it) }
+            listen.put("host", if (AppPrefs.socksListen(context) == AppPrefs.SOCKS_LISTEN_V4) "0.0.0.0" else "::")
+            base.put("listen", listen)
+        }
 
         // routing 文件绝对路径:引擎 cfgDir 为空,相对路径会解析到 CWD 而失败;
         // 放 cacheDir 作持久化(面板可改),ensureRuntimeFiles 仅缺失/空才种入,已落盘保留。

@@ -7,6 +7,9 @@
          注意 manifest 的 foregroundServiceType 属性没有 `vpn` flag(AOSP 全版本如此),
          真实 VPN 应用(v2rayNG/WireGuard 等)一律声明 specialUse。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 仅代理(SOCKS5)模式后台连通性(§8):本地 SOCKS 监听后台被 uid 网络策略限制,
+         弹系统框请求「忽略电池优化」豁免(Android M+ 系统对话框,免运行时授权)。 -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- 开机自启(§4.3):BOOT_COMPLETED 受保护广播必须声明权限。 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Android 13+:VPN 保活通知展示需运行时授权(§4.3),启动时申请一次。 -->

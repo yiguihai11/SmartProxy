@@ -11,6 +11,8 @@ import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -188,6 +190,7 @@ class MainActivity : ComponentActivity() {
             android.util.Log.i("SmartProxyVpn", "[MainActivity] serviceMode=SOCKS5, skipping VPN consent. Starting service directly...")
             ensureNotifyPermission()
             SmartProxyVpnService.start(this)
+            maybeRequestBatteryOptimizationExemption()
             warnNoUpstream()
             return
         }
@@ -220,7 +223,29 @@ class MainActivity : ComponentActivity() {
             notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
+
+    /** 仅代理(SOCKS5)模式后台连通性依赖「忽略电池优化」豁免(§8):Android M+ 对后台
+     *  uid 施加网络限制,本地 SOCKS 监听的回环 SYN-ACK 会按 uid 规则被丢包 —— 前台
+     *  正常、后台超时(SS 安卓同款现象)。启动 socks 时引导一次系统「忽略电池优化」
+     *  弹框;已豁免或已引导满 MAX_BATTERY_OPT_ASKS 次则跳过,防误触无限弹。 */
+    private fun maybeRequestBatteryOptimizationExemption() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        if (pm.isIgnoringBatteryOptimizations(packageName)) return
+        if (AppPrefs.batteryOptAskCount(this) >= MAX_BATTERY_OPT_ASKS) return
+        AppPrefs.setBatteryOptAskCount(this, AppPrefs.batteryOptAskCount(this) + 1)
+        runCatching {
+            startActivity(Intent(
+                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                Uri.parse("package:$packageName")
+            ))
+        }.onFailure {
+            android.util.Log.w("SmartProxyVpn", "[MainActivity] Battery-optimization dialog unavailable: ${it.message}")
+        }
+    }
 }
+
+private const val MAX_BATTERY_OPT_ASKS = 3
 
 private fun copyPanelUrl(context: Context, url: String) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -463,12 +488,16 @@ private fun AppDrawerContent(
             )
             Spacer(Modifier.height(6.dp))
 
-            // 侧边栏菜单项：代理应用 (Apps)
-            DrawerMenuItem(
-                title = "代理应用 (Apps)",
-                subtitle = "选择各应用的代理 / 绕过规则",
-                onClick = onOpenApps
-            )
+            // 侧边栏菜单项：代理应用 (Apps)(per-app 分流走 VpnService.Builder、禁止联网
+            // 走 TUN 数据路径,仅 VPN 隧道模式生效;仅代理 SOCKS5 无 VpnService,入口一并
+            // 隐藏(§8)。规则仍留在 AppPrefs,切回 VPN 模式照常生效。)
+            if (AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN) {
+                DrawerMenuItem(
+                    title = "代理应用 (Apps)",
+                    subtitle = "选择各应用的代理 / 绕过规则",
+                    onClick = onOpenApps
+                )
+            }
 
             // 侧边栏菜单项：DNS 服务器(builder.addDnsServer,仅 VPN 隧道模式生效;仅代理
             // SOCKS5 无 VpnService,注入不发生,入口一并隐藏(§6.1))。设置存 AppPrefs,
@@ -590,9 +619,18 @@ private fun HomeLauncher(
     val context = LocalContext.current
     val running by SmartProxyVpnService.isRunning.collectAsState()
 
-    // v4/v6 拦截:config.json 真源(§4.6,Go 面板与首页共写同一文件);开机自启仍是 AppPrefs。
-    var ipv4 by remember { mutableStateOf(ConfigProvider.ipv4(context)) }
-    var ipv6 by remember { mutableStateOf(ConfigProvider.ipv6(context)) }
+    // 开关语义随服务模式(§8):VPN 隧道 = 拦截(tun.inet4/6_address,config.json 真源);
+    // 仅代理(SOCKS5) = 监听(AppPrefs.socksListen → listen.host,首页与面板同源)。
+    // remember 以 socksMode 为 key:切换服务模式时重新读真源,不残留旧模式的显示态。
+    val socksMode = AppPrefs.serviceMode(context) == AppPrefs.MODE_SOCKS5
+    var ipv4 by remember(socksMode) { mutableStateOf(
+        if (socksMode) AppPrefs.socksListen(context) != AppPrefs.SOCKS_LISTEN_V6
+        else ConfigProvider.ipv4(context)
+    ) }
+    var ipv6 by remember(socksMode) { mutableStateOf(
+        if (socksMode) AppPrefs.socksListen(context) != AppPrefs.SOCKS_LISTEN_V4
+        else ConfigProvider.ipv6(context)
+    ) }
     var bootAuto by remember { mutableStateOf(AppPrefs.bootAutoStart(context)) }
 
     // 连接进度弧:运行中扫 0→360°,扫完前状态显示"连接中"。
@@ -695,45 +733,59 @@ private fun HomeLauncher(
             Spacer(Modifier.height(30.dp))
 
             // ── 开关卡:IPv4 / IPv6 左右各半;开机自启(Apps 已移至侧边栏菜单)──
-            // 拦截是 TUN 特性,仅 VPN 隧道模式生效(§8);仅代理(SOCKS5)无 VpnService,
-            // 开关置灰不可拨,点击整卡 Toast 提示。守卫:两个族不能同时关——
-            // VpnService.Builder 至少要一个 addAddress,否则 establish() 抛
-            // IllegalArgumentException 启动必败;运行中关最后一个还会让 restart() 重建
-            // 失败、连隧道一起收掉。拦在开关这一层,checked 是受控 state,不更新即回弹。
-            val interceptionEnabled = AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN
-            val interceptionHint: () -> Unit = {
-                Toast.makeText(context, "IPv4/IPv6 拦截仅 VPN 隧道模式生效", Toast.LENGTH_SHORT).show()
-            }
+            // 语义随服务模式(§8):VPN 隧道 = 拦截(tun.inet4/6_address);仅代理(SOCKS5) =
+            // 监听(AppPrefs.socksListen → listen.host:双开/只 v6="::"、只 v4="0.0.0.0"。
+            // Go net.Listen 对 "::" 默认双栈,只 v6 实际仍收 v4-mapped,与双开等价)。
+            // 守卫:两个族不能同时关 —— VPN 的 VpnService.Builder 至少要一个 addAddress,
+            // 否则 establish() 抛 IllegalArgumentException;仅代理也要有监听地址。
+            // 运行中改都走显式重建(Go watcher 自动重启已删除);restart() 自带 isRunning
+            // 守卫,未在跑只落盘。拦在开关这一层,checked 是受控 state,不更新即回弹。
+            val vpnIntercept = !socksMode
             Row(modifier = Modifier.fillMaxWidth()) {
                 SwitchCard(
-                    title = "IPv4 拦截", subtitle = "接管 IPv4 流量", checked = ipv4,
-                    enabled = interceptionEnabled,
-                    onDisabledClick = interceptionHint,
+                    title = if (vpnIntercept) "IPv4 拦截" else "IPv4 监听",
+                    subtitle = if (vpnIntercept) "接管 IPv4 流量" else "SOCKS5 监听 IPv4",
+                    checked = ipv4,
                     onCheckedChange = { v ->
                         if (!v && !ipv6) {
                             Toast.makeText(context, "至少需开启 IPv4 或 IPv6 其中一个", Toast.LENGTH_SHORT).show()
                             return@SwitchCard
                         }
                         ipv4 = v
-                        // 写 config.json tun.inet4_address(§4.6):运行中显式重建才生效
-                        // (Go watcher 自动重启已删除)。restart() 自带 isRunning 守卫,未在跑只落盘。
-                        ConfigProvider.setIpv4(context, v)
+                        if (vpnIntercept) {
+                            // 写 config.json tun.inet4_address(§4.6),运行中显式重建才生效。
+                            ConfigProvider.setIpv4(context, v)
+                        } else {
+                            AppPrefs.setSocksListen(context, when {
+                                v && ipv6 -> AppPrefs.SOCKS_LISTEN_BOTH
+                                v -> AppPrefs.SOCKS_LISTEN_V4
+                                else -> AppPrefs.SOCKS_LISTEN_V6
+                            })
+                        }
                         SmartProxyVpnService.restart(context)
                     },
                     modifier = Modifier.weight(1f)
                 )
                 Spacer(Modifier.width(8.dp))
                 SwitchCard(
-                    title = "IPv6 拦截", subtitle = "接管 IPv6 流量", checked = ipv6,
-                    enabled = interceptionEnabled,
-                    onDisabledClick = interceptionHint,
+                    title = if (vpnIntercept) "IPv6 拦截" else "IPv6 监听",
+                    subtitle = if (vpnIntercept) "接管 IPv6 流量" else "SOCKS5 监听 IPv6",
+                    checked = ipv6,
                     onCheckedChange = { v ->
                         if (!v && !ipv4) {
                             Toast.makeText(context, "至少需开启 IPv4 或 IPv6 其中一个", Toast.LENGTH_SHORT).show()
                             return@SwitchCard
                         }
                         ipv6 = v
-                        ConfigProvider.setIpv6(context, v)
+                        if (vpnIntercept) {
+                            ConfigProvider.setIpv6(context, v)
+                        } else {
+                            AppPrefs.setSocksListen(context, when {
+                                ipv4 && v -> AppPrefs.SOCKS_LISTEN_BOTH
+                                v -> AppPrefs.SOCKS_LISTEN_V6
+                                else -> AppPrefs.SOCKS_LISTEN_V4
+                            })
+                        }
                         SmartProxyVpnService.restart(context)
                     },
                     modifier = Modifier.weight(1f)

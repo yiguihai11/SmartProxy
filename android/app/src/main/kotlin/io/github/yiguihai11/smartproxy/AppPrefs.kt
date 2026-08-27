@@ -11,6 +11,8 @@ import android.content.Context
  *  - 自定义启动注入 DNS(IPv4 / IPv6)
  *  - 排除路由列表(excludeRoute, API 33+)
  *  - 服务模式(VPN 隧道 / 仅代理 SOCKS5,§8)
+ *  - 电池优化豁免引导计数(仅代理模式后台连通性,§8)
+ *  - 仅代理模式 SOCKS5 监听族(§8,listen.host 派生源)
  */
 object AppPrefs {
 
@@ -27,6 +29,8 @@ object AppPrefs {
     private const val KEY_EXCLUDED_ROUTES = "excluded_routes"
     private const val KEY_THEME_MODE = "theme_mode"
     private const val KEY_SERVICE_MODE = "service_mode"
+    private const val KEY_BATTERY_OPT_ASK = "battery_opt_ask_count"
+    private const val KEY_SOCKS_LISTEN = "socks_listen"
 
     private fun sp(context: Context) =
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -109,6 +113,29 @@ object AppPrefs {
 
     fun setServiceMode(context: Context, mode: String) {
         sp(context).edit().putString(KEY_SERVICE_MODE, mode).apply()
+    }
+
+    /** 电池优化豁免引导已弹次数:仅代理(SOCKS5)模式后台连通性依赖「忽略电池优化」,
+     *  启动时最多引导几次(防误触无限弹);已豁免则不再引导。 */
+    fun batteryOptAskCount(context: Context): Int =
+        sp(context).getInt(KEY_BATTERY_OPT_ASK, 0)
+
+    fun setBatteryOptAskCount(context: Context, count: Int) {
+        sp(context).edit().putInt(KEY_BATTERY_OPT_ASK, count).apply()
+    }
+
+    const val SOCKS_LISTEN_BOTH = "both"
+    const val SOCKS_LISTEN_V4 = "v4"
+    const val SOCKS_LISTEN_V6 = "v6"
+
+    /** 仅代理模式 SOCKS5 监听族(§8,首页 v4/v6 开关):both = "::" 全接口双栈、
+     *  v4 = "0.0.0.0"、v6 = "::"(Go net.Listen 对 "::" 默认双栈,仍收 v4-mapped)。
+     *  默认 both(保持原行为);config.json 的 listen.host 由它派生(ConfigProvider 不变量)。 */
+    fun socksListen(context: Context): String =
+        sp(context).getString(KEY_SOCKS_LISTEN, SOCKS_LISTEN_BOTH) ?: SOCKS_LISTEN_BOTH
+
+    fun setSocksListen(context: Context, mode: String) {
+        sp(context).edit().putString(KEY_SOCKS_LISTEN, mode).apply()
     }
 }
 
