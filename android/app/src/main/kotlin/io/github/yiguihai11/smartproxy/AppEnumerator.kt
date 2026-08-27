@@ -47,7 +47,7 @@ object AppEnumerator {
             .map { ai ->
                 AppInfo(
                     pkg = ai.packageName,
-                    label = pm.getApplicationLabel(ai)?.toString() ?: ai.packageName,
+                    label = pm.getApplicationLabel(ai).toString(),
                     uid = ai.uid,
                     selected = selected.contains(ai.packageName),
                     system = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0

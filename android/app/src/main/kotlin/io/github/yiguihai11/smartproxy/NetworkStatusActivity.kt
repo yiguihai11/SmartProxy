@@ -309,7 +309,7 @@ class NetworkStatusActivity : ComponentActivity() {
                 AppMeta("UID $uid", null)
             } else {
                 val ai = pm.getApplicationInfo(pkg, 0)
-                val label = pm.getApplicationLabel(ai)?.toString() ?: pkg
+                val label = pm.getApplicationLabel(ai).toString()
                 AppMeta(label, AppEnumerator.iconBitmap(this, pkg))
             }
         }.getOrElse { AppMeta("UID $uid", null) }
@@ -408,7 +408,7 @@ private fun NetworkStatusScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    Text(error!!, fontSize = 13.sp, color = Color(0xFFFF6B6B))
+                    Text(error, fontSize = 13.sp, color = Color(0xFFFF6B6B))
                 }
                 appItems.isEmpty() -> Column(
                     Modifier.fillMaxWidth().weight(1f),
