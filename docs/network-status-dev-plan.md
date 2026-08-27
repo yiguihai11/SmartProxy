@@ -1,6 +1,7 @@
 # 联网状态(按应用流量监控)+ 应用页加载体验 —— 开发计划
 
 > 状态:设计定稿(决策已确认),待进入开发
+> ⚠️ **已实现(功能已全部落地),本文为历史设计快照**——文中「30 秒淡出 / onPause 立即关采集」等已按实现调整(实际:5 秒淡出 / onPause 延迟 5 秒);实际行为以 README / 各模块文档 / 代码为准。
 > 相关:`docs/android-dev-plan.md`(Android 版总计划)、`docs/tun.md`(TUN handler)、`mobile/bridge.go`(gomobile 桥)
 > 基线:main@b64f661,备份 tag `backup-before-network-status`;计划文档提交 `52ec11f`
 

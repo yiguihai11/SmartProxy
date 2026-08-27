@@ -1,6 +1,7 @@
 # SmartProxy Android 版开发计划
 
 > 状态:设计讨论稿,待确认后进入开发
+> ⚠️ **已实现(功能已全部落地),本文为历史设计快照**——文档描述的桥接口、`tun.dns_servers`、`/api/vpn` 等已随实现改动;实际行为以 README / `docs/config.md` / `docs/android-cli.md` / 各模块文档为准,勿按本文反推代码。
 > 参考:老项目 [sockstun](https://github.com/yiguihai11/sockstun)(Java + VpnService + JNI/C 隧道)
 > 相关:`docs/android-cli.md`(构建通道)、`mobile/bridge.go`(gomobile 桥)
 

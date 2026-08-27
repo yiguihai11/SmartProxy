@@ -8,8 +8,8 @@ GitHub Actions 上跑**(GitHub-hosted runner 2 核 / 7 GB),本机不装 Android 
 
 | 文件 | 作用 |
 |---|---|
-| `android/` | 手写的 Android 工程(Compose + Kotlin + Gradle wrapper 8.9),M1 起逐步成型 |
-| `android/app/src/main/assets/` | 引擎运行资产:config.json(tun 段含 dns_servers)、chnroute.txt、acl.txt |
+| `android/` | 手写的 Android 工程(Compose + Kotlin + Gradle wrapper 8.14.5),M1 起逐步成型 |
+| `android/app/src/main/assets/` | 引擎运行资产:config.json(tun 段不含 dns_servers,DNS 由 VpnService 启动时 `addDnsServer` 注入)、chnroute.txt、acl.txt |
 | `mobile/` | gomobile bind 的 Go 引擎导出层(bridge.go),产出 `build/smartproxy.aar` |
 | `.github/workflows/android-build.yml` | Actions 工作流:装 SDK/NDK → gomobile 出 AAR → Gradle 签名 release → 上传 APK |
 
@@ -22,8 +22,8 @@ android/app/libs/smartproxy.aar --Gradle assembleRelease--> app-release.apk
 
 一次 CI 构建做:
 
-1. `actions/setup-java` 配 JDK 17 + `actions/setup-go` 配 Go
-2. `go install golang.org/x/mobile/cmd/gomobile` + `sdkmanager` 装 platform-35 / build-tools
+1. `actions/setup-java` 配 JDK 21 + `actions/setup-go` 配 Go
+2. `go install golang.org/x/mobile/cmd/gomobile` + `sdkmanager` 装 platform-36 / build-tools 35.0.0
 3. `gomobile init` + `make android` → `build/smartproxy.aar`,拷进 `android/app/libs/`
 4. `keytool` 现生成 debug keystore(**临时签名**,`android`/`androiddebugkey`)
 5. `./gradlew assembleRelease`(env 注入签名)→ **签名** `app-release.apk`
