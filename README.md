@@ -1,6 +1,11 @@
 # SmartProxy
 
-[![Go Report Card](https://goreportcard.com/badge/gitlab.com/yiguihai/smartproxy)](https://goreportcard.com/report/gitlab.com/yiguihai/smartproxy)
+[![go-test](https://github.com/yiguihai11/SmartProxy/actions/workflows/go-test.yml/badge.svg?branch=main&label=go-test)](https://github.com/yiguihai11/SmartProxy/actions/workflows/go-test.yml)
+[![android-build](https://github.com/yiguihai11/SmartProxy/actions/workflows/android-build.yml/badge.svg?branch=main&label=android-build)](https://github.com/yiguihai11/SmartProxy/actions/workflows/android-build.yml)
+[![update-chnroute](https://github.com/yiguihai11/SmartProxy/actions/workflows/update-chnroute.yml/badge.svg?branch=main&label=update-chnroute)](https://github.com/yiguihai11/SmartProxy/actions/workflows/update-chnroute.yml)
+[![CircleCI](https://circleci.com/gh/yiguihai11/SmartProxy.svg?style=shield)](https://app.circleci.com/pipelines/github/yiguihai11/SmartProxy)
+[![Go Report Card](https://goreportcard.com/badge/github.com/yiguihai11/SmartProxy)](https://goreportcard.com/report/github.com/yiguihai11/SmartProxy)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/yiguihai11/SmartProxy)](https://github.com/yiguihai11/SmartProxy/blob/main/go.mod)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 高性能智能路由代理：TUN 全局透明代理 + 标准 SOCKS5 服务双入口，自动国内外分流、DNS 反污染与 IP 优选、DPI 域名识别、多上游负载与健康检查、配置热重载。
@@ -127,6 +132,7 @@ proxy port 22 direct                   # SSH 强制直连（"direct" 为特殊�
 - 抽屉：代理应用（per-app 分流与「禁止联网」，仅 VPN 隧道模式显示）、DNS 服务器注入（仅 VPN）、排除路由（仅 VPN + API 33+）、服务模式、联网状态、日志查看。
 - 联网状态：按应用的实时连接与网速，页面打开才采集；单条连接可封禁（掐断现存连接 + 写 ACL）。
 - 日志：应用内查看 `SmartProxyVpn` 标签；Go 引擎日志在 logcat 的 `GoLog` 标签（应用内有意排除）。
+- 国际化：界面中英双语 —— 默认英文，系统语言为中文时自动切换中文。
 
 **构建**：
 
@@ -138,8 +144,8 @@ make android   # → build/smartproxy.aar（引擎库）
 核心调用：`Mobile.startRouter(configPath, tunFd, tunEnabled)`。fd 模式下传 TUN fd + `true`；仅代理模式传 `0, false`。fd 模式下 `tun.file_descriptor` 不读 JSON（仅由 `startRouter` 传入）、`auto_route` 强制 `false`、`inet4/6_address` 必须与 `VpnService.Builder` 一致。
 
 **CI**：
-- `go-test`：全部包测试 + 并发热点 race + `go vet` + 编译（每次 Go 改动）。
-- `android-build`：Gradle `assembleRelease` 出四 ABI APK。
+- `go-test`（GitHub Actions）：全部包测试 + 并发热点 race + `go vet` + 编译（每次 Go 改动）。
+- `android-build`（GitHub Actions + **CircleCI 双通道**）：Gradle `assembleRelease` 出四 ABI APK。2026-08 月 GitHub Actions 全球性故障后移植到 CircleCI，两条独立构建通道互为冗余。
 - `update-chnroute`：每月 1/15/30 号自动拉取 china-ip-list 更新 `chnroute.txt` 并推回 main。
 
 ## ⚖️ 开源协议
