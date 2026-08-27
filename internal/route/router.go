@@ -98,10 +98,10 @@ func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 		return conn, false, err
 	case result != "fallback":
 		if selected.IsUDPOnly() {
-			slog.Warn("rule selected a udp_only proxy for TCP", "url", selected.URL, "host", host, "port", port)
+			slog.Warn("rule selected a udp_only proxy for TCP", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port)
 			return nil, false, errors.New("proxy is udp_only, cannot serve TCP")
 		}
-		slog.Info("using proxy alias from rule", "url", selected.URL, "host", host, "port", port, "domain", domain)
+		slog.Info("using proxy alias from rule", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port, "domain", domain)
 		conn, err := selected.Connect(ctx, host, port)
 		return conn, true, err
 	}
@@ -182,10 +182,10 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 		return conn, nil, false, nil
 	case result != "fallback":
 		if selected.IsUDPOnly() {
-			slog.Warn("rule selected a udp_only proxy for TCP", "url", selected.URL, "host", host, "port", port)
+			slog.Warn("rule selected a udp_only proxy for TCP", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port)
 			return nil, nil, false, errors.New("proxy is udp_only, cannot serve TCP")
 		}
-		slog.Info("using proxy alias from rule", "url", selected.URL, "host", host, "port", port, "domain", domain)
+		slog.Info("using proxy alias from rule", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port, "domain", domain)
 		conn, err := selected.Connect(ctx, host, port)
 		if err != nil {
 			return nil, nil, false, err
