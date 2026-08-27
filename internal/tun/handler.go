@@ -52,7 +52,9 @@ type TUNHandler struct {
 	uidResolverFn atomic.Pointer[UIDResolverFunc]
 
 	// connStats 连接监控(「联网状态」页数据源):懒开关,页面打开才采集。
-	connStats ConnStats
+	// 指针字段:NewConnStats 分配共享实例,handler 与 liveTCP 同持;原子字段
+	// (atomic.Bool/Int32)按值拷贝会被 go vet 拒(copylocks)。
+	connStats *ConnStats
 
 	// liveTCP 活跃 TCP 连接句柄注册表(「联网状态」页封禁时按 ACL 扫描掐断)。
 	// 与 connStats 共享同一 ConnStats,掐断时可即时移除统计记录。
@@ -86,10 +88,10 @@ func NewHandler(cfg *config.Config, r *route.Router, re *rules.Engine, um *upstr
 		dnsHandler:    dh,
 		cleanerStopCh: make(chan struct{}),
 	}
-	// connStats 是值字段,须先赋好再取地址,确保 liveTCP 与 handler 共享同一实例
+	// connStats 指针字段:NewConnStats 分配共享实例,handler 与 liveTCP 同持
 	// (掐断时 Remove 统计记录才作用在同一张表上)。
 	h.connStats = NewConnStats()
-	h.liveTCP = newLiveTCP(&h.connStats)
+	h.liveTCP = newLiveTCP(h.connStats)
 	h.config.Store(cfg)
 	return h
 }

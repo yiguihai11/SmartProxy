@@ -69,8 +69,10 @@ type ConnStats struct {
 	total int // 存活记录数(上限 connStatsMaxRecords)
 }
 
-func NewConnStats() ConnStats {
-	cs := ConnStats{byUID: make(map[int32]*uidStats)}
+// NewConnStats 返回共享实例指针:ConnStats 含 atomic.Bool/Int32(noCopy),按值返回
+// 会被 go vet 拒(copylocks),且本就要求 handler 与 liveTCP 共享同一张表。
+func NewConnStats() *ConnStats {
+	cs := &ConnStats{byUID: make(map[int32]*uidStats)}
 	cs.pinUID.Store(-1)
 	return cs
 }

@@ -31,7 +31,7 @@ func newKillHandler(t *testing.T, acl string) *TUNHandler {
 	require.NoError(t, err)
 	h := &TUNHandler{ruleEng: re}
 	h.connStats = NewConnStats()
-	h.liveTCP = newLiveTCP(&h.connStats)
+	h.liveTCP = newLiveTCP(h.connStats)
 	return h
 }
 
@@ -39,7 +39,7 @@ func newKillHandler(t *testing.T, acl string) *TUNHandler {
 
 func TestLiveTCP_AddRemoveSnapshot(t *testing.T) {
 	cs := NewConnStats()
-	lt := newLiveTCP(&cs)
+	lt := newLiveTCP(cs)
 
 	app1, remote1 := net.Pipe()
 	hd1 := lt.add(app1, "1.2.3.4", 443, nil)
@@ -63,7 +63,7 @@ func TestLiveTCP_AddRemoveSnapshot(t *testing.T) {
 
 func TestLiveTCP_ConcurrentAddRemoveSnapshot(t *testing.T) {
 	cs := NewConnStats()
-	lt := newLiveTCP(&cs)
+	lt := newLiveTCP(cs)
 
 	app0, _ := net.Pipe()
 	seed := lt.add(app0, "1.2.3.4", 443, nil)
