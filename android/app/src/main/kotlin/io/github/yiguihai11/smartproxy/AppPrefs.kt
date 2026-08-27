@@ -32,6 +32,7 @@ object AppPrefs {
     private const val KEY_SERVICE_MODE = "service_mode"
     private const val KEY_BATTERY_OPT_ASK = "battery_opt_ask_count"
     private const val KEY_SOCKS_LISTEN = "socks_listen"
+    private const val KEY_SHIZUKU_SYNC_TOKEN = "shizuku_sync_token"
 
     private fun sp(context: Context) =
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -151,6 +152,14 @@ object AppPrefs {
 
     fun setSocksListen(context: Context, mode: String) {
         sp(context).edit().putString(KEY_SOCKS_LISTEN, mode).apply()
+    }
+
+    /** Shizuku 网络共享同步 Token */
+    fun shizukuSyncToken(context: Context): String =
+        sp(context).getString(KEY_SHIZUKU_SYNC_TOKEN, "") ?: ""
+
+    fun setShizukuSyncToken(context: Context, token: String) {
+        sp(context).edit().putString(KEY_SHIZUKU_SYNC_TOKEN, token).apply()
     }
 }
 

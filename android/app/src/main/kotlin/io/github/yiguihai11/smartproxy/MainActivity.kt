@@ -177,6 +177,7 @@ class MainActivity : ComponentActivity() {
             )
             SmartProxyVpnService.refreshForeground(this)
         }
+        io.github.yiguihai11.smartproxy.shizuku.TetheringCoreSync.onAppForegrounded(this)
     }
 
     private fun onToggleClicked() {
@@ -387,10 +388,11 @@ private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme:
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // DNS / 排除路由 / 服务模式设置对话框开关(侧边栏菜单打开,§6 / §8)。
+    // DNS / 排除路由 / 服务模式 / 网络共享设置对话框开关(侧边栏菜单打开,§6 / §8)。
     var showDnsDialog by remember { mutableStateOf(false) }
     var showExcludeDialog by remember { mutableStateOf(false) }
     var showServiceModeDialog by remember { mutableStateOf(false) }
+    var showTetheringDialog by remember { mutableStateOf(false) }
 
     // DNS / 排除路由在 establish() 时固化(读 AppPrefs),改了要重建 VpnService 才生效;
     // 两者是 App 层设置,Go watcher 不感知。VPN 在跑则显式重建(SmartProxyVpnService.restart
@@ -421,13 +423,17 @@ private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme:
                     scope.launch { drawerState.close() }
                     showServiceModeDialog = true
                 },
-                onOpenLogcat = {
+                onOpenTethering = {
                     scope.launch { drawerState.close() }
-                    context.startActivity(Intent(context, LogcatActivity::class.java))
+                    showTetheringDialog = true
                 },
                 onOpenNetworkStatus = {
                     scope.launch { drawerState.close() }
                     context.startActivity(Intent(context, NetworkStatusActivity::class.java))
+                },
+                onOpenLogcat = {
+                    scope.launch { drawerState.close() }
+                    context.startActivity(Intent(context, LogcatActivity::class.java))
                 }
             )
         }
@@ -439,6 +445,12 @@ private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme:
             onOpenDrawer = { scope.launch { drawerState.open() } },
             themeMode = themeMode,
             onCycleTheme = onCycleTheme
+        )
+    }
+
+    if (showTetheringDialog) {
+        TetheringDialog(
+            onDismiss = { showTetheringDialog = false }
         )
     }
 
@@ -486,6 +498,7 @@ private fun AppDrawerContent(
     onOpenDns: () -> Unit,
     onOpenExclude: () -> Unit,
     onOpenServiceMode: () -> Unit,
+    onOpenTethering: () -> Unit,
     onOpenLogcat: () -> Unit,
     onOpenNetworkStatus: () -> Unit
 ) {
@@ -590,6 +603,15 @@ private fun AppDrawerContent(
                 subtitle = stringResource(R.string.drawer_service_mode_subtitle, serviceModeLabel(context, serviceMode)),
                 onClick = onOpenServiceMode
             )
+
+            // 侧边栏菜单项：网络共享 (Shizuku 免 Root 共享代理至热点/USB, Android 13+ 支持)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                DrawerMenuItem(
+                    title = stringResource(R.string.drawer_tethering),
+                    subtitle = stringResource(R.string.drawer_tethering_subtitle),
+                    onClick = onOpenTethering
+                )
+            }
 
             // 侧边栏菜单项：联网状态(仅 VPN 隧道服务模式 + 仅绕过 + 运行中才出现;懒采集,页面开才统计)
             // 连接监控只挂在 TUN 数据路径,仅代理(SOCKS5)模式监控恒空,入口一并隐藏(§6.1)。

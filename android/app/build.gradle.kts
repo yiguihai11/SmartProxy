@@ -76,6 +76,7 @@ android {
     }
     buildFeatures {
         compose = true
+        aidl = true
     }
     packaging {
         jniLibs {
@@ -97,6 +98,10 @@ dependencies {
     // Go engine AAR (built by `make android` → build/smartproxy.aar, copied to
     // app/libs/ during CI). Not committed; see scripts/README or the workflow.
     implementation(files("libs/smartproxy.aar"))
+
+    // Shizuku API & Provider for non-root privileged tethering (Android 13+)
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
 
     // 2026-08 最新稳定 BOM(Compose 1.11);Kotlin 2.4 的 compose 编译器要求 runtime 匹配,必须连带升。
     implementation(platform("androidx.compose:compose-bom:2026.05.01"))

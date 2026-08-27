@@ -87,6 +87,9 @@ class SmartProxyVpnService : VpnService() {
                     .setAction(NotificationHelper.ACTION_REFRESH_FOREGROUND)
             )
         }
+
+        private var appContextRef: java.lang.ref.WeakReference<android.content.Context>? = null
+        fun getAppContext(): android.content.Context? = appContextRef?.get()
     }
 
     private var startedEngine = false
@@ -165,10 +168,12 @@ class SmartProxyVpnService : VpnService() {
         // 服务模式(§8):仅代理(SOCKS5)不建 VpnService,直接起引擎 SOCKS5;VPN 模式走 establishVpn。
         val socksOnly = AppPrefs.serviceMode(this) == AppPrefs.MODE_SOCKS5
         Log.i(TAG, "[startInternal] serviceMode=${AppPrefs.serviceMode(this)}, socksOnly=$socksOnly. Calling ${if (socksOnly) "startSocksOnly()" else "establishVpn()"}...")
+        appContextRef = java.lang.ref.WeakReference(applicationContext)
         val started = if (socksOnly) startSocksOnly() else establishVpn()
         if (started) {
             startedEngine = true
             _isRunning.value = true
+            io.github.yiguihai11.smartproxy.shizuku.TetheringCoreSync.onStarted(this, ConfigProvider.readConfig(this))
             Log.i(TAG, "[startInternal] Start SUCCESS (socks=$socksOnly)! startedEngine=true, _isRunning=true. Returning START_STICKY.")
             return START_STICKY
         }
@@ -176,6 +181,7 @@ class SmartProxyVpnService : VpnService() {
         // 是 false;重建(ACTION_RESTART)路径 shutdown(fullTeardown=false)为无感保留了
         // isRunning=true,重建失败必须落 false,否则首页圆球卡在"已连接"但隧道已没了。
         Log.e(TAG, "[startInternal] Start FAILED (socks=$socksOnly)! Stopping foreground notification and service.")
+        io.github.yiguihai11.smartproxy.shizuku.TetheringCoreSync.onStartFailed(this, "Start failed")
         _isRunning.value = false
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -458,6 +464,7 @@ class SmartProxyVpnService : VpnService() {
             Log.i(TAG, "[shutdown] Already torn down (tornDown=true), skipping.")
             return
         }
+        io.github.yiguihai11.smartproxy.shizuku.TetheringCoreSync.onStopping(this)
         Log.i(TAG, "[shutdown] Step 0: Enter shutdown(). startedEngine=$startedEngine, _isRunning=${_isRunning.value}, tunFds=${tunFdCount()}, fullTeardown=$fullTeardown")
         if (startedEngine) {
             try {

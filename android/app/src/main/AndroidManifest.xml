@@ -90,6 +90,20 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <!-- Shizuku Binder 发现 Provider -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+        <!-- Shizuku 网络共享同步广播接收器 -->
+        <receiver
+            android:name=".shizuku.ShizukuRoutingSyncReceiver"
+            android:exported="false" />
     </application>
 
 </manifest>
