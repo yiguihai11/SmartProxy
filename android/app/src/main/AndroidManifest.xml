@@ -2,6 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Shizuku 网络共享(normal 级,声明即自动授予):主进程 CoreTetheringLease.holdTestNetwork
+         调 ConnectivityManager.requestNetwork(test network)保活受保护上游,缺它 SecurityException,
+         startRouting 直接 -2。 -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- API 34+:VpnService 用 specialUse 类型声明(normal 权限,免运行时授权)。
          注意 manifest 的 foregroundServiceType 属性没有 `vpn` flag(AOSP 全版本如此),
