@@ -20,7 +20,15 @@ executors:
   android:
     docker:
       - image: cimg/android:2026.08-ndk
-    resource_class: medium
+    # 必须 large(4 vCPU / 8 GB)。medium 只有 4 GB 且无 swap,冷构建到
+    # minifyReleaseWithR8(R8 混淆)紧接 lintVitalRelease(发布前 lint)这两个内存
+    # 峰值叠加时,Gradle daemon(-Xmx2048m + R8 常驻 + lint)被内核 OOM killer
+    # SIGKILL —— 表现为「Gradle build daemon disappeared unexpectedly」,daemon
+    # 日志在 R8 警告处戛然而止、无 Java 异常也无 hs_err(外部杀进程特征)。
+    # GH Actions 的 ubuntu-latest 是 7 GB 故从不触发;提到 8 GB 对齐该预算。
+    # 手动 SSH 重跑能过是假象:R8 已在(被超时杀掉的)首次运行里完成,重跑全是
+    # UP-TO-DATE,绕开了内存峰值。
+    resource_class: large
     environment:
       # cimg/android 镜像内置 SDK 就在这个路径;显式再写一遍,对齐 AGP 的
       # "SDK 双路径不一致"检查(GH runner 曾因 ANDROID_SDK_ROOT 指向别处报错)。
