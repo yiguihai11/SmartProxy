@@ -107,6 +107,8 @@ tr:last-child td{border-bottom:none}
 .proxy-card .circ.half .dot{background:var(--yellow)}
 .proxy-card .circ.na{color:var(--text3)}
 .proxy-card .circ.na{cursor:default}
+.proxy-card .circ.unknown{color:var(--text3)}
+.proxy-card .circ.unknown .dot{background:var(--text3)}
 .proxy-card .circ.manual{border-style:dashed}
 .proxy-card .actions{margin-top:12px;display:flex;gap:8px}
 .toggle-group{display:flex;gap:4px;margin-bottom:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px;width:fit-content}
@@ -532,18 +534,23 @@ function circuitStat(snap,supports){
   if(m)return snap.available?{c:'up',t:'up',m:true}:{c:'down',t:'down',m:true};
   if(snap.state==='open')return {c:'down',t:'down',m:m};
   if(snap.state==='half_open')return {c:'half',t:'half',m:m};
-  return snap.last_attempt?{c:'up',t:'up',m:m}:{c:'na',t:'unknown',m:m};
+  // 从未探测过(健康检查禁用 / 单节点 auto_disable_if_single_proxy 跳过 / 首个周期未跑):
+  // 显示 "unknown" 但仍允许点击——点击 = 强制关闭(force down)该电路,否则单节点用户
+  // 永远看到 "TCP unknown" 且关不掉。c 用 'unknown'(而非 'na')使 badge 保持可点,
+  // 真正无此电路(scheme 不支持)的 n/a 才禁点。
+  return snap.last_attempt?{c:'up',t:'up',m:m}:{c:'unknown',t:'unknown',m:m};
 }
 // Click a badge to flip that circuit: up → disable (force down), down → enable (force up),
 // manually-up → release back to automatic. A manual-down pin (e.g. the udp_in_tcp TCP default)
 // force-enables: the user's "turn TCP back on" click must take effect immediately, not merely
-// release the pin and read "unknown" until the next health cycle. Non-probable circuits
-// (unknown/n/a) are not clickable.
+// release the pin and read "unknown" until the next health cycle. unknown (never probed, e.g.
+// single-proxy auto-disable) stays clickable and disables the circuit on first click; only
+// true n/a (scheme without that circuit) is not clickable.
 async function toggleCircuit(i,c){
   var p=healthD.health.proxies[i];
   if(!p)return;
   var s=c==='udp'?p.udp_health:p.health;
-  if(!s||!s.last_attempt&&!s.manual&&s.state==='closed')return;
+  if(!s)return;
   var action=s.manual?(s.available?'auto':'enable'):(s.available?'disable':'enable');
   await fetch('/health/proxy?alias='+encodeURIComponent(p.alias)+'&circuit='+c+'&action='+action,{method:'POST'});
   loadHealth()
