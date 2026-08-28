@@ -14,6 +14,7 @@ import android.util.Log
 import androidx.annotation.Keep
 import androidx.annotation.RequiresApi
 import io.github.yiguihai11.smartproxy.BuildConfig
+import org.json.JSONObject
 import rikka.shizuku.Shizuku
 import rikka.shizuku.SystemServiceHelper
 import java.io.File
@@ -195,6 +196,9 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
     }
 
     private fun currentRoutingDetailLocked(): String {
+        // ERROR 状态必须透传 setRoutingError 存的根因,否则对话框只看到「路由错误」、
+        // 具体失败被整段吞掉(曾导致排查只能靠猜)。
+        if (routingState == ROUTING_STATE_ERROR) return routingDetail
         if (!routingActive && routingState != ROUTING_STATE_WAITING) return ""
         val upstreamInterface = upstreamMonitor?.currentInterfaceNames.orEmpty()
         return formatRoutingDetail(upstreamInterface)
@@ -902,7 +906,10 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         val lease = checkNotNull(coreLease) { "Core lease is unavailable" }
         val stagedDir = stageNativeAssets(lease)
         val configFile = File(stagedDir, "config.json")
-        configFile.writeText(config.engineContent)
+        // 引擎按 config 的 routing.chnroute_file / acl_file 加载文件;本进程以 shell UID
+        // 运行,读不了主应用私有 cacheDir,必须把这两个路径重定向到已 stage 的同名文件,
+        // 否则 engine.New → chnroute.Load 直接 permission denied,startRouting 报 -2。
+        configFile.writeText(relocateRoutingFilesForShell(config.engineContent, stagedDir))
 
         try {
             smartproxy.mobile.Mobile.startRouter(configFile.absolutePath, fd.toLong(), true)
@@ -939,6 +946,14 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         }
         stagedAssetFingerprint = fingerprint
         return directory.absolutePath
+    }
+
+    private fun relocateRoutingFilesForShell(engineContent: String, stagedDir: String): String {
+        val json = runCatching { JSONObject(engineContent) }.getOrElse { return engineContent }
+        val routing = json.optJSONObject("routing") ?: JSONObject().also { json.put("routing", it) }
+        routing.put("chnroute_file", File(stagedDir, "chnroute.txt").absolutePath)
+        routing.put("acl_file", File(stagedDir, "acl.txt").absolutePath)
+        return json.toString()
     }
 
     private fun readEngineConfig(coreLease: ICoreTetheringLease): String {

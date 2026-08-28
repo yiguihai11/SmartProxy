@@ -156,6 +156,9 @@ internal class CoreTetheringLease : ICoreTetheringLease.Stub() {
     private var routingSnapshot: HotspotRoutingSnapshot? = null
     private var coreConfig: String? = null
     private var assetDirectory: File? = null
+    // 引擎运行文件(chnroute.txt / acl.txt)在 cacheDir;Shizuku 用户服务以 shell UID 运行,
+    // 读不了主应用私有路径,必须把 cacheDir 资源一并暴露给它 stage 到 /data/local/tmp。
+    private var assetCacheDirectory: File? = null
 
     @Synchronized
     fun attach(context: Context, snapshot: HotspotRoutingSnapshot, coreConfig: String) {
@@ -163,6 +166,7 @@ internal class CoreTetheringLease : ICoreTetheringLease.Stub() {
         routingSnapshot = snapshot
         this.coreConfig = coreConfig
         assetDirectory = context.filesDir
+        assetCacheDirectory = context.cacheDir
     }
 
     @Synchronized
@@ -170,6 +174,7 @@ internal class CoreTetheringLease : ICoreTetheringLease.Stub() {
         routingSnapshot = null
         coreConfig = null
         assetDirectory = null
+        assetCacheDirectory = null
     }
 
     @Synchronized
@@ -200,15 +205,29 @@ internal class CoreTetheringLease : ICoreTetheringLease.Stub() {
     @Synchronized
     override fun openAssetFile(name: String): ParcelFileDescriptor {
         require(name.isNotBlank() && File(name).name == name) { "Invalid asset name" }
-        val file = File(checkNotNull(assetDirectory) { "Core asset directory is unavailable" }, name)
-        require(file.isFile) { "Core asset is unavailable: $name" }
+        val file = resolveAsset(name)
+            ?: throw IllegalArgumentException("Core asset is unavailable: $name")
         return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
     }
 
-    private fun assetFiles(): List<File> = assetDirectory?.listFiles()
-        ?.filter { it.isFile && (it.name.endsWith(".txt") || it.name.endsWith(".json")) }
-        ?.sortedBy { it.name }
-        .orEmpty()
+    private fun resolveAsset(name: String): File? {
+        listOfNotNull(assetDirectory, assetCacheDirectory).forEach { dir ->
+            val file = File(dir, name)
+            if (file.isFile) return file
+        }
+        return null
+    }
+
+    private fun assetFiles(): List<File> =
+        listOfNotNull(assetDirectory, assetCacheDirectory)
+            .flatMap { dir ->
+                dir.listFiles()?.asSequence()
+                    ?.filter { it.isFile && (it.name.endsWith(".txt") || it.name.endsWith(".json")) }
+                    ?.toList()
+                    .orEmpty()
+            }
+            .distinctBy { it.name }
+            .sortedBy { it.name }
 
     @Synchronized
     override fun holdTestNetwork(tun: ParcelFileDescriptor) {
