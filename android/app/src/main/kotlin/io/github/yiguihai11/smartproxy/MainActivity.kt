@@ -608,8 +608,10 @@ private fun AppDrawerContent(
                 onClick = onOpenServiceMode
             )
 
-            // 侧边栏菜单项：网络共享 (Shizuku 免 Root 共享代理至热点/USB, Android 13+ 支持)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // 侧边栏菜单项：网络共享 (Shizuku 免 Root 共享代理至热点/USB, Android 13+ 支持)。
+            // 只挂 TUN 数据路径(Shizuku 读 TUN fd 转发到热点),仅代理(SOCKS5)模式无 TUN 可
+            // 共享,入口一并隐藏(§6.1)。
+            if (serviceMode == AppPrefs.MODE_VPN && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 DrawerMenuItem(
                     title = stringResource(R.string.drawer_tethering),
                     subtitle = stringResource(R.string.drawer_tethering_subtitle),
