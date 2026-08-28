@@ -30,6 +30,12 @@ class SmartProxyVpnService : VpnService() {
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning
 
+        /** 本次连接会话的启动时刻(ms),首页圆环连接时长数据源;0 = 未连接。
+         *  启动成功(含 sticky 重启)时赋值,完整拆机(fullTeardown)时清零;
+         *  重建(fullTeardown=false)不重置,时长连续不计入重启间隙。 */
+        @Volatile
+        var startedAt: Long = 0L
+
         /** DNS 缺省值(§6 抽屉 DNS 设置存 AppPrefs,自定义留空时回退这里)。 */
         private const val DEFAULT_DNS_V4 = "223.5.5.5"
         private const val DEFAULT_DNS_V6 = "2400:3200::1"
@@ -173,6 +179,7 @@ class SmartProxyVpnService : VpnService() {
         if (started) {
             startedEngine = true
             _isRunning.value = true
+            startedAt = System.currentTimeMillis()
             io.github.yiguihai11.smartproxy.shizuku.TetheringCoreSync.onStarted(this, ConfigProvider.readConfig(this).toString())
             Log.i(TAG, "[startInternal] Start SUCCESS (socks=$socksOnly)! startedEngine=true, _isRunning=true. Returning START_STICKY.")
             return START_STICKY
@@ -522,6 +529,7 @@ class SmartProxyVpnService : VpnService() {
 
             Log.i(TAG, "[shutdown] Step 5/6: Updating state _isRunning.value = false...")
             _isRunning.value = false
+            startedAt = 0L
             // 完整拆机完成,后续(如 onDestroy)的 shutdown 直接跳过。
             tornDown = true
         } else {

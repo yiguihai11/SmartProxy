@@ -29,6 +29,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -101,6 +102,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -732,6 +734,19 @@ private fun HomeLauncher(
     }
     val connecting = running && sweep.value < 355f
 
+    // 连接时长(§圆环):每秒 tick,读服务端会话启动时刻算 elapsed。running 变 false 时
+    // LaunchedEffect 重启不进入循环,计时停;重建(fullTeardown=false)不重置 startedAt。
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(running) {
+        if (running) {
+            while (true) {
+                nowMs = System.currentTimeMillis()
+                delay(1000)
+            }
+        }
+    }
+    val elapsedMs = if (running) nowMs - SmartProxyVpnService.startedAt else 0L
+
     Box(modifier = Modifier.fillMaxSize()) {
         if (ThemeState.isDark) {
             // 深色模式(§7):樱花粉深色渐变,夜间不刺眼。
@@ -791,31 +806,18 @@ private fun HomeLauncher(
                     )
                 }
             }
-            Spacer(Modifier.height(18.dp))
-
-            // ── 状态行:「状态: 未连接/连接中/已连接」────────────────
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.home_status), fontSize = 18.sp, color = GreyText)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = when {
-                        !running -> stringResource(R.string.home_disconnected)
-                        connecting -> stringResource(R.string.home_connecting)
-                        else -> stringResource(R.string.home_connected)
-                    },
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = when {
-                        !running -> StatusIdle
-                        connecting -> StatusConnecting
-                        else -> StatusConnected
-                    }
-                )
-            }
             Spacer(Modifier.height(24.dp))
 
-            // ── 大圆环 + 中心紫渐变球体(带白色电源字形) ────────────────
-            ConnectOrb(running = running, sweep = sweep.value, onToggleVpn = onToggleVpn)
+            // ── 大圆环 + 中心状态区 ──────────────────────────────
+            // 未连接:中心电源球体;连接中/已连接:状态点+文字+时长。状态显示并入
+            // 圆环中心(§效果图),不再单独状态行。点按整环启停。
+            ConnectOrb(
+                running = running,
+                connecting = connecting,
+                sweep = sweep.value,
+                elapsedMs = elapsedMs,
+                onToggleVpn = onToggleVpn
+            )
             Spacer(Modifier.height(30.dp))
 
             // ── 开关卡:IPv4 / IPv6 左右各半;开机自启(Apps 已移至侧边栏菜单)──
@@ -1083,15 +1085,34 @@ private fun isValidIpLiteral(s: String): Boolean {
     }
 }
 
-/** 大圆环:浅紫轨道 + 橙→黄渐变进度弧 + 中心紫渐变球体(球上白色电源字形)。 */
+/** 连接时长格式化:HH:MM:SS(对齐效果图 00:12:34)。 */
+private fun formatElapsed(ms: Long): String {
+    val totalSec = (ms / 1000).coerceAtLeast(0)
+    return String.format("%02d:%02d:%02d", totalSec / 3600, (totalSec % 3600) / 60, totalSec % 60)
+}
+
+/** 大圆环:浅粉轨道 + 橙→黄渐变进度弧 + 中心状态区。点按整环启停。
+ *  未连接:中心为电源球体(1:1 原版素材 progress_btn_normal.png + 白色电源字形,保持原样);
+ *  连接中/已连接:中心换成 状态点(橙/绿)+ 状态文字 + 连接时长(§圆环效果图样式)。 */
 @Composable
-private fun ConnectOrb(running: Boolean, sweep: Float, onToggleVpn: () -> Unit) {
-    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(214.dp)) {
+private fun ConnectOrb(
+    running: Boolean,
+    connecting: Boolean,
+    sweep: Float,
+    elapsedMs: Long,
+    onToggleVpn: () -> Unit
+) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(214.dp)
+            .clickable { onToggleVpn() }
+    ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val stroke = 12.dp.toPx()
             val radius = (size.minDimension - stroke) / 2f
             val center = this.center
-            // 浅紫轨道(整圈)
+            // 浅粉轨道(整圈)
             drawCircle(color = TrackPink, radius = radius, style = Stroke(width = stroke))
             // 进度弧:橙色→黄色,连接时从顶开始顺时针扫过;未连接为 0。
             if (sweep > 0f) {
@@ -1106,25 +1127,45 @@ private fun ConnectOrb(running: Boolean, sweep: Float, onToggleVpn: () -> Unit) 
                 )
             }
         }
-        // 中心球体:1:1 原版素材(progress_btn_normal.png,紫渐变高光球)+
-        // 图标字体白色电源字形(原版 @dimen/x40=40sp、@color/white),点按启停。
-        Box(
-            modifier = Modifier
-                .size(121.dp)
-                .clickable { onToggleVpn() },
-            contentAlignment = Alignment.Center
-        ) {
-            Image(
-                painter = painterResource(R.drawable.progress_btn_normal),
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize()
-            )
-            Text(
-                text = "\ue640",                     // 原版电源(dianyuan),白色
-                fontFamily = IconFont,
-                fontSize = 40.sp,
-                color = Color.White
-            )
+        if (!running) {
+            // 未连接:电源球体(启停点击区域是整个圆环,点哪都触发)。
+            Box(
+                modifier = Modifier.size(121.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.progress_btn_normal),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize()
+                )
+                Text(
+                    text = "\ue640",                     // 原版电源(dianyuan),白色
+                    fontFamily = IconFont,
+                    fontSize = 40.sp,
+                    color = Color.White
+                )
+            }
+        } else {
+            // 连接中/已连接:状态点 + 文字 + 连接时长。
+            val dotColor = if (connecting) StatusConnecting else StatusConnected
+            val statusText = if (connecting) stringResource(R.string.home_connecting)
+            else stringResource(R.string.home_connected)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                // 状态点(带一圈同色光晕,对齐效果图)
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.size(26.dp)
+                ) {
+                    Box(Modifier.size(22.dp).background(dotColor.copy(alpha = 0.22f), CircleShape))
+                    Box(Modifier.size(11.dp).background(dotColor, CircleShape))
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(statusText, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = PurpleDark)
+                if (!connecting) {
+                    Spacer(Modifier.height(5.dp))
+                    Text(formatElapsed(elapsedMs), fontSize = 13.sp, color = GreyText)
+                }
+            }
         }
     }
 }
