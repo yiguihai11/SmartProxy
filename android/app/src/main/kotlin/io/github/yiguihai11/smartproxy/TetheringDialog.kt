@@ -483,14 +483,15 @@ fun TetheringDialog(
         }
     }
 
-    // 主题色获取 (与 MainActivity 保持一致)
-    val purpleText = if (ThemeState.isDark) Color(0xFFC9A9E8) else Color(0xFF7850AA)
-    val purpleDark = if (ThemeState.isDark) Color(0xFFD7C3EE) else Color(0xFF613D8D)
-    val purpleSoft = if (ThemeState.isDark) Color(0xFFAA92CC) else Color(0xFF9A80BA)
-    val greyText = if (ThemeState.isDark) Color(0xFFB3A9C0) else Color(0xFF666666)
-    val cardSurface = if (ThemeState.isDark) Color(0xFF2B2436).copy(alpha = 0.95f) else Color.White.copy(alpha = 0.95f)
-    val drawerSurface = if (ThemeState.isDark) Color(0xFF241D2E) else Color(0xFFF9F7FC)
-    val dividerLine = if (ThemeState.isDark) Color(0xFF3A3146) else Color(0xFFE2DCE8)
+    // 主题色获取 (与 MainActivity 樱花粉保持一致)
+    val purpleText = if (ThemeState.isDark) Color(0xFFF6B8CF) else Color(0xFFD66E9B)
+    val purpleFill = if (ThemeState.isDark) Color(0xFFC25E87) else Color(0xFFD66E9B) // 白图标/白字填充容器
+    val purpleDark = if (ThemeState.isDark) Color(0xFFF8CDDF) else Color(0xFFB3557F)
+    val purpleSoft = if (ThemeState.isDark) Color(0xFFE9A8C3) else Color(0xFFE88EAF)
+    val greyText = if (ThemeState.isDark) Color(0xFFC9A8B6) else Color(0xFF7A626D)
+    val cardSurface = if (ThemeState.isDark) Color(0xFF38262F).copy(alpha = 0.95f) else Color.White.copy(alpha = 0.95f)
+    val drawerSurface = if (ThemeState.isDark) Color(0xFF32212A) else Color(0xFFFDF4F7)
+    val dividerLine = if (ThemeState.isDark) Color(0xFF4A3741) else Color(0xFFF0DCE5)
 
     val serviceConnected = tetheringService != null
 
@@ -562,7 +563,7 @@ fun TetheringDialog(
                 ) {
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = purpleText,
+                        color = purpleFill,
                         modifier = Modifier.size(38.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
@@ -728,7 +729,7 @@ fun TetheringDialog(
                 Button(
                     onClick = onDismiss,
                     shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = purpleText),
+                    colors = ButtonDefaults.buttonColors(containerColor = purpleFill),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(46.dp)

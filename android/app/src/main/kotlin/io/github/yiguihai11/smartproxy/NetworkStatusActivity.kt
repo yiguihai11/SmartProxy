@@ -316,17 +316,17 @@ class NetworkStatusActivity : ComponentActivity() {
     }
 }
 
-// ── 主题色(对齐首页 / 应用选择页紫色系,深色同源)──────────────────────
-private val PurpleText get() = if (ThemeState.isDark) Color(0xFFC9A9E8) else Color(0xFF7850AA)
-private val PurpleSoft get() = if (ThemeState.isDark) Color(0xFFAA92CC) else Color(0xFF9A80BA)
-private val GreyText get() = if (ThemeState.isDark) Color(0xFFB3A9C0) else Color(0xFF666666)
-private val TextDark get() = if (ThemeState.isDark) Color(0xFFE6E2EC) else Color(0xFF222222)
-private val SoftBg get() = if (ThemeState.isDark) Color(0xFF16111E) else Color(0xFFF3F0F8)
-private val PlaceholderBg get() = if (ThemeState.isDark) Color(0xFF2A2234) else Color(0xFFEEEAF6)
-private val CardBg get() = if (ThemeState.isDark) Color(0xFF2B2436) else Color.White
+// ── 主题色(对齐首页 / 应用选择页樱花粉色系,深色同源)──────────────────────
+private val PurpleText get() = if (ThemeState.isDark) Color(0xFFF6B8CF) else Color(0xFFD66E9B)
+private val PurpleSoft get() = if (ThemeState.isDark) Color(0xFFE9A8C3) else Color(0xFFE88EAF)
+private val GreyText get() = if (ThemeState.isDark) Color(0xFFC9A8B6) else Color(0xFF7A626D)
+private val TextDark get() = if (ThemeState.isDark) Color(0xFFF3E3EA) else Color(0xFF3A2A31)
+private val SoftBg get() = if (ThemeState.isDark) Color(0xFF2B1A22) else Color(0xFFFFF5F9)
+private val PlaceholderBg get() = if (ThemeState.isDark) Color(0xFF3D2430) else Color(0xFFFCE0EC)
+private val CardBg get() = if (ThemeState.isDark) Color(0xFF38262F) else Color.White
 private val UpGreen = Color(0xFF4CAF50)
 private val DownBlue = Color(0xFF3E7BFA)
-private val TcpBadge = Color(0xFF7B5FA6)
+private val TcpBadge get() = if (ThemeState.isDark) Color(0xFFC25E87) else Color(0xFFD66E9B)
 private val UdpBadge = Color(0xFF3E7BFA)
 private val BlockRed = Color(0xFFE53935)
 

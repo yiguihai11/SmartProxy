@@ -88,7 +88,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -322,23 +321,26 @@ private fun themeIcon(mode: String): ImageVector = when (mode) {
     else -> Icons.Outlined.BrightnessAuto
 }
 
-// ── 主题色(逆向自 Ultimate VPN Free 的 colors.xml)──────────────────────
+// ── 主题色(樱花粉,从紫色系整体换色)──────────────────────────────
 // 浅/深两套(§7):getter 读 ThemeState.isDark 响应式切换,引用处零改动。
-private val PurpleText get() = if (ThemeState.isDark) Color(0xFFC9A9E8) else Color(0xFF7850AA) // 标题/强调
-private val PurpleDark get() = if (ThemeState.isDark) Color(0xFFD7C3EE) else Color(0xFF613D8D) // 面板文字
-private val PurpleSoft get() = if (ThemeState.isDark) Color(0xFFAA92CC) else Color(0xFF9A80BA) // 弱化箭头
+// 调色板:浅色强调 #D66E9B(深粉,白内容可读)/深色强调 #F6B8CF(浅粉,深底可读);
+// 填充型容器(品牌块/按钮/FAB 的白图标)在深色下用更深一档 #C25E87,浅色沿用强调。
+private val PurpleText get() = if (ThemeState.isDark) Color(0xFFF6B8CF) else Color(0xFFD66E9B) // 标题/强调
+private val PurpleFill get() = if (ThemeState.isDark) Color(0xFFC25E87) else Color(0xFFD66E9B) // 填充容器(白内容)
+private val PurpleDark get() = if (ThemeState.isDark) Color(0xFFF8CDDF) else Color(0xFFB3557F) // 面板文字
+private val PurpleSoft get() = if (ThemeState.isDark) Color(0xFFE9A8C3) else Color(0xFFE88EAF) // 弱化箭头
 private val StatusIdle = Color(0xFFE87C7C)       // 未连接(状态语义色,两主题一致)
 private val StatusConnecting = Color(0xFFFF8413) // 连接中
 private val StatusConnected = Color(0xFF2EBD85)  // 已连接
-private val GreyText get() = if (ThemeState.isDark) Color(0xFFB3A9C0) else Color(0xFF666666)
-private val TrackPurple = Color(0xFFC9AFE0)      // 圆环浅紫轨道(圆环底,两主题一致)
+private val GreyText get() = if (ThemeState.isDark) Color(0xFFC9A8B6) else Color(0xFF7A626D)
+private val TrackPink get() = if (ThemeState.isDark) Color(0xFF5A3A48) else Color(0xFFFAD4E3) // 圆环轨道
 private val ArcOrange = Color(0xFFFF8413)
 private val ArcYellow = Color(0xFFFFEB3C)
 // 表面/分隔/开关轨道:深色模式换深色变体,保证卡片与抽屉不刺眼。
-private val CardSurface get() = if (ThemeState.isDark) Color(0xFF2B2436).copy(alpha = 0.90f) else Color.White.copy(alpha = 0.90f)
-private val DrawerSurface get() = if (ThemeState.isDark) Color(0xFF241D2E) else Color(0xFFF9F7FC)
-private val DividerLine get() = if (ThemeState.isDark) Color(0xFF3A3146) else Color(0xFFE2DCE8)
-private val SwitchBorder get() = if (ThemeState.isDark) Color(0xFF4A4254) else Color(0xFFC9C0D4)
+private val CardSurface get() = if (ThemeState.isDark) Color(0xFF38262F).copy(alpha = 0.90f) else Color.White.copy(alpha = 0.90f)
+private val DrawerSurface get() = if (ThemeState.isDark) Color(0xFF32212A) else Color(0xFFFDF4F7)
+private val DividerLine get() = if (ThemeState.isDark) Color(0xFF4A3741) else Color(0xFFF0DCE5)
+private val SwitchBorder get() = if (ThemeState.isDark) Color(0xFF5A4250) else Color(0xFFE3C8D3)
 
 /** 原版图标字体(assets/fonts/iconfont.ttf,逆向自 Ultimate VPN):电源/菜单/刷新/箭头。 */
 private val IconFont = FontFamily(Font(R.font.iconfont))
@@ -524,7 +526,7 @@ private fun AppDrawerContent(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(
                     shape = RoundedCornerShape(14.dp),
-                    color = PurpleText,
+                    color = PurpleFill,
                     modifier = Modifier.size(46.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
@@ -732,29 +734,23 @@ private fun HomeLauncher(
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (ThemeState.isDark) {
-            // 深色模式(§7):浅紫渐变图换深色渐变,夜间不刺眼。
+            // 深色模式(§7):樱花粉深色渐变,夜间不刺眼。
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(
-                        Brush.verticalGradient(listOf(Color(0xFF1B1426), Color(0xFF2E213E)))
+                        Brush.verticalGradient(listOf(Color(0xFF2B1A22), Color(0xFF3D2430)))
                     )
             )
         } else {
-            // 1:1 原版背景:全屏 bg_main.jpg(淡紫渐变)+ 顶部 280dp bg_home_top 装饰。
-            Image(
-                painter = painterResource(R.drawable.bg_main),
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
-            )
-            Image(
-                painter = painterResource(R.drawable.bg_home_top),
-                contentDescription = null,
+            // 浅色背景(樱花粉):原 bg_main.jpg 图换成同源代码渐变,顶部同样色系。
+            // 原图只有 10×100(淡紫上下渐变),代码渐变更高清、天然适配任意屏幕。
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(280.dp),
-                contentScale = ContentScale.FillBounds
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(listOf(Color(0xFFFFF5F9), Color(0xFFFCE0EC)))
+                    )
             )
         }
         Column(
@@ -1096,7 +1092,7 @@ private fun ConnectOrb(running: Boolean, sweep: Float, onToggleVpn: () -> Unit) 
             val radius = (size.minDimension - stroke) / 2f
             val center = this.center
             // 浅紫轨道(整圈)
-            drawCircle(color = TrackPurple, radius = radius, style = Stroke(width = stroke))
+            drawCircle(color = TrackPink, radius = radius, style = Stroke(width = stroke))
             // 进度弧:橙色→黄色,连接时从顶开始顺时针扫过;未连接为 0。
             if (sweep > 0f) {
                 drawArc(

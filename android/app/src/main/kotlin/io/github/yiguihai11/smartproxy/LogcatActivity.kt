@@ -243,12 +243,13 @@ class LogcatActivity : ComponentActivity() {
     }
 }
 
-// ── 主题色(对齐首页紫色系,同 AppSelectionActivity 模式)─────────────
-private val PurpleText get() = if (ThemeState.isDark) Color(0xFFC9A9E8) else Color(0xFF7850AA)
-private val GreyText get() = if (ThemeState.isDark) Color(0xFFB3A9C0) else Color(0xFF666666)
-private val TextDark get() = if (ThemeState.isDark) Color(0xFFE6E2EC) else Color(0xFF222222)
-private val SoftBg get() = if (ThemeState.isDark) Color(0xFF16111E) else Color(0xFFF3F0F8)
-private val CardBg get() = if (ThemeState.isDark) Color(0xFF2B2436) else Color.White
+// ── 主题色(对齐首页樱花粉色系,同 AppSelectionActivity 模式)─────────────
+private val PurpleText get() = if (ThemeState.isDark) Color(0xFFF6B8CF) else Color(0xFFD66E9B)
+private val PurpleFill get() = if (ThemeState.isDark) Color(0xFFC25E87) else Color(0xFFD66E9B) // FAB 等白图标填充
+private val GreyText get() = if (ThemeState.isDark) Color(0xFFC9A8B6) else Color(0xFF7A626D)
+private val TextDark get() = if (ThemeState.isDark) Color(0xFFF3E3EA) else Color(0xFF3A2A31)
+private val SoftBg get() = if (ThemeState.isDark) Color(0xFF2B1A22) else Color(0xFFFFF5F9)
+private val CardBg get() = if (ThemeState.isDark) Color(0xFF38262F) else Color.White
 
 private val LogcatColors get() =
     if (ThemeState.isDark) darkColorScheme(primary = PurpleText)
@@ -398,7 +399,7 @@ private fun LogcatScreen(
         // ── FAB:手动刷新(自动刷新关闭时使用) ──────────────────
         FloatingActionButton(
             onClick = onManualRefresh,
-            containerColor = PurpleText,
+            containerColor = PurpleFill,
             contentColor = Color.White,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
