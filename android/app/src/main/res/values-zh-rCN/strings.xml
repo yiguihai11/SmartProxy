@@ -35,6 +35,10 @@
     <string name="drawer_speed_meter">悬浮网速计</string>
     <string name="drawer_speed_meter_subtitle">角落胶囊:实时上下行网速与最耗流量应用</string>
     <string name="speed_meter_perm_needed">请授予悬浮窗权限以显示网速胶囊</string>
+    <string name="speed_meter_panel_title">联网状态</string>
+    <string name="speed_meter_panel_hint">点外部收起 · 双击应用看访问明细</string>
+    <string name="speed_meter_block">掐断</string>
+    <string name="speed_meter_confirm_block">确认掐断?</string>
     <string name="drawer_footer_tagline">Go 内核 · 轻量高效</string>
 
     <!-- Home -->

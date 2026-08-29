@@ -22,6 +22,9 @@ import kotlin.math.abs
  * 悬浮网速计(塞班式角落小胶囊):VPN 运行期间在其它 App 上层显示一个半透明胶囊,
  * 内容 = 当前网速最大的 App 小图标 + 全局 ↑ 上传 / ↓ 下载 总速率,可拖动。
  *
+ * 点击胶囊(未拖动)展开成模态面板 [SpeedMeterPanel] —— 多应用网速列表、双击看访问明细
+ * (SNI/host)、掐断、pin 定住、点面板外收回。
+ *
  * 数据来自引擎连接统计(Mobile.getConnectionStats,仅 VPN 隧道的 TUN 数据路径有
  * 按 UID 记账;仅代理 SOCKS5 模式无此数据,故只在 VPN 模式由服务拉起)。每秒轮询,
  * δ 速率 = 本快照累计字节 − 上一次;和联网状态页共用采集闸 ConnStatsGate(悬浮窗
@@ -47,14 +50,17 @@ object SpeedMeterOverlay {
     private var upView: TextView? = null
     private var downView: TextView? = null
 
+    /** 展开的模态面板(点击胶囊弹出);null = 未展开。 */
+    private var panel: SpeedMeterPanel? = null
+
     private var pollThread: HandlerThread? = null
     private var bgHandler: Handler? = null
     private val mainHandler = Handler(android.os.Looper.getMainLooper())
 
     /** 上一次轮询的各 UID 累计字节(算 δ);uid → (up, down)。仅 bg 线程访问。 */
     private val prevTotals = HashMap<Int, Pair<Long, Long>>()
-    /** uid → 应用图标缓存(仅 bg 线程写,主线程读引用)。 */
-    private val iconCache = HashMap<Int, Drawable?>()
+    /** uid → (应用名, 图标),仅 bg 线程写、主线程读引用。 */
+    private val metaCache = HashMap<Int, Pair<String, Drawable?>>()
     private var gateHeld = false
 
     /** VPN 连上后由服务调用:开关开 + 有悬浮窗权限才显示;否则静默跳过(下次连或
@@ -66,7 +72,7 @@ object SpeedMeterOverlay {
         mainHandler.post { showOnMain(app) }
     }
 
-    /** VPN 断开 / 开关关闭 / 权限撤销时调用:移除胶囊、停轮询、放采集。幂等。 */
+    /** VPN 断开 / 开关关闭 / 权限撤销时调用:移除胶囊与面板、停轮询、放采集。幂等。 */
     fun hide() {
         mainHandler.post { hideOnMain() }
     }
@@ -126,6 +132,7 @@ object SpeedMeterOverlay {
 
     private fun hideOnMain() {
         stopPolling()
+        collapsePanel() // 面板关闭时自行复位引擎 pin
         val view = capsule
         val manager = wm
         if (view != null && manager != null) {
@@ -140,7 +147,7 @@ object SpeedMeterOverlay {
         appContext = null
         if (gateHeld) { ConnStatsGate.release(); gateHeld = false }
         prevTotals.clear()
-        iconCache.clear()
+        metaCache.clear()
     }
 
     private fun buildCapsule(app: Context): View {
@@ -183,8 +190,7 @@ object SpeedMeterOverlay {
         return container
     }
 
-    /** 拖动:按下记起点,移动 updateViewLayout,抬起持久化位置。点击(未超 touch slop)
-     *  不做任何事(折叠态胶囊,无展开面板)。 */
+    /** 拖动:按下记起点,移动 updateViewLayout,抬起持久化位置。未拖动(点击)→ 展开面板。 */
     private fun attachDrag(
         app: Context,
         view: View,
@@ -221,12 +227,26 @@ object SpeedMeterOverlay {
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (dragging) AppPrefs.setSpeedMeterPos(app, params.x, params.y)
+                    else if (ev.actionMasked == MotionEvent.ACTION_UP) openPanel(app)
                     dragging = false
                     true
                 }
                 else -> false
             }
         }
+    }
+
+    /** 点击胶囊展开模态面板;重复点击幂等。 */
+    private fun openPanel(app: Context) {
+        if (panel != null) return
+        val manager = wm ?: return
+        val p = SpeedMeterPanel(app, manager) { collapsePanel() }
+        if (p.show()) panel = p
+    }
+
+    private fun collapsePanel() {
+        panel?.dismiss() // dismiss 内复位引擎 pin
+        panel = null
     }
 
     // ── 后台轮询 ────────────────────────────────────────────────────────
@@ -253,25 +273,31 @@ object SpeedMeterOverlay {
         pollThread = null
     }
 
-    /** 在 bg 线程:取快照 → 算总速率 + 最大流量 uid → 解析图标 → post 回主线程刷新。 */
+    /** 在 bg 线程:取快照 → 总速率 + 最大流量 uid + 完整应用列表(含连接明细)→ post 回主线程。 */
     private fun pollOnce(app: Context) {
-        data class Tick(val upBps: Long, val downBps: Long, val topUid: Int)
+        data class Tick(
+            val upBps: Long,
+            val downBps: Long,
+            val topUid: Int,
+            val apps: List<SpeedMeterPanel.AppData>
+        )
         val tick = runCatching {
             val json = smartproxy.mobile.Mobile.getConnectionStats()
             val root = JSONObject(json)
-            val apps = root.optJSONArray("apps")
+            val appsArr = root.optJSONArray("apps")
             var totalUp = 0L
             var totalDown = 0L
             var topUid = -1
             var topBytes = -1L
             val nowSeen = HashSet<Int>()
-            if (apps != null) {
-                for (i in 0 until apps.length()) {
-                    val a = apps.optJSONObject(i) ?: continue
+            val appList = ArrayList<SpeedMeterPanel.AppData>()
+            if (appsArr != null) {
+                for (i in 0 until appsArr.length()) {
+                    val a = appsArr.optJSONObject(i) ?: continue
                     val uid = a.optInt("uid", -1)
+                    if (uid < 0) continue
                     val up = a.optLong("up", 0L)
                     val down = a.optLong("down", 0L)
-                    if (uid < 0) continue
                     nowSeen.add(uid)
                     val prev = prevTotals[uid]
                     val upD = (up - (prev?.first ?: up)).coerceAtLeast(0L)
@@ -281,18 +307,33 @@ object SpeedMeterOverlay {
                     totalDown += downD
                     val sum = upD + downD
                     if (sum > topBytes) { topBytes = sum; topUid = uid }
+                    // 连接明细(SNI/host:port + 累计上下行),供展开面板显示/掐断。
+                    val connsArr = a.optJSONArray("conns")
+                    val conns = ArrayList<SpeedMeterPanel.ConnData>()
+                    if (connsArr != null) {
+                        for (j in 0 until connsArr.length()) {
+                            val c = connsArr.optJSONObject(j) ?: continue
+                            conns += SpeedMeterPanel.ConnData(
+                                proto = c.optInt("proto", 0),
+                                host = c.optString("host", ""),
+                                port = c.optInt("port", 0),
+                                up = c.optLong("up", 0L),
+                                down = c.optLong("down", 0L)
+                            )
+                        }
+                    }
+                    val meta = metaFor(app, uid)
+                    appList += SpeedMeterPanel.AppData(uid, meta.first, meta.second, upD, downD, conns)
                 }
             }
             // 清掉已不在快照里的 uid 旧基准,防 map 无限增长。
             prevTotals.keys.removeAll { it !in nowSeen }
-            Tick(totalUp, totalDown, if (topBytes > 0) topUid else -1)
+            Tick(totalUp, totalDown, if (topBytes > 0) topUid else -1, appList)
         }.getOrNull() ?: return // 引擎未启动等:本次跳过,视图保持原样
 
-        val icon: Drawable? = if (tick.topUid >= 0) {
-            iconCache.getOrPut(tick.topUid) { resolveIcon(app, tick.topUid) }
-        } else null
-
+        val icon: Drawable? = if (tick.topUid >= 0) metaFor(app, tick.topUid).second else null
         mainHandler.post {
+            if (capsule == null) return@post
             upView?.text = "↑ ${fmt(tick.upBps)}/s"
             downView?.text = "↓ ${fmt(tick.downBps)}/s"
             val iv = iconView
@@ -304,14 +345,25 @@ object SpeedMeterOverlay {
                     iv.visibility = View.GONE
                 }
             }
+            panel?.render(tick.apps)
         }
     }
 
-    private fun resolveIcon(app: Context, uid: Int): Drawable? {
-        val pm = app.packageManager
-        val pkg = pm.getPackagesForUid(uid)?.firstOrNull() ?: return null
-        return runCatching { pm.getApplicationIcon(pkg) }.getOrNull()
-    }
+    /** uid → (应用名, 图标),懒解析 + 缓存;失败回退 "UID x"。仅 bg 线程写。 */
+    private fun metaFor(app: Context, uid: Int): Pair<String, Drawable?> =
+        metaCache.getOrPut(uid) {
+            runCatching {
+                val pm = app.packageManager
+                val pkg = pm.getPackagesForUid(uid)?.firstOrNull()
+                if (pkg == null) {
+                    "UID $uid" to null
+                } else {
+                    val ai = pm.getApplicationInfo(pkg, 0)
+                    val label = pm.getApplicationLabel(ai).toString()
+                    label to pm.getApplicationIcon(pkg)
+                }
+            }.getOrElse { "UID $uid" to null }
+        }
 
     private fun fmt(bps: Long): String {
         val f = bps.toDouble()

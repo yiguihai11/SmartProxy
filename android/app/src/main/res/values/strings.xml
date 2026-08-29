@@ -35,6 +35,10 @@
     <string name="drawer_speed_meter">Floating speed meter</string>
     <string name="drawer_speed_meter_subtitle">Corner capsule: live up/down speed &amp; top app</string>
     <string name="speed_meter_perm_needed">Grant the overlay permission to show the speed capsule</string>
+    <string name="speed_meter_panel_title">Network status</string>
+    <string name="speed_meter_panel_hint">Tap outside to close · Double-tap an app for its connections</string>
+    <string name="speed_meter_block">Block</string>
+    <string name="speed_meter_confirm_block">Confirm?</string>
     <string name="drawer_footer_tagline">Go core · light &amp; fast</string>
 
     <!-- Home -->
