@@ -80,6 +80,148 @@ func TestNewManager_UDPInTCPEntryDefaultsTCPDown(t *testing.T) {
 	}
 }
 
+// TestReload_NewlyAddedUDPInTCPDefaultsTCPDown covers the add-node-at-runtime path (the
+// panel writes config while the engine is running → Manager.Reload). A udp_in_tcp node
+// that did NOT exist before the reload (so it is not in the captured manual pins) must
+// still pick up the construction default TCP force-down. Previously Reload blanket-reset
+// every new proxy's health: reset() cleared the default pin's forced StateOpen back to
+// Closed while leaving manual=&false, so the snapshot reported Manual=true AND
+// Available=true — the panel rendered "TCP up (manual)" instead of "TCP down", the first
+// click did an `auto` release and read "unknown", and a second click was needed to
+// actually disable it.
+func TestReload_NewlyAddedUDPInTCPDefaultsTCPDown(t *testing.T) {
+	m, err := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{
+			{Alias: "plain", URL: "socks5://plain.proxy:1080"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Hot-reload adds the hev node for the first time (no pre-existing pin to restore).
+	m.Reload(UpstreamConfig{
+		Proxies: []ProxyEntry{
+			{Alias: "plain", URL: "socks5://plain.proxy:1080"},
+			{Alias: "hev", URL: "socks5://hev.proxy:1080", UDPInTCP: true},
+		},
+	})
+
+	hev := m.aliasMap["hev"]
+	if hev == nil || !hev.UDPInTCP {
+		t.Fatal("hev node should be added as UDPInTCP after reload")
+	}
+	if !hev.health.IsManuallyDisabled() {
+		t.Error("freshly-added hev node's TCP should be manually disabled (force-down pin)")
+	}
+	snap := hev.health.Snapshot()
+	if !snap.Manual {
+		t.Error("hev TCP snapshot should report manual=true (pinned at construction)")
+	}
+	if snap.Available {
+		t.Errorf("hev TCP snapshot should report available=false for a force-down pin, got state=%s (manual and available must not disagree)", snap.State)
+	}
+	if hev.EffectiveMode() != ModeUDPOnly {
+		t.Errorf("freshly-added hev EffectiveMode = %s, want udp_only (TCP default off)", hev.EffectiveMode())
+	}
+	if !hev.SupportsUDP() {
+		t.Error("hev node should still support UDP routing (framed path) after reload")
+	}
+	// The pre-existing plain node is unaffected: automatic, not force-down.
+	plain := m.aliasMap["plain"]
+	if plain == nil || plain.health.IsManuallyDisabled() {
+		t.Error("plain node's TCP should stay automatic after reload")
+	}
+}
+
+// TestReload_FlipUDPInTCPOnExistingNodeAppliesTCPDefault covers the edit-existing-node
+// path: a plain socks5 node (TCP automatic) is edited to enable udp_in_tcp. The reload must
+// apply the construction TCP force-down default to that circuit instead of overlaying the
+// stale pre-toggle auto pin — otherwise the freshly-enabled hev node silently skips its
+// "TCP off by default" intent.
+func TestReload_FlipUDPInTCPOnExistingNodeAppliesTCPDefault(t *testing.T) {
+	m, err := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{
+			{Alias: "srv", URL: "socks5://srv.proxy:1080"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.aliasMap["srv"].EffectiveMode(); got != ModeTCPAndUDP {
+		t.Fatalf("precondition: plain socks5 EffectiveMode = %s, want tcp_and_udp", got)
+	}
+
+	m.Reload(UpstreamConfig{
+		Proxies: []ProxyEntry{
+			{Alias: "srv", URL: "socks5://srv.proxy:1080", UDPInTCP: true},
+		},
+	})
+
+	srv := m.aliasMap["srv"]
+	if !srv.health.IsManuallyDisabled() {
+		t.Errorf("after enabling udp_in_tcp: TCP should be force-down (default), got EffectiveMode=%s", srv.EffectiveMode())
+	}
+	if srv.EffectiveMode() != ModeUDPOnly {
+		t.Errorf("after enabling udp_in_tcp: EffectiveMode = %s, want udp_only", srv.EffectiveMode())
+	}
+}
+
+// TestReload_FlipPluginOnExistingNodeAppliesUDPDefault is the SS-plugin analog: a plain ss
+// node (UDP automatic) edited to carry a SIP003 plugin must get the construction UDP
+// force-down default applied, since plugin deployments usually expose no UDP relay.
+func TestReload_FlipPluginOnExistingNodeAppliesUDPDefault(t *testing.T) {
+	const noPlugin = "ss://none:pass@srv.proxy:8388"
+	const withPlugin = "ss://none:pass@srv.proxy:8388?plugin=obfs-local%3Bobfs%3Dhttp"
+	m, err := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{{Alias: "ss", URL: noPlugin}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.aliasMap["ss"].udpHealth.IsManuallyDisabled() {
+		t.Fatal("precondition: plain ss node UDP should not be force-down")
+	}
+
+	m.Reload(UpstreamConfig{
+		Proxies: []ProxyEntry{{Alias: "ss", URL: withPlugin}},
+	})
+
+	ss := m.aliasMap["ss"]
+	if !ss.udpHealth.IsManuallyDisabled() {
+		t.Error("after enabling plugin: UDP should be force-down (default)")
+	}
+}
+
+// TestReload_UserReEnableSurvivesUnchangedReload guards the other direction: a hev node
+// whose TCP the user force-enabled must keep that pin across a reload that does NOT toggle
+// the udp_in_tcp flag (e.g. a port edit), so the flag-on default logic never clobbers an
+// explicit user choice when the flag was already on.
+func TestReload_UserReEnableSurvivesUnchangedReload(t *testing.T) {
+	mk := func() UpstreamConfig {
+		return UpstreamConfig{
+			Proxies: []ProxyEntry{
+				{Alias: "hev", URL: "socks5://hev.proxy:1080", UDPInTCP: true},
+			},
+		}
+	}
+	m, err := NewManager(mk())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hev := m.aliasMap["hev"]
+	if !hev.health.IsManuallyDisabled() {
+		t.Fatal("precondition: hev node TCP should default force-down")
+	}
+	// User explicitly turns TCP back on.
+	hev.health.SetManualState(true)
+
+	m.Reload(mk()) // flag unchanged (true → true)
+	if got := m.aliasMap["hev"].EffectiveMode(); got != ModeTCPAndUDP {
+		t.Errorf("user force-enable must survive an unchanged-flag reload, got EffectiveMode=%s", got)
+	}
+}
+
 func TestNewManager_WithProxies(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
 		Default: "failover",

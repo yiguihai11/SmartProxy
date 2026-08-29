@@ -101,17 +101,6 @@ func (ph *ProxyHealth) ManualPin() (pinned, available bool) {
 	return true, *ph.manual
 }
 
-func (ph *ProxyHealth) reset() {
-	ph.mu.Lock()
-	defer ph.mu.Unlock()
-	ph.state = StateClosed
-	ph.consecutiveFailures = 0
-	ph.consecutiveSuccesses = 0
-	ph.lastAttempt = time.Time{}
-	ph.openSince = time.Time{}
-	ph.latency = 0
-}
-
 // resetAutoOpened returns a circuit that the health checker auto-opened (StateOpen /
 // StateHalfOpen with no manual pin) to closed, so it is immediately available again and
 // re-validated by the next probe cycle. It does NOT pin the circuit: on the next probe (or

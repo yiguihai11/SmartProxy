@@ -183,6 +183,20 @@ func (p *Proxy) applyUDPInTCPDefaults() {
 	p.health.SetManualState(false)
 }
 
+// tcpDefaultDriven reports whether the TCP circuit's construction-time default is force-down:
+// a hev udp_in_tcp socks node (applyUDPInTCPDefaults). Mirrors that function's guard so a
+// reload can tell whether the default applies before/after the config changed.
+func (p *Proxy) tcpDefaultDriven() bool {
+	return p.UDPInTCP && (p.Scheme == SchemeSOCKS5 || p.Scheme == SchemeSOCKS5H)
+}
+
+// udpDefaultDriven reports whether the UDP circuit's construction-time default is force-down:
+// an ss node carrying a SIP003 plugin (NewProxy pins udpHealth down), whose deployment usually
+// exposes no UDP relay.
+func (p *Proxy) udpDefaultDriven() bool {
+	return p.Scheme == SchemeSS && p.Plugin != ""
+}
+
 // SupportsUDP reports whether routing may use this upstream to relay UDP (via UDPProxyConn
 // or the ss UDP relay). Effective-mode based: a UDP-capable node whose UDP circuit is open
 // downgrades to tcp_only and is skipped by UDP routing until UDP recovers.

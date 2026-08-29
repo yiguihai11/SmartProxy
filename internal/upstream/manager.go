@@ -51,10 +51,15 @@ func (m *Manager) Reload(cfg UpstreamConfig) {
 	}
 	m.dnsUDPPool = NewUDPAssociatePool(4)
 
-	for _, p := range newProxies {
-		p.health.reset()
-	}
-	// Restore after reset so a pin's forced state wins over the fresh automatic state.
+	// newProxies are freshly built by rebuildFromConfig: their health is zero-value
+	// (StateClosed) apart from construction-time default pins, which set state and
+	// manual consistently (hev udp_in_tcp TCP-down via applyUDPInTCPDefaults, SS-plugin
+	// UDP-down via NewProxy). Do NOT blanket-reset them: reset() would clear a default
+	// pin's forced StateOpen back to Closed while leaving manual=&false, reporting the
+	// circuit as both "manual" and "available" (the add-node-shows-TCP-up bug).
+	// restoreManualPins overlays the PRE-reload user pins for aliases that already existed
+	// (Set/ClearManualState keep state and manual in sync); brand-new aliases keep their
+	// construction defaults.
 	m.restoreManualPins(pins)
 
 	if m.healthChecker != nil {
@@ -78,9 +83,14 @@ func (m *Manager) Stop() {
 
 // circuitPin captures one health circuit's manual pin: whether it is pinned and, if so,
 // the forced availability. Both index 0 (TCP) and index 1 (UDP) live in the same array.
+// defaultDriven records whether the circuit's construction-time default force-down applied
+// on the PRE-reload node (TCP: hev udp_in_tcp; UDP: ss + SIP003 plugin), so a reload that
+// newly flips that flag on can let the fresh construction default win instead of overlaying
+// a stale pin from when the node had no such default.
 type circuitPin struct {
-	pinned bool
-	up     bool
+	pinned        bool
+	up            bool
+	defaultDriven bool
 }
 
 // captureManualPins records each proxy's manual circuit pins keyed by alias. Caller must
@@ -93,7 +103,10 @@ func (m *Manager) captureManualPins() map[string][2]circuitPin {
 		}
 		tpinned, tup := p.health.ManualPin()
 		upinned, uup := p.udpHealth.ManualPin()
-		pins[alias] = [2]circuitPin{{pinned: tpinned, up: tup}, {pinned: upinned, up: uup}}
+		pins[alias] = [2]circuitPin{
+			{pinned: tpinned, up: tup, defaultDriven: p.tcpDefaultDriven()},
+			{pinned: upinned, up: uup, defaultDriven: p.udpDefaultDriven()},
+		}
 	}
 	return pins
 }
@@ -104,7 +117,12 @@ func (m *Manager) captureManualPins() map[string][2]circuitPin {
 // the alias, not the server. The saved state is applied in full — pinned circuits are
 // re-pinned and released circuits are cleared — so the exact pre-reload manual state wins
 // over any construction default (e.g. a plugin node released to automatic stays released,
-// instead of reverting to its default UDP-down). Caller must not hold m.mu.
+// instead of reverting to its default UDP-down). The one exception: when a circuit's
+// default force-down flag is flipped ON by the reload itself (a normal socks node edited to
+// enable udp_in_tcp, or an ss node that gains a plugin), the pre-toggle pin is stale — the
+// fresh construction default is left in place rather than re-applying the old auto/up pin,
+// otherwise the newly-enabled hev/plugin node would silently skip its safety default.
+// Caller must not hold m.mu.
 func (m *Manager) restoreManualPins(pins map[string][2]circuitPin) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -113,15 +131,20 @@ func (m *Manager) restoreManualPins(pins map[string][2]circuitPin) {
 		if !ok || p == nil {
 			continue
 		}
-		restore := func(ph *ProxyHealth, cp circuitPin) {
+		restore := func(ph *ProxyHealth, cp circuitPin, nowDefaultDriven bool) {
+			// Flag just toggled on (was not default-driven, now is): keep the construction
+			// default applied by rebuildFromConfig and drop the stale pre-toggle pin.
+			if nowDefaultDriven && !cp.defaultDriven {
+				return
+			}
 			if cp.pinned {
 				ph.SetManualState(cp.up)
 			} else {
 				ph.ClearManualState()
 			}
 		}
-		restore(&p.health, pin[0])
-		restore(&p.udpHealth, pin[1])
+		restore(&p.health, pin[0], p.tcpDefaultDriven())
+		restore(&p.udpHealth, pin[1], p.udpDefaultDriven())
 	}
 }
 
