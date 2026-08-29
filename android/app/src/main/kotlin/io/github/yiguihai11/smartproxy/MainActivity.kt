@@ -520,23 +520,6 @@ private fun AppDrawerContent(
     // 的按应用维度展示最相关;白名单模式隐藏入口(设计定稿 §6.1)。
     val vpnRunning by SmartProxyVpnService.isRunning.collectAsState()
 
-    // 悬浮网速计开关(仅 VPN 隧道模式有意义:按应用统计只挂 TUN 数据路径)。开启需悬浮窗
-    // 特殊权限 —— 无权限先跳系统设置授权,返回回调按授权结果置位;已授权且 VPN 在跑则立即
-    // 显示胶囊,否则只落盘,下次连接由服务 startInternal 的 autoShow 拉起。关闭即撤胶囊。
-    var speedMeterOn by remember { mutableStateOf(AppPrefs.speedMeterEnabled(context)) }
-    val overlayPermLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) {
-        // 系统悬浮窗设置页不回传 resultCode,直接按当前授权状态定夺:授权了才真正打开。
-        if (Settings.canDrawOverlays(context)) {
-            speedMeterOn = true
-            AppPrefs.setSpeedMeterEnabled(context, true)
-            if (SmartProxyVpnService.isRunning.value) SpeedMeterOverlay.autoShow(context)
-        } else {
-            speedMeterOn = false // 用户未授权:开关回弹为关
-        }
-    }
-
     ModalDrawerSheet(
         drawerContainerColor = DrawerSurface,
         drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
@@ -653,38 +636,6 @@ private fun AppDrawerContent(
                 )
             }
 
-            // 悬浮网速计开关(塞班式角落胶囊,仅 VPN 模式;数据来自 TUN 按 UID 统计,
-            // 仅代理 SOCKS5 模式无数据故不显示)。不要求 VPN 正在运行——可预先开启,下次
-            // 连接服务自动显示;关闭则立即撤胶囊。首次开启无悬浮窗权限时引导系统设置授权。
-            if (serviceMode == AppPrefs.MODE_VPN) {
-                DrawerSwitchItem(
-                    title = stringResource(R.string.drawer_speed_meter),
-                    subtitle = stringResource(R.string.drawer_speed_meter_subtitle),
-                    checked = speedMeterOn,
-                    onCheckedChange = { want ->
-                        if (want) {
-                            if (Settings.canDrawOverlays(context)) {
-                                speedMeterOn = true
-                                AppPrefs.setSpeedMeterEnabled(context, true)
-                                if (vpnRunning) SpeedMeterOverlay.autoShow(context)
-                            } else {
-                                Toast.makeText(context, context.getString(R.string.speed_meter_perm_needed), Toast.LENGTH_LONG).show()
-                                val intent = Intent(
-                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                    Uri.parse("package:${context.packageName}")
-                                )
-                                runCatching { overlayPermLauncher.launch(intent) }
-                                    .onFailure { runCatching { context.startActivity(intent) } }
-                            }
-                        } else {
-                            speedMeterOn = false
-                            AppPrefs.setSpeedMeterEnabled(context, false)
-                            SpeedMeterOverlay.hide()
-                        }
-                    }
-                )
-            }
-
             // 侧边栏菜单项：日志查看(本进程 logcat,Debug 级)
             DrawerMenuItem(
                 title = stringResource(R.string.drawer_logcat),
@@ -752,46 +703,6 @@ private fun DrawerMenuItem(
     }
 }
 
-/** 侧边栏开关项:标题 + 副标题 + 右侧 Switch,整行可点切换;视觉对齐 [DrawerMenuItem]。 */
-@Composable
-private fun DrawerSwitchItem(
-    title: String,
-    subtitle: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = CardSurface,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 5.dp)
-            .clickable { onCheckedChange(!checked) }
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(title, fontSize = 15.sp, color = PurpleDark, fontWeight = FontWeight.Medium)
-                Text(subtitle, fontSize = 12.sp, color = GreyText)
-            }
-            Switch(
-                checked = checked,
-                onCheckedChange = onCheckedChange,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = PurpleText,
-                    uncheckedThumbColor = Color.White,
-                    uncheckedTrackColor = DividerLine,
-                    uncheckedBorderColor = SwitchBorder
-                )
-            )
-        }
-    }
-}
-
-
 /** 首页主体内容(抽屉 HomeScreen 的内层):背景 + 标题栏(左菜单按钮开抽屉)+ 状态行 +
  *  圆环 + 开关卡 + 面板卡(仅 VPN 运行时显示)。侧边栏功能(Apps / DNS / 排除路由)在 HomeScreen 抽屉。 */
 @Composable
@@ -823,6 +734,24 @@ private fun HomeLauncher(
         else ConfigProvider.ipv6(context)
     ) }
     var bootAuto by remember { mutableStateOf(AppPrefs.bootAutoStart(context)) }
+
+    // 悬浮网速计开关(首页右侧半卡,与开机自启各占半宽):仅 VPN 隧道模式有意义 —— 按应用
+    // 统计只挂 TUN 数据路径,仅代理(SOCKS5)模式禁用置灰。开启需悬浮窗权限:无权限先跳
+    // 系统设置授权,返回回调按授权结果置位;已授权且 VPN 在跑则立即显示胶囊,否则只落盘,
+    // 下次连接由服务 autoShow 拉起。关闭即撤胶囊。socksMode 下 enabled=false 点卡片弹提示。
+    var speedMeterOn by remember { mutableStateOf(AppPrefs.speedMeterEnabled(context)) }
+    val overlayPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        // 系统悬浮窗设置页不回传 resultCode,直接按当前授权状态定夺:授权了才真正打开。
+        if (Settings.canDrawOverlays(context)) {
+            speedMeterOn = true
+            AppPrefs.setSpeedMeterEnabled(context, true)
+            if (running) SpeedMeterOverlay.autoShow(context)
+        } else {
+            speedMeterOn = false // 用户未授权:开关回弹为关
+        }
+    }
 
     // 连接进度弧:运行中扫 0→360°,扫完前状态显示"连接中"。
     val sweep = remember { Animatable(0f) }
@@ -976,17 +905,54 @@ private fun HomeLauncher(
                     modifier = Modifier.weight(1f)
                 )
             }
-            SwitchCard(
-                title = stringResource(R.string.home_boot_autostart),
-                subtitle = if (serviceMode == AppPrefs.MODE_VPN)
-                    stringResource(R.string.home_boot_autostart_sub_vpn) else stringResource(R.string.home_boot_autostart_sub_socks),
-                checked = bootAuto,
-                onCheckedChange = { v ->
-                    bootAuto = v
-                    AppPrefs.setBootAutoStart(context, v)
-                },
-                modifier = Modifier.fillMaxWidth()
-            )
+            // 开机自启 | 悬浮网速计:与上面 IPv4/IPv6 同款「左右各半」布局。悬浮网速计仅
+            // VPN 隧道模式可用(按应用统计挂 TUN 数据路径),仅代理 SOCKS5 模式整卡置灰,
+            // 点了 Toast 提示;开启时若还没悬浮窗权限走系统授权,授权成功才真正置位。
+            Row(modifier = Modifier.fillMaxWidth()) {
+                SwitchCard(
+                    title = stringResource(R.string.home_boot_autostart),
+                    subtitle = if (serviceMode == AppPrefs.MODE_VPN)
+                        stringResource(R.string.home_boot_autostart_sub_vpn) else stringResource(R.string.home_boot_autostart_sub_socks),
+                    checked = bootAuto,
+                    onCheckedChange = { v ->
+                        bootAuto = v
+                        AppPrefs.setBootAutoStart(context, v)
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(8.dp))
+                SwitchCard(
+                    title = stringResource(R.string.home_speed_meter),
+                    subtitle = stringResource(R.string.home_speed_meter_sub),
+                    checked = speedMeterOn,
+                    enabled = !socksMode,
+                    onDisabledClick = {
+                        Toast.makeText(context, context.getString(R.string.toast_speed_meter_vpn_only), Toast.LENGTH_SHORT).show()
+                    },
+                    onCheckedChange = { want ->
+                        if (want) {
+                            if (Settings.canDrawOverlays(context)) {
+                                speedMeterOn = true
+                                AppPrefs.setSpeedMeterEnabled(context, true)
+                                if (running) SpeedMeterOverlay.autoShow(context)
+                            } else {
+                                Toast.makeText(context, context.getString(R.string.speed_meter_perm_needed), Toast.LENGTH_LONG).show()
+                                val intent = Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:${context.packageName}")
+                                )
+                                runCatching { overlayPermLauncher.launch(intent) }
+                                    .onFailure { runCatching { context.startActivity(intent) } }
+                            }
+                        } else {
+                            speedMeterOn = false
+                            AppPrefs.setSpeedMeterEnabled(context, false)
+                            SpeedMeterOverlay.hide()
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+            }
             Spacer(Modifier.height(24.dp))
 
             // ── 管理面板卡(服务运行中显示)。仅代理模式 URL=127.0.0.1,QR 跨设备扫到的是

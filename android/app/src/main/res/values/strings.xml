@@ -32,8 +32,6 @@
     <string name="drawer_network_status_subtitle">Per-app live connections &amp; speed</string>
     <string name="drawer_logcat">Log viewer</string>
     <string name="drawer_logcat_subtitle">App logs (Debug level)</string>
-    <string name="drawer_speed_meter">Floating speed meter</string>
-    <string name="drawer_speed_meter_subtitle">Corner capsule: live up/down speed &amp; top app</string>
     <string name="speed_meter_perm_needed">Grant the overlay permission to show the speed capsule</string>
     <string name="speed_meter_panel_title">Network status</string>
     <string name="speed_meter_panel_hint">Tap outside to close · Tap the arrow for an app\'s connections</string>
@@ -60,6 +58,9 @@
     <string name="home_boot_autostart">Start on boot</string>
     <string name="home_boot_autostart_sub_vpn">Auto-start VPN after boot (needs authorization)</string>
     <string name="home_boot_autostart_sub_socks">Auto-start proxy-only service after boot</string>
+    <string name="home_speed_meter">Floating speed meter</string>
+    <string name="home_speed_meter_sub">Corner capsule: live up/down speed</string>
+    <string name="toast_speed_meter_vpn_only">VPN tunnel mode only</string>
 
     <!-- Admin panel card -->
     <string name="panel_title">Admin panel</string>
