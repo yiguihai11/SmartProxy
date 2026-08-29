@@ -155,6 +155,7 @@
     <string name="shizuku_status_not_installed">未安装 Shizuku</string>
     <string name="shizuku_status_not_running">Shizuku 未运行</string>
     <string name="shizuku_status_open_manager">请安装或启动 Shizuku，然后刷新。</string>
+    <string name="shizuku_download_button">打开官网下载</string>
     <string name="shizuku_status_unsupported">不支持此 Shizuku 版本</string>
     <string name="shizuku_status_update_required">请先更新 Shizuku，再使用此功能。</string>
     <string name="shizuku_status_permission_required">需要授权</string>

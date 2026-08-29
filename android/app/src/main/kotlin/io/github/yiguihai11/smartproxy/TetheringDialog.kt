@@ -2,8 +2,10 @@ package io.github.yiguihai11.smartproxy
 
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.IBinder
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
@@ -72,6 +74,9 @@ import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuProvider
 import java.util.UUID
+
+// Shizuku 官网(简体中文)下载页,未安装 / 版本过旧时由「打开官网下载」按钮引导。
+const val ShizukuDownloadUrl = "https://shizuku.rikka.app/zh-hans/"
 
 enum class ShizukuStatus(
     val statusRes: Int,
@@ -306,6 +311,17 @@ fun TetheringDialog(
             } else {
                 tetheringService = null
             }
+        }
+    }
+
+    // 打开 Shizuku 官网下载页(未安装 / 版本过旧需更新时引导用户自行安装)。
+    fun openShizukuDownloadPage() {
+        runCatching {
+            context.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(ShizukuDownloadUrl))
+            )
+        }.onFailure {
+            toast(R.string.shizuku_operation_failed)
         }
     }
 
@@ -619,7 +635,29 @@ fun TetheringDialog(
                     details = state.shizukuStatus.detailsRes?.let { stringResource(it) },
                     cardColor = cardSurface,
                     titleColor = purpleDark,
-                    detailColor = greyText
+                    detailColor = greyText,
+                    extraContent = {
+                        if (state.shizukuStatus == ShizukuStatus.NOT_INSTALLED ||
+                            state.shizukuStatus == ShizukuStatus.UNSUPPORTED
+                        ) {
+                            Spacer(Modifier.height(6.dp))
+                            OutlinedButton(
+                                onClick = { openShizukuDownloadPage() },
+                                enabled = !state.operation.isToggleInProgress,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(38.dp)
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.shizuku_download_button),
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
                 ) {
                     Row(
                         modifier = Modifier
