@@ -635,31 +635,30 @@ fun TetheringDialog(
                     details = state.shizukuStatus.detailsRes?.let { stringResource(it) },
                     cardColor = cardSurface,
                     titleColor = purpleDark,
-                    detailColor = greyText,
-                    extraContent = {
-                        if (state.shizukuStatus == ShizukuStatus.NOT_INSTALLED ||
-                            state.shizukuStatus == ShizukuStatus.NOT_RUNNING ||
-                            state.shizukuStatus == ShizukuStatus.UNSUPPORTED
+                    detailColor = greyText
+                ) {
+                    // 未安装 / 已安装未启动 / 版本过旧:引导用户到官网下载或查看启动教程。
+                    if (state.shizukuStatus == ShizukuStatus.NOT_INSTALLED ||
+                        state.shizukuStatus == ShizukuStatus.NOT_RUNNING ||
+                        state.shizukuStatus == ShizukuStatus.UNSUPPORTED
+                    ) {
+                        Spacer(Modifier.height(6.dp))
+                        OutlinedButton(
+                            onClick = { openShizukuDownloadPage() },
+                            enabled = !state.operation.isToggleInProgress,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(38.dp)
                         ) {
-                            Spacer(Modifier.height(6.dp))
-                            OutlinedButton(
-                                onClick = { openShizukuDownloadPage() },
-                                enabled = !state.operation.isToggleInProgress,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(38.dp)
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.shizuku_download_button),
-                                    fontSize = 12.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
+                            Text(
+                                text = stringResource(R.string.shizuku_download_button),
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
-                ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()

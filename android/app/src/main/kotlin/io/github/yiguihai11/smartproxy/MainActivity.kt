@@ -21,7 +21,12 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -1152,20 +1157,39 @@ private fun ConnectOrb(
             val dotColor = if (connecting) StatusConnecting else StatusConnected
             val statusText = if (connecting) stringResource(R.string.home_connecting)
             else stringResource(R.string.home_connected)
+            // 已连接绿点呼吸动画:光晕 alpha 在 0.22 ↔ 0.05 间往复(约 1.6s 一个周期),
+            // 模拟"心跳"提示运行中;连接中橙点保持静态。
+            val haloAlpha = if (!connecting) {
+                val breath = rememberInfiniteTransition(label = "connectedDotBreath")
+                breath.animateFloat(
+                    initialValue = 0.22f,
+                    targetValue = 0.05f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(800, easing = LinearEasing),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "connectedDotHaloAlpha"
+                ).value
+            } else 0.22f
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 // 状态点(带一圈同色光晕,对齐效果图)
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier.size(26.dp)
                 ) {
-                    Box(Modifier.size(22.dp).background(dotColor.copy(alpha = 0.22f), CircleShape))
+                    Box(Modifier.size(22.dp).background(dotColor.copy(alpha = haloAlpha), CircleShape))
                     Box(Modifier.size(11.dp).background(dotColor, CircleShape))
                 }
                 Spacer(Modifier.height(10.dp))
                 Text(statusText, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = PurpleDark)
                 if (!connecting) {
                     Spacer(Modifier.height(5.dp))
-                    Text(formatElapsed(elapsedMs), fontSize = 13.sp, color = GreyText)
+                    Text(
+                        formatElapsed(elapsedMs),
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = GreyText
+                    )
                 }
             }
         }
