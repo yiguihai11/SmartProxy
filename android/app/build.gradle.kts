@@ -16,6 +16,13 @@ fun deriveVersionCode(version: String): Int {
     return major.toInt() * 100000 + minor.toInt() * 1000 + patch.toInt()
 }
 
+// Shizuku 免 root 共享跑在一个独立的常驻用户服务进程(shell UID,daemon=true)。Shizuku 仅在
+// UserServiceArgs.version() 变化时才杀掉旧守护、用新 APK 重新拉起;版本号相同则复用旧进程。
+// APK 升级后旧进程的 classloader 仍指向已被替换删除的旧 APK,其 native 库目录 libgojni.so
+// 路径失效,首次启动共享引擎即 dlopen failed / -2。用构建时间戳(每次打包都不同,重装即重启
+// 守护),绝不复用悬空的旧进程。刻意不用 versionCode/CI run number——同版本号或重跑时它们不变。
+val shizukuServiceVersion: Int = (System.currentTimeMillis() / 1000L).toInt()
+
 android {
     namespace = "io.github.yiguihai11.smartproxy"
     // 编译用最新 API(Android 16 = API 36);targetSdk 暂留 35 —— Android 16 对
@@ -28,6 +35,8 @@ android {
         targetSdk = 35
         versionCode = deriveVersionCode(ciVersion)
         versionName = ciVersion
+        // 每次打包都变化的 Shizuku 用户服务版本号(见 shizukuServiceVersion 注释)。
+        buildConfigField("int", "ShizukuServiceVersion", shizukuServiceVersion.toString())
     }
 
     signingConfigs {

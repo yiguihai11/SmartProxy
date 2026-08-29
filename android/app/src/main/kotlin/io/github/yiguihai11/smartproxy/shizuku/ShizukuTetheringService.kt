@@ -1020,7 +1020,11 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
 
     companion object {
         private const val TAG = "ShizukuTethering"
-        const val USER_SERVICE_VERSION = 20_260_828
+        // 跟随构建号变化(app/build.gradle.kts 的 shizukuServiceVersion:CI run number /
+        // 构建时间戳),不是写死的日期。Shizuku 只在 version 变化时重启常驻用户服务进程;
+        // 固定值会让升级 APK 后仍复用旧进程,其 classloader 指向已删除的旧 APK,native 库
+        // libgojni.so 路径失效 → 启动共享引擎时 dlopen failed / -2。每次打包都变 → 重装即重启守护。
+        val USER_SERVICE_VERSION: Int = BuildConfig.ShizukuServiceVersion
         private const val TETHERING_SERVICE = "tethering"
         private const val TEST_NETWORK_SERVICE = "test_network"
         private val TETHERING_IPV6_PREFIX = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
