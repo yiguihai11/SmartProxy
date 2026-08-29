@@ -638,6 +638,7 @@ fun TetheringDialog(
                     detailColor = greyText,
                     extraContent = {
                         if (state.shizukuStatus == ShizukuStatus.NOT_INSTALLED ||
+                            state.shizukuStatus == ShizukuStatus.NOT_RUNNING ||
                             state.shizukuStatus == ShizukuStatus.UNSUPPORTED
                         ) {
                             Spacer(Modifier.height(6.dp))
