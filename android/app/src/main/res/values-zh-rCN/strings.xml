@@ -32,6 +32,9 @@
     <string name="drawer_network_status_subtitle">按应用的实时连接与网速</string>
     <string name="drawer_logcat">日志查看</string>
     <string name="drawer_logcat_subtitle">程序运行日志 (Debug 级)</string>
+    <string name="drawer_speed_meter">悬浮网速计</string>
+    <string name="drawer_speed_meter_subtitle">角落胶囊:实时上下行网速与最耗流量应用</string>
+    <string name="speed_meter_perm_needed">请授予悬浮窗权限以显示网速胶囊</string>
     <string name="drawer_footer_tagline">Go 内核 · 轻量高效</string>
 
     <!-- Home -->

@@ -21,6 +21,9 @@
     <!-- 应用内应用选择(§5):API 30+ 枚举全部已装应用必需;个人分发 APK 可接受,
          上 Play 需单独向 Google 申请审批。 -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <!-- 悬浮网速计(塞班式角落胶囊):TYPE_APPLICATION_OVERLAY 需要悬浮窗特殊权限,
+         运行期经 Settings.ACTION_MANAGE_OVERLAY_PERMISSION 引导用户授予(声明不自动授予)。 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:name=".SmartProxyApp"

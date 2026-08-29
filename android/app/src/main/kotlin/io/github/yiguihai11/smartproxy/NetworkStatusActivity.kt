@@ -127,6 +127,10 @@ class NetworkStatusActivity : ComponentActivity() {
      *  5 秒内切回来则取消它、数据原样保留;超时才真正 setConnStatsEnabled(false) 清表。 */
     private var statsCloseJob: Job? = null
 
+    /** 本页是否已持有采集闸(ConnStatsGate)。悬浮窗也可能同时持有,计数合并,
+     *  页面走/留只动自己那一份,不能把悬浮窗在用的采集关掉。 */
+    private var gateHeld = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -221,8 +225,10 @@ class NetworkStatusActivity : ComponentActivity() {
         active = true
         statsCloseJob?.cancel() // 5 秒宽限内切回来:取消延迟清空,统计原样保留
         statsCloseJob = null
-        runCatching { smartproxy.mobile.Mobile.setConnStatsEnabled(true) }
-            .onFailure { Log.e(TAG, "[NetworkStatus] setConnStatsEnabled(true) failed", it) }
+        if (!gateHeld) { // 走引用计数闸:悬浮窗可能也在用,只加自己那一份
+            ConnStatsGate.acquire()
+            gateHeld = true
+        }
         // 后台延迟关采集可能已把引擎 pin 复位(-1):回来按当前展开状态重新 pin,
         // 防正在查看的应用因 pin 失同步而无流量淡出(-1 时是 no-op)。
         runCatching { smartproxy.mobile.Mobile.setConnStatsPin(pinnedUid) }
@@ -240,9 +246,9 @@ class NetworkStatusActivity : ComponentActivity() {
         active = false
         statsCloseJob = lifecycleScope.launch {
             delay(5_000)
-            if (!active) { // 5 秒后仍不在前台才真正清空
-                runCatching { smartproxy.mobile.Mobile.setConnStatsEnabled(false) }
-                    .onFailure { Log.e(TAG, "[NetworkStatus] delayed setConnStatsEnabled(false) failed", it) }
+            if (!active && gateHeld) { // 5 秒后仍不在前台才放掉自己那份(悬浮窗仍持有则采集不关)
+                ConnStatsGate.release()
+                gateHeld = false
             }
         }
         super.onPause()
@@ -251,9 +257,11 @@ class NetworkStatusActivity : ComponentActivity() {
     override fun onDestroy() {
         statsCloseJob?.cancel() // 取消未触发的延迟任务,防销毁后仍碰 Mobile
         statsCloseJob = null
-        // 兜底(正常 onPause 已延迟关闭 / 宽限内销毁):确保销毁后引擎零开销;轮询随 composition 一并取消。
-        runCatching { smartproxy.mobile.Mobile.setConnStatsEnabled(false) }
-            .onFailure { Log.e(TAG, "[NetworkStatus] setConnStatsEnabled(false) failed", it) }
+        // 兜底(正常 onPause 已延迟释放 / 宽限内销毁):放掉自己那份采集,确保销毁后引擎零开销。
+        if (gateHeld) {
+            ConnStatsGate.release()
+            gateHeld = false
+        }
         super.onDestroy()
     }
 

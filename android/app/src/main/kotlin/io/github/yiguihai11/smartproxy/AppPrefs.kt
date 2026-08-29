@@ -33,6 +33,9 @@ object AppPrefs {
     private const val KEY_BATTERY_OPT_ASK = "battery_opt_ask_count"
     private const val KEY_SOCKS_LISTEN = "socks_listen"
     private const val KEY_SHIZUKU_SYNC_TOKEN = "shizuku_sync_token"
+    private const val KEY_SPEED_METER = "speed_meter_enabled"
+    private const val KEY_SPEED_METER_X = "speed_meter_x"
+    private const val KEY_SPEED_METER_Y = "speed_meter_y"
 
     private fun sp(context: Context) =
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -160,6 +163,25 @@ object AppPrefs {
 
     fun setShizukuSyncToken(context: Context, token: String) {
         sp(context).edit().putString(KEY_SHIZUKU_SYNC_TOKEN, token).apply()
+    }
+
+    /** 悬浮网速计开关(塞班式角落胶囊,仅 VPN 隧道模式有按应用统计可显示)。默认关。 */
+    fun speedMeterEnabled(context: Context): Boolean =
+        sp(context).getBoolean(KEY_SPEED_METER, false)
+
+    fun setSpeedMeterEnabled(context: Context, value: Boolean) {
+        sp(context).edit().putBoolean(KEY_SPEED_METER, value).apply()
+    }
+
+    /** 胶囊上次拖动后的位置(相对屏幕左上,TYPE_APPLICATION_OVERLAY + TOP|START gravity)。
+     *  -1 = 未设置,首次显示放到右上角。 */
+    fun speedMeterPos(context: Context): Pair<Int, Int> {
+        val p = sp(context)
+        return Pair(p.getInt(KEY_SPEED_METER_X, -1), p.getInt(KEY_SPEED_METER_Y, -1))
+    }
+
+    fun setSpeedMeterPos(context: Context, x: Int, y: Int) {
+        sp(context).edit().putInt(KEY_SPEED_METER_X, x).putInt(KEY_SPEED_METER_Y, y).apply()
     }
 }
 

@@ -16,6 +16,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -518,6 +519,24 @@ private fun AppDrawerContent(
     // 联网状态门控 = VPN 运行中 && 仅绕过(黑名单)模式:仅绕过下应用分流行为与「联网状态」
     // 的按应用维度展示最相关;白名单模式隐藏入口(设计定稿 §6.1)。
     val vpnRunning by SmartProxyVpnService.isRunning.collectAsState()
+
+    // 悬浮网速计开关(仅 VPN 隧道模式有意义:按应用统计只挂 TUN 数据路径)。开启需悬浮窗
+    // 特殊权限 —— 无权限先跳系统设置授权,返回回调按授权结果置位;已授权且 VPN 在跑则立即
+    // 显示胶囊,否则只落盘,下次连接由服务 startInternal 的 autoShow 拉起。关闭即撤胶囊。
+    var speedMeterOn by remember { mutableStateOf(AppPrefs.speedMeterEnabled(context)) }
+    val overlayPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        // 系统悬浮窗设置页不回传 resultCode,直接按当前授权状态定夺:授权了才真正打开。
+        if (Settings.canDrawOverlays(context)) {
+            speedMeterOn = true
+            AppPrefs.setSpeedMeterEnabled(context, true)
+            if (SmartProxyVpnService.isRunning.value) SpeedMeterOverlay.autoShow(context)
+        } else {
+            speedMeterOn = false // 用户未授权:开关回弹为关
+        }
+    }
+
     ModalDrawerSheet(
         drawerContainerColor = DrawerSurface,
         drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
@@ -634,6 +653,38 @@ private fun AppDrawerContent(
                 )
             }
 
+            // 悬浮网速计开关(塞班式角落胶囊,仅 VPN 模式;数据来自 TUN 按 UID 统计,
+            // 仅代理 SOCKS5 模式无数据故不显示)。不要求 VPN 正在运行——可预先开启,下次
+            // 连接服务自动显示;关闭则立即撤胶囊。首次开启无悬浮窗权限时引导系统设置授权。
+            if (serviceMode == AppPrefs.MODE_VPN) {
+                DrawerSwitchItem(
+                    title = stringResource(R.string.drawer_speed_meter),
+                    subtitle = stringResource(R.string.drawer_speed_meter_subtitle),
+                    checked = speedMeterOn,
+                    onCheckedChange = { want ->
+                        if (want) {
+                            if (Settings.canDrawOverlays(context)) {
+                                speedMeterOn = true
+                                AppPrefs.setSpeedMeterEnabled(context, true)
+                                if (vpnRunning) SpeedMeterOverlay.autoShow(context)
+                            } else {
+                                Toast.makeText(context, context.getString(R.string.speed_meter_perm_needed), Toast.LENGTH_LONG).show()
+                                val intent = Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:${context.packageName}")
+                                )
+                                runCatching { overlayPermLauncher.launch(intent) }
+                                    .onFailure { runCatching { context.startActivity(intent) } }
+                            }
+                        } else {
+                            speedMeterOn = false
+                            AppPrefs.setSpeedMeterEnabled(context, false)
+                            SpeedMeterOverlay.hide()
+                        }
+                    }
+                )
+            }
+
             // 侧边栏菜单项：日志查看(本进程 logcat,Debug 级)
             DrawerMenuItem(
                 title = stringResource(R.string.drawer_logcat),
@@ -696,6 +747,45 @@ private fun DrawerMenuItem(
                 contentDescription = null,
                 tint = PurpleSoft,
                 modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+/** 侧边栏开关项:标题 + 副标题 + 右侧 Switch,整行可点切换;视觉对齐 [DrawerMenuItem]。 */
+@Composable
+private fun DrawerSwitchItem(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = CardSurface,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 5.dp)
+            .clickable { onCheckedChange(!checked) }
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 15.sp, color = PurpleDark, fontWeight = FontWeight.Medium)
+                Text(subtitle, fontSize = 12.sp, color = GreyText)
+            }
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = PurpleText,
+                    uncheckedThumbColor = Color.White,
+                    uncheckedTrackColor = DividerLine,
+                    uncheckedBorderColor = SwitchBorder
+                )
             )
         }
     }

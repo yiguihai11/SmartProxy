@@ -32,6 +32,9 @@
     <string name="drawer_network_status_subtitle">Per-app live connections &amp; speed</string>
     <string name="drawer_logcat">Log viewer</string>
     <string name="drawer_logcat_subtitle">App logs (Debug level)</string>
+    <string name="drawer_speed_meter">Floating speed meter</string>
+    <string name="drawer_speed_meter_subtitle">Corner capsule: live up/down speed &amp; top app</string>
+    <string name="speed_meter_perm_needed">Grant the overlay permission to show the speed capsule</string>
     <string name="drawer_footer_tagline">Go core · light &amp; fast</string>
 
     <!-- Home -->

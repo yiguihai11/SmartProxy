@@ -181,6 +181,9 @@ class SmartProxyVpnService : VpnService() {
             _isRunning.value = true
             startedAt = System.currentTimeMillis()
             io.github.yiguihai11.smartproxy.shizuku.TetheringCoreSync.onStarted(this, ConfigProvider.readConfig(this).toString())
+            // 悬浮网速计:仅 VPN 隧道模式有按 UID 统计(TUN 数据路径),SOCKS5 模式无数据可显。
+            // autoShow 内部按开关 + 悬浮窗权限自门控,未开/未授权均为 no-op。
+            if (!socksOnly) SpeedMeterOverlay.autoShow(applicationContext)
             Log.i(TAG, "[startInternal] Start SUCCESS (socks=$socksOnly)! startedEngine=true, _isRunning=true. Returning START_STICKY.")
             return START_STICKY
         }
@@ -530,6 +533,9 @@ class SmartProxyVpnService : VpnService() {
             Log.i(TAG, "[shutdown] Step 5/6: Updating state _isRunning.value = false...")
             _isRunning.value = false
             startedAt = 0L
+            // 撤掉悬浮网速计(用户停止 / onRevoke / onDestroy 都走这里)。重建(fullTeardown=false)
+            // 不动它,隧道重建期间胶囊继续显示,不闪。
+            SpeedMeterOverlay.hide()
             // 完整拆机完成,后续(如 onDestroy)的 shutdown 直接跳过。
             tornDown = true
         } else {
