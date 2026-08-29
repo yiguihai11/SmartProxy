@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.Drawable
-import android.os.SystemClock
 import android.text.TextUtils
 import android.util.Log
 import android.util.TypedValue
@@ -18,12 +17,12 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import kotlin.math.hypot
 
 /**
- * 悬浮网速计的展开面板 —— 「点击胶囊」弹出的模态面板,和程序里的「联网状态」页一样:
- * 多应用网速列表(按当前总速率排序) + 双击应用行展开访问明细(SNI/host:port、累计上下行)+
- * 每行「定住」(pin,引擎不淡出该应用)+ 每条连接「掐断」(二次确认后 Mobile.blockConnection)。
+ * 悬浮网速计的展开面板 —— 「双击胶囊」弹出的模态面板,和程序里的「联网状态」页一样:
+ * 多应用网速列表(按当前总速率排序) + 点每行右侧下拉箭头展开访问明细(SNI/host:port、
+ * 累计上下行)+ 每行「定住」(pin,引擎不淡出该应用)+ 每条连接「掐断」(二次确认后
+ * Mobile.blockConnection)。
  *
  * 窗口为全屏遮罩 + 居中深色卡片(经典 View 构建)。点卡片外(遮罩边缘)或 ✕ 收回,收回时
  * 若引擎还 pin 着某应用则复位(-1),不留残留。1s 轮询由 SpeedMeterOverlay 驱动 [render]:
@@ -242,7 +241,6 @@ class SpeedMeterPanel(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(10), dp(8), dp(8), dp(8))
-            setOnTouchListener(doubleTapToggle(data.uid))
         }
         val icon = ImageView(app).apply {
             val s = dp(30)
@@ -274,7 +272,9 @@ class SpeedMeterPanel(
             text = "▾"
             textSize = 13f
             setTextColor(SUB_COLOR)
-            setPadding(dp(4), 0, 0, 0)
+            // 点右侧下拉箭头展开/收起访问明细(加大触控区)。
+            setPadding(dp(10), dp(6), dp(4), dp(6))
+            setOnClickListener { toggleExpand(data.uid) }
         }
         info.addView(label); info.addView(sub)
         speedCol.addView(up); speedCol.addView(down)
@@ -291,31 +291,7 @@ class SpeedMeterPanel(
         return h
     }
 
-    /** 双击行 → 展开/收起明细(同联网状态页:展开即 pin,收起时若是被 pin 的则复位)。 */
-    private fun doubleTapToggle(uid: Int): View.OnTouchListener {
-        var lastTapTime = 0L
-        var lastRawX = 0f
-        var lastRawY = 0f
-        return View.OnTouchListener { v, ev ->
-            when (ev.actionMasked) {
-                MotionEvent.ACTION_DOWN -> true // 消费 DOWN 以便收到 UP;滚动时 ScrollView 会拦截并取消
-                MotionEvent.ACTION_UP -> {
-                    val now = SystemClock.uptimeMillis()
-                    val dist = hypot(ev.rawX - lastRawX, ev.rawY - lastRawY)
-                    lastRawX = ev.rawX; lastRawY = ev.rawY
-                    if (now - lastTapTime < DOUBLE_TAP_MS && dist < dp(40)) {
-                        lastTapTime = 0
-                        toggleExpand(uid)
-                    } else {
-                        lastTapTime = now
-                    }
-                    true
-                }
-                else -> false
-            }
-        }
-    }
-
+    /** 点右侧箭头 → 展开/收起明细(展开即 pin,收起时若是被 pin 的则复位,同联网状态页)。 */
     private fun toggleExpand(uid: Int) {
         if (uid in expandedUids) {
             expandedUids.remove(uid)
@@ -473,9 +449,9 @@ class SpeedMeterPanel(
 
     companion object {
         private const val TAG = "SpeedMeterPanel"
-        private const val DOUBLE_TAP_MS = 300L
         private val SCRIM = 0x66000000
-        private val CARD_COLOR = 0xF01E1E2E
+        // 0xF01E1E2E 超 Int 正范围,Kotlin 会推断为 Long;颜色要 Int(带符号补码),显式 .toInt()。
+        private val CARD_COLOR = 0xF01E1E2E.toInt()
         private val TEXT_COLOR = Color.WHITE
         private val SUB_COLOR = Color.parseColor("#B3FFFFFF")
         private val UP_COLOR = Color.parseColor("#FF7CCB7C")

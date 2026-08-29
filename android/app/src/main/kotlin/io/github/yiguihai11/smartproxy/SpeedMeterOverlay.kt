@@ -6,6 +6,7 @@ import android.graphics.PixelFormat
 import android.graphics.drawable.Drawable
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.TypedValue
 import android.view.Gravity
@@ -17,6 +18,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import org.json.JSONObject
 import kotlin.math.abs
+import kotlin.math.hypot
 
 /**
  * 悬浮网速计(塞班式角落小胶囊):VPN 运行期间在其它 App 上层显示一个半透明胶囊,
@@ -36,6 +38,7 @@ import kotlin.math.abs
 object SpeedMeterOverlay {
     private const val TAG = "SpeedMeter"
     private const val POLL_INTERVAL_MS = 1000L
+    private const val DOUBLE_TAP_MS = 300L
 
     // 胶囊配色:半透明深底 + 上传绿 / 下载蓝(白字在深底上对比足够)。
     private const val BG_COLOR = 0xB3000000.toInt()
@@ -190,7 +193,7 @@ object SpeedMeterOverlay {
         return container
     }
 
-    /** 拖动:按下记起点,移动 updateViewLayout,抬起持久化位置。未拖动(点击)→ 展开面板。 */
+    /** 拖动:按下记起点,移动 updateViewLayout,抬起持久化位置。未拖动且双击(轻点两次)→ 展开面板。 */
     private fun attachDrag(
         app: Context,
         view: View,
@@ -203,6 +206,9 @@ object SpeedMeterOverlay {
         var startX = 0
         var startY = 0
         var dragging = false
+        var lastTapTime = 0L
+        var lastTapX = 0f
+        var lastTapY = 0f
         view.setOnTouchListener { v, ev ->
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -226,8 +232,21 @@ object SpeedMeterOverlay {
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (dragging) AppPrefs.setSpeedMeterPos(app, params.x, params.y)
-                    else if (ev.actionMasked == MotionEvent.ACTION_UP) openPanel(app)
+                    if (dragging) {
+                        AppPrefs.setSpeedMeterPos(app, params.x, params.y)
+                    } else if (ev.actionMasked == MotionEvent.ACTION_UP) {
+                        // 双击胶囊展开面板;单击(未拖动)不做任何事。
+                        val now = SystemClock.uptimeMillis()
+                        val dx = ev.rawX - lastTapX
+                        val dy = ev.rawY - lastTapY
+                        lastTapX = ev.rawX; lastTapY = ev.rawY
+                        if (now - lastTapTime < DOUBLE_TAP_MS && hypot(dx, dy) < dp(app, 40)) {
+                            lastTapTime = 0
+                            openPanel(app)
+                        } else {
+                            lastTapTime = now
+                        }
+                    }
                     dragging = false
                     true
                 }
