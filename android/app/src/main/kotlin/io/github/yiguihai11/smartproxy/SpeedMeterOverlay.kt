@@ -183,15 +183,15 @@ object SpeedMeterOverlay {
             }
         }
         val icon = ImageView(app).apply {
-            val s = dp(app, 14)
+            val s = dp(app, 16)
             layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = dp(app, 4) }
             scaleType = ImageView.ScaleType.FIT_CENTER
             visibility = View.GONE // 无流量时隐藏,有最大流量 App 才显示
         }
         val up = TextView(app).apply {
             setTextColor(UP_COLOR)
-            // 12sp + includeFontPadding=false 的行高 ≈ 14dp,正好与旁边 14dp 图标
-            // 上下持平(CENTER_VERTICAL 居中);11sp 时行高偏矮,看着图标比字高一截。
+            // 12sp + includeFontPadding=false 的行高 ≈ 14dp;图标 16dp 略高于字,
+            // 容器 CENTER_VERTICAL 整体居中,观感协调。
             textSize = 12f
             includeFontPadding = false
             text = "↑ --"
