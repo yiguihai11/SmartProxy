@@ -38,6 +38,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Column
@@ -1003,7 +1004,8 @@ private fun currentNetworkDns(context: Context): NetworkDnsCandidates {
  *  推荐填国内 DNS:引擎拦截所有 DNS 查询,对国内 DNS 直连查询并做反污染检测
  *  (只有它可能回污染答案),国外域名自动回退国外 DNS 走代理;填国外 DNS 也能用,
  *  但查询走上游代理需上游支持 UDP。改动后需重启 VPN 生效。
- *  候选段(currentNetworkDns):当前网络原生 DNS 点选填入(DNS 每族单服务器,点选 = 替换)。 */
+ *  候选(currentNetworkDns):各输入框正下方横排本族当前网络原生 DNS,点选填入
+ *  (DNS 每族单服务器,点选 = 替换);无候选则该位置留空。 */
 @Composable
 private fun DnsDialog(
     initialV4: String,
@@ -1027,7 +1029,12 @@ private fun DnsDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(6.dp))
+                // IPv4 候选:当前网络原生 IPv4 DNS,横排胶囊(溢出横向滚动),点选填入。
+                if (candidates.v4.isNotEmpty()) {
+                    DnsChipRow(candidates.v4) { v4 = it }
+                    Spacer(Modifier.height(6.dp))
+                }
                 OutlinedTextField(
                     value = v6,
                     onValueChange = { v6 = it },
@@ -1035,21 +1042,11 @@ private fun DnsDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Spacer(Modifier.height(8.dp))
-                if (candidates.v4.isNotEmpty() || candidates.v6.isNotEmpty()) {
-                    Text(
-                        text = stringResource(R.string.dialog_dns_candidates),
-                        fontSize = 12.sp,
-                        color = GreyText
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    candidates.v4.forEach { addr ->
-                        DnsCandidateRow(address = addr, isV4 = true) { v4 = it }
-                    }
-                    candidates.v6.forEach { addr ->
-                        DnsCandidateRow(address = addr, isV4 = false) { v6 = it }
-                    }
-                    Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(6.dp))
+                // IPv6 候选:当前网络原生 IPv6 DNS,横排胶囊(溢出横向滚动),点选填入。
+                if (candidates.v6.isNotEmpty()) {
+                    DnsChipRow(candidates.v6) { v6 = it }
+                    Spacer(Modifier.height(6.dp))
                 }
                 Text(
                     text = stringResource(R.string.dialog_dns_help),
@@ -1074,22 +1071,30 @@ private fun DnsDialog(
     )
 }
 
-/** DNS 候选行:一行一个当前网络原生 DNS,点击填入对应族字段(替换)。
- *  浅色 surfaceVariant 底 + 族前缀,视觉上明显可点(与 ServiceModeDialog 下拉同一套样式)。 */
+/** DNS 候选横排胶囊行:当前网络原生 DNS 的多个地址并排一排(不换行,溢出横向滚动),
+ *  点击填入对应族字段(替换)。胶囊只显示裸地址,无族前缀(已放在对应输入框下方)。 */
 @Composable
-private fun DnsCandidateRow(address: String, isV4: Boolean, onPick: (String) -> Unit) {
-    Surface(
-        onClick = { onPick(address) },
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+private fun DnsChipRow(addresses: List<String>, onPick: (String) -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
     ) {
-        Text(
-            text = "${if (isV4) "IPv4" else "IPv6"} · $address",
-            fontSize = 13.sp,
-            color = PurpleDark,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-        )
+        addresses.forEach { addr ->
+            Surface(
+                onClick = { onPick(addr) },
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                border = BorderStroke(1.dp, DividerLine),
+                modifier = Modifier.padding(end = 6.dp)
+            ) {
+                Text(
+                    text = addr,
+                    fontSize = 12.sp,
+                    color = PurpleDark,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                )
+            }
+        }
     }
 }
 

@@ -71,7 +71,6 @@
 
     <!-- Dialogs -->
     <string name="dialog_dns_help">DNS injected when VPN starts (addDnsServer); empty = default.\nDomestic DNS recommended (default 223.5.5.5 / 2400:3200::1):\nthe engine queries it directly and anti-pollution-checks the\nreply (domestic DNS is the one that can return poisoned answers);\nforeign domains fall back to foreign DNS via the proxy.\nA foreign DNS also works, but every query then rides the\nupstream proxy, which must support UDP.\nRestart VPN to apply.</string>
-    <string name="dialog_dns_candidates">Current network DNS (tap to fill)</string>
     <string name="toast_invalid_dns">Invalid DNS address format</string>
     <string name="dialog_exclude_title">Excluded routes (API 33+)</string>
     <string name="dialog_exclude_hint">One CIDR per line, e.g. 127.0.0.1/8</string>
