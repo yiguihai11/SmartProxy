@@ -8,6 +8,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.VpnService
 import android.os.Build
@@ -15,6 +17,8 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
+import java.net.Inet4Address
+import java.net.Inet6Address
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -969,10 +973,38 @@ private fun HomeLauncher(
     }
 }
 
+/** DNS 候选数据:当前真实网络(Wi-Fi / 移动数据,跳过 VPN)的原生 DNS,按族分列。 */
+private data class NetworkDnsCandidates(val v4: List<String>, val v6: List<String>)
+
+/** 读系统当前网络原生 DNS:ConnectivityManager.allNetworks 跳过 TRANSPORT_VPN,
+ *  聚合其余网络的 LinkProperties.getDnsServers() 去重。IPv6 剥掉 zone index
+ *  (hostAddress 会带 %wlan0,不剥会过不了 isValidIpLiteral 的纯字面量校验)。
+ *  读不到(无网络 / 无权限 / 异常)返回空列表 → 对话框隐藏候选段。normal 权限
+ *  ACCESS_NETWORK_STATE 声明即授予,异常走 runCatching 静默降级。 */
+private fun currentNetworkDns(context: Context): NetworkDnsCandidates {
+    val v4 = LinkedHashSet<String>()
+    val v6 = LinkedHashSet<String>()
+    runCatching {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        for (net in cm.allNetworks) {
+            val caps = cm.getNetworkCapabilities(net) ?: continue
+            if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue // 只要原生真实 DNS
+            val link = cm.getLinkProperties(net) ?: continue
+            for (addr in link.dnsServers) {
+                if (addr.isLoopbackAddress || addr.isAnyLocalAddress) continue
+                val host = addr.hostAddress?.substringBefore('%') ?: continue
+                if (addr is Inet4Address) v4.add(host) else if (addr is Inet6Address) v6.add(host)
+            }
+        }
+    }
+    return NetworkDnsCandidates(v4.toList(), v6.toList())
+}
+
 /** DNS 服务器设置对话框(§6):启动 VPN 时 addDnsServer 注入的 IPv4 / IPv6,留空 = 默认。
  *  推荐填国内 DNS:引擎拦截所有 DNS 查询,对国内 DNS 直连查询并做反污染检测
  *  (只有它可能回污染答案),国外域名自动回退国外 DNS 走代理;填国外 DNS 也能用,
- *  但查询走上游代理需上游支持 UDP。改动后需重启 VPN 生效。 */
+ *  但查询走上游代理需上游支持 UDP。改动后需重启 VPN 生效。
+ *  候选段(currentNetworkDns):当前网络原生 DNS 点选填入(DNS 每族单服务器,点选 = 替换)。 */
 @Composable
 private fun DnsDialog(
     initialV4: String,
@@ -983,6 +1015,7 @@ private fun DnsDialog(
     var v4 by remember { mutableStateOf(initialV4) }
     var v6 by remember { mutableStateOf(initialV6) }
     val context = LocalContext.current
+    val candidates = remember { currentNetworkDns(context) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.drawer_dns)) },
@@ -1004,6 +1037,21 @@ private fun DnsDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(8.dp))
+                if (candidates.v4.isNotEmpty() || candidates.v6.isNotEmpty()) {
+                    Text(
+                        text = stringResource(R.string.dialog_dns_candidates),
+                        fontSize = 12.sp,
+                        color = GreyText
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    candidates.v4.forEach { addr ->
+                        DnsCandidateRow(address = addr, isV4 = true) { v4 = it }
+                    }
+                    candidates.v6.forEach { addr ->
+                        DnsCandidateRow(address = addr, isV4 = false) { v6 = it }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                }
                 Text(
                     text = stringResource(R.string.dialog_dns_help),
                     fontSize = 12.sp,
@@ -1025,6 +1073,25 @@ private fun DnsDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.btn_cancel)) } }
     )
+}
+
+/** DNS 候选行:一行一个当前网络原生 DNS,点击填入对应族字段(替换)。
+ *  浅色 surfaceVariant 底 + 族前缀,视觉上明显可点(与 ServiceModeDialog 下拉同一套样式)。 */
+@Composable
+private fun DnsCandidateRow(address: String, isV4: Boolean, onPick: (String) -> Unit) {
+    Surface(
+        onClick = { onPick(address) },
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+    ) {
+        Text(
+            text = "${if (isV4) "IPv4" else "IPv6"} · $address",
+            fontSize = 13.sp,
+            color = PurpleDark,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+        )
+    }
 }
 
 /** 排除路由设置对话框(API 33+ builder.excludeRoute):每行一个 CIDR,不走 VPN 隧道直连。 */

@@ -7,6 +7,9 @@
          调 ConnectivityManager.requestNetwork(test network)保活受保护上游,缺它 SecurityException,
          startRouting 直接 -2。 -->
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <!-- DNS 候选(§6):ConnectivityManager 读当前网络原生 DNS(Wi-Fi/移动数据,跳 VPN)做候选点选,
+         getNetworkCapabilities/getLinkProperties 均需它;normal 级声明即授予。 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <!-- API 34+:VpnService 用 specialUse 类型声明(normal 权限,免运行时授权)。
          注意 manifest 的 foregroundServiceType 属性没有 `vpn` flag(AOSP 全版本如此),
