@@ -49,11 +49,13 @@ object SpeedMeterOverlay {
     private const val TAG = "SpeedMeter"
     private const val POLL_INTERVAL_MS = 1000L
     private const val DOUBLE_TAP_MS = 300L
+    /** 胶囊无流量淡出 / 有流量淡入的动画时长。 */
+    private const val FADE_MS = 200L
     /** 前台应用判定缓存刷新周期:queryEvents 不便宜,5s 一次足够(切前台 5s 内跟上)。 */
     private const val FOREGROUND_REFRESH_MS = 5000L
 
-    // 胶囊配色:40% 不透明度深底 + 上传绿 / 下载蓝(白字在深底上对比足够)。
-    private const val BG_COLOR = 0x66000000.toInt()
+    // 胶囊配色:30% 不透明度深底 + 上传绿 / 下载蓝(白字在深底上对比足够)。
+    private const val BG_COLOR = 0x4D000000.toInt()
     private val UP_COLOR = Color.parseColor("#FF7CCB7C")
     private val DOWN_COLOR = Color.parseColor("#FF6FB7FF")
 
@@ -64,6 +66,8 @@ object SpeedMeterOverlay {
     private var iconView: ImageView? = null
     private var upView: TextView? = null
     private var downView: TextView? = null
+    /** 胶囊当前是否处于「显示(alpha=1)」态(仅主线程):状态翻转才启动淡入/淡出,避免每秒重启动画。 */
+    private var capsuleShown = true
 
     private var pollThread: HandlerThread? = null
     private var bgHandler: Handler? = null
@@ -132,6 +136,7 @@ object SpeedMeterOverlay {
         wm = manager
         capsule = view
         layoutParams = params
+        capsuleShown = true // 新胶囊默认 VISIBLE + alpha 1
         if (defaultPos) {
             // 首次(无保存位置):布局完成后贴到右边并留 8dp 边距。
             view.post {
@@ -347,8 +352,10 @@ object SpeedMeterOverlay {
 
         val icon: Drawable? = if (tick.appUid >= 0) metaFor(app, tick.appUid).second else null
         mainHandler.post {
-            if (capsule == null) return@post
+            val cap = capsule ?: return@post
             if (tick.appUid >= 0) {
+                // 有展示对象(前台应用或最大流量 App):刷新内容;前台应用 0 速率也保留显示
+                // (↑0B/s ↓0B/s + 图标,标明当前前台是哪个 App)。
                 upView?.text = "↑ ${fmt(tick.appUp)}/s"
                 downView?.text = "↓ ${fmt(tick.appDown)}/s"
                 val iv = iconView
@@ -360,10 +367,24 @@ object SpeedMeterOverlay {
                         iv.visibility = View.GONE
                     }
                 }
+                if (!capsuleShown) {
+                    // 淡入:从当前 alpha(淡出中途或已到 0)动画回 1;先 VISIBLE 让窗口长回。
+                    cap.animate().cancel()
+                    cap.visibility = View.VISIBLE
+                    cap.animate().alpha(1f).setDuration(FADE_MS).start()
+                    capsuleShown = true
+                }
             } else {
-                upView?.text = "↑ --"
-                downView?.text = "↓ --"
-                iconView?.visibility = View.GONE
+                // 无任何可展示应用(引擎空快照 && 无前台可识别):淡出后 GONE,不显示无意义的
+                // ↑--↓--。淡出期间仍 VISIBLE;动画结束置 GONE,窗口塌成 0 尺寸、触摸透传。
+                // 有流量/有前台的下一个 tick 淡入恢复,位置不变(首次定位已在 view.post 排过)。
+                if (capsuleShown) {
+                    cap.animate().cancel()
+                    cap.animate().alpha(0f).setDuration(FADE_MS).withEndAction {
+                        cap.visibility = View.GONE
+                    }.start()
+                    capsuleShown = false
+                }
             }
         }
     }
