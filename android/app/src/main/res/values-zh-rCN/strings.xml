@@ -76,7 +76,7 @@
     <string name="dialog_dns_candidates">当前网络 DNS(点选填入)</string>
     <string name="toast_invalid_dns">DNS 地址格式不正确</string>
     <string name="dialog_exclude_title">排除路由 (API 33+)</string>
-    <string name="dialog_exclude_hint">每行一个 CIDR,如 192.168.1.0/24</string>
+    <string name="dialog_exclude_hint">每行一个 CIDR,如 127.0.0.1/8</string>
     <string name="dialog_exclude_help">这些网段不走 VPN 隧道(分隧道直连);修改后需重启 VPN 生效。</string>
     <string name="cd_choose_service_mode">选择服务模式</string>
     <string name="dialog_service_help">VPN 隧道:接管系统流量智能分流(默认)。\n仅代理:不启动 VPN 模式,仅运行引擎 SOCKS5 代理(:1080,局域网可访问)。\n运行中切换将自动重启生效。</string>

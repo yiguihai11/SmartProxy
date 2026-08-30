@@ -76,7 +76,7 @@
     <string name="dialog_dns_candidates">Current network DNS (tap to fill)</string>
     <string name="toast_invalid_dns">Invalid DNS address format</string>
     <string name="dialog_exclude_title">Excluded routes (API 33+)</string>
-    <string name="dialog_exclude_hint">One CIDR per line, e.g. 192.168.1.0/24</string>
+    <string name="dialog_exclude_hint">One CIDR per line, e.g. 127.0.0.1/8</string>
     <string name="dialog_exclude_help">These networks bypass the VPN tunnel (split tunnel); restart VPN to apply.</string>
     <string name="cd_choose_service_mode">Choose service mode</string>
     <string name="dialog_service_help">VPN tunnel: takes over system traffic for smart routing (default).\nProxy only: no VPN mode; runs the engine\'s SOCKS5 proxy (:1080, LAN-accessible).\nSwitching while running auto-restarts.</string>
