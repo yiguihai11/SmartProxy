@@ -55,7 +55,10 @@
     <string name="home_speed_meter">Floating speed meter</string>
     <string name="home_speed_meter_sub">Capsule: live speed of foreground / top app</string>
     <string name="toast_speed_meter_vpn_only">VPN tunnel mode only</string>
-    <string name="speed_meter_usage_access_needed">To show the foreground app\'s speed, grant \"Usage access\" in system settings; otherwise it falls back to the top traffic app</string>
+    <string name="usage_access_dialog_title">Grant usage access</string>
+    <string name="usage_access_dialog_message">The speed capsule shows the foreground app\'s live speed (whichever is faster). To detect the foreground app, it needs \"Usage access\".\n\nThis permission reads recently-used foreground-app info on-device only, for the capsule display — nothing is uploaded, and it does not affect proxying.\n\nWithout it, the capsule falls back to showing the top traffic app.</string>
+    <string name="usage_access_dialog_ok">Grant</string>
+    <string name="usage_access_dialog_cancel">Not now</string>
 
     <!-- Admin panel card -->
     <string name="panel_title">Admin panel</string>
