@@ -2,7 +2,6 @@ package io.github.yiguihai11.smartproxy
 
 import android.Manifest
 import android.app.Activity
-import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -53,6 +52,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -66,6 +66,9 @@ import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -82,6 +85,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -151,6 +155,10 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+    /** OriginOS 省电引导对话框开关(§8):Compose state,setContent 里读、HomeScreen 渲染;
+     *  仅代理模式启动时 maybeRequestBatteryOptimizationExemption 置 true 弹出。 */
+    private var batteryDialogVisible by mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // 统一 edge-to-edge(含 Android 15+ 强制生效):背景通铺到系统栏后,
@@ -168,7 +176,10 @@ class MainActivity : ComponentActivity() {
                     onCycleTheme = {
                         themeMode = cycleThemeMode(themeMode)
                         AppPrefs.setThemeMode(this, themeMode)
-                    }
+                    },
+                    batteryDialogVisible = batteryDialogVisible,
+                    onBatteryDialogDismiss = { batteryDialogVisible = false },
+                    onOpenBatterySettings = { openAppDetailsSettings() }
                 )
             }
         }
@@ -260,7 +271,7 @@ class MainActivity : ComponentActivity() {
         if (!isOriginOS() && pm.isIgnoringBatteryOptimizations(packageName)) return
         AppPrefs.setBatteryOptAskCount(this, AppPrefs.batteryOptAskCount(this) + 1)
         if (isOriginOS()) {
-            originOSBatteryGuidance()
+            batteryDialogVisible = true
         } else {
             runCatching {
                 startActivity(Intent(
@@ -274,22 +285,17 @@ class MainActivity : ComponentActivity() {
     }
 
     /** OriginOS(vivo/iQOO,含 bbk 系)智能冻结独立于 AOSP 豁免,引导到本应用详情页
-     *  (耗电管理→允许后台运行)——无公共 Intent 直达省电策略,应用详情页是最可靠入口。 */
-    private fun originOSBatteryGuidance() {
-        val intent = Intent(
-            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-            Uri.parse("package:$packageName")
-        )
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.battery_title))
-            .setMessage(getString(R.string.battery_message))
-            .setPositiveButton(getString(R.string.battery_settings)) { _, _ ->
-                runCatching { startActivity(intent) }.onFailure {
-                    android.util.Log.w("SmartProxyVpn", "[MainActivity] App-details settings unavailable: ${it.message}")
-                }
-            }
-            .setNegativeButton(getString(R.string.battery_dismiss), null)
-            .show()
+     *  (耗电管理→允许后台运行)——无公共 Intent 直达省电策略,应用详情页是最可靠入口。
+     *  对话框本体是 HomeScreen 里的 M3 AlertDialog,这里只负责跳详情页。 */
+    private fun openAppDetailsSettings() {
+        runCatching {
+            startActivity(Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:$packageName")
+            ))
+        }.onFailure {
+            android.util.Log.w("SmartProxyVpn", "[MainActivity] App-details settings unavailable: ${it.message}")
+        }
     }
 
     /** OriginOS 判定:厂商 vivo/bbk(iQOO 属 BBK 系,MANUFACTURER 常报 vivo/bbk)。
@@ -383,7 +389,14 @@ private fun rememberServiceMode(): String {
 }
 
 @Composable
-private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme: () -> Unit) {
+private fun HomeScreen(
+    onToggleVpn: () -> Unit,
+    themeMode: String,
+    onCycleTheme: () -> Unit,
+    batteryDialogVisible: Boolean,
+    onBatteryDialogDismiss: () -> Unit,
+    onOpenBatterySettings: () -> Unit
+) {
     val context = LocalContext.current
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -503,6 +516,25 @@ private fun HomeScreen(onToggleVpn: () -> Unit, themeMode: String, onCycleTheme:
                 showServiceModeDialog = false
                 AppPrefs.setServiceMode(context, mode)
                 applyVpnSettings()
+            }
+        )
+    }
+
+    // OriginOS 省电引导(§8):仅代理模式启动时 maybeRequestBatteryOptimizationExemption 置位。
+    // 与其它对话框同款 M3 AlertDialog;「去设置」跳应用详情页(耗电管理→允许后台运行)。
+    if (batteryDialogVisible) {
+        AlertDialog(
+            onDismissRequest = onBatteryDialogDismiss,
+            title = { Text(stringResource(R.string.battery_title)) },
+            text = { Text(stringResource(R.string.battery_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    onBatteryDialogDismiss()
+                    onOpenBatterySettings()
+                }) { Text(stringResource(R.string.battery_settings)) }
+            },
+            dismissButton = {
+                TextButton(onClick = onBatteryDialogDismiss) { Text(stringResource(R.string.battery_dismiss)) }
             }
         )
     }
@@ -684,13 +716,13 @@ private fun DrawerMenuItem(
     subtitle: String,
     onClick: () -> Unit
 ) {
-    Surface(
+    Card(
+        onClick = onClick,
         shape = RoundedCornerShape(16.dp),
-        color = CardSurface,
+        colors = CardDefaults.cardColors(containerColor = CardSurface),
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 5.dp)
-            .clickable(onClick = onClick)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
@@ -747,6 +779,8 @@ private fun HomeLauncher(
     // 系统设置授权,返回回调按授权结果置位;已授权且 VPN 在跑则立即显示胶囊,否则只落盘,
     // 下次连接由服务 autoShow 拉起。关闭即撤胶囊。socksMode 下 enabled=false 点卡片弹提示。
     var speedMeterOn by remember { mutableStateOf(AppPrefs.speedMeterEnabled(context)) }
+    // 悬浮窗授权回调里/开关开启时:缺「使用情况访问权限」就弹 M3 说明对话框(见下方 Box 内)。
+    var showUsageAccessDialog by remember { mutableStateOf(false) }
     val overlayPermLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {
@@ -756,7 +790,7 @@ private fun HomeLauncher(
             AppPrefs.setSpeedMeterEnabled(context, true)
             if (running) SpeedMeterOverlay.autoShow(context)
             // 前台应用判定还需「使用情况访问权限」:顺带引导(不阻塞,未授权退回流量最大)。
-            SpeedMeterOverlay.ensureUsageAccess(context)
+            if (SpeedMeterOverlay.needsUsageAccess(context)) showUsageAccessDialog = true
         } else {
             speedMeterOn = false // 用户未授权:开关回弹为关
         }
@@ -811,36 +845,43 @@ private fun HomeLauncher(
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // ── 标题栏:左侧菜单按钮(开侧边栏抽屉)+ 居中标题 + 右上主题切换(§7) ──
-            Box(Modifier.fillMaxWidth()) {
-                IconButton(
-                    onClick = onOpenDrawer,
-                    modifier = Modifier.align(Alignment.CenterStart)
-                ) {
-                    Icon(Icons.Filled.Menu, contentDescription = stringResource(R.string.cd_open_menu), tint = PurpleText)
-                }
-                Text(
-                    text = "SmartProxy",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = PurpleText,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.align(Alignment.Center)
-                )
+            // ── 标题栏:M3 CenterAlignedTopAppBar(左菜单按钮 + 居中标题 + 右上主题切换)。
+            // windowInsets=0 交给外层 safeDrawingPadding 统一让位,避免双份状态栏 inset;
+            // 容器透明保留首页渐变,icon/标题色沿用品牌紫。 ──
+            CenterAlignedTopAppBar(
+                title = {
+                    Text(
+                        text = "SmartProxy",
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = PurpleText
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onOpenDrawer) {
+                        Icon(Icons.Filled.Menu, contentDescription = stringResource(R.string.cd_open_menu), tint = PurpleText)
+                    }
+                },
                 // 主题切换钮(§7):按模式显太阳/月亮/自动图标,点击循环切换(auto→浅→深),
                 // 图标随模式变化,状态一目了然。
-                IconButton(
-                    onClick = onCycleTheme,
-                    modifier = Modifier.align(Alignment.CenterEnd)
-                ) {
-                    Icon(
-                        imageVector = themeIcon(themeMode),
-                        contentDescription = stringResource(R.string.cd_theme_mode, themeModeLabel(context, themeMode)),
-                        tint = PurpleText,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-            }
+                actions = {
+                    IconButton(onClick = onCycleTheme) {
+                        Icon(
+                            imageVector = themeIcon(themeMode),
+                            contentDescription = stringResource(R.string.cd_theme_mode, themeModeLabel(context, themeMode)),
+                            tint = PurpleText,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                },
+                windowInsets = WindowInsets(0, 0, 0, 0),
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                    containerColor = Color.Transparent,
+                    navigationIconContentColor = PurpleText,
+                    titleContentColor = PurpleText,
+                    actionIconContentColor = PurpleText
+                )
+            )
             Spacer(Modifier.height(24.dp))
 
             // ── 大圆环 + 中心状态区 ──────────────────────────────
@@ -945,7 +986,7 @@ private fun HomeLauncher(
                                 AppPrefs.setSpeedMeterEnabled(context, true)
                                 if (running) SpeedMeterOverlay.autoShow(context)
                                 // 前台应用判定需「使用情况访问权限」:引导授权(不阻塞,未授权退回流量最大)。
-                                SpeedMeterOverlay.ensureUsageAccess(context)
+                                if (SpeedMeterOverlay.needsUsageAccess(context)) showUsageAccessDialog = true
                             } else {
                                 Toast.makeText(context, context.getString(R.string.speed_meter_perm_needed), Toast.LENGTH_LONG).show()
                                 val intent = Intent(
@@ -972,6 +1013,26 @@ private fun HomeLauncher(
                 PanelCard(url = panelUrl, auth = adminAuth, onCopy = { url -> copyPanelUrl(context, url) }, onOpen = { url -> openPanel(context, url) })
                 Spacer(Modifier.height(8.dp))
             }
+        }
+
+        // 「使用情况访问权限」说明对话框(M3):开启悬浮网速计且前台应用判定缺权限时弹出。
+        if (showUsageAccessDialog) {
+            AlertDialog(
+                onDismissRequest = { showUsageAccessDialog = false },
+                title = { Text(stringResource(R.string.usage_access_dialog_title)) },
+                text = { Text(stringResource(R.string.usage_access_dialog_message)) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showUsageAccessDialog = false
+                        SpeedMeterOverlay.openUsageAccessSettings(context)
+                    }) { Text(stringResource(R.string.usage_access_dialog_ok)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showUsageAccessDialog = false }) {
+                        Text(stringResource(R.string.usage_access_dialog_cancel))
+                    }
+                }
+            )
         }
     }
 }
@@ -1362,9 +1423,9 @@ private fun SwitchCard(
     val tapModifier = if (!enabled && onDisabledClick != null) {
         Modifier.clickable { onDisabledClick() }
     } else Modifier
-    Surface(
+    Card(
         shape = RoundedCornerShape(20.dp),
-        color = CardSurface,
+        colors = CardDefaults.cardColors(containerColor = CardSurface),
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
@@ -1401,9 +1462,9 @@ private fun SwitchCard(
  *  底部居中箭头展开(§4.4)。auth 非空(admin_auth 启用)时在 URL 下方显示登录凭据。 */
 @Composable
 private fun PanelCard(url: String?, auth: Pair<String, String>?, onCopy: (String) -> Unit, onOpen: (String) -> Unit) {
-    Surface(
+    Card(
         shape = RoundedCornerShape(24.dp),
-        color = CardSurface,
+        colors = CardDefaults.cardColors(containerColor = CardSurface),
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)

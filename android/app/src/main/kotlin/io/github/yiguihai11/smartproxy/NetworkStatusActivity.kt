@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,6 +38,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -387,17 +390,24 @@ private fun NetworkStatusScreen(
                 .safeDrawingPadding()
                 .padding(horizontal = 16.dp)
         ) {
-            // ── 顶栏:返回 + 标题 ────────────────────────────────
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-            ) {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.cd_back), tint = PurpleText)
-                }
-                Spacer(Modifier.width(4.dp))
-                Text(stringResource(R.string.drawer_network_status), fontSize = 20.sp, fontWeight = FontWeight.Bold, color = PurpleText)
-            }
+            // ── 顶栏:M3 TopAppBar(返回 + 标题)。windowInsets=0 交给外层 safeDrawingPadding
+            // 统一让位,容器透明保留 SoftBg,icon/标题色沿用品牌紫。 ──
+            TopAppBar(
+                title = {
+                    Text(stringResource(R.string.drawer_network_status), fontSize = 20.sp, fontWeight = FontWeight.Bold, color = PurpleText)
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.cd_back), tint = PurpleText)
+                    }
+                },
+                windowInsets = WindowInsets(0, 0, 0, 0),
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.Transparent,
+                    navigationIconContentColor = PurpleText,
+                    titleContentColor = PurpleText
+                )
+            )
             Spacer(Modifier.height(8.dp))
 
             when {

@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -42,6 +43,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -282,43 +285,57 @@ private fun LogcatScreen(
                 .safeDrawingPadding()
                 .padding(horizontal = 16.dp)
         ) {
-            // ── 顶栏:返回 + 标题 + 搜索/复制/分享/清空 ─────────────
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-            ) {
-                if (showSearch) {
-                    IconButton(onClick = onToggleSearch) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.cd_exit_search), tint = PurpleText)
+            // ── 顶栏:M3 TopAppBar(返回 + 标题 + 搜索/复制/分享/清空;搜索模式标题位换成
+            // 输入框)。windowInsets=0 交给外层 safeDrawingPadding 统一让位,容器透明保留 SoftBg。 ──
+            TopAppBar(
+                title = {
+                    if (showSearch) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = onSearchQueryChange,
+                            placeholder = { Text(stringResource(R.string.logcat_search_placeholder), fontSize = 13.sp) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    } else {
+                        Text(stringResource(R.string.logcat_title), fontSize = 20.sp, fontWeight = FontWeight.Bold, color = PurpleText)
                     }
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = onSearchQueryChange,
-                        placeholder = { Text(stringResource(R.string.logcat_search_placeholder), fontSize = 13.sp) },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                } else {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.cd_back), tint = PurpleText)
+                },
+                navigationIcon = {
+                    if (showSearch) {
+                        IconButton(onClick = onToggleSearch) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.cd_exit_search), tint = PurpleText)
+                        }
+                    } else {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.cd_back), tint = PurpleText)
+                        }
                     }
-                    Spacer(Modifier.width(4.dp))
-                    Text(stringResource(R.string.logcat_title), fontSize = 20.sp, fontWeight = FontWeight.Bold, color = PurpleText)
-                    Spacer(Modifier.weight(1f))
-                    IconButton(onClick = onToggleSearch) {
-                        Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.cd_search), tint = PurpleText)
+                },
+                actions = {
+                    if (!showSearch) {
+                        IconButton(onClick = onToggleSearch) {
+                            Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.cd_search), tint = PurpleText)
+                        }
+                        IconButton(onClick = onCopyAll) {
+                            Icon(Icons.Filled.ContentCopy, contentDescription = stringResource(R.string.cd_copy_all), tint = PurpleText)
+                        }
+                        IconButton(onClick = onShare) {
+                            Icon(Icons.Filled.Share, contentDescription = stringResource(R.string.cd_share_logs), tint = PurpleText)
+                        }
+                        IconButton(onClick = onClear) {
+                            Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.cd_clear), tint = PurpleText)
+                        }
                     }
-                    IconButton(onClick = onCopyAll) {
-                        Icon(Icons.Filled.ContentCopy, contentDescription = stringResource(R.string.cd_copy_all), tint = PurpleText)
-                    }
-                    IconButton(onClick = onShare) {
-                        Icon(Icons.Filled.Share, contentDescription = stringResource(R.string.cd_share_logs), tint = PurpleText)
-                    }
-                    IconButton(onClick = onClear) {
-                        Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.cd_clear), tint = PurpleText)
-                    }
-                }
-            }
+                },
+                windowInsets = WindowInsets(0, 0, 0, 0),
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.Transparent,
+                    navigationIconContentColor = PurpleText,
+                    titleContentColor = PurpleText,
+                    actionIconContentColor = PurpleText
+                )
+            )
             Spacer(Modifier.height(4.dp))
 
             // ── 自动刷新开关 + 状态 ─────────────────────────────

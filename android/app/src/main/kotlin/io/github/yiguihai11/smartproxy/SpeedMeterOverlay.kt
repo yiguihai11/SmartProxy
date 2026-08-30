@@ -1,6 +1,5 @@
 package io.github.yiguihai11.smartproxy
 
-import android.app.AlertDialog
 import android.app.AppOpsManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
@@ -410,24 +409,12 @@ object SpeedMeterOverlay {
             ) == AppOpsManager.MODE_ALLOWED
         }.getOrDefault(false)
 
-    /** 首次开启悬浮网速计时引导授予「使用情况访问权限」(前台应用判定用)。
-     *  申请前先弹说明对话框:讲清用途(识别前台应用)、数据不上传、不授予的后果;
-     *  用户点「去授权」才跳系统使用情况访问设置页,「暂不」直接跳过。不阻塞胶囊——
-     *  拿不到权限就退回显示流量最大应用。 */
-    fun ensureUsageAccess(context: Context) {
-        if (hasUsageAccess(context)) return
-        AlertDialog.Builder(context)
-            .setTitle(context.getString(R.string.usage_access_dialog_title))
-            .setMessage(context.getString(R.string.usage_access_dialog_message))
-            .setPositiveButton(context.getString(R.string.usage_access_dialog_ok)) { _, _ ->
-                openUsageAccessSettings(context)
-            }
-            .setNegativeButton(context.getString(R.string.usage_access_dialog_cancel), null)
-            .show()
-    }
+    /** 前台应用判定是否缺「使用情况访问权限」(AppOps 校验)。M3 授权说明对话框由
+     *  HomeLauncher 弹(Compose AlertDialog),这里只暴露判定与跳转,不再持有平台对话框。 */
+    fun needsUsageAccess(context: Context): Boolean = !hasUsageAccess(context)
 
     /** 跳系统「使用情况访问设置」页。 */
-    private fun openUsageAccessSettings(context: Context) {
+    fun openUsageAccessSettings(context: Context) {
         runCatching {
             context.startActivity(
                 Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
