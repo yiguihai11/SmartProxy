@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Shizuku 网络共享(normal 级,声明即自动授予):主进程 CoreTetheringLease.holdTestNetwork
@@ -24,6 +25,10 @@
     <!-- 悬浮网速计(塞班式角落胶囊):TYPE_APPLICATION_OVERLAY 需要悬浮窗特殊权限,
          运行期经 Settings.ACTION_MANAGE_OVERLAY_PERMISSION 引导用户授予(声明不自动授予)。 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- 悬浮网速计「前台应用判定」:PACKAGE_USAGE_STATS 是特殊授权(AppOps 校验,声明不自动
+         授予),经 Settings.ACTION_USAGE_ACCESS_SETTINGS 引导;未授权则胶囊退回显示流量最大应用。 -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
 
     <application
         android:name=".SmartProxyApp"

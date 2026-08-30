@@ -55,8 +55,9 @@
     <string name="home_boot_autostart_sub_vpn">开机后自动启动 VPN(需已授权)</string>
     <string name="home_boot_autostart_sub_socks">开机后自动启动仅代理服务</string>
     <string name="home_speed_meter">悬浮网速计</string>
-    <string name="home_speed_meter_sub">角落胶囊:实时上下行网速</string>
+    <string name="home_speed_meter_sub">胶囊:前台或最耗流量应用的实时网速</string>
     <string name="toast_speed_meter_vpn_only">仅 VPN 隧道模式可用</string>
+    <string name="speed_meter_usage_access_needed">要按前台应用显示网速,请到系统设置授予「使用情况访问权限」;不授予则只显示流量最大的应用</string>
 
     <!-- Admin panel card -->
     <string name="panel_title">管理面板</string>

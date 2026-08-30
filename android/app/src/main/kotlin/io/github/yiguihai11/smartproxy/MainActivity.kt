@@ -748,6 +748,8 @@ private fun HomeLauncher(
             speedMeterOn = true
             AppPrefs.setSpeedMeterEnabled(context, true)
             if (running) SpeedMeterOverlay.autoShow(context)
+            // 前台应用判定还需「使用情况访问权限」:顺带引导(不阻塞,未授权退回流量最大)。
+            SpeedMeterOverlay.ensureUsageAccess(context)
         } else {
             speedMeterOn = false // 用户未授权:开关回弹为关
         }
@@ -935,6 +937,8 @@ private fun HomeLauncher(
                                 speedMeterOn = true
                                 AppPrefs.setSpeedMeterEnabled(context, true)
                                 if (running) SpeedMeterOverlay.autoShow(context)
+                                // 前台应用判定需「使用情况访问权限」:引导授权(不阻塞,未授权退回流量最大)。
+                                SpeedMeterOverlay.ensureUsageAccess(context)
                             } else {
                                 Toast.makeText(context, context.getString(R.string.speed_meter_perm_needed), Toast.LENGTH_LONG).show()
                                 val intent = Intent(
