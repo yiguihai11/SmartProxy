@@ -43,6 +43,13 @@ type connRecord struct {
 	up       atomic.Int64           // 上行(app→远端)累计字节
 	down     atomic.Int64           // 下行(远端→app)累计字节
 	lastSeen atomic.Int64           // unix 秒
+
+	// 逐出标记:表满时 evictOneLocked 把仍活跃的连接逐出表(仅计数 wrapper 还在引用
+	// rec)。逐出时已把当时 up/down 并入 app 累计,并记在 evictUp/evictDown;连接关闭
+	// 时 Remove 只补并入 evict 之后的增量,避免把 evict 前字节二次计入。
+	evicted   atomic.Bool
+	evictUp   atomic.Int64
+	evictDown atomic.Int64
 }
 
 // uidStats 汇总某 app(uid)的累计流量 + 它当前存活/未淘汰的连接。
@@ -236,6 +243,12 @@ func (cs *ConnStats) evictOneLocked() {
 		return
 	}
 	victimUs.mu.Lock()
+	// 记下已并入的字节快照 + 逐出标记,供 Remove 只补 evict 后的增量(见 connRecord
+	// 字段注释)。读 rec.up 前先置标记无碍:Remove 读 evictUp 与 rec.up 都在 rec 上,
+	// 与计数 goroutine 的交错由「先 Store evictUp 再…」保证不会把 evict 前字节漏并。
+	victim.evictUp.Store(victim.up.Load())
+	victim.evictDown.Store(victim.down.Load())
+	victim.evicted.Store(true)
 	victimUs.up.Add(victim.up.Load())
 	victimUs.down.Add(victim.down.Load())
 	for i, r := range victimUs.conns {
@@ -259,26 +272,32 @@ func (cs *ConnStats) Remove(rec *connRecord) {
 	if rec == nil {
 		return
 	}
+	evicted := rec.evicted.Load()
 	cs.mu.Lock()
 	us := cs.byUID[rec.uid]
 	if us == nil {
+		// 无 app 累计目标:已逐出(evict 时空壳被删)或表被 SetEnabled(false) 清过。
+		// evict 前的字节早已并入,evict 后的增量无归处——极端边缘,丢弃即可。
 		cs.mu.Unlock()
 		return
 	}
 	us.mu.Lock()
-	for i, r := range us.conns {
-		if r == rec {
-			us.conns = append(us.conns[:i], us.conns[i+1:]...)
-			break
+	if !evicted {
+		for i, r := range us.conns {
+			if r == rec {
+				us.conns = append(us.conns[:i], us.conns[i+1:]...)
+				break
+			}
 		}
+		if len(us.conns) == 0 {
+			delete(cs.byUID, rec.uid)
+		}
+		cs.total-- // 已逐出的 rec 在 evict 时就减过了,这里不能再减
 	}
-	if len(us.conns) == 0 {
-		delete(cs.byUID, rec.uid)
-	}
-	us.up.Add(rec.up.Load())
-	us.down.Add(rec.down.Load())
+	// 只并入 evict 之后的新字节;未逐出的 rec evictUp=0,行为与原来一致(并入全量)。
+	us.up.Add(rec.up.Load() - rec.evictUp.Load())
+	us.down.Add(rec.down.Load() - rec.evictDown.Load())
 	us.mu.Unlock()
-	cs.total--
 	cs.mu.Unlock()
 }
 

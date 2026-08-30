@@ -16,9 +16,9 @@ import (
 // ── fakes ──────────────────────────────────────────────────────────────────
 
 type fakeNetConn struct {
-	readN  int
-	readErr error
-	writeN int
+	readN    int
+	readErr  error
+	writeN   int
 	writeErr error
 }
 
@@ -228,6 +228,76 @@ func TestConnStatsEviction_CapsAtMax(t *testing.T) {
 		assert.LessOrEqual(t, liveUp, a.Up, "app 总量应 ≥ 存活连接之和(含淘汰累计)")
 	}
 	assert.Equal(t, connStatsMaxRecords, totalConns)
+}
+
+func TestConnStatsEvictLiveConn_NoDoubleCount(t *testing.T) {
+	cs := NewConnStats()
+	cs.SetEnabled(true)
+	defer cs.SetEnabled(false)
+
+	// 目标连接 rec(uid 10123)+ 同 uid 另一条保壳(逐出空壳时 uidStats 不删,
+	// Remove 才有累计可并入)。
+	rec := cs.begin(10123, 6, "1.2.3.4", 443)
+	require.NotNil(t, rec)
+	_ = cs.begin(10123, 6, "1.2.3.9", 443)
+
+	wrapped := cs.wrapTCP(&fakeNetConn{readN: 100}, rec)
+	rbuf := make([]byte, 512)
+	n, err := wrapped.Read(rbuf)
+	require.NoError(t, err)
+	assert.Equal(t, 100, n)
+	assert.Equal(t, int64(100), rec.up.Load())
+
+	// Read 会刷新 rec.lastSeen(countingConn 里记 now),所以反查必须放在读之后,
+	// 才能让 rec 成为全表最旧 → 表满时必先被逐出。
+	rec.lastSeen.Store(time.Now().Add(-100 * time.Second).Unix())
+
+	// 填满表到上限,再 begin 一条触发逐出 → 逐出 rec。
+	for i := 0; i < connStatsMaxRecords-2; i++ {
+		cs.begin(int32(2000+i%7), 6, "1.2.3.4", 80)
+	}
+	_ = cs.begin(9999, 6, "5.6.7.8", 443)
+
+	assert.True(t, rec.evicted.Load(), "最旧的活跃连接应被逐出")
+	cs.mu.Lock()
+	us := cs.byUID[10123]
+	require.NotNil(t, us, "同 uid 有保壳连接,uidStats 不应被删")
+	us.mu.Lock()
+	// rec 已出表,只剩保壳连接。
+	foundRec := false
+	for _, r := range us.conns {
+		if r == rec {
+			foundRec = true
+		}
+	}
+	us.mu.Unlock()
+	cs.mu.Unlock()
+	assert.False(t, foundRec, "逐出后 rec 不应再出现在连接列表")
+	// 逐出时已把当时字节(100)并入累计。
+	assert.Equal(t, int64(100), us.up.Load())
+	assert.Equal(t, int64(100), rec.evictUp.Load())
+
+	// 逐出后连接继续跑:再读 200 字节,rec.up 到 300。
+	n, err = wrapped.Read(rbuf)
+	require.NoError(t, err)
+	assert.Equal(t, 100, n)
+	_, _ = wrapped.Read(rbuf) // 第二次读,累计到 300
+	assert.Equal(t, int64(300), rec.up.Load())
+
+	// 连接关闭:Remove 只补并入 evict 之后的增量(300-100=200)→ 累计 100+200=300,
+	// 不把 evict 前字节二次计入(若双计会是 400)。
+	cs.Remove(rec)
+	assert.Equal(t, int64(300), us.up.Load())
+
+	var app *snapApp
+	for _, a := range parseSnapshot(t, cs.Snapshot()) {
+		if a.UID == 10123 {
+			app = &a
+		}
+	}
+	require.NotNil(t, app, "快照里应有 uid 10123")
+	assert.Equal(t, int64(300), app.Up, "每字节恰好计入一次:100(evict 时)+ 200(关闭时)")
+	assert.Len(t, app.Conns, 1, "rec 已逐出,只剩保壳连接")
 }
 
 func TestConnStatsReset_Clears(t *testing.T) {
