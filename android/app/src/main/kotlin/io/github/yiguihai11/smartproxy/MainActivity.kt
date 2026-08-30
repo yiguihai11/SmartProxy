@@ -1094,6 +1094,10 @@ private fun DnsCandidateRow(address: String, isV4: Boolean, onPick: (String) -> 
     }
 }
 
+/** 排除路由默认项:回环段——VPN 隧道内本地服务(SOCKS :1080 / 管理面板)留在本机。
+ *  仅当用户排除列表为空时预填进输入框;已有自定义路由则不打扰。 */
+private const val DEFAULT_EXCLUDE_ROUTE = "127.0.0.1/8"
+
 /** 排除路由设置对话框(API 33+ builder.excludeRoute):每行一个 CIDR,不走 VPN 隧道直连。 */
 @Composable
 private fun ExcludeRoutesDialog(
@@ -1101,7 +1105,9 @@ private fun ExcludeRoutesDialog(
     onDismiss: () -> Unit,
     onSave: (Set<String>) -> Unit
 ) {
-    var text by remember { mutableStateOf(initialRoutes.joinToString("\n")) }
+    // 空列表 → 预填默认回环排除(用户可删可改);非空 → 原样显示现有路由。
+    val initialText = if (initialRoutes.isEmpty()) DEFAULT_EXCLUDE_ROUTE else initialRoutes.joinToString("\n")
+    var text by remember { mutableStateOf(initialText) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.dialog_exclude_title)) },
