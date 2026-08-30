@@ -54,8 +54,8 @@ object SpeedMeterOverlay {
     /** 前台应用判定缓存刷新周期:queryEvents 不便宜,5s 一次足够(切前台 5s 内跟上)。 */
     private const val FOREGROUND_REFRESH_MS = 5000L
 
-    // 胶囊配色:30% 不透明度深底 + 上传绿 / 下载蓝(白字在深底上对比足够)。
-    private const val BG_COLOR = 0x4D000000.toInt()
+    // 胶囊配色:40% 不透明度深底 + 上传绿 / 下载蓝(白字在深底上对比足够)。
+    private const val BG_COLOR = 0x66000000.toInt()
     private val UP_COLOR = Color.parseColor("#FF7CCB7C")
     private val DOWN_COLOR = Color.parseColor("#FF6FB7FF")
 
