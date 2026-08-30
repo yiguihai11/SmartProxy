@@ -875,7 +875,9 @@ private fun HomeLauncher(
                     }
                 },
                 windowInsets = WindowInsets(0, 0, 0, 0),
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                // centerAlignedTopAppBarColors 已废弃(官方提示用 topAppBarColors 代替),
+                // 两者返回同型 TopAppBarColors,行为一致。
+                colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color.Transparent,
                     navigationIconContentColor = PurpleText,
                     titleContentColor = PurpleText,
@@ -1044,7 +1046,12 @@ private data class NetworkDnsCandidates(val v4: List<String>, val v6: List<Strin
  *  聚合其余网络的 LinkProperties.getDnsServers() 去重。IPv6 剥掉 zone index
  *  (hostAddress 会带 %wlan0,不剥会过不了 isValidIpLiteral 的纯字面量校验)。
  *  读不到(无网络 / 无权限 / 异常)返回空列表 → 对话框隐藏候选段。normal 权限
- *  ACCESS_NETWORK_STATE 声明即授予,异常走 runCatching 静默降级。 */
+ *  ACCESS_NETWORK_STATE 声明即授予,异常走 runCatching 静默降级。
+ *  @Suppress("DEPRECATION"):API 33 起 getAllNetworks() 标废弃,但没有同步替代——
+ *  getActiveNetwork() 在 VPN 运行时返回 VPN 自己(读不到底层真实 DNS),而
+ *  registerNetworkCallback 是异步常驻,不适合一次性候选查询;枚举全网络并跳过
+ *  TRANSPORT_VPN 仍是此场景唯一正确做法,抑制并注明。 */
+@Suppress("DEPRECATION")
 private fun currentNetworkDns(context: Context): NetworkDnsCandidates {
     val v4 = LinkedHashSet<String>()
     val v6 = LinkedHashSet<String>()
