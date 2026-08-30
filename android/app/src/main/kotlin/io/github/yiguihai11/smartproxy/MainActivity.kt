@@ -64,6 +64,7 @@ import androidx.compose.material.icons.outlined.BrightnessAuto
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
@@ -1092,7 +1093,8 @@ private fun DnsDialog(
 }
 
 /** DNS 候选横排胶囊行:当前网络原生 DNS 的多个地址并排一排(不换行,溢出横向滚动),
- *  点击填入对应族字段(替换)。胶囊只显示裸地址,无族前缀(已放在对应输入框下方)。 */
+ *  点击填入对应族字段(替换)。用 M3 原生 AssistChip(辅助完成「填 DNS」这个动作,
+ *  自带胶囊造型/边框/按压态),只显示裸地址,无族前缀(已放在对应输入框下方)。 */
 @Composable
 private fun DnsChipRow(addresses: List<String>, onPick: (String) -> Unit) {
     Row(
@@ -1100,20 +1102,11 @@ private fun DnsChipRow(addresses: List<String>, onPick: (String) -> Unit) {
         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
     ) {
         addresses.forEach { addr ->
-            Surface(
+            AssistChip(
                 onClick = { onPick(addr) },
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                border = BorderStroke(1.dp, DividerLine),
+                label = { Text(addr) },
                 modifier = Modifier.padding(end = 6.dp)
-            ) {
-                Text(
-                    text = addr,
-                    fontSize = 12.sp,
-                    color = PurpleDark,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                )
-            }
+            )
         }
     }
 }
