@@ -33,10 +33,6 @@
     <string name="drawer_logcat">Log viewer</string>
     <string name="drawer_logcat_subtitle">App logs (Debug level)</string>
     <string name="speed_meter_perm_needed">Grant the overlay permission to show the speed capsule</string>
-    <string name="speed_meter_panel_title">Network status</string>
-    <string name="speed_meter_panel_hint">Tap outside to close · Tap the arrow for an app\'s connections</string>
-    <string name="speed_meter_block">Block</string>
-    <string name="speed_meter_confirm_block">Confirm?</string>
     <string name="drawer_footer_tagline">Go core · light &amp; fast</string>
 
     <!-- Home -->
