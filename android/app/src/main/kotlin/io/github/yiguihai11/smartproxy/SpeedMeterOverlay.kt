@@ -170,34 +170,35 @@ object SpeedMeterOverlay {
     }
 
     private fun buildCapsule(app: Context): View {
-        val padH = dp(app, 10)
-        val padV = dp(app, 5)
+        // 紧凑尺寸:内边距收窄(图标与胶囊边界不再留 10dp),图标/字号同步调小。
+        val padH = dp(app, 6)
+        val padV = dp(app, 3)
         val container = LinearLayout(app).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(padH, padV, padH, padV)
             background = android.graphics.drawable.GradientDrawable().apply {
-                cornerRadius = dp(app, 22).toFloat()
+                cornerRadius = dp(app, 16).toFloat()
                 setColor(BG_COLOR)
             }
         }
         val icon = ImageView(app).apply {
-            val s = dp(app, 18)
-            layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = dp(app, 6) }
+            val s = dp(app, 14)
+            layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = dp(app, 4) }
             scaleType = ImageView.ScaleType.FIT_CENTER
             visibility = View.GONE // 无流量时隐藏,有最大流量 App 才显示
         }
         val up = TextView(app).apply {
             setTextColor(UP_COLOR)
-            textSize = 12f
+            textSize = 11f
             includeFontPadding = false
             text = "↑ --"
         }
         val down = TextView(app).apply {
             setTextColor(DOWN_COLOR)
-            textSize = 12f
+            textSize = 11f
             includeFontPadding = false
-            setPadding(dp(app, 6), 0, 0, 0)
+            setPadding(dp(app, 4), 0, 0, 0)
             text = "↓ --"
         }
         container.addView(icon)
