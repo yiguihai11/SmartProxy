@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.VpnService
@@ -1005,7 +1007,8 @@ private fun currentNetworkDns(context: Context): NetworkDnsCandidates {
  *  (只有它可能回污染答案),国外域名自动回退国外 DNS 走代理;填国外 DNS 也能用,
  *  但查询走上游代理需上游支持 UDP。改动后需重启 VPN 生效。
  *  候选(currentNetworkDns):各输入框正下方横排本族当前网络原生 DNS,点选填入
- *  (DNS 每族单服务器,点选 = 替换);无候选则该位置留空。 */
+ *  (DNS 每族单服务器,点选 = 替换);无候选则该位置留空。
+ *  实时跟随:默认网络回调监听网络切换(Wi-Fi/移动数据/VPN 起停),变了就重读。 */
 @Composable
 private fun DnsDialog(
     initialV4: String,
@@ -1016,7 +1019,24 @@ private fun DnsDialog(
     var v4 by remember { mutableStateOf(initialV4) }
     var v6 by remember { mutableStateOf(initialV6) }
     val context = LocalContext.current
-    val candidates = remember { currentNetworkDns(context) }
+    // 候选实时跟随网络切换:默认网络变化(Wi-Fi↔移动数据、VPN 起停等)触发重读;
+    // 内容没变不写 state,避免无谓重组。对话框关闭自动注销回调。
+    var candidates by remember { mutableStateOf(currentNetworkDns(context)) }
+    val refreshCandidates = {
+        val fresh = currentNetworkDns(context)
+        if (fresh != candidates) candidates = fresh
+    }
+    DisposableEffect(context) {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = refreshCandidates()
+            override fun onLost(network: Network) = refreshCandidates()
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = refreshCandidates()
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) = refreshCandidates()
+        }
+        runCatching { cm.registerDefaultNetworkCallback(cb) }
+        onDispose { runCatching { cm.unregisterNetworkCallback(cb) } }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.drawer_dns)) },
