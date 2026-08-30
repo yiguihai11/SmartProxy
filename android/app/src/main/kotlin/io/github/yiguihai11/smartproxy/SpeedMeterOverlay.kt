@@ -190,13 +190,15 @@ object SpeedMeterOverlay {
         }
         val up = TextView(app).apply {
             setTextColor(UP_COLOR)
-            textSize = 11f
+            // 12sp + includeFontPadding=false 的行高 ≈ 14dp,正好与旁边 14dp 图标
+            // 上下持平(CENTER_VERTICAL 居中);11sp 时行高偏矮,看着图标比字高一截。
+            textSize = 12f
             includeFontPadding = false
             text = "↑ --"
         }
         val down = TextView(app).apply {
             setTextColor(DOWN_COLOR)
-            textSize = 11f
+            textSize = 12f
             includeFontPadding = false
             setPadding(dp(app, 4), 0, 0, 0)
             text = "↓ --"
