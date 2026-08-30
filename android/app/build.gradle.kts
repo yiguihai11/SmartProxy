@@ -102,6 +102,9 @@ android {
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        // M3 TopAppBar/CenterAlignedTopAppBar 是 @ExperimentalMaterial3Api(Kotlin 2.4 下
+        // 未 opt-in 直接报错),整模块 opt-in(Compose 官方对 M3 实验 API 的通行做法)。
+        optIn.add("androidx.compose.material3.ExperimentalMaterial3Api")
     }
 }
 
