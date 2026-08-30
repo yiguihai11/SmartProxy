@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -80,14 +81,16 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 		return closeFdOnErr(fmt.Errorf("failed to load config: %w", err))
 	}
 
-	// 与桌面 main.go 一致:slog 输出同时进 logbuf.Default 环形缓冲,纯 Go 面板的
-	// Logs 页(GET /logs)才能读到;否则 logbuf 恒空,面板显示 "No logs available"。
-	// 包装会转发到 stdout(logcat GoLog tag 不受影响)。
-	// Level=Debug:App 侧 Logcat 页要求"详细到调试级别",TUN 热路径的连接级日志
-	// (NewConnectionEx 的 slog.Debug)也一并可见。
+	// slog 级别跟随 config.log_level(与桌面 cmd/smartproxy main.go 的 setLogLevel
+	// 同一套映射):config.Load 已把空值补成 "INFO"(config/loader.go),所以默认 INFO,
+	// 引擎的连接级 Debug 日志(NewConnectionEx)与面板 /logs 的 debug 条目随之被过滤。
+	// 调试期想临时放开,把 config 的 log_level 改成 "DEBUG" 即可。
+	// 输出仍同时进 logbuf.Default 环形缓冲(纯 Go 面板 Logs 页 GET /logs 才读得到,
+	// 否则 logbuf 恒空显示 "No logs available"),并转发到 stdout(logcat GoLog tag)。
+	logLevel := slogLevelFromConfig(cfg.LogLevel)
 	slog.SetDefault(slog.New(logbuf.NewSlogHandlerLevel(
-		slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}),
-		logbuf.Default, slog.LevelDebug,
+		slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}),
+		logbuf.Default, logLevel,
 	)))
 
 	// 服务模式(Android §8):tunEnabled=false = 仅代理(SOCKS5)——不建 TUN 隧道,只跑
@@ -370,4 +373,21 @@ func BlockConnection(host string) error {
 		return fmt.Errorf("engine not running")
 	}
 	return globalEngine.BlockConnection(host)
+}
+
+// slogLevelFromConfig 把 config.log_level 映射成 slog 级别,与桌面端
+// cmd/smartproxy main.go 的映射保持一致;未知值回退 INFO(和 config.Load 补默认一致)。
+func slogLevelFromConfig(level string) slog.Level {
+	switch strings.ToUpper(level) {
+	case "DEBUG":
+		return slog.LevelDebug
+	case "INFO":
+		return slog.LevelInfo
+	case "WARN":
+		return slog.LevelWarn
+	case "ERROR":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
