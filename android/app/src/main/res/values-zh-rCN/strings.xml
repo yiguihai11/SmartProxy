@@ -38,8 +38,6 @@
     <!-- Home -->
     <string name="cd_open_menu">打开菜单</string>
     <string name="cd_theme_mode">主题模式:%1$s</string>
-    <string name="home_status">状态:</string>
-    <string name="home_disconnected">未连接</string>
     <string name="home_connecting">连接中…</string>
     <string name="home_connected">已连接</string>
     <string name="home_ipv4_intercept">IPv4 拦截</string>
@@ -189,7 +187,6 @@
     <string name="shizuku_routing_enabled">SmartProxy 网络共享已启用</string>
     <string name="shizuku_routing_disabled">SmartProxy 网络共享已关闭</string>
     <string name="shizuku_routing_operation_failed">网络共享路由失败（错误 %1$d）: %2$s</string>
-    <string name="shizuku_routing_snapshot_timeout">无法读取当前运行的 SmartProxy 配置</string>
     <string name="shizuku_usb_status_enabled">USB 网络共享已启用</string>
     <string name="shizuku_tethering_ip_mode_ipv4">仅 IPv4</string>
     <string name="shizuku_tethering_ip_mode_dual_stack">IPv4 + IPv6</string>

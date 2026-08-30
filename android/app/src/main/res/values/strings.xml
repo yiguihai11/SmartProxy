@@ -38,8 +38,6 @@
     <!-- Home -->
     <string name="cd_open_menu">Open menu</string>
     <string name="cd_theme_mode">Theme: %1$s</string>
-    <string name="home_status">Status:</string>
-    <string name="home_disconnected">Disconnected</string>
     <string name="home_connecting">Connecting…</string>
     <string name="home_connected">Connected</string>
     <string name="home_ipv4_intercept">IPv4 interception</string>
@@ -189,7 +187,6 @@
     <string name="shizuku_routing_enabled">SmartProxy tethering enabled</string>
     <string name="shizuku_routing_disabled">SmartProxy tethering disabled</string>
     <string name="shizuku_routing_operation_failed">Tethering routing failed (error %1$d): %2$s</string>
-    <string name="shizuku_routing_snapshot_timeout">Unable to read running SmartProxy configuration</string>
     <string name="shizuku_usb_status_enabled">USB tethering is active</string>
     <string name="shizuku_tethering_ip_mode_ipv4">IPv4 only</string>
     <string name="shizuku_tethering_ip_mode_dual_stack">IPv4 + IPv6</string>

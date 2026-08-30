@@ -341,7 +341,6 @@ private val PurpleText get() = if (ThemeState.isDark) Color(0xFFF6B8CF) else Col
 private val PurpleFill get() = if (ThemeState.isDark) Color(0xFFC25E87) else Color(0xFFD66E9B) // 填充容器(白内容)
 private val PurpleDark get() = if (ThemeState.isDark) Color(0xFFF8CDDF) else Color(0xFFB3557F) // 面板文字
 private val PurpleSoft get() = if (ThemeState.isDark) Color(0xFFE9A8C3) else Color(0xFFE88EAF) // 弱化箭头
-private val StatusIdle = Color(0xFFE87C7C)       // 未连接(状态语义色,两主题一致)
 private val StatusConnecting = Color(0xFFFF8413) // 连接中
 private val StatusConnected = Color(0xFF2EBD85)  // 已连接
 private val GreyText get() = if (ThemeState.isDark) Color(0xFFC9A8B6) else Color(0xFF7A626D)
