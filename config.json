@@ -77,7 +77,7 @@
       "ipv6": "[2001:4860:4860::8888]:53"
     },
     "query_timeout": 3,
-    "speed_check_mode": "tcp:443",
+    "speed_check_mode": "",
     "static_records": [
       {
         "host": "smartproxy.lan",
