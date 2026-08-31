@@ -20,6 +20,14 @@ object AppPrefs {
     const val DEFAULT_DNS_V4 = "223.5.5.5"
     const val DEFAULT_DNS_V6 = "2400:3200::1"
 
+    // 悬浮网速计外观默认(与历史硬编码一致):胶囊内边距 6dp、字号 12sp、图标 15dp、
+    // 背景不透明 40%、不钻状态栏。
+    const val SPEED_METER_DEFAULT_CAPSULE_SIZE = 6
+    const val SPEED_METER_DEFAULT_FONT_SIZE = 12
+    const val SPEED_METER_DEFAULT_ICON_SIZE = 15
+    const val SPEED_METER_DEFAULT_ALPHA = 40
+    const val SPEED_METER_DEFAULT_ALLOW_STATUS_BAR = false
+
     private const val NAME = "smartproxy_prefs"
     private const val KEY_GLOBAL_MODE = "global_mode"
     private const val KEY_SELECTED_APPS = "selected_apps"
@@ -36,6 +44,11 @@ object AppPrefs {
     private const val KEY_SPEED_METER = "speed_meter_enabled"
     private const val KEY_SPEED_METER_X = "speed_meter_x"
     private const val KEY_SPEED_METER_Y = "speed_meter_y"
+    private const val KEY_SPEED_METER_CAPSULE_SIZE = "speed_meter_capsule_size"
+    private const val KEY_SPEED_METER_FONT_SIZE = "speed_meter_font_size"
+    private const val KEY_SPEED_METER_ICON_SIZE = "speed_meter_icon_size"
+    private const val KEY_SPEED_METER_ALPHA = "speed_meter_alpha"
+    private const val KEY_SPEED_METER_ALLOW_STATUS_BAR = "speed_meter_allow_status_bar"
 
     private fun sp(context: Context) =
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -182,6 +195,47 @@ object AppPrefs {
 
     fun setSpeedMeterPos(context: Context, x: Int, y: Int) {
         sp(context).edit().putInt(KEY_SPEED_METER_X, x).putInt(KEY_SPEED_METER_Y, y).apply()
+    }
+
+    // ── 悬浮网速计外观(长按设置对话框读写,见 SpeedMeterSettingsActivity)──────
+    /** 胶囊内边距(dp)。范围 2..20,默认 6。 */
+    fun speedMeterCapsuleSize(context: Context): Int =
+        sp(context).getInt(KEY_SPEED_METER_CAPSULE_SIZE, SPEED_METER_DEFAULT_CAPSULE_SIZE)
+
+    fun setSpeedMeterCapsuleSize(context: Context, value: Int) {
+        sp(context).edit().putInt(KEY_SPEED_METER_CAPSULE_SIZE, value).apply()
+    }
+
+    /** 上行/下行字号(sp)。范围 8..24,默认 12。 */
+    fun speedMeterFontSize(context: Context): Int =
+        sp(context).getInt(KEY_SPEED_METER_FONT_SIZE, SPEED_METER_DEFAULT_FONT_SIZE)
+
+    fun setSpeedMeterFontSize(context: Context, value: Int) {
+        sp(context).edit().putInt(KEY_SPEED_METER_FONT_SIZE, value).apply()
+    }
+
+    /** App 图标尺寸(dp)。范围 8..32,默认 15。 */
+    fun speedMeterIconSize(context: Context): Int =
+        sp(context).getInt(KEY_SPEED_METER_ICON_SIZE, SPEED_METER_DEFAULT_ICON_SIZE)
+
+    fun setSpeedMeterIconSize(context: Context, value: Int) {
+        sp(context).edit().putInt(KEY_SPEED_METER_ICON_SIZE, value).apply()
+    }
+
+    /** 胶囊背景不透明度(0..100)。默认 40(历史硬编码 0x66 = 40%)。 */
+    fun speedMeterAlpha(context: Context): Int =
+        sp(context).getInt(KEY_SPEED_METER_ALPHA, SPEED_METER_DEFAULT_ALPHA)
+
+    fun setSpeedMeterAlpha(context: Context, value: Int) {
+        sp(context).edit().putInt(KEY_SPEED_METER_ALPHA, value).apply()
+    }
+
+    /** 是否允许胶囊拖到状态栏底下(顶部被系统状态栏盖住)。默认关 = 钳在状态栏之下。 */
+    fun speedMeterAllowStatusBar(context: Context): Boolean =
+        sp(context).getBoolean(KEY_SPEED_METER_ALLOW_STATUS_BAR, SPEED_METER_DEFAULT_ALLOW_STATUS_BAR)
+
+    fun setSpeedMeterAllowStatusBar(context: Context, value: Boolean) {
+        sp(context).edit().putBoolean(KEY_SPEED_METER_ALLOW_STATUS_BAR, value).apply()
     }
 }
 

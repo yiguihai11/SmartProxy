@@ -60,6 +60,19 @@
     <string name="usage_access_dialog_ok">Grant</string>
     <string name="usage_access_dialog_cancel">Not now</string>
 
+    <!-- Speed meter settings (long-press the capsule) -->
+    <string name="speed_meter_settings_title">Speed meter settings</string>
+    <string name="speed_meter_capsule_size">Capsule size</string>
+    <string name="speed_meter_font_size">Font size</string>
+    <string name="speed_meter_icon_size">App icon size</string>
+    <string name="speed_meter_alpha">Opacity</string>
+    <string name="speed_meter_allow_status_bar">Allow moving under the status bar</string>
+    <string name="speed_meter_restore_defaults">Restore defaults</string>
+    <string name="speed_meter_done">Done</string>
+    <string name="speed_meter_size_fmt">%1$d dp</string>
+    <string name="speed_meter_font_fmt">%1$d sp</string>
+    <string name="speed_meter_alpha_fmt">%1$d%%</string>
+
     <!-- Admin panel card -->
     <string name="panel_title">Admin panel</string>
     <string name="panel_user">User: %1$s</string>

@@ -60,6 +60,19 @@
     <string name="usage_access_dialog_ok">去授权</string>
     <string name="usage_access_dialog_cancel">暂不</string>
 
+    <!-- 悬浮网速计设置(长按胶囊) -->
+    <string name="speed_meter_settings_title">网速计设置</string>
+    <string name="speed_meter_capsule_size">胶囊大小</string>
+    <string name="speed_meter_font_size">字号</string>
+    <string name="speed_meter_icon_size">图标大小</string>
+    <string name="speed_meter_alpha">透明度</string>
+    <string name="speed_meter_allow_status_bar">可移动到状态栏底下</string>
+    <string name="speed_meter_restore_defaults">恢复默认</string>
+    <string name="speed_meter_done">完成</string>
+    <string name="speed_meter_size_fmt">%1$d dp</string>
+    <string name="speed_meter_font_fmt">%1$d sp</string>
+    <string name="speed_meter_alpha_fmt">%1$d%%</string>
+
     <!-- Admin panel card -->
     <string name="panel_title">管理面板</string>
     <string name="panel_user">登录账号: %1$s</string>

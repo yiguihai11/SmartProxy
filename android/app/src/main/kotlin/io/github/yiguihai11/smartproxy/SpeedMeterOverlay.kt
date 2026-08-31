@@ -51,11 +51,14 @@ object SpeedMeterOverlay {
     private const val DOUBLE_TAP_MS = 300L
     /** 胶囊无流量淡出 / 有流量淡入的动画时长。 */
     private const val FADE_MS = 200L
+    /** 长按阈值:按下停留超此时间(且未超 slop 移动)触发设置对话框。 */
+    private const val LONG_PRESS_MS = 500L
+    /** 设置对话框重复打开守卫:胶囊在设置页之上仍可触摸,防 1s 内叠第二个 Activity。 */
+    private const val SETTINGS_REOPEN_GUARD_MS = 1000L
     /** 前台应用判定缓存刷新周期:queryEvents 不便宜,5s 一次足够(切前台 5s 内跟上)。 */
     private const val FOREGROUND_REFRESH_MS = 5000L
 
-    // 胶囊配色:40% 不透明度深底 + 上传绿 / 下载蓝(白字在深底上对比足够)。
-    private const val BG_COLOR = 0x66000000.toInt()
+    // 胶囊配色:上传绿 / 下载蓝(白字在深底上对比足够);背景不透明度走 AppPrefs.speedMeterAlpha。
     private val UP_COLOR = Color.parseColor("#FF7CCB7C")
     private val DOWN_COLOR = Color.parseColor("#FF6FB7FF")
 
@@ -68,6 +71,10 @@ object SpeedMeterOverlay {
     private var downView: TextView? = null
     /** 胶囊当前是否处于「显示(alpha=1)」态(仅主线程):状态翻转才启动淡入/淡出,避免每秒重启动画。 */
     private var capsuleShown = true
+    /** 待触发的长按 runnable(attachDrag 里 postDelayed;hideOnMain 取消)。仅主线程。 */
+    private var longPressRunnable: Runnable? = null
+    /** 上次打开设置对话框的时间(防重复打开守卫)。 */
+    private var lastSettingsOpenAt = 0L
 
     private var pollThread: HandlerThread? = null
     private var bgHandler: Handler? = null
@@ -122,7 +129,11 @@ object SpeedMeterOverlay {
                 x = app.resources.displayMetrics.widthPixels
                 y = dp(app, 40)
             } else {
-                x = sx; y = sy
+                x = sx
+                // 「可进状态栏」OFF:钳下界到状态栏之下,恢复时胶囊不被状态栏盖住
+                // (上界需测量后才知道,这里只钳下界,溢出由后续拖动/设置页自纠)。
+                y = if (AppPrefs.speedMeterAllowStatusBar(app)) sy
+                    else sy.coerceIn(statusBarHeight(app), Int.MAX_VALUE)
             }
         }
         try {
@@ -152,6 +163,9 @@ object SpeedMeterOverlay {
 
     private fun hideOnMain() {
         stopPolling()
+        // 取消 pending 长按,防 hide 后 runnable 到点又去 openSettings(此时胶囊已移除)。
+        longPressRunnable?.let { mainHandler.removeCallbacks(it) }
+        longPressRunnable = null
         val view = capsule
         val manager = wm
         if (view != null && manager != null) {
@@ -170,35 +184,40 @@ object SpeedMeterOverlay {
     }
 
     private fun buildCapsule(app: Context): View {
-        // 紧凑尺寸:内边距收窄(图标与胶囊边界不再留 10dp),图标/字号同步调小。
-        val padH = dp(app, 6)
-        val padV = dp(app, 3)
+        // 外观全部读偏好(长按设置可调);映射与 applySettingsInPlace 必须保持一致:
+        // 胶囊大小 → padH、padV=max(1,size/2)、圆角=size*2+4;字号 → 文本;图标 → dp;透明度 → 背景 alpha。
+        val capsuleSize = AppPrefs.speedMeterCapsuleSize(app)
+        val fontSize = AppPrefs.speedMeterFontSize(app)
+        val iconSize = AppPrefs.speedMeterIconSize(app)
+        val padH = dp(app, capsuleSize)
+        val padV = dp(app, (capsuleSize / 2).coerceAtLeast(1))
+        val corner = dp(app, capsuleSize * 2 + 4)
         val container = LinearLayout(app).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(padH, padV, padH, padV)
             background = android.graphics.drawable.GradientDrawable().apply {
-                cornerRadius = dp(app, 16).toFloat()
-                setColor(BG_COLOR)
+                cornerRadius = corner.toFloat()
+                setColor(bgColorFor(AppPrefs.speedMeterAlpha(app)))
             }
         }
         val icon = ImageView(app).apply {
-            val s = dp(app, 15)
+            val s = dp(app, iconSize)
             layoutParams = LinearLayout.LayoutParams(s, s).apply { marginEnd = dp(app, 4) }
             scaleType = ImageView.ScaleType.FIT_CENTER
             visibility = View.GONE // 无流量时隐藏,有最大流量 App 才显示
         }
         val up = TextView(app).apply {
             setTextColor(UP_COLOR)
-            // 12sp + includeFontPadding=false 的行高 ≈ 14dp;图标 15dp 略高于字,
+            // includeFontPadding=false 的行高 ≈ 字号 + 3dp;图标略高于字,
             // 容器 CENTER_VERTICAL 整体居中,观感协调。
-            textSize = 12f
+            textSize = fontSize.toFloat()
             includeFontPadding = false
             text = "↑ --"
         }
         val down = TextView(app).apply {
             setTextColor(DOWN_COLOR)
-            textSize = 12f
+            textSize = fontSize.toFloat()
             includeFontPadding = false
             setPadding(dp(app, 4), 0, 0, 0)
             text = "↓ --"
@@ -212,7 +231,57 @@ object SpeedMeterOverlay {
         return container
     }
 
-    /** 拖动:按下记起点,移动 updateViewLayout,抬起持久化位置。未拖动且双击(轻点两次)→ 打开联网状态页。 */
+    /** 改即存实时预览:原地改现有胶囊视图(不重建窗口,无闪烁),并按新尺寸/权限钳制位置。
+     *  滑块一动就调;胶囊未显示(VPN 未跑)时静默 no-op,下次 buildCapsule 读新偏好。需主线程。 */
+    fun applySettingsInPlace(app: Context) {
+        val cap = capsule ?: return
+        val lp = layoutParams ?: return
+        val manager = wm ?: return
+
+        val capsuleSize = AppPrefs.speedMeterCapsuleSize(app)
+        val fontSize = AppPrefs.speedMeterFontSize(app)
+        val iconSize = AppPrefs.speedMeterIconSize(app)
+        val padH = dp(app, capsuleSize)
+        val padV = dp(app, (capsuleSize / 2).coerceAtLeast(1))
+        (cap as? LinearLayout)?.let {
+            it.setPadding(padH, padV, padH, padV)
+            (it.background as? android.graphics.drawable.GradientDrawable)?.apply {
+                setColor(bgColorFor(AppPrefs.speedMeterAlpha(app)))
+                cornerRadius = dp(app, capsuleSize * 2 + 4).toFloat()
+            }
+        }
+        iconView?.let { iv ->
+            val ilp = iv.layoutParams as? LinearLayout.LayoutParams
+            if (ilp != null) {
+                val s = dp(app, iconSize)
+                ilp.width = s
+                ilp.height = s
+                iv.layoutParams = ilp // 重新赋值触发 requestLayout
+            }
+        }
+        upView?.textSize = fontSize.toFloat()
+        downView?.textSize = fontSize.toFloat()
+        cap.requestLayout()
+        cap.invalidate()
+
+        // 位置钳制:关「可进状态栏」把钻到底下的胶囊钳出来;尺寸变大贴右溢出自动往左收。
+        // 读到的 cap.width/height 是旧布局值,滞后一帧自纠,可接受。
+        val minY = if (AppPrefs.speedMeterAllowStatusBar(app)) 0 else statusBarHeight(app)
+        val dm = app.resources.displayMetrics
+        val maxX = (dm.widthPixels - cap.width).coerceAtLeast(0)
+        val maxY = (dm.heightPixels - cap.height).coerceAtLeast(0)
+        val newX = lp.x.coerceIn(0, maxX)
+        val newY = lp.y.coerceIn(minY, maxY)
+        if (newX != lp.x || newY != lp.y) {
+            lp.x = newX
+            lp.y = newY
+            AppPrefs.setSpeedMeterPos(app, newX, newY)
+            runCatching { manager.updateViewLayout(cap, lp) }
+        }
+    }
+
+    /** 拖动:按下记起点,移动 updateViewLayout,抬起持久化位置。未拖动且双击(轻点两次)→ 打开联网状态页;
+     *  按下停留超 LONG_PRESS_MS 且未超 slop → 长按打开设置对话框(该次手势不再算单击/双击)。 */
     private fun attachDrag(
         app: Context,
         view: View,
@@ -225,45 +294,62 @@ object SpeedMeterOverlay {
         var startX = 0
         var startY = 0
         var dragging = false
+        var longPressTriggered = false
         var lastTapTime = 0L
         var lastTapX = 0f
         var lastTapY = 0f
+        val longPress = Runnable {
+            longPressTriggered = true
+            lastTapTime = 0 // 长按不算轻点:抬指不得构成双击第一击
+            openSettings(app)
+        }
+        longPressRunnable = longPress
         view.setOnTouchListener { v, ev ->
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     startRawX = ev.rawX; startRawY = ev.rawY
                     startX = params.x; startY = params.y
                     dragging = false
+                    longPressTriggered = false
+                    mainHandler.postDelayed(longPress, LONG_PRESS_MS)
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = ev.rawX - startRawX
                     val dy = ev.rawY - startRawY
-                    if (!dragging && abs(dx) + abs(dy) > slop) dragging = true
+                    if (!dragging && abs(dx) + abs(dy) > slop) {
+                        dragging = true
+                        mainHandler.removeCallbacks(longPress) // 超 slop 即取消长按
+                    }
                     if (dragging) {
                         val dm = app.resources.displayMetrics
+                        // 「可进状态栏」OFF → 拖拽下限钳到状态栏之下,胶囊始终完整可见。
+                        val minY = if (AppPrefs.speedMeterAllowStatusBar(app)) 0 else statusBarHeight(app)
                         params.x = (startX + dx).toInt()
                             .coerceIn(0, (dm.widthPixels - view.width).coerceAtLeast(0))
                         params.y = (startY + dy).toInt()
-                            .coerceIn(0, (dm.heightPixels - view.height).coerceAtLeast(0))
+                            .coerceIn(minY, (dm.heightPixels - view.height).coerceAtLeast(0))
                         runCatching { manager.updateViewLayout(view, params) }
                     }
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (dragging) {
-                        AppPrefs.setSpeedMeterPos(app, params.x, params.y)
-                    } else if (ev.actionMasked == MotionEvent.ACTION_UP) {
-                        // 双击胶囊打开联网状态页;单击(未拖动)不做任何事。
-                        val now = SystemClock.uptimeMillis()
-                        val dx = ev.rawX - lastTapX
-                        val dy = ev.rawY - lastTapY
-                        lastTapX = ev.rawX; lastTapY = ev.rawY
-                        if (now - lastTapTime < DOUBLE_TAP_MS && hypot(dx, dy) < dp(app, 40)) {
-                            lastTapTime = 0
-                            openNetworkStatus(app)
-                        } else {
-                            lastTapTime = now
+                    mainHandler.removeCallbacks(longPress)
+                    when {
+                        dragging -> AppPrefs.setSpeedMeterPos(app, params.x, params.y)
+                        longPressTriggered -> {} // 长按已消费本次手势:双击/单击都忽略
+                        ev.actionMasked == MotionEvent.ACTION_UP -> {
+                            // 双击胶囊打开联网状态页;单击(未拖动)不做任何事。
+                            val now = SystemClock.uptimeMillis()
+                            val dx = ev.rawX - lastTapX
+                            val dy = ev.rawY - lastTapY
+                            lastTapX = ev.rawX; lastTapY = ev.rawY
+                            if (now - lastTapTime < DOUBLE_TAP_MS && hypot(dx, dy) < dp(app, 40)) {
+                                lastTapTime = 0
+                                openNetworkStatus(app)
+                            } else {
+                                lastTapTime = now
+                            }
                         }
                     }
                     dragging = false
@@ -282,6 +368,20 @@ object SpeedMeterOverlay {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
         }.onFailure { Log.e(TAG, "open NetworkStatusActivity failed", it) }
+    }
+
+    /** 长按胶囊 → 打开设置对话框(独立对话框 Activity;胶囊在设置页上层,滑块实时预览)。
+     *  1000ms 重复打开守卫:胶囊在设置页上仍可触摸,防连点叠第二个 Activity。 */
+    private fun openSettings(app: Context) {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastSettingsOpenAt < SETTINGS_REOPEN_GUARD_MS) return
+        lastSettingsOpenAt = now
+        runCatching {
+            app.startActivity(
+                Intent(app, SpeedMeterSettingsActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }.onFailure { Log.e(TAG, "open SpeedMeterSettingsActivity failed", it) }
     }
 
     // ── 后台轮询 ────────────────────────────────────────────────────────
@@ -471,6 +571,19 @@ object SpeedMeterOverlay {
             else -> "${bps}B"
         }
     }
+
+    /** 背景色:纯黑底 + 用户不透明度(0..100)。alpha=100 → 0xFF000000(合法负 Int,
+     *  GradientDrawable.setColor 接受;勿写 0xFF000000.toInt() 误算成 Int.MIN_VALUE)。 */
+    private fun bgColorFor(alphaPercent: Int): Int =
+        (alphaPercent.coerceIn(0, 100) * 255 / 100) shl 24
+
+    /** 状态栏高度:悬浮窗窗口无 decor 可依附,拿不到 ViewInsets,用系统 dimen 查询。
+     *  minSdk 26 全版本可用;刘海/挖孔返回含 cutout 的完整高度,恰好符合「钳到状态栏之下」语义。 */
+    private fun statusBarHeight(app: Context): Int =
+        runCatching {
+            val id = app.resources.getIdentifier("status_bar_height", "dimen", "android")
+            if (id > 0) app.resources.getDimensionPixelSize(id) else 0
+        }.getOrDefault(0)
 
     private fun dp(app: Context, value: Int): Int =
         TypedValue.applyDimension(

@@ -6,4 +6,16 @@
         <item name="android:statusBarColor">@android:color/white</item>
         <item name="android:windowLightStatusBar">true</item>
     </style>
+
+    <!-- 悬浮网速计设置对话框:全屏透明 + Compose 自绘 scrim + 居中卡片。
+         不开 windowIsFloating——WRAP_CONTENT 浮动窗口语义会与全屏布局互坑;
+         windowBackground 必须覆盖成 transparent(平台 parent 是白色,否则整屏白闪)。 -->
+    <style name="Theme.SmartProxy.Dialog" parent="Theme.SmartProxy">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
 </resources>
