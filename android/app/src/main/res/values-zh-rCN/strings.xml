@@ -67,6 +67,11 @@
     <string name="speed_meter_icon_size">图标大小</string>
     <string name="speed_meter_alpha">透明度</string>
     <string name="speed_meter_allow_status_bar">可移动到状态栏内</string>
+    <string name="speed_meter_status_bar">状态栏显示网速</string>
+    <string name="speed_meter_status_bar_sub">网速作为常驻通知小图标显示在状态栏(无需悬浮窗权限)</string>
+    <string name="speed_meter_status_need_notif">需要通知权限才能在状态栏显示网速</string>
+    <string name="status_speed_channel">状态栏网速</string>
+    <string name="status_speed_channel_desc">常驻通知小图标,在状态栏显示实时网速</string>
     <string name="speed_meter_restore_defaults">恢复默认</string>
     <string name="speed_meter_done">完成</string>
     <string name="speed_meter_size_fmt">%1$d dp</string>

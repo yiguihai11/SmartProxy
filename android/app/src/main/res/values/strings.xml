@@ -67,6 +67,11 @@
     <string name="speed_meter_icon_size">App icon size</string>
     <string name="speed_meter_alpha">Opacity</string>
     <string name="speed_meter_allow_status_bar">Allow moving into the status bar area</string>
+    <string name="speed_meter_status_bar">Show speed in status bar</string>
+    <string name="speed_meter_status_bar_sub">Show speed as a persistent notification icon in the status bar (no overlay permission needed)</string>
+    <string name="speed_meter_status_need_notif">Notification permission is required to show speed in the status bar</string>
+    <string name="status_speed_channel">Status bar speed</string>
+    <string name="status_speed_channel_desc">Persistent notification icon showing live speed in the status bar</string>
     <string name="speed_meter_restore_defaults">Restore defaults</string>
     <string name="speed_meter_done">Done</string>
     <string name="speed_meter_size_fmt">%1$d dp</string>

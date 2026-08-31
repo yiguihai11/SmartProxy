@@ -90,13 +90,24 @@ object SpeedMeterOverlay {
     private var lastForegroundQuery = 0L
     private var gateHeld = false
 
-    /** VPN 连上后由服务调用:开关开 + 有悬浮窗权限才显示;否则静默跳过(下次连或
-     *  开关/权限就绪后再由服务/抽屉触发)。重复调用幂等。 */
+    /** VPN 连上后由服务调用:开总开关则按需起胶囊 + 后台轮询;重复调用幂等。
+     *  - 悬浮胶囊要 SYSTEM_ALERT_WINDOW;状态栏网速通知(StatusBarSpeed)只要 POST_NOTIFICATIONS,
+     *    没悬浮窗权限也照跑轮询喂通知。 */
     fun autoShow(context: Context) {
         val app = context.applicationContext
-        if (!AppPrefs.speedMeterEnabled(app)) return
-        if (!canDrawOverlays(app)) return
-        mainHandler.post { showOnMain(app) }
+        mainHandler.post {
+            if (!AppPrefs.speedMeterEnabled(app)) { hideOnMain(); return@post }
+            if (canDrawOverlays(app) && capsule == null) showOnMain(app)
+            ensurePolling(app)
+        }
+    }
+
+    /** 启动后台轮询(+ 采集 gate):胶囊与状态栏通知共用;无悬浮窗权限时为状态栏单独跑。 */
+    private fun ensurePolling(app: Context) {
+        if (pollThread != null) return
+        if (appContext == null) appContext = app
+        startPolling(app)
+        if (!gateHeld) { ConnStatsGate.acquire(); gateHeld = true }
     }
 
     /** VPN 断开 / 开关关闭 / 权限撤销时调用:移除胶囊与面板、停轮询、放采集。幂等。 */
@@ -165,12 +176,13 @@ object SpeedMeterOverlay {
             }
         }
         attachDrag(app, view, params, manager)
-        startPolling(app)
-        if (!gateHeld) { ConnStatsGate.acquire(); gateHeld = true }
+        ensurePolling(app)
     }
 
     private fun hideOnMain() {
         stopPolling()
+        // 撤掉状态栏网速通知(胶囊没了/服务停了,通知图标也得走)。
+        appContext?.let { StatusBarSpeed.hide(it) }
         // 取消 pending 长按,防 hide 后 runnable 到点又去 openSettings(此时胶囊已移除)。
         longPressRunnable?.let { mainHandler.removeCallbacks(it) }
         longPressRunnable = null
@@ -487,9 +499,23 @@ object SpeedMeterOverlay {
             }
             val (wUp, wDown) = speeds[win] ?: Pair(0L, 0L)
             Tick(win, wUp, wDown)
-        }.getOrNull() ?: return // 引擎未启动等:本次跳过,视图保持原样
+        }.getOrNull() ?: run {
+            // 引擎未启动等:胶囊视图保持原样,状态栏通知也拿不到数据,撤掉。
+            StatusBarSpeed.hide(app)
+            return
+        }
 
-        val icon: Drawable? = if (tick.appUid >= 0) metaFor(app, tick.appUid).second else null
+        // 赢家 App(与胶囊同一个):名字 + 图标,bg 线程缓存解析。
+        val winMeta = if (tick.appUid >= 0) metaFor(app, tick.appUid) else null
+
+        // 状态栏网速通知(独立于胶囊,无悬浮窗权限也能跑):显示赢家 App 的上下行,与胶囊同源。
+        if (AppPrefs.speedMeterStatusBar(app)) {
+            StatusBarSpeed.update(app, tick.appUp, tick.appDown, winMeta?.first)
+        } else {
+            StatusBarSpeed.hide(app)
+        }
+
+        val icon: Drawable? = winMeta?.second
         mainHandler.post {
             val cap = capsule ?: return@post
             if (tick.appUid >= 0) {
