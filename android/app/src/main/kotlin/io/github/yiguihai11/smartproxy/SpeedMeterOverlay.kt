@@ -120,8 +120,15 @@ object SpeedMeterOverlay {
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             // 不抢焦点(不挡输入)、窗口外触摸透传给下层 App;半透明像素格式。
+            // FLAG_LAYOUT_IN_SCREEN:让窗口 frame 占满整块屏幕(含状态栏区域),忽略状态栏 inset——
+            // 否则 TYPE_APPLICATION_OVERLAY 被强制布局在状态栏之下,y=0 也顶不到物理顶部,
+            // 「可移动到状态栏内」开关形同虚设。此 flag 只解除布局钳制;OFF 时靠拖拽/恢复的
+            // y 下界钳制(statusBarHeight)保证胶囊不钻进去。
+            // 注意:状态栏图标与下拉通知面板(SystemUI)z-order 仍在 overlay 之上,重叠部分会被盖住——
+            // 普通 App 无法嵌入 SystemUI 通知栏内部,只能把胶囊贴到屏幕顶部同区域。
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
