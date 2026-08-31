@@ -220,6 +220,7 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     LabelField(
+                        modifier = Modifier.weight(1f),
                         label = stringResource(R.string.speed_meter_up_label),
                         value = upLabel,
                         onValueChange = {
@@ -229,6 +230,7 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
                         }
                     )
                     LabelField(
+                        modifier = Modifier.weight(1f),
                         label = stringResource(R.string.speed_meter_down_label),
                         value = downLabel,
                         onValueChange = {
@@ -348,8 +350,14 @@ private fun SliderRow(
 }
 
 @Composable
-private fun LabelField(label: String, value: String, onValueChange: (String) -> Unit) {
-    Column(Modifier.weight(1f)) {
+private fun LabelField(
+    modifier: Modifier = Modifier,
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit
+) {
+    // weight 是 RowScope 扩展,只能在父 Row 内容里调,故由调用点传入 modifier。
+    Column(modifier) {
         Text(label, color = LabelColor, fontSize = 14.sp)
         OutlinedTextField(
             value = value,
