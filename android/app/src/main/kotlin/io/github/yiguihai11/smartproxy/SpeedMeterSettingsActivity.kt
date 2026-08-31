@@ -15,8 +15,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -26,6 +28,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -96,6 +99,9 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
     var downLabel by remember { mutableStateOf(AppPrefs.speedMeterDownLabel(ctx)) }
     var upColor by remember { mutableStateOf(AppPrefs.speedMeterUpColor(ctx)) }
     var downColor by remember { mutableStateOf(AppPrefs.speedMeterDownColor(ctx)) }
+    // 颜色输入框文本(随选中色/输入同步;非法时红框不写入)。
+    var upColorHex by remember { mutableStateOf(hexOf(AppPrefs.speedMeterUpColor(ctx))) }
+    var downColorHex by remember { mutableStateOf(hexOf(AppPrefs.speedMeterDownColor(ctx))) }
 
     /** 改动即实时应用到悬浮胶囊(主线程);胶囊未显示时内部 no-op,下次构建读新偏好。 */
     fun applyAppearance() = SpeedMeterOverlay.applySettingsInPlace(ctx)
@@ -124,6 +130,7 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
                 Modifier
                     .padding(24.dp)
                     .verticalScroll(rememberScrollState())
+                    .imePadding()
             ) {
                 Text(
                     stringResource(R.string.speed_meter_settings_title),
@@ -234,19 +241,39 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
                 ColorRow(
                     label = stringResource(R.string.speed_meter_up_color),
                     selected = upColor,
+                    hex = upColorHex,
                     onSelect = {
                         upColor = it
+                        upColorHex = hexOf(it)
                         AppPrefs.setSpeedMeterUpColor(ctx, it)
                         applyAppearance()
+                    },
+                    onHexChange = { text ->
+                        upColorHex = text
+                        hexToColor(text)?.let { c ->
+                            upColor = c
+                            AppPrefs.setSpeedMeterUpColor(ctx, c)
+                            applyAppearance()
+                        }
                     }
                 )
                 ColorRow(
                     label = stringResource(R.string.speed_meter_down_color),
                     selected = downColor,
+                    hex = downColorHex,
                     onSelect = {
                         downColor = it
+                        downColorHex = hexOf(it)
                         AppPrefs.setSpeedMeterDownColor(ctx, it)
                         applyAppearance()
+                    },
+                    onHexChange = { text ->
+                        downColorHex = text
+                        hexToColor(text)?.let { c ->
+                            downColor = c
+                            AppPrefs.setSpeedMeterDownColor(ctx, c)
+                            applyAppearance()
+                        }
                     }
                 )
                 Row(
@@ -275,6 +302,8 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
                         downLabel = AppPrefs.SPEED_METER_DEFAULT_DOWN_LABEL
                         upColor = AppPrefs.SPEED_METER_DEFAULT_UP_COLOR
                         downColor = AppPrefs.SPEED_METER_DEFAULT_DOWN_COLOR
+                        upColorHex = hexOf(AppPrefs.SPEED_METER_DEFAULT_UP_COLOR)
+                        downColorHex = hexOf(AppPrefs.SPEED_METER_DEFAULT_DOWN_COLOR)
                         applyAppearance()
                     }) {
                         Text(stringResource(R.string.speed_meter_restore_defaults), color = LabelColor)
@@ -335,12 +364,39 @@ private fun LabelField(label: String, value: String, onValueChange: (String) -> 
 }
 
 @Composable
-private fun ColorRow(label: String, selected: Int, onSelect: (Int) -> Unit) {
+private fun ColorRow(
+    label: String,
+    selected: Int,
+    hex: String,
+    onSelect: (Int) -> Unit,
+    onHexChange: (String) -> Unit
+) {
+    // 非空且不合法 → 红框提示,此时不写入(空 = 保持现色继续编辑)。
+    val badHex = hex.isNotEmpty() && hexToColor(hex) == null
     Column(Modifier
         .fillMaxWidth()
         .padding(top = 16.dp)
     ) {
-        Text(label, color = LabelColor, fontSize = 15.sp)
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(label, color = LabelColor, fontSize = 15.sp, modifier = Modifier.weight(1f))
+            OutlinedTextField(
+                value = hex,
+                onValueChange = onHexChange,
+                singleLine = true,
+                isError = badHex,
+                shape = RoundedCornerShape(10.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = if (badHex) ErrorColor else AccentColor,
+                    unfocusedBorderColor = if (badHex) ErrorColor else DividerLine,
+                    focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent
+                ),
+                modifier = Modifier.width(132.dp)
+            )
+        }
         Row(
             Modifier
                 .fillMaxWidth()
@@ -384,3 +440,16 @@ private val PRESET_TEXT_COLORS = listOf(
     0xFFFF7A7A.toInt(),
     0xFFFF8AC4.toInt()
 )
+
+private val ErrorColor get() = if (ThemeState.isDark) Color(0xFFFF6B6B) else Color(0xFFD32F2F)
+
+private val HEX_RE = Regex("^[0-9a-fA-F]{6}$")
+
+/** "#RRGGBB"(可带可不带 #,大小写都可,6 位不透明) → ARGB Color int;非法返回 null。 */
+private fun hexToColor(hex: String): Int? {
+    val h = hex.removePrefix("#").trim()
+    return if (HEX_RE.matches(h)) 0xFF000000.toInt() or h.toInt(16) else null
+}
+
+/** ARGB Color int → "#RRGGBB"(六位大写,不透明)。 */
+private fun hexOf(color: Int): String = String.format("#%06X", color and 0xFFFFFF)
