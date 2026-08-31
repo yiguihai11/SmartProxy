@@ -66,7 +66,7 @@
     <string name="speed_meter_font_size">Font size</string>
     <string name="speed_meter_icon_size">App icon size</string>
     <string name="speed_meter_alpha">Opacity</string>
-    <string name="speed_meter_allow_status_bar">Allow moving under the status bar</string>
+    <string name="speed_meter_allow_status_bar">Allow moving into the status bar area</string>
     <string name="speed_meter_restore_defaults">Restore defaults</string>
     <string name="speed_meter_done">Done</string>
     <string name="speed_meter_size_fmt">%1$d dp</string>
