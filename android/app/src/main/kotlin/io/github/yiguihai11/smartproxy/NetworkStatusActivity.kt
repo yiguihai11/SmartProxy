@@ -1,6 +1,9 @@
 package io.github.yiguihai11.smartproxy
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -9,7 +12,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -93,11 +96,12 @@ private data class AppItem(
     val uid: Int,
     val label: String,
     val icon: ImageBitmap?,
+    val pkg: String?, // 长按跳系统应用信息页;共享 uid 取第一个包,拿不到为 null
     val upBps: Long,
     val downBps: Long,
     val conns: List<ConnStatsRec>
 )
-private data class AppMeta(val label: String, val icon: ImageBitmap?)
+private data class AppMeta(val label: String, val icon: ImageBitmap?, val pkg: String?)
 
 class NetworkStatusActivity : ComponentActivity() {
 
@@ -181,6 +185,7 @@ class NetworkStatusActivity : ComponentActivity() {
                                     .onFailure { Log.e(TAG, "[NetworkStatus] setConnStatsPin failed", it) }
                             }
                         },
+                        onLongPress = { item -> openAppInfo(item.pkg) },
                         onBlockConn = { conn -> pendingBlock = conn },
                         onPoll = poll,
                         onBack = { finish() }
@@ -307,23 +312,33 @@ class NetworkStatusActivity : ComponentActivity() {
             val downBps = if (prev == null) 0L else (app.down - prev.second).coerceAtLeast(0L)
             prevTotals[app.uid] = app.up to app.down
             val meta = metaFor(app.uid)
-            AppItem(app.uid, meta.label, meta.icon, upBps, downBps, app.conns)
+            AppItem(app.uid, meta.label, meta.icon, meta.pkg, upBps, downBps, app.conns)
         }
     }
 
-    /** uid → 应用名/图标(懒解析 + 缓存);共享 uid 取第一个包,失败回退 "UID x"。 */
+    /** uid → 应用名/图标/包名(懒解析 + 缓存);共享 uid 取第一个包,失败回退 "UID x"。 */
     private fun metaFor(uid: Int): AppMeta = metaCache.getOrPut(uid) {
         runCatching {
             val pm = packageManager
             val pkg = pm.getPackagesForUid(uid)?.firstOrNull()
             if (pkg == null) {
-                AppMeta("UID $uid", null)
+                AppMeta("UID $uid", null, null)
             } else {
                 val ai = pm.getApplicationInfo(pkg, 0)
                 val label = pm.getApplicationLabel(ai).toString()
-                AppMeta(label, AppEnumerator.iconBitmap(this, pkg))
+                AppMeta(label, AppEnumerator.iconBitmap(this, pkg), pkg)
             }
-        }.getOrElse { AppMeta("UID $uid", null) }
+        }.getOrElse { AppMeta("UID $uid", null, null) }
+    }
+
+    /** 长按应用行 → 打开其系统「应用信息」页(ACTION_APPLICATION_DETAILS)。 */
+    private fun openAppInfo(pkg: String?) {
+        if (pkg == null) return
+        runCatching {
+            startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", pkg, null))
+            )
+        }.onFailure { e -> Log.w(TAG, "[NetworkStatus] openAppInfo failed pkg=$pkg", e) }
     }
 }
 
@@ -371,6 +386,7 @@ private fun NetworkStatusScreen(
     expandedUids: Set<Int>,
     active: Boolean,
     onToggleExpand: (Int) -> Unit,
+    onLongPress: (AppItem) -> Unit,
     onBlockConn: (ConnStatsRec) -> Unit,
     onPoll: suspend () -> Unit,
     onBack: () -> Unit
@@ -443,6 +459,7 @@ private fun NetworkStatusScreen(
                             item = item,
                             expanded = item.uid in expandedUids,
                             onToggle = { onToggleExpand(item.uid) },
+                            onLongPress = { onLongPress(item) },
                             onBlockConn = onBlockConn
                         )
                     }
@@ -463,9 +480,9 @@ private fun NetworkStatusScreen(
     }
 }
 
-/** 应用组:图标 + 名 + ↑/↓ 网速;整行点击展开/收起连接明细。 */
+/** 应用组:图标 + 名 + ↑/↓ 网速;单击展开/收起连接明细,长按跳系统应用信息页。 */
 @Composable
-private fun AppGroup(item: AppItem, expanded: Boolean, onToggle: () -> Unit, onBlockConn: (ConnStatsRec) -> Unit) {
+private fun AppGroup(item: AppItem, expanded: Boolean, onToggle: () -> Unit, onLongPress: () -> Unit, onBlockConn: (ConnStatsRec) -> Unit) {
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = CardBg,
@@ -478,7 +495,7 @@ private fun AppGroup(item: AppItem, expanded: Boolean, onToggle: () -> Unit, onB
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(onClick = onToggle)
+                    .combinedClickable(onClick = onToggle, onLongClick = onLongPress)
                     .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
                 if (item.icon != null) {
