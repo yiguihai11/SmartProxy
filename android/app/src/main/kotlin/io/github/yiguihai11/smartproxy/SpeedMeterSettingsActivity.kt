@@ -1,16 +1,9 @@
 package io.github.yiguihai11.smartproxy
 
-import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
-import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -37,8 +30,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -65,7 +56,6 @@ import kotlin.math.roundToInt
  *  - 全屏透明对话框 Activity + 自绘 scrim + 居中卡片;胶囊(TYPE_APPLICATION_OVERLAY)
  *    在窗口之上,拖动滑块即可实时预览。
  *  - 4 条滑块:胶囊大小 / 字号 / 图标大小 / 透明度(改即存:一动就写 AppPrefs + applySettingsInPlace)。
- *  - 1 个开关:「可移动到状态栏内」(ON = 可拖到屏幕最顶与状态栏重叠;OFF = 钳在状态栏之下,默认)。
  *  - 底部「恢复默认」/「完成」;点卡片外(scrim)关闭。
  *  无保存/取消:偏好即真源,每次改动即时生效,本页只是长按胶囊的便捷入口。
  */
@@ -101,7 +91,6 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
     var fontSize by remember { mutableStateOf(AppPrefs.speedMeterFontSize(ctx).toFloat()) }
     var iconSize by remember { mutableStateOf(AppPrefs.speedMeterIconSize(ctx).toFloat()) }
     var alpha by remember { mutableStateOf(AppPrefs.speedMeterAlpha(ctx).toFloat()) }
-    var allowStatusBar by remember { mutableStateOf(AppPrefs.speedMeterAllowStatusBar(ctx)) }
     var upLabel by remember { mutableStateOf(AppPrefs.speedMeterUpLabel(ctx)) }
     var downLabel by remember { mutableStateOf(AppPrefs.speedMeterDownLabel(ctx)) }
     var upColor by remember { mutableStateOf(AppPrefs.speedMeterUpColor(ctx)) }
@@ -109,20 +98,6 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
     // 颜色输入框文本(随选中色/输入同步;非法时红框不写入)。
     var upColorHex by remember { mutableStateOf(hexOf(AppPrefs.speedMeterUpColor(ctx))) }
     var downColorHex by remember { mutableStateOf(hexOf(AppPrefs.speedMeterDownColor(ctx))) }
-    var statusBar by remember { mutableStateOf(AppPrefs.speedMeterStatusBar(ctx)) }
-
-    /** 状态栏网速开关要 POST_NOTIFICATIONS(Android 13+):未授权先申请,拒绝则回退开关。 */
-    val notifPermLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            statusBar = true
-            AppPrefs.setSpeedMeterStatusBar(ctx, true)
-        } else {
-            statusBar = false
-            Toast.makeText(ctx, R.string.speed_meter_status_need_notif, Toast.LENGTH_LONG).show()
-        }
-    }
 
     /** 改动即实时应用到悬浮胶囊(主线程);胶囊未显示时内部 no-op,下次构建读新偏好。 */
     fun applyAppearance() = SpeedMeterOverlay.applySettingsInPlace(ctx)
@@ -141,7 +116,7 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
             elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
             modifier = Modifier
                 .widthIn(min = 300.dp, max = 360.dp)
-                // 消费卡片空白区点击:子 Slider/Switch 自己消费手势,不受影响。
+                // 消费卡片空白区点击:子 Slider 自己消费手势,不受影响。
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
@@ -207,81 +182,6 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
                         applyAppearance()
                     }
                 )
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(top = 20.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        stringResource(R.string.speed_meter_allow_status_bar),
-                        color = LabelColor,
-                        fontSize = 15.sp,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Switch(
-                        checked = allowStatusBar,
-                        onCheckedChange = {
-                            allowStatusBar = it
-                            AppPrefs.setSpeedMeterAllowStatusBar(ctx, it)
-                            applyAppearance()
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = AccentColor,
-                            uncheckedThumbColor = Color(0xFF9E9E9E),
-                            uncheckedTrackColor = Color(0xFFE0E0E0)
-                        )
-                    )
-                }
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(top = 20.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            stringResource(R.string.speed_meter_status_bar),
-                            color = LabelColor,
-                            fontSize = 15.sp
-                        )
-                        Text(
-                            stringResource(R.string.speed_meter_status_bar_sub),
-                            color = ValueColor,
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(top = 2.dp)
-                        )
-                    }
-                    Switch(
-                        checked = statusBar,
-                        onCheckedChange = { want ->
-                            if (want) {
-                                val granted =
-                                    Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-                                        ContextCompat.checkSelfPermission(
-                                            ctx, Manifest.permission.POST_NOTIFICATIONS
-                                        ) == PackageManager.PERMISSION_GRANTED
-                                if (granted) {
-                                    statusBar = true
-                                    AppPrefs.setSpeedMeterStatusBar(ctx, true)
-                                } else {
-                                    notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                }
-                            } else {
-                                statusBar = false
-                                AppPrefs.setSpeedMeterStatusBar(ctx, false)
-                                StatusBarSpeed.hide(ctx)
-                            }
-                        },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = AccentColor,
-                            uncheckedThumbColor = Color(0xFF9E9E9E),
-                            uncheckedTrackColor = Color(0xFFE0E0E0)
-                        )
-                    )
-                }
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -359,8 +259,6 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
                         AppPrefs.setSpeedMeterFontSize(ctx, AppPrefs.SPEED_METER_DEFAULT_FONT_SIZE)
                         AppPrefs.setSpeedMeterIconSize(ctx, AppPrefs.SPEED_METER_DEFAULT_ICON_SIZE)
                         AppPrefs.setSpeedMeterAlpha(ctx, AppPrefs.SPEED_METER_DEFAULT_ALPHA)
-                        AppPrefs.setSpeedMeterAllowStatusBar(ctx, AppPrefs.SPEED_METER_DEFAULT_ALLOW_STATUS_BAR)
-                        AppPrefs.setSpeedMeterStatusBar(ctx, AppPrefs.SPEED_METER_DEFAULT_STATUS_BAR)
                         AppPrefs.setSpeedMeterUpLabel(ctx, AppPrefs.SPEED_METER_DEFAULT_UP_LABEL)
                         AppPrefs.setSpeedMeterDownLabel(ctx, AppPrefs.SPEED_METER_DEFAULT_DOWN_LABEL)
                         AppPrefs.setSpeedMeterUpColor(ctx, AppPrefs.SPEED_METER_DEFAULT_UP_COLOR)
@@ -369,9 +267,6 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
                         fontSize = AppPrefs.SPEED_METER_DEFAULT_FONT_SIZE.toFloat()
                         iconSize = AppPrefs.SPEED_METER_DEFAULT_ICON_SIZE.toFloat()
                         alpha = AppPrefs.SPEED_METER_DEFAULT_ALPHA.toFloat()
-                        allowStatusBar = AppPrefs.SPEED_METER_DEFAULT_ALLOW_STATUS_BAR
-                        StatusBarSpeed.hide(ctx)
-                        statusBar = AppPrefs.SPEED_METER_DEFAULT_STATUS_BAR
                         upLabel = AppPrefs.SPEED_METER_DEFAULT_UP_LABEL
                         downLabel = AppPrefs.SPEED_METER_DEFAULT_DOWN_LABEL
                         upColor = AppPrefs.SPEED_METER_DEFAULT_UP_COLOR

@@ -21,13 +21,11 @@ object AppPrefs {
     const val DEFAULT_DNS_V6 = "2400:3200::1"
 
     // 悬浮网速计外观默认(与历史硬编码一致):胶囊内边距 6dp、字号 12sp、图标 15dp、
-    // 背景不透明 40%、不钻状态栏。
+    // 背景不透明 40%。
     const val SPEED_METER_DEFAULT_CAPSULE_SIZE = 6
     const val SPEED_METER_DEFAULT_FONT_SIZE = 12
     const val SPEED_METER_DEFAULT_ICON_SIZE = 15
     const val SPEED_METER_DEFAULT_ALPHA = 40
-    const val SPEED_METER_DEFAULT_ALLOW_STATUS_BAR = false
-    const val SPEED_METER_DEFAULT_STATUS_BAR = false
 
     // ↑/↓ 指示文字与颜色(颜色存 ARGB Color int,默认沿用历史硬编码的绿/蓝)。
     const val SPEED_METER_DEFAULT_UP_LABEL = "↑"
@@ -56,8 +54,6 @@ object AppPrefs {
     private const val KEY_SPEED_METER_FONT_SIZE = "speed_meter_font_size"
     private const val KEY_SPEED_METER_ICON_SIZE = "speed_meter_icon_size"
     private const val KEY_SPEED_METER_ALPHA = "speed_meter_alpha"
-    private const val KEY_SPEED_METER_ALLOW_STATUS_BAR = "speed_meter_allow_status_bar"
-    private const val KEY_SPEED_METER_STATUS_BAR = "speed_meter_status_bar"
     private const val KEY_SPEED_METER_UP_LABEL = "speed_meter_up_label"
     private const val KEY_SPEED_METER_DOWN_LABEL = "speed_meter_down_label"
     private const val KEY_SPEED_METER_UP_COLOR = "speed_meter_up_color"
@@ -241,23 +237,6 @@ object AppPrefs {
 
     fun setSpeedMeterAlpha(context: Context, value: Int) {
         sp(context).edit().putInt(KEY_SPEED_METER_ALPHA, value).apply()
-    }
-
-    /** 是否允许胶囊拖到状态栏底下(顶部被系统状态栏盖住)。默认关 = 钳在状态栏之下。 */
-    fun speedMeterAllowStatusBar(context: Context): Boolean =
-        sp(context).getBoolean(KEY_SPEED_METER_ALLOW_STATUS_BAR, SPEED_METER_DEFAULT_ALLOW_STATUS_BAR)
-
-    fun setSpeedMeterAllowStatusBar(context: Context, value: Boolean) {
-        sp(context).edit().putBoolean(KEY_SPEED_METER_ALLOW_STATUS_BAR, value).apply()
-    }
-
-    /** 状态栏网速(TrafficIndicator 式):把每秒网速画成 Bitmap 塞常驻通知 smallIcon,系统状态栏
-     *  把它画在状态栏那一行(按 alpha 着色)。仅需 POST_NOTIFICATIONS,不需要悬浮窗权限。默认关。 */
-    fun speedMeterStatusBar(context: Context): Boolean =
-        sp(context).getBoolean(KEY_SPEED_METER_STATUS_BAR, SPEED_METER_DEFAULT_STATUS_BAR)
-
-    fun setSpeedMeterStatusBar(context: Context, value: Boolean) {
-        sp(context).edit().putBoolean(KEY_SPEED_METER_STATUS_BAR, value).apply()
     }
 
     // ── ↑/↓ 指示文字与颜色 ──────────────────────────────────────────────

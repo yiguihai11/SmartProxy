@@ -90,24 +90,13 @@ object SpeedMeterOverlay {
     private var lastForegroundQuery = 0L
     private var gateHeld = false
 
-    /** VPN 连上后由服务调用:开总开关则按需起胶囊 + 后台轮询;重复调用幂等。
-     *  - 悬浮胶囊要 SYSTEM_ALERT_WINDOW;状态栏网速通知(StatusBarSpeed)只要 POST_NOTIFICATIONS,
-     *    没悬浮窗权限也照跑轮询喂通知。 */
+    /** VPN 连上后由服务调用:开关开 + 有悬浮窗权限才显示;否则静默跳过(下次连或
+     *  开关/权限就绪后再由服务/抽屉触发)。重复调用幂等。 */
     fun autoShow(context: Context) {
         val app = context.applicationContext
-        mainHandler.post {
-            if (!AppPrefs.speedMeterEnabled(app)) { hideOnMain(); return@post }
-            if (canDrawOverlays(app) && capsule == null) showOnMain(app)
-            ensurePolling(app)
-        }
-    }
-
-    /** 启动后台轮询(+ 采集 gate):胶囊与状态栏通知共用;无悬浮窗权限时为状态栏单独跑。 */
-    private fun ensurePolling(app: Context) {
-        if (pollThread != null) return
-        if (appContext == null) appContext = app
-        startPolling(app)
-        if (!gateHeld) { ConnStatsGate.acquire(); gateHeld = true }
+        if (!AppPrefs.speedMeterEnabled(app)) return
+        if (!canDrawOverlays(app)) return
+        mainHandler.post { showOnMain(app) }
     }
 
     /** VPN 断开 / 开关关闭 / 权限撤销时调用:移除胶囊与面板、停轮询、放采集。幂等。 */
@@ -131,15 +120,8 @@ object SpeedMeterOverlay {
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             // 不抢焦点(不挡输入)、窗口外触摸透传给下层 App;半透明像素格式。
-            // FLAG_LAYOUT_IN_SCREEN:让窗口 frame 占满整块屏幕(含状态栏区域),忽略状态栏 inset——
-            // 否则 TYPE_APPLICATION_OVERLAY 被强制布局在状态栏之下,y=0 也顶不到物理顶部,
-            // 「可移动到状态栏内」开关形同虚设。此 flag 只解除布局钳制;OFF 时靠拖拽/恢复的
-            // y 下界钳制(statusBarHeight)保证胶囊不钻进去。
-            // 注意:状态栏图标与下拉通知面板(SystemUI)z-order 仍在 overlay 之上,重叠部分会被盖住——
-            // 普通 App 无法嵌入 SystemUI 通知栏内部,只能把胶囊贴到屏幕顶部同区域。
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -149,10 +131,7 @@ object SpeedMeterOverlay {
                 y = dp(app, 40)
             } else {
                 x = sx
-                // 「可进状态栏」OFF:钳下界到状态栏之下,恢复时胶囊不被状态栏盖住
-                // (上界需测量后才知道,这里只钳下界,溢出由后续拖动/设置页自纠)。
-                y = if (AppPrefs.speedMeterAllowStatusBar(app)) sy
-                    else sy.coerceIn(statusBarHeight(app), Int.MAX_VALUE)
+                y = sy
             }
         }
         try {
@@ -176,13 +155,12 @@ object SpeedMeterOverlay {
             }
         }
         attachDrag(app, view, params, manager)
-        ensurePolling(app)
+        startPolling(app)
+        if (!gateHeld) { ConnStatsGate.acquire(); gateHeld = true }
     }
 
     private fun hideOnMain() {
         stopPolling()
-        // 撤掉状态栏网速通知(胶囊没了/服务停了,通知图标也得走)。
-        appContext?.let { StatusBarSpeed.hide(it) }
         // 取消 pending 长按,防 hide 后 runnable 到点又去 openSettings(此时胶囊已移除)。
         longPressRunnable?.let { mainHandler.removeCallbacks(it) }
         longPressRunnable = null
@@ -293,14 +271,13 @@ object SpeedMeterOverlay {
         cap.requestLayout()
         cap.invalidate()
 
-        // 位置钳制:关「可进状态栏」把钻到底下的胶囊钳出来;尺寸变大贴右溢出自动往左收。
+        // 位置钳制:尺寸变大贴右/贴边溢出时自动往内收。
         // 读到的 cap.width/height 是旧布局值,滞后一帧自纠,可接受。
-        val minY = if (AppPrefs.speedMeterAllowStatusBar(app)) 0 else statusBarHeight(app)
         val dm = app.resources.displayMetrics
         val maxX = (dm.widthPixels - cap.width).coerceAtLeast(0)
         val maxY = (dm.heightPixels - cap.height).coerceAtLeast(0)
         val newX = lp.x.coerceIn(0, maxX)
-        val newY = lp.y.coerceIn(minY, maxY)
+        val newY = lp.y.coerceIn(0, maxY)
         if (newX != lp.x || newY != lp.y) {
             lp.x = newX
             lp.y = newY
@@ -352,12 +329,10 @@ object SpeedMeterOverlay {
                     }
                     if (dragging) {
                         val dm = app.resources.displayMetrics
-                        // 「可进状态栏」OFF → 拖拽下限钳到状态栏之下,胶囊始终完整可见。
-                        val minY = if (AppPrefs.speedMeterAllowStatusBar(app)) 0 else statusBarHeight(app)
                         params.x = (startX + dx).toInt()
                             .coerceIn(0, (dm.widthPixels - view.width).coerceAtLeast(0))
                         params.y = (startY + dy).toInt()
-                            .coerceIn(minY, (dm.heightPixels - view.height).coerceAtLeast(0))
+                            .coerceIn(0, (dm.heightPixels - view.height).coerceAtLeast(0))
                         runCatching { manager.updateViewLayout(view, params) }
                     }
                     true
@@ -499,23 +474,9 @@ object SpeedMeterOverlay {
             }
             val (wUp, wDown) = speeds[win] ?: Pair(0L, 0L)
             Tick(win, wUp, wDown)
-        }.getOrNull() ?: run {
-            // 引擎未启动等:胶囊视图保持原样,状态栏通知也拿不到数据,撤掉。
-            StatusBarSpeed.hide(app)
-            return
-        }
+        }.getOrNull() ?: return // 引擎未启动等:本次跳过,视图保持原样
 
-        // 赢家 App(与胶囊同一个):名字 + 图标,bg 线程缓存解析。
-        val winMeta = if (tick.appUid >= 0) metaFor(app, tick.appUid) else null
-
-        // 状态栏网速通知(独立于胶囊,无悬浮窗权限也能跑):显示赢家 App 的上下行,与胶囊同源。
-        if (AppPrefs.speedMeterStatusBar(app)) {
-            StatusBarSpeed.update(app, tick.appUp, tick.appDown, winMeta?.first)
-        } else {
-            StatusBarSpeed.hide(app)
-        }
-
-        val icon: Drawable? = winMeta?.second
+        val icon: Drawable? = if (tick.appUid >= 0) metaFor(app, tick.appUid).second else null
         mainHandler.post {
             val cap = capsule ?: return@post
             if (tick.appUid >= 0) {
@@ -648,14 +609,6 @@ object SpeedMeterOverlay {
      *  GradientDrawable.setColor 接受;勿写 0xFF000000.toInt() 误算成 Int.MIN_VALUE)。 */
     private fun bgColorFor(alphaPercent: Int): Int =
         (alphaPercent.coerceIn(0, 100) * 255 / 100) shl 24
-
-    /** 状态栏高度:悬浮窗窗口无 decor 可依附,拿不到 ViewInsets,用系统 dimen 查询。
-     *  minSdk 26 全版本可用;刘海/挖孔返回含 cutout 的完整高度,恰好符合「钳到状态栏之下」语义。 */
-    private fun statusBarHeight(app: Context): Int =
-        runCatching {
-            val id = app.resources.getIdentifier("status_bar_height", "dimen", "android")
-            if (id > 0) app.resources.getDimensionPixelSize(id) else 0
-        }.getOrDefault(0)
 
     private fun dp(app: Context, value: Int): Int =
         TypedValue.applyDimension(
