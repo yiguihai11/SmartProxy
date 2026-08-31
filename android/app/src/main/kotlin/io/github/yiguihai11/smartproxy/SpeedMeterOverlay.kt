@@ -75,6 +75,9 @@ object SpeedMeterOverlay {
     private var longPressRunnable: Runnable? = null
     /** 上次打开设置对话框的时间(防重复打开守卫)。 */
     private var lastSettingsOpenAt = 0L
+    /** 设置对话框打开期间为 true:强制胶囊保持显示(设置页作为前台被自我排除,无流量
+     *  tick 会走淡出,滑块预览就没得看了)。仅主线程读写。 */
+    private var settingsOpen = false
 
     private var pollThread: HandlerThread? = null
     private var bgHandler: Handler? = null
@@ -166,6 +169,8 @@ object SpeedMeterOverlay {
         // 取消 pending 长按,防 hide 后 runnable 到点又去 openSettings(此时胶囊已移除)。
         longPressRunnable?.let { mainHandler.removeCallbacks(it) }
         longPressRunnable = null
+        // 配置标记复位:下次 show 重新按当前状态决定淡入淡出(设置页可能已关)。
+        settingsOpen = false
         val view = capsule
         val manager = wm
         if (view != null && manager != null) {
@@ -371,17 +376,36 @@ object SpeedMeterOverlay {
     }
 
     /** 长按胶囊 → 打开设置对话框(独立对话框 Activity;胶囊在设置页上层,滑块实时预览)。
-     *  1000ms 重复打开守卫:胶囊在设置页上仍可触摸,防连点叠第二个 Activity。 */
+     *  1000ms 重复打开守卫:胶囊在设置页上仍可触摸,防连点叠第二个 Activity。
+     *  打开即置 settingsOpen:设置页在前台时自我排除、无流量 tick 会淡出,这里先强制把
+     *  胶囊按回来(已淡出则立即淡入),配置期间预览不断档;Activity onDestroy 走 onSettingsClosed 复位。 */
     private fun openSettings(app: Context) {
         val now = SystemClock.uptimeMillis()
         if (now - lastSettingsOpenAt < SETTINGS_REOPEN_GUARD_MS) return
         lastSettingsOpenAt = now
+        settingsOpen = true
+        capsule?.let { cap ->
+            if (!capsuleShown) {
+                cap.animate().cancel()
+                cap.visibility = View.VISIBLE
+                cap.animate().alpha(1f).setDuration(FADE_MS).start()
+                capsuleShown = true
+            }
+        }
         runCatching {
             app.startActivity(
                 Intent(app, SpeedMeterSettingsActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
-        }.onFailure { Log.e(TAG, "open SpeedMeterSettingsActivity failed", it) }
+        }.onFailure {
+            settingsOpen = false
+            Log.e(TAG, "open SpeedMeterSettingsActivity failed", it)
+        }
+    }
+
+    /** 设置对话框关闭(Activity onDestroy)时调用:恢复「无数据即淡出」行为。任意线程皆可,内部回主线程。 */
+    fun onSettingsClosed() {
+        mainHandler.post { settingsOpen = false }
     }
 
     // ── 后台轮询 ────────────────────────────────────────────────────────
@@ -472,6 +496,15 @@ object SpeedMeterOverlay {
                 }
                 if (!capsuleShown) {
                     // 淡入:从当前 alpha(淡出中途或已到 0)动画回 1;先 VISIBLE 让窗口长回。
+                    cap.animate().cancel()
+                    cap.visibility = View.VISIBLE
+                    cap.animate().alpha(1f).setDuration(FADE_MS).start()
+                    capsuleShown = true
+                }
+            } else if (settingsOpen) {
+                // 配置期间强制保持显示(即使无数据):滑块预览不能断档;内容留原样,
+                // 下个 tick 有数据再刷新。已淡出则淡入回来。
+                if (!capsuleShown) {
                     cap.animate().cancel()
                     cap.visibility = View.VISIBLE
                     cap.animate().alpha(1f).setDuration(FADE_MS).start()

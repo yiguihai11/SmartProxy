@@ -69,6 +69,12 @@ class SpeedMeterSettingsActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // 配置期间悬浮胶囊被强制保持显示(设置页前台自我排除、无流量会淡出),关页即恢复。
+        SpeedMeterOverlay.onSettingsClosed()
+    }
 }
 
 @Composable
