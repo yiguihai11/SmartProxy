@@ -5,7 +5,6 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.Drawable
 import android.os.Handler
@@ -58,9 +57,8 @@ object SpeedMeterOverlay {
     /** 前台应用判定缓存刷新周期:queryEvents 不便宜,5s 一次足够(切前台 5s 内跟上)。 */
     private const val FOREGROUND_REFRESH_MS = 5000L
 
-    // 胶囊配色:上传绿 / 下载蓝(白字在深底上对比足够);背景不透明度走 AppPrefs.speedMeterAlpha。
-    private val UP_COLOR = Color.parseColor("#FF7CCB7C")
-    private val DOWN_COLOR = Color.parseColor("#FF6FB7FF")
+    // ↑/↓ 文字颜色与标签前缀走 AppPrefs(长按设置可调),默认绿/蓝 + ↑/↓;
+    // 背景不透明度走 AppPrefs.speedMeterAlpha。
 
     private var appContext: Context? = null
     private var wm: WindowManager? = null
@@ -213,19 +211,19 @@ object SpeedMeterOverlay {
             visibility = View.GONE // 无流量时隐藏,有最大流量 App 才显示
         }
         val up = TextView(app).apply {
-            setTextColor(UP_COLOR)
+            setTextColor(AppPrefs.speedMeterUpColor(app))
             // includeFontPadding=false 的行高 ≈ 字号 + 3dp;图标略高于字,
             // 容器 CENTER_VERTICAL 整体居中,观感协调。
             textSize = fontSize.toFloat()
             includeFontPadding = false
-            text = "↑ --"
+            text = "${AppPrefs.speedMeterUpLabel(app)} --"
         }
         val down = TextView(app).apply {
-            setTextColor(DOWN_COLOR)
+            setTextColor(AppPrefs.speedMeterDownColor(app))
             textSize = fontSize.toFloat()
             includeFontPadding = false
             setPadding(dp(app, 4), 0, 0, 0)
-            text = "↓ --"
+            text = "${AppPrefs.speedMeterDownLabel(app)} --"
         }
         container.addView(icon)
         container.addView(up)
@@ -266,6 +264,13 @@ object SpeedMeterOverlay {
         }
         upView?.textSize = fontSize.toFloat()
         downView?.textSize = fontSize.toFloat()
+        // ↑/↓ 颜色即时生效;有数据的文本由下一 poll tick 用新 label 刷新,占位 "--" 态这里直接换前缀。
+        val upLabel = AppPrefs.speedMeterUpLabel(app)
+        val downLabel = AppPrefs.speedMeterDownLabel(app)
+        upView?.setTextColor(AppPrefs.speedMeterUpColor(app))
+        downView?.setTextColor(AppPrefs.speedMeterDownColor(app))
+        upView?.let { if (it.text.toString().endsWith("--")) it.text = "$upLabel --" }
+        downView?.let { if (it.text.toString().endsWith("--")) it.text = "$downLabel --" }
         cap.requestLayout()
         cap.invalidate()
 
@@ -483,8 +488,9 @@ object SpeedMeterOverlay {
             if (tick.appUid >= 0) {
                 // 有展示对象(前台应用或最大流量 App):刷新内容;前台应用 0 速率也保留显示
                 // (↑0B/s ↓0B/s + 图标,标明当前前台是哪个 App)。
-                upView?.text = "↑ ${fmt(tick.appUp)}/s"
-                downView?.text = "↓ ${fmt(tick.appDown)}/s"
+                // 标签前缀每 tick 读偏好:设置里改 label 后 ≤1s 生效,无需额外缓存。
+                upView?.text = "${AppPrefs.speedMeterUpLabel(app)} ${fmt(tick.appUp)}/s"
+                downView?.text = "${AppPrefs.speedMeterDownLabel(app)} ${fmt(tick.appDown)}/s"
                 val iv = iconView
                 if (iv != null) {
                     if (icon != null) {

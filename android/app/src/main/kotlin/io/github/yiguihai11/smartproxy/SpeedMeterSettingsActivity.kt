@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -15,13 +16,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -36,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -87,6 +92,10 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
     var iconSize by remember { mutableStateOf(AppPrefs.speedMeterIconSize(ctx).toFloat()) }
     var alpha by remember { mutableStateOf(AppPrefs.speedMeterAlpha(ctx).toFloat()) }
     var allowStatusBar by remember { mutableStateOf(AppPrefs.speedMeterAllowStatusBar(ctx)) }
+    var upLabel by remember { mutableStateOf(AppPrefs.speedMeterUpLabel(ctx)) }
+    var downLabel by remember { mutableStateOf(AppPrefs.speedMeterDownLabel(ctx)) }
+    var upColor by remember { mutableStateOf(AppPrefs.speedMeterUpColor(ctx)) }
+    var downColor by remember { mutableStateOf(AppPrefs.speedMeterDownColor(ctx)) }
 
     /** 改动即实时应用到悬浮胶囊(主线程);胶囊未显示时内部 no-op,下次构建读新偏好。 */
     fun applyAppearance() = SpeedMeterOverlay.applySettingsInPlace(ctx)
@@ -200,6 +209,49 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
                 Row(
                     Modifier
                         .fillMaxWidth()
+                        .padding(top = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    LabelField(
+                        label = stringResource(R.string.speed_meter_up_label),
+                        value = upLabel,
+                        onValueChange = {
+                            upLabel = it
+                            AppPrefs.setSpeedMeterUpLabel(ctx, it)
+                            applyAppearance()
+                        }
+                    )
+                    LabelField(
+                        label = stringResource(R.string.speed_meter_down_label),
+                        value = downLabel,
+                        onValueChange = {
+                            downLabel = it
+                            AppPrefs.setSpeedMeterDownLabel(ctx, it)
+                            applyAppearance()
+                        }
+                    )
+                }
+                ColorRow(
+                    label = stringResource(R.string.speed_meter_up_color),
+                    selected = upColor,
+                    onSelect = {
+                        upColor = it
+                        AppPrefs.setSpeedMeterUpColor(ctx, it)
+                        applyAppearance()
+                    }
+                )
+                ColorRow(
+                    label = stringResource(R.string.speed_meter_down_color),
+                    selected = downColor,
+                    onSelect = {
+                        downColor = it
+                        AppPrefs.setSpeedMeterDownColor(ctx, it)
+                        applyAppearance()
+                    }
+                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
                         .padding(top = 12.dp),
                     horizontalArrangement = Arrangement.End
                 ) {
@@ -210,11 +262,19 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
                         AppPrefs.setSpeedMeterIconSize(ctx, AppPrefs.SPEED_METER_DEFAULT_ICON_SIZE)
                         AppPrefs.setSpeedMeterAlpha(ctx, AppPrefs.SPEED_METER_DEFAULT_ALPHA)
                         AppPrefs.setSpeedMeterAllowStatusBar(ctx, AppPrefs.SPEED_METER_DEFAULT_ALLOW_STATUS_BAR)
+                        AppPrefs.setSpeedMeterUpLabel(ctx, AppPrefs.SPEED_METER_DEFAULT_UP_LABEL)
+                        AppPrefs.setSpeedMeterDownLabel(ctx, AppPrefs.SPEED_METER_DEFAULT_DOWN_LABEL)
+                        AppPrefs.setSpeedMeterUpColor(ctx, AppPrefs.SPEED_METER_DEFAULT_UP_COLOR)
+                        AppPrefs.setSpeedMeterDownColor(ctx, AppPrefs.SPEED_METER_DEFAULT_DOWN_COLOR)
                         capsuleSize = AppPrefs.SPEED_METER_DEFAULT_CAPSULE_SIZE.toFloat()
                         fontSize = AppPrefs.SPEED_METER_DEFAULT_FONT_SIZE.toFloat()
                         iconSize = AppPrefs.SPEED_METER_DEFAULT_ICON_SIZE.toFloat()
                         alpha = AppPrefs.SPEED_METER_DEFAULT_ALPHA.toFloat()
                         allowStatusBar = AppPrefs.SPEED_METER_DEFAULT_ALLOW_STATUS_BAR
+                        upLabel = AppPrefs.SPEED_METER_DEFAULT_UP_LABEL
+                        downLabel = AppPrefs.SPEED_METER_DEFAULT_DOWN_LABEL
+                        upColor = AppPrefs.SPEED_METER_DEFAULT_UP_COLOR
+                        downColor = AppPrefs.SPEED_METER_DEFAULT_DOWN_COLOR
                         applyAppearance()
                     }) {
                         Text(stringResource(R.string.speed_meter_restore_defaults), color = LabelColor)
@@ -258,12 +318,69 @@ private fun SliderRow(
     }
 }
 
+@Composable
+private fun LabelField(label: String, value: String, onValueChange: (String) -> Unit) {
+    Column(Modifier.weight(1f)) {
+        Text(label, color = LabelColor, fontSize = 14.sp)
+        OutlinedTextField(
+            value = value,
+            onValueChange = { if (it.length <= 4) onValueChange(it) }, // 标签是符号,限 4 字
+            singleLine = true,
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 6.dp)
+        )
+    }
+}
+
+@Composable
+private fun ColorRow(label: String, selected: Int, onSelect: (Int) -> Unit) {
+    Column(Modifier
+        .fillMaxWidth()
+        .padding(top = 16.dp)
+    ) {
+        Text(label, color = LabelColor, fontSize = 15.sp)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            PRESET_TEXT_COLORS.forEach { c ->
+                val sel = c == selected
+                Box(
+                    Modifier
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(Color(c))
+                        .border(2.dp, if (sel) AccentColor else DividerLine, CircleShape)
+                        .clickable { onSelect(c) }
+                )
+            }
+        }
+    }
+}
+
 // 浅/深两套(§7):getter 读 ThemeState.isDark,色板与全 App 惯例一致。
 private val AccentColor get() = if (ThemeState.isDark) Color(0xFF7CCB7C) else Color(0xFF2EBD85)
 private val CardBg get() = if (ThemeState.isDark) Color(0xFF26262B) else Color(0xFFFAFAFA)
 private val TitleColor get() = if (ThemeState.isDark) Color(0xFFF2F2F2) else Color(0xFF1C1C1E)
 private val LabelColor get() = if (ThemeState.isDark) Color(0xFFD1D1D6) else Color(0xFF3A3A3C)
 private val ValueColor get() = if (ThemeState.isDark) Color(0xFF8E8E93) else Color(0xFF6E6E73)
+private val DividerLine get() = if (ThemeState.isDark) Color(0xFF3A3A3E) else Color(0xFFE0E0E0)
 private val SpeedMeterSettingsColors get() =
     if (ThemeState.isDark) darkColorScheme(primary = AccentColor)
     else lightColorScheme(primary = AccentColor)
+
+// 可在深色胶囊上清晰读出的预设文字色(白 + 高亮系;前三个含历史默认绿/蓝)。
+private val PRESET_TEXT_COLORS = listOf(
+    0xFFFFFFFF.toInt(),
+    0xFF7CCB7C.toInt(),
+    0xFF6FB7FF.toInt(),
+    0xFF5FD4C4.toInt(),
+    0xFFFFE08A.toInt(),
+    0xFFFFB74D.toInt(),
+    0xFFFF7A7A.toInt(),
+    0xFFFF8AC4.toInt()
+)

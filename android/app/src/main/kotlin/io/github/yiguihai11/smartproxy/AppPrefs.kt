@@ -28,6 +28,13 @@ object AppPrefs {
     const val SPEED_METER_DEFAULT_ALPHA = 40
     const val SPEED_METER_DEFAULT_ALLOW_STATUS_BAR = false
 
+    // ↑/↓ 指示文字与颜色(颜色存 ARGB Color int,默认沿用历史硬编码的绿/蓝)。
+    const val SPEED_METER_DEFAULT_UP_LABEL = "↑"
+    const val SPEED_METER_DEFAULT_DOWN_LABEL = "↓"
+    // 0xFF.. 字面量超 Int.MAX 是 Long,toInt() 得到合法负 ARGB int(与 Color.parseColor 同值)。
+    val SPEED_METER_DEFAULT_UP_COLOR = 0xFF7CCB7C.toInt()
+    val SPEED_METER_DEFAULT_DOWN_COLOR = 0xFF6FB7FF.toInt()
+
     private const val NAME = "smartproxy_prefs"
     private const val KEY_GLOBAL_MODE = "global_mode"
     private const val KEY_SELECTED_APPS = "selected_apps"
@@ -49,6 +56,10 @@ object AppPrefs {
     private const val KEY_SPEED_METER_ICON_SIZE = "speed_meter_icon_size"
     private const val KEY_SPEED_METER_ALPHA = "speed_meter_alpha"
     private const val KEY_SPEED_METER_ALLOW_STATUS_BAR = "speed_meter_allow_status_bar"
+    private const val KEY_SPEED_METER_UP_LABEL = "speed_meter_up_label"
+    private const val KEY_SPEED_METER_DOWN_LABEL = "speed_meter_down_label"
+    private const val KEY_SPEED_METER_UP_COLOR = "speed_meter_up_color"
+    private const val KEY_SPEED_METER_DOWN_COLOR = "speed_meter_down_color"
 
     private fun sp(context: Context) =
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -236,6 +247,41 @@ object AppPrefs {
 
     fun setSpeedMeterAllowStatusBar(context: Context, value: Boolean) {
         sp(context).edit().putBoolean(KEY_SPEED_METER_ALLOW_STATUS_BAR, value).apply()
+    }
+
+    // ── ↑/↓ 指示文字与颜色 ──────────────────────────────────────────────
+    /** 上行指示文字(拼在网速前的标签前缀,如 "↑ 123K/s")。默认 "↑"。 */
+    fun speedMeterUpLabel(context: Context): String =
+        sp(context).getString(KEY_SPEED_METER_UP_LABEL, SPEED_METER_DEFAULT_UP_LABEL)
+            ?: SPEED_METER_DEFAULT_UP_LABEL
+
+    fun setSpeedMeterUpLabel(context: Context, value: String) {
+        sp(context).edit().putString(KEY_SPEED_METER_UP_LABEL, value).apply()
+    }
+
+    /** 下行指示文字。默认 "↓"。 */
+    fun speedMeterDownLabel(context: Context): String =
+        sp(context).getString(KEY_SPEED_METER_DOWN_LABEL, SPEED_METER_DEFAULT_DOWN_LABEL)
+            ?: SPEED_METER_DEFAULT_DOWN_LABEL
+
+    fun setSpeedMeterDownLabel(context: Context, value: String) {
+        sp(context).edit().putString(KEY_SPEED_METER_DOWN_LABEL, value).apply()
+    }
+
+    /** 上行文字颜色(ARGB Color int)。默认历史绿 #FF7CCB7C。 */
+    fun speedMeterUpColor(context: Context): Int =
+        sp(context).getInt(KEY_SPEED_METER_UP_COLOR, SPEED_METER_DEFAULT_UP_COLOR)
+
+    fun setSpeedMeterUpColor(context: Context, value: Int) {
+        sp(context).edit().putInt(KEY_SPEED_METER_UP_COLOR, value).apply()
+    }
+
+    /** 下行文字颜色。默认历史蓝 #FF6FB7FF。 */
+    fun speedMeterDownColor(context: Context): Int =
+        sp(context).getInt(KEY_SPEED_METER_DOWN_COLOR, SPEED_METER_DEFAULT_DOWN_COLOR)
+
+    fun setSpeedMeterDownColor(context: Context, value: Int) {
+        sp(context).edit().putInt(KEY_SPEED_METER_DOWN_COLOR, value).apply()
     }
 }
 
