@@ -20,7 +20,7 @@
     <!-- Drawer -->
     <string name="drawer_tagline">智能分流代理</string>
     <string name="drawer_section_menu">功能菜单</string>
-    <string name="drawer_apps">代理应用 (Apps)</string>
+    <string name="drawer_apps">分应用代理 (Apps)</string>
     <string name="drawer_apps_subtitle">选择各应用的代理 / 绕过规则</string>
     <string name="drawer_dns">DNS 服务器</string>
     <string name="drawer_dns_subtitle">启动时注入的 IPv4 / IPv6 DNS</string>

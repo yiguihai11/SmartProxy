@@ -371,7 +371,7 @@ private const val PROJECT_URL = "https://github.com/yiguihai11/SmartProxy"
 
 /**
  * 服务模式(§8)的可观察 Compose state:SharedPreferences 变化 → OnSharedPreferenceChangeListener
- * → state 更新 → 重组。侧边栏菜单显示条件(代理应用 / DNS / 排除路由 / 联网状态)、监听开关
+ * → state 更新 → 重组。侧边栏菜单显示条件(分应用代理 / DNS / 排除路由 / 联网状态)、监听开关
  * 副标题等直接读 AppPrefs.serviceMode 的 UI 都依赖它:否则切模式后 drawerContent 被 Compose
  * skipping 跳过,隐藏菜单不恢复、副标题不刷新。返回 () -> Unit 注销,DisposableEffect 管生命周期。
  */
@@ -615,7 +615,7 @@ private fun AppDrawerContent(
             )
             Spacer(Modifier.height(6.dp))
 
-            // 侧边栏菜单项：代理应用 (Apps)(per-app 分流走 VpnService.Builder、禁止联网
+            // 侧边栏菜单项：分应用代理 (Apps)(per-app 分流走 VpnService.Builder、禁止联网
             // 走 TUN 数据路径,仅 VPN 隧道模式生效;仅代理 SOCKS5 无 VpnService,入口一并
             // 隐藏(§8)。规则仍留在 AppPrefs,切回 VPN 模式照常生效。)
             if (serviceMode == AppPrefs.MODE_VPN) {

@@ -20,7 +20,7 @@
     <!-- Drawer -->
     <string name="drawer_tagline">Smart split proxy</string>
     <string name="drawer_section_menu">Menu</string>
-    <string name="drawer_apps">Proxy apps</string>
+    <string name="drawer_apps">Per-app proxy</string>
     <string name="drawer_apps_subtitle">Per-app proxy / bypass rules</string>
     <string name="drawer_dns">DNS servers</string>
     <string name="drawer_dns_subtitle">IPv4 / IPv6 DNS injected on start</string>
