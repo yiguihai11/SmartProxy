@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import java.util.concurrent.Executors
 
 /**
  * VPN 入口服务(§4 / §4.5 / §4.6):
@@ -98,12 +99,37 @@ class SmartProxyVpnService : VpnService() {
         fun getAppContext(): android.content.Context? = appContextRef?.get()
     }
 
+    @Volatile
     private var startedEngine = false
 
     /** P1#6 守卫:完整拆机(fullTeardown=true)只执行一次。ACTION_STOP 的 shutdown 之后
      *  onDestroy 会再调一次 shutdown,没有这个守卫就会再 sleep 100ms + 再 stopForeground;
      *  onRevoke 与 onDestroy 并发/先后到达同理。startInternal 成功建隧道时复位。 */
+    @Volatile
     private var tornDown = false
+
+    /** 引擎阻塞活(startRouter/stopRouter/Builder.establish/100ms 留白)专用单线程串行器。
+     *  onStartCommand/onRevoke/onDestroy 都在主线程,这些 JNI/系统调用能阻塞数秒,直接跑
+     *  主线程就是 ANR。单线程 FIFO 原样复刻了"主线程串行处理 intent"的顺序保证——RESTART
+     *  的 stop→start 作为同一个排队单元丢进来,不会被别的 intent 插断——只是不再堵主线程。 */
+    private val engineExecutor = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "SmartProxyVpnEngine").apply { isDaemon = true }
+    }
+
+    private fun enqueueEngineWork(action: String, block: () -> Unit) {
+        if (engineExecutor.isShutdown) {
+            Log.w(TAG, "[engineExecutor] already shut down, dropping '$action'")
+            return
+        }
+        Log.i(TAG, "[engineExecutor] enqueue: $action")
+        engineExecutor.execute {
+            try {
+                block()
+            } catch (e: Exception) {
+                Log.e(TAG, "[engineExecutor] engine work '$action' crashed", e)
+            }
+        }
+    }
 
     /** §4.6 establish 保留的原始 PFD:shutdown 时显式 close() 通知系统拆 VPN(状态栏图标
      *  即刻消失)。传给 Go 的 fd 是 dup + detachFd 出的独立拷贝(见 establishVpn),Go 引擎
@@ -122,23 +148,26 @@ class SmartProxyVpnService : VpnService() {
         if (action == NotificationHelper.ACTION_STOP) {
             // 圆球 / 通知停止 = 用户显式停止:静默停,后续 onRevoke 不误报被动。
             // stopSelf() 在 shutdown(fullTeardown=true) 内部先于关 fd 调用(v2rayNG 顺序)。
+            // 阻塞拆机丢引擎线程,主线程立即返回。
             userInitiatedStop = true
-            Log.i(TAG, "[onStartCommand] ACTION_STOP is user stop. shutdown() will call stopSelf() BEFORE closing tun fd...")
-            shutdown()
-            Log.i(TAG, "[onStartCommand] ACTION_STOP handling completed. Returning START_NOT_STICKY.")
+            Log.i(TAG, "[onStartCommand] ACTION_STOP is user stop; enqueue full shutdown.")
+            enqueueEngineWork("ACTION_STOP") { shutdown() }
             return START_NOT_STICKY
         }
 
         // 设置变更重建(§6 / 首页 IPv4 / IPv6 开关):停旧会话 → 立即按新配置重建。
-        // shutdown + startInternal 在同一主线程回调内顺序执行,原子完成——不会再像旧的
-        // 异步重启循环那样,在用户停止后靠 delayed start 把隧道重新拉起。
+        // shutdown + startInternal 作为【同一个排队单元】丢给单线程引擎,顺序执行、原子
+        // 完成,不会被其它 intent 插断——保持了旧版"主线程回调内原子重建"的保证,也不会
+        // 再像已删除的异步重启循环那样在用户停止后靠 delayed start 把隧道拉起。
         if (action == ACTION_RESTART) {
             // 重建(§6 设置变更 / 首页 IPv4 / IPv6 开关):服务需存活,不能 stopSelf。
             // fullTeardown=false → 跳过"stopSelf + 留白",停引擎 + 关 fd 后立即重建。
-            Log.i(TAG, "[onStartCommand] ACTION_RESTART: shutting down (fullTeardown=false, keep service alive) then rebuilding VPN...")
-            shutdown(fullTeardown = false)
-            Log.i(TAG, "[onStartCommand] ACTION_RESTART: re-establishing with new settings...")
-            return startInternal()
+            Log.i(TAG, "[onStartCommand] ACTION_RESTART: enqueue shutdown(false)+rebuild.")
+            enqueueEngineWork("ACTION_RESTART") {
+                shutdown(fullTeardown = false)
+                startInternal()
+            }
+            return START_STICKY
         }
 
         // 通知授权补发:只重刷前台通知,不动引擎。已在跑保持,没在跑不拉起。
@@ -152,9 +181,13 @@ class SmartProxyVpnService : VpnService() {
         }
 
         // 正常启动:之后的 onRevoke 一律视为被动断连(被抢占 / 系统设置断开)。
+        // startForeground 必须在 startForegroundService 后 ~5s 内调用,先在主线程立刻把
+        // 前台通知挂上满足时限;慢的 establish/startRouter 丢引擎线程(失败分支仍会 stopSelf)。
         Log.i(TAG, "[onStartCommand] Normal start path. Setting userInitiatedStop=false.")
         userInitiatedStop = false
-        return startInternal()
+        NotificationHelper.startForeground(this)
+        enqueueEngineWork("ACTION_START") { startInternal() }
+        return START_STICKY
     }
 
     /** 建前台通知并按服务模式启动引擎 / 隧道(§8):START 与 RESTART 分支共用。
@@ -487,6 +520,14 @@ class SmartProxyVpnService : VpnService() {
                 Log.e(TAG, "[shutdown] Step 1/6: Mobile.stopRouter() threw exception", e)
             }
             startedEngine = false
+            // 注销 UID 反查回调:establish 时 setUIDResolver(UIDResolver(this)) 把持有本
+            // Service Context 的回调注册进 gomobile 全局变量,不注销就一直吊住已销毁的 Service。
+            // 重建(RESTART)时 establish 会再注册一个新的;SOCKS5 模式本就没注册,置 null 无害。
+            try {
+                smartproxy.mobile.Mobile.setUIDResolver(null)
+            } catch (e: Exception) {
+                Log.w(TAG, "[shutdown] setUIDResolver(null) failed", e)
+            }
         } else {
             Log.i(TAG, "[shutdown] Step 1/6: startedEngine is false, skipping Mobile.stopRouter().")
         }
@@ -550,9 +591,9 @@ class SmartProxyVpnService : VpnService() {
         super.onRevoke()
         val passive = !userInitiatedStop
         Log.w(TAG, "[onRevoke] Triggered by system! userInitiatedStop=$userInitiatedStop, passive=$passive")
-        Log.i(TAG, "[onRevoke] Executing shutdown()...")
-        shutdown()
+        enqueueEngineWork("onRevoke") { shutdown() }
         // §4.5:被动断开弹一次性通知(仅提示,不违背保活通知极简原则);主动停止则静默。
+        // 通知本身是轻量调用,留在主线程立刻弹,不必等引擎线程拆机。
         if (passive) {
             Log.i(TAG, "[onRevoke] Passive disconnect. Displaying notification...")
             NotificationHelper.notifyDisconnected(this)
@@ -562,7 +603,10 @@ class SmartProxyVpnService : VpnService() {
 
     override fun onDestroy() {
         Log.i(TAG, "[onDestroy] Service onDestroy() entered.")
-        shutdown()
+        // 最终拆机排队跑完后再关执行器(shutdown 不中断已排队/在跑任务);daemon 线程,
+        // 不会拖住进程退出。
+        enqueueEngineWork("onDestroy") { shutdown() }
+        engineExecutor.shutdown()
         super.onDestroy()
         Log.i(TAG, "[onDestroy] Service onDestroy() completed.")
     }
