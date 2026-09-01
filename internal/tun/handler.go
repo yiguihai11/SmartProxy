@@ -266,6 +266,9 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 		remote, isProxy, err := h.router.EstablishConnection(ctx, host, port, "", h.ruleEng)
 		if err != nil {
 			slog.Error("TUN failed to establish connection", "host", host, "port", port, "error", err)
+			// 成功路径的 remove 在 relay goroutine 的 defer 里;失败分支不建 goroutine,
+			// 必须在这里手动摘表,否则代理故障时每个失败连接漏一个句柄,liveTCP 只增不减。
+			h.liveTCP.remove(hd)
 			conn.Close()
 			if onClose != nil {
 				onClose(err)
@@ -412,7 +415,7 @@ func (h *TUNHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketCon
 	}
 
 	safego.Go("tun.handleGenericUDP", func() {
-		h.handleGenericUDP(ctx, conn, destination)
+		h.handleGenericUDP(ctx, conn, source, destination)
 		if onClose != nil {
 			onClose(nil)
 		}
@@ -476,7 +479,7 @@ type udpRemoteEntry struct {
 	proxyHeader []byte // pre-built SOCKS5 UDP header (only used on the proxy path)
 }
 
-func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, destination M.Socksaddr) {
+func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, source M.Socksaddr, destination M.Socksaddr) {
 	defer conn.Close()
 
 	if h.upstreamMgr == nil || h.router == nil || h.ruleEng == nil {
@@ -493,7 +496,10 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, de
 	sess.lastActive.Store(time.Now().Unix())
 	udp.ActiveSessions.Add(1)
 
-	sessKey := destination.String()
+	// key 必须带源:每个(源 app, 目标)UDP 流是独立 conn/会话,只按目标做 key 时,
+	// 多 App 打同一目标(共用 DNS、同 CDN 的 QUIC)会 Store 互相覆盖、defer Delete 互删,
+	// 被覆盖的会话对 cleaner/evict 不可见(500 上限失效),只能等 gVisor 5 分钟超时才死。
+	sessKey := source.String() + "->" + destination.String()
 	h.storeUDPSession(sessKey, sess)
 	h.startUDPCleaner()
 	defer h.udpSessions.Delete(sessKey)

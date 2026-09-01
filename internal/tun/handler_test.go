@@ -671,7 +671,9 @@ func TestTUNHandler_HandleGenericUDP_NilDeps(t *testing.T) {
 	mockConn.On("Close").Return(nil)
 
 	assert.NotPanics(t, func() {
-		handler.handleGenericUDP(context.Background(), mockConn, M.Socksaddr{Addr: netip.MustParseAddr("8.8.8.8"), Port: 443})
+		handler.handleGenericUDP(context.Background(), mockConn,
+			M.Socksaddr{Addr: netip.MustParseAddr("10.0.0.1"), Port: 12345},
+			M.Socksaddr{Addr: netip.MustParseAddr("8.8.8.8"), Port: 443})
 	})
 	mockConn.AssertExpectations(t)
 }
