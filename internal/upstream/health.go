@@ -315,6 +315,10 @@ func (hc *HealthChecker) checkProxyTCP(p *Proxy) {
 			return http.ErrUseLastResponse
 		},
 	}
+	// This transport is per-probe (DialContext closes over this proxy p) and never
+	// reused: close its pooled keep-alive conn when done, otherwise each probe leaks an
+	// idle connection that only drains when the transport is eventually GC'd.
+	defer transport.CloseIdleConnections()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", cfg.URL, nil)
 	var success bool
