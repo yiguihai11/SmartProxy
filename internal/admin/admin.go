@@ -54,6 +54,11 @@ type Server struct {
 	tcpLn     net.Listener
 	server    *http.Server
 	tcpServer *http.Server
+	// tcpExposed records whether the TCP listener was bound to all interfaces (auth
+	// was configured at Start) vs loopback-only. The bind can't move at runtime, so a
+	// hot-reload that drops auth must not turn a LAN-exposed listener into an open
+	// relay — see SetAdminAuth.
+	tcpExposed bool
 
 	tlsEnabled   bool
 	certFile     string
@@ -82,7 +87,18 @@ func (s *Server) SetLogBuffer(buf *logbuf.RingBuffer) {
 	s.logBuf = buf
 }
 
+// SetAdminAuth applies a hot-reloaded panel auth config. It is fail-closed: the TCP
+// listener's bind (all-interfaces vs loopback) was fixed at Start from the auth state
+// then, and cannot be narrowed without a restart. If this reload would DROP auth
+// (disabled, or blank username/password) while the listener is exposed on the LAN, the
+// old credentials are kept — otherwise the panel silently becomes an unauthenticated
+// open relay reachable by anyone on the network. Enabling auth or rotating the password
+// is always allowed; only downgrades on an exposed listener are refused.
 func (s *Server) SetAdminAuth(auth *config.AdminAuthConf) {
+	if s.tcpExposed && !authConfEffective(auth) {
+		slog.Warn("ignoring config reload that disables panel auth on a LAN-exposed listener; restart the proxy to rebind the panel to loopback")
+		return
+	}
 	s.adminAuth = auth
 }
 
@@ -141,7 +157,8 @@ func (s *Server) Start() error {
 
 	if s.tcpPort > 0 {
 		addr := fmt.Sprintf(":%d", s.tcpPort)
-		if !s.authEnabled() {
+		exposed := s.authEnabled()
+		if !exposed {
 			// No authentication configured: an open panel bound to all interfaces would let
 			// anyone on the LAN (or via port forwarding) write config, change ACLs/chnroute,
 			// create files and flip circuits. Force loopback so it is only reachable from
@@ -154,15 +171,25 @@ func (s *Server) Start() error {
 			slog.Warn("admin TCP listen failed", "port", s.tcpPort, "error", err)
 		} else {
 			s.tcpLn = tcpLn
+			s.tcpExposed = exposed
 			if s.tlsEnabled {
 				tlsCfg, err := s.buildTLSConfig()
 				if err != nil {
-					// A bad cert (e.g. unreadable configured files) must not take the
-					// panel down: fall back to plain HTTP so it stays reachable.
-					slog.Warn("admin TLS setup failed, falling back to plain HTTP", "error", err)
-					s.tcpServer = newHTTPServer(handler)
-					slog.Info("admin HTTP server started", "port", s.tcpPort)
-					go s.tcpServer.Serve(tcpLn)
+					// fail-closed: TLS is what protects Basic Auth on the all-interfaces
+					// bind. If the cert won't load, serving plain HTTP there broadcasts the
+					// credentials and every request to the LAN — shut the listener instead
+					// of silently downgrading. Plain-HTTP fallback is only acceptable on the
+					// loopback bind (no auth, local host only).
+					if exposed {
+						slog.Error("admin TLS setup failed with auth enabled; refusing to serve plaintext on all interfaces", "port", s.tcpPort, "error", err)
+						tcpLn.Close()
+						s.tcpLn = nil
+					} else {
+						slog.Warn("admin TLS setup failed on loopback bind, falling back to plain HTTP", "error", err)
+						s.tcpServer = newHTTPServer(handler)
+						slog.Info("admin HTTP server started", "port", s.tcpPort)
+						go s.tcpServer.Serve(tcpLn)
+					}
 				} else {
 					// One port, two protocols: TLS handshakes are served as HTTPS,
 					// plaintext requests are 301-redirected to https (see tls.go).
@@ -191,7 +218,16 @@ func (s *Server) tlsDispatch(handler http.Handler) http.Handler {
 			handler.ServeHTTP(w, r)
 			return
 		}
-		host := r.Host
+		// Build the https authority from the server-side local address (the interface the
+		// peer actually reached), never from the client-supplied Host header: a forged /
+		// rebound Host would turn this 301 into an open redirect to an attacker host.
+		host := ""
+		// LocalAddrContextKey holds the net.Addr the connection arrived on (the interface
+		// the peer actually reached); it is server-populated, unlike the client-controlled
+		// Host header. "ip:port" (IPv6 already bracketed).
+		if addr, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
+			host = addr.String()
+		}
 		if host == "" {
 			host = "localhost"
 		}
@@ -257,11 +293,18 @@ func (s *Server) setupMux() http.Handler {
 	return mux
 }
 
-// authEnabled reports whether Basic Auth is actually configured on the panel. It is the
-// single gate both authMiddleware and the bind-address logic must agree on: the same
-// condition that leaves endpoints open decides whether binding all interfaces is safe.
+// authConfEffective reports whether c turns Basic Auth on with usable credentials —
+// enabled AND both username and password non-empty. An empty password must not count as
+// "auth configured": it would let anyone log in with a blank password while still
+// triggering the all-interfaces bind. It is the single condition the middleware gate and
+// the bind-address logic must agree on.
+func authConfEffective(c *config.AdminAuthConf) bool {
+	return c != nil && c.Enabled && c.Username != "" && c.Password != ""
+}
+
+// authEnabled reports whether Basic Auth is actually configured on the panel.
 func (s *Server) authEnabled() bool {
-	return s.adminAuth != nil && s.adminAuth.Enabled && s.adminAuth.Username != ""
+	return authConfEffective(s.adminAuth)
 }
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
@@ -850,7 +893,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "format error", http.StatusInternalServerError)
 			return
 		}
-		if err := atomicWriteFile(s.configPath, indented, 0644); err != nil {
+		// config.json holds the panel password and upstream node credentials: owner-only.
+	if err := atomicWriteFile(s.configPath, indented, 0o600); err != nil {
 			http.Error(w, "write failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -880,7 +924,8 @@ func (s *Server) saveConfig(mutate func(c *config.Config)) (*config.Config, erro
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := atomicWriteFile(s.configPath, indented, 0644); err != nil {
+	// config.json holds the panel password and upstream node credentials: owner-only.
+	if err := atomicWriteFile(s.configPath, indented, 0o600); err != nil {
 		return nil, nil, err
 	}
 	slog.Info("admin: config saved to disk", "path", s.configPath)

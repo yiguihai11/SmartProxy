@@ -1458,3 +1458,49 @@ func hasSANIP(ips []net.IP, want string) bool {
 	}
 	return false
 }
+
+func TestAuthConfEffective(t *testing.T) {
+	cases := []struct {
+		name string
+		auth *config.AdminAuthConf
+		want bool
+	}{
+		{"nil", nil, false},
+		{"disabled", &config.AdminAuthConf{Enabled: false, Username: "admin", Password: "x"}, false},
+		{"empty username", &config.AdminAuthConf{Enabled: true, Username: "", Password: "x"}, false},
+		{"empty password", &config.AdminAuthConf{Enabled: true, Username: "admin", Password: ""}, false},
+		{"valid", &config.AdminAuthConf{Enabled: true, Username: "admin", Password: "x"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := authConfEffective(c.auth); got != c.want {
+				t.Fatalf("authConfEffective() = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// A hot-reload must not be able to turn a LAN-exposed listener into an open panel:
+// blanking the password / disabling auth on an exposed bind is refused (old credentials
+// kept), while the same downgrade on a loopback bind is allowed.
+func TestSetAdminAuthFailClosedOnExposedListener(t *testing.T) {
+	s := &Server{}
+	good := &config.AdminAuthConf{Enabled: true, Username: "admin", Password: "secret"}
+	s.tcpExposed = true
+	s.SetAdminAuth(good)
+
+	s.SetAdminAuth(&config.AdminAuthConf{Enabled: true, Username: "admin", Password: ""})
+	if !authConfEffective(s.adminAuth) {
+		t.Fatal("downgrade to empty password applied on exposed listener; want old credentials kept")
+	}
+	s.SetAdminAuth(&config.AdminAuthConf{Enabled: false, Username: "", Password: ""})
+	if !authConfEffective(s.adminAuth) {
+		t.Fatal("disabling auth on exposed listener applied; want old credentials kept")
+	}
+
+	s.tcpExposed = false
+	s.SetAdminAuth(&config.AdminAuthConf{Enabled: false, Username: "", Password: ""})
+	if authConfEffective(s.adminAuth) {
+		t.Fatal("disabling auth on loopback bind should be allowed")
+	}
+}
