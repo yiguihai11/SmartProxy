@@ -288,6 +288,13 @@ func (e *Engine) serve(ctx context.Context) {
 				return
 			}
 			slog.Error("accept error", "error", err)
+			// 退避:最典型是 EMFILE(fd 表打满),裸 continue 会在耗尽 fd 时 100% CPU
+			// 热自旋狂调 Accept。短暂停一下(shutdown 可立即唤醒),fd 释放后 10ms 内自愈。
+			select {
+			case <-time.After(10 * time.Millisecond):
+			case <-ctx.Done():
+				return
+			}
 			continue
 		}
 		// Backpressure: when maxConcurrentClients handlers are busy, block accept
