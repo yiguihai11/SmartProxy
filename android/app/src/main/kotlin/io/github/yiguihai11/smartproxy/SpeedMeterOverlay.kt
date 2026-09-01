@@ -22,6 +22,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 import kotlin.math.hypot
 
@@ -81,10 +82,12 @@ object SpeedMeterOverlay {
     private var bgHandler: Handler? = null
     private val mainHandler = Handler(android.os.Looper.getMainLooper())
 
-    /** 上一次轮询的各 UID 累计字节(算 δ);uid → (up, down)。仅 bg 线程访问。 */
-    private val prevTotals = HashMap<Int, Pair<Long, Long>>()
-    /** uid → (应用名, 图标),仅 bg 线程写、主线程读引用。 */
-    private val metaCache = HashMap<Int, Pair<String, Drawable?>>()
+    /** 上一次轮询的各 UID 累计字节(算 δ);uid → (up, down)。bg 轮询线程读写,
+     *  hideOnMain(主线程)也会 clear()——必须并发安全,否则快速关开 VPN 时 bg 还在
+     *  put/removeAll、主线程已 clear,裸 HashMap 会 CME/结构损坏直接崩进程。 */
+    private val prevTotals = ConcurrentHashMap<Int, Pair<Long, Long>>()
+    /** uid → (应用名, 图标)。同上:bg 写、主线程 hide 时 clear,用并发 Map。 */
+    private val metaCache = ConcurrentHashMap<Int, Pair<String, Drawable?>>()
     /** 当前前台应用 uid;-1 = 拿不到(未授权「使用情况访问权限」/无可判定)。仅 bg 线程访问。 */
     private var foregroundUid = -1
     private var lastForegroundQuery = 0L
