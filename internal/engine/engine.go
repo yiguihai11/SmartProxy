@@ -219,7 +219,9 @@ func (e *Engine) Start(ctx context.Context) error {
 	if e.Config.Load().TUN.Enabled {
 		tunDev, tunStack, err := e.TUNHandler.Start(ctx, e.Config.Load().TUN)
 		if err != nil {
-			cancel()
+			// 失败也要清掉 New() 里已起的后台 goroutine(router cleanup、上游 health
+			// 探测、DNS);只 cancel() 它们不会停,配置错误重试一次叠一套、持续空拨测。
+			e.Stop()
 			return fmt.Errorf("failed to start TUN: %w", err)
 		}
 		e.tunDev = tunDev
@@ -234,17 +236,9 @@ func (e *Engine) Start(ctx context.Context) error {
 		listenAddr := net.JoinHostPort(lc.Host, strconv.Itoa(lc.Port))
 		ln, err := net.Listen("tcp", listenAddr)
 		if err != nil {
-			if e.tunStack != nil {
-				if closer, ok := e.tunStack.(interface{ Close() error }); ok {
-					closer.Close()
-				}
-			}
-			if e.tunDev != nil {
-				if closer, ok := e.tunDev.(interface{ Close() error }); ok {
-					closer.Close()
-				}
-			}
-			cancel()
+			// e.Stop() 按正确顺序关 tunDev→tunStack→TUNHandler,并停掉 New() 起的后台
+			// goroutine——替代原先只关 tun 的半截清理(那版漏了 health 探测/cleanup)。
+			e.Stop()
 			return fmt.Errorf("failed to listen: %w", err)
 		}
 		e.listener = ln

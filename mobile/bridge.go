@@ -248,8 +248,13 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 	if err := eng.Start(ctx); err != nil {
 		slog.Error("[Go-Bridge] StartRouter eng.Start failed", "error", err)
 		cancel()
-		// eng.Start 失败时 TUN 栈可能已部分建立也可能没有;fd 是否被接管不确定,
-		// 保守起见不在这里补关(避免双关),交给引擎自身的清理路径。
+		// eng.Start 失败内部已 e.Stop()(停 health 探测/router cleanup/TUN,fd 也按
+		// 正确顺序关了)。这里补停本桥在 Start 前启动的 fsnotify watcher——否则重试
+		// StartRouter 会 new 一个新 watcher 顶掉 routerWatcher,旧 watcher goroutine 泄漏。
+		if routerWatcher != nil {
+			routerWatcher.Stop()
+			routerWatcher = nil
+		}
 		return err
 	}
 
