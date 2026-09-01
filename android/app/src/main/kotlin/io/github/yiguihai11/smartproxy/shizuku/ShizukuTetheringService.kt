@@ -36,8 +36,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * forwarding, NAT and DNS machinery sends client traffic into that TUN.
  *
  * 线程模型:所有改路由/热点状态的入口(startRouting/stopRouting/synchronizeRouting/
- * setWifiHotspotEnabled/notifyCore*/onTetheringChanged/binder 死亡回调)都在 [routingWorker]
- * 单线程上串行——*Locked 方法的「Locked」指 worker 独占状态,不是 synchronized(this)。
+ * setWifiHotspotEnabled、notifyCoreStopping/notifyCoreStartFailed、onTetheringChanged、
+ * binder 死亡回调)都在 [routingWorker]
+ * 单线程上串行——Locked 后缀方法的「Locked」指 worker 独占状态,不是 synchronized(this)。
  * this 监视器只在 getStatus 快照和 statusListener 发布时短暂持有:建测试网络(~15s)、
  * 等 tethering 状态(每类型最多 ~10s)、上游重试 sleep(8s)这些长操作绝不能抱着状态锁,
  * 否则 UI 状态轮询和 fail-closed 回调会在锁队列里堵几十秒。
