@@ -3,12 +3,19 @@ package chnroute
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/netip"
 	"os"
 	"strings"
 )
+
+// maxChnrouteSize caps how much of a chnroute file Load will read. Real delegated
+// prefix lists are a few MiB; 64 MiB leaves huge headroom. The cap exists because
+// /files/validate takes an arbitrary path — an unbounded ReadAll on /dev/zero (or a
+// giant sparse file) would be a one-request OOM that takes the proxy down.
+const maxChnrouteSize = 64 << 20 // 64 MiB
 
 func Load(path string) (*Trie, error) {
 	f, err := os.Open(path)
@@ -17,9 +24,13 @@ func Load(path string) (*Trie, error) {
 	}
 	defer f.Close()
 
-	data, err := io.ReadAll(f)
+	// Read cap+1 so a file at/over the limit is reported rather than parsed truncated.
+	data, err := io.ReadAll(io.LimitReader(f, maxChnrouteSize+1))
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(data)) > maxChnrouteSize {
+		return nil, fmt.Errorf("chnroute file too large (>%d MiB)", maxChnrouteSize>>20)
 	}
 
 	prefixes, err := parsePrefixes(data)
