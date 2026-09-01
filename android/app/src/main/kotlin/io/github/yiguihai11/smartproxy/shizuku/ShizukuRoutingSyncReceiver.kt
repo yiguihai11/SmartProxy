@@ -33,10 +33,11 @@ class ShizukuRoutingSyncReceiver : BroadcastReceiver() {
             Log.w(TAG, "Ignoring malformed hotspot synchronization broadcast")
             return
         }
-        val pendingResult = goAsync()
-        ShizukuRoutingSyncDispatcher.enqueue(context.applicationContext, update, intent.coreTetheringLease()) {
-            pendingResult.finish()
-        }
+        // 慢同步(建测试网络/等 tethering 状态,可达 30s)交给进程级单例 dispatcher 的 worker
+        // 线程异步跑,不用 goAsync:慢路径只在 EVENT_CORE_STARTED 触发,此刻 VPN 前台服务(FGS)
+        // 活着、进程不会被回收;而 goAsync 只有 ~10s 预算,onReceive 里同步等 synchronizeRouting
+        // 跑完才 finish 反而超预算触发广播 ANR。
+        ShizukuRoutingSyncDispatcher.enqueue(context.applicationContext, update, intent.coreTetheringLease())
     }
 }
 
@@ -48,7 +49,6 @@ private object ShizukuRoutingSyncDispatcher {
         val context: Context,
         val update: HotspotRoutingSync,
         val coreLease: ICoreTetheringLease?,
-        val finish: () -> Unit,
         val retryAfterDisconnect: Boolean = true,
     )
 
@@ -74,9 +74,9 @@ private object ShizukuRoutingSyncDispatcher {
         }
     }
 
-    fun enqueue(context: Context, update: HotspotRoutingSync, coreLease: ICoreTetheringLease?, finish: () -> Unit) {
+    fun enqueue(context: Context, update: HotspotRoutingSync, coreLease: ICoreTetheringLease?) {
         mainHandler.post {
-            queue.addLast(PendingUpdate(context, update, coreLease, finish))
+            queue.addLast(PendingUpdate(context, update, coreLease))
             pump()
         }
     }
@@ -99,7 +99,6 @@ private object ShizukuRoutingSyncDispatcher {
                     queue.addFirst(pending.copy(retryAfterDisconnect = false))
                 } else {
                     result.onFailure { Log.e(TAG, "Unable to forward hotspot synchronization", it) }
-                    pending.finish()
                 }
                 inFlight = false
                 pump()
@@ -186,7 +185,7 @@ private object ShizukuRoutingSyncDispatcher {
 
     private fun failAll(message: String) {
         if (queue.isNotEmpty()) Log.w(TAG, message)
-        while (queue.isNotEmpty()) queue.removeFirst().finish()
+        queue.clear()
         inFlight = false
     }
 }
