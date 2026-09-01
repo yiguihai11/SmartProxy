@@ -216,6 +216,10 @@ func (h *Handler) HandlePacket(ctx context.Context, data []byte, clientAddr net.
 		} else {
 			toSend = payload
 		}
+		// 并发安全(8 worker 共享同一条上游 TCP):net.TCPConn.Write 整个调用持运行时
+		// fdMutex 写锁,多 goroutine 写被串行化,帧不会交错。前提是【一帧一次 Write】——
+		// 别把 toSend 拆成两次 Write 或套共享 bufio.Writer,否则该保证失效(ponytail: 无需
+		// 应用层写锁,运行时已串行;heV 帧自描述、乱序无影响)。
 		if _, err := sess.remoteConn.Write(toSend); err != nil {
 			slog.Debug("failed to write to remote in 0-RTT path", "error", err)
 			h.closeSession(sess)
