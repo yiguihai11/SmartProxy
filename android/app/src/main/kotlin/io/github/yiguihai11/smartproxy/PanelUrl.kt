@@ -29,18 +29,23 @@ object PanelUrl {
         return null
     }
 
-    /** <scheme>://smartproxy.lan:<port>;未连网/拿不到局域网 IP 返回 null。
+    /** <scheme>://smartproxy.lan:<port>;拿不到/不该给链接时返回 null:
+     *  - admin_port 空/0:引擎侧 engine.go 见 AdminPort<=0 且 admin_socket 空就不建
+     *    adminServer(面板 HTTP 根本不监听),给链接是死链 → null,首页卡整块不显示;
+     *  - VPN 模式未连网/拿不到局域网 IP:static record 无从建立 → null。
      *  scheme 读 admin_https(默认 https)。仅代理(SOCKS5)模式(§8)无 VPN DNS 接管:
      *  smartproxy.lan 手机系统 DNS 解析不了,改用 loopback 127.0.0.1(admin 绑
      *  ":AdminPort",证书内置 SAN 127.0.0.1,本机开面板无告警)。LAN IP 不进证书
      *  (用户取消 SAN 自动追加,§8),不再给局域网设备提供 App 链接;需要者可自行加
      *  admin_cert_sans 或放行自签告警。 */
     fun url(context: Context): String? {
+        val port = ConfigProvider.adminPort(context)
+        if (port <= 0) return null
         val scheme = if (ConfigProvider.adminHttps(context)) "https" else "http"
         if (AppPrefs.serviceMode(context) == AppPrefs.MODE_SOCKS5) {
-            return "$scheme://127.0.0.1:${ConfigProvider.adminPort(context)}"
+            return "$scheme://127.0.0.1:$port"
         }
         if (lanIpv4() == null) return null
-        return "$scheme://smartproxy.lan:${ConfigProvider.adminPort(context)}"
+        return "$scheme://smartproxy.lan:$port"
     }
 }

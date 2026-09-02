@@ -1009,9 +1009,11 @@ private fun HomeLauncher(
             }
             Spacer(Modifier.height(24.dp))
 
-            // ── 管理面板卡(服务运行中显示)。仅代理模式 URL=127.0.0.1,QR 跨设备扫到的是
-            // 扫描机自己,只能本机开面板;VPN 模式 smartproxy.lan 可跨设备扫 QR。────────
-            if (running) {
+            // ── 管理面板卡(服务运行中且面板可达才显示)。panelUrl==null 涵盖两种:
+            //  admin_port 空(引擎没开面板)、VPN 模式拿不到局域网 IP——都不给死链/空卡。
+            //  仅代理模式 URL=127.0.0.1,QR 跨设备扫到的是扫描机自己,只能本机开面板;
+            //  VPN 模式 smartproxy.lan 可跨设备扫 QR。────────
+            if (running && panelUrl != null) {
                 PanelCard(url = panelUrl, auth = adminAuth, onCopy = { url -> copyPanelUrl(context, url) }, onOpen = { url -> openPanel(context, url) })
                 Spacer(Modifier.height(8.dp))
             }
