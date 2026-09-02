@@ -42,14 +42,41 @@ object ConfigProvider {
     fun ensureConfig(context: Context) {
         val f = File(context.filesDir, CONFIG_NAME)
         if (!f.exists()) {
-            atomicWriteText(f, applyInvariants(context, JSONObject(readAsset(context, CONFIG_NAME))).toString())
+            atomicWriteText(f, freshSeed(context))
             return
         }
         val text = runCatching { f.readText() }.getOrDefault("")
         val parsed = runCatching { JSONObject(text) }.getOrNull()
-        val base = parsed ?: JSONObject(readAsset(context, CONFIG_NAME))
-        val out = applyInvariants(context, base).toString()
+        if (parsed == null) {
+            // 损坏:回退 assets 默认重新落盘(同样走 freshSeed,出厂随机面板密码)。
+            atomicWriteText(f, freshSeed(context))
+            return
+        }
+        val out = applyInvariants(context, parsed).toString()
         if (out != text) atomicWriteText(f, out)
+    }
+
+    /** 从 assets 种一份全新 config:应用不变量,再把出厂写死的面板密码换成每装随机值。
+     *  assets 里 admin/smartproxy 全网通用、等于没密码;首页面板卡回显真实凭据且可复制,
+     *  用户在自己手机上看得到,局域网别人猜不到。只在「全新播种/损坏重建」时跑,
+     *  绝不动已存在的用户配置(老升级、面板改过密码都不碰)。 */
+    private fun freshSeed(context: Context): String {
+        val json = applyInvariants(context, JSONObject(readAsset(context, CONFIG_NAME)))
+        json.optJSONObject("listen")?.optJSONObject("admin_auth")
+            ?.takeIf { it.optBoolean("enabled", false) }
+            ?.put("password", randomAdminPassword())
+        return json.toString()
+    }
+
+    /** 15 字节 SecureRandom → URL-safe Base64 无填充(约 20 字符,~120 bit 熵)。
+     *  字母表 URL-safe 且无 +/= ,面板 Basic Auth 输入、二维码都不踩特殊字符坑。 */
+    private fun randomAdminPassword(): String {
+        val bytes = ByteArray(15)
+        java.security.SecureRandom().nextBytes(bytes)
+        return android.util.Base64.encodeToString(
+            bytes,
+            android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING
+        )
     }
 
     /** filesDir/config.json 绝对路径(StartRouter 按路径加载,与桌面 config.Load 同路)。 */

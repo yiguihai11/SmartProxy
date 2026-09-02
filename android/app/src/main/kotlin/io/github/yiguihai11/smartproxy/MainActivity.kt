@@ -40,6 +40,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Column
@@ -1496,8 +1497,13 @@ private fun PanelCard(url: String?, auth: Pair<String, String>?, onCopy: (String
                 Text(url, fontSize = 13.sp, color = GreyText)
                 if (auth != null) {
                     Spacer(Modifier.height(6.dp))
-                    Text(stringResource(R.string.panel_user, auth.first), fontSize = 12.sp, color = GreyText)
-                    Text(stringResource(R.string.panel_pass, auth.second), fontSize = 12.sp, color = GreyText)
+                    // 出厂随机密码人手记不住:长按选中即可复制账号/密码(不进 URL、不进 QR)。
+                    SelectionContainer {
+                        Column {
+                            Text(stringResource(R.string.panel_user, auth.first), fontSize = 12.sp, color = GreyText)
+                            Text(stringResource(R.string.panel_pass, auth.second), fontSize = 12.sp, color = GreyText)
+                        }
+                    }
                 }
                 Spacer(Modifier.height(10.dp))
                 Row {
