@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -119,6 +120,10 @@ func (s *Server) Start() error {
 	// HTTP, HTTPS); build one hardened handler and reuse it so the three http.Server
 	// constructors can't drift.
 	handler := s.authMiddleware(s.limitBody(mux))
+	// TCP listeners additionally get CSRF defense: a browser that has cached the
+	// panel's Basic-Auth can be tricked by a malicious page into issuing mutating
+	// requests. The unix socket keeps the bare handler — browsers can't reach it.
+	tcpHandler := s.csrfMiddleware(handler)
 
 	if s.sockPath != "" {
 		dir := filepath.Dir(s.sockPath)
@@ -186,20 +191,20 @@ func (s *Server) Start() error {
 						s.tcpLn = nil
 					} else {
 						slog.Warn("admin TLS setup failed on loopback bind, falling back to plain HTTP", "error", err)
-						s.tcpServer = newHTTPServer(handler)
+						s.tcpServer = newHTTPServer(tcpHandler)
 						slog.Info("admin HTTP server started", "port", s.tcpPort)
 						go s.tcpServer.Serve(tcpLn)
 					}
 				} else {
 					// One port, two protocols: TLS handshakes are served as HTTPS,
 					// plaintext requests are 301-redirected to https (see tls.go).
-					s.tcpServer = newHTTPServer(s.tlsDispatch(handler))
+					s.tcpServer = newHTTPServer(s.tlsDispatch(tcpHandler))
 					slog.Info("admin HTTPS server started (HTTP redirects to https)", "port", s.tcpPort)
 					go s.tcpServer.Serve(&splitListener{Listener: tcpLn, tlsCfg: tlsCfg})
 				}
 			} else {
 				// The TCP port requires authentication
-				s.tcpServer = newHTTPServer(handler)
+				s.tcpServer = newHTTPServer(tcpHandler)
 				slog.Info("admin HTTP server started", "port", s.tcpPort)
 				go s.tcpServer.Serve(tcpLn)
 			}
@@ -329,6 +334,50 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// csrfMiddleware blocks cross-site state-changing requests on TCP listeners.
+// Browsers attach an Origin header they cannot forge or suppress to cross-origin
+// POST/PUT/DELETE/PATCH; if that Origin's host:port isn't the panel's own Host,
+// the request is a CSRF (or DNS-rebinding) attempt and is rejected. Read-only
+// GET/HEAD/OPTIONS pass untouched. Requests with no Origin at all pass too: a
+// non-browser client (curl, the native app) never auto-replays a browser's cached
+// Basic-Auth, so it cannot be a CSRF victim. Only TCP listeners wrap this — the
+// unix socket is unreachable from browsers.
+func (s *Server) csrfMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		}
+		if origin := r.Header.Get("Origin"); origin != "" {
+			u, err := url.Parse(origin)
+			if err != nil || !sameAuthority(u.Host, r.Host) {
+				slog.Warn("admin: rejected cross-origin state-changing request",
+					"method", r.Method, "path", r.URL.Path, "origin", origin, "host", r.Host)
+				http.Error(w, "Forbidden: cross-origin request rejected", http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// sameAuthority compares an Origin's host:port against the Host the client
+// reached, case-insensitively, tolerating a missing/default port on either side.
+func sameAuthority(originHost, reqHost string) bool {
+	oh, op := splitHostPort(originHost)
+	rh, rp := splitHostPort(reqHost)
+	return oh == rh && op == rp
+}
+
+func splitHostPort(h string) (host, port string) {
+	host, port, err := net.SplitHostPort(h)
+	if err != nil {
+		return strings.ToLower(strings.TrimSuffix(h, ".")), ""
+	}
+	return strings.ToLower(strings.TrimSuffix(host, ".")), port
 }
 
 const (

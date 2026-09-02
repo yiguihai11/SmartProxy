@@ -1504,3 +1504,68 @@ func TestSetAdminAuthFailClosedOnExposedListener(t *testing.T) {
 		t.Fatal("disabling auth on loopback bind should be allowed")
 	}
 }
+
+func TestAdmin_CSRFOriginCheck(t *testing.T) {
+	s := &Server{}
+	reached := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = true })
+	h := s.csrfMiddleware(next)
+
+	cases := []struct {
+		name   string
+		method string
+		origin string
+		host   string
+		want   bool // true = request reaches handler (200), false = 403
+	}{
+		{"GET cross-origin allowed (read-only)", http.MethodGet, "https://evil.com", "smartproxy.lan:9090", true},
+		{"POST same-origin allowed", http.MethodPost, "https://smartproxy.lan:9090", "smartproxy.lan:9090", true},
+		{"PUT loopback same-origin allowed", http.MethodPut, "https://127.0.0.1:9090", "127.0.0.1:9090", true},
+		{"POST cross-origin blocked", http.MethodPost, "https://evil.com", "smartproxy.lan:9090", false},
+		{"PUT cross-origin blocked", http.MethodPut, "https://evil.com", "127.0.0.1:9090", false},
+		{"DELETE cross-origin blocked", http.MethodDelete, "http://evil.com:9090", "smartproxy.lan:9090", false},
+		{"POST no origin (curl/native) allowed", http.MethodPost, "", "smartproxy.lan:9090", true},
+		{"POST origin host case-insensitive match", http.MethodPost, "https://SmartProxy.LAN:9090", "smartproxy.lan:9090", true},
+		{"POST origin wrong port blocked", http.MethodPost, "https://smartproxy.lan:8080", "smartproxy.lan:9090", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			reached = false
+			req := httptest.NewRequest(c.method, "https://"+c.host+"/config", nil)
+			req.Host = c.host
+			if c.origin != "" {
+				req.Header.Set("Origin", c.origin)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if c.want {
+				if rec.Code != http.StatusOK || !reached {
+					t.Fatalf("expected request to reach handler (200), got code=%d reached=%v", rec.Code, reached)
+				}
+			} else {
+				if rec.Code != http.StatusForbidden || reached {
+					t.Fatalf("expected 403 without reaching handler, got code=%d reached=%v", rec.Code, reached)
+				}
+			}
+		})
+	}
+}
+
+func TestAdmin_SameAuthority(t *testing.T) {
+	cases := []struct {
+		origin, host string
+		want         bool
+	}{
+		{"smartproxy.lan:9090", "smartproxy.lan:9090", true},
+		{"SmartProxy.LAN:9090", "smartproxy.lan:9090", true},
+		{"127.0.0.1:9090", "127.0.0.1:9090", true},
+		{"evil.com", "smartproxy.lan:9090", false},
+		{"smartproxy.lan:8080", "smartproxy.lan:9090", false},
+		{"[::1]:9090", "[::1]:9090", true},
+	}
+	for _, c := range cases {
+		if got := sameAuthority(c.origin, c.host); got != c.want {
+			t.Errorf("sameAuthority(%q,%q)=%v want %v", c.origin, c.host, got, c.want)
+		}
+	}
+}
