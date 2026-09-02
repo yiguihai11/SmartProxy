@@ -358,7 +358,7 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
             setPreferTestNetworks(true)
             createTestNetwork(config.dnsServers, config.ipv6Enabled)
             val tun = checkNotNull(testTun) { "Test TUN file descriptor is unavailable" }
-            startRoutingEngineLocked(config, tun.fd)
+            startRoutingEngineLocked(config, tun)
             setRoutingActiveLocked(config)
         } catch (error: Throwable) {
             cleanupRouting()
@@ -568,7 +568,7 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         routingDetail = "Switching tethering to new SmartProxy connection"
         stopRoutingEngineLocked()
         val tun = checkNotNull(testTun) { "Test TUN file descriptor is unavailable" }
-        startRoutingEngineLocked(config, tun.fd)
+        startRoutingEngineLocked(config, tun)
         setRoutingActiveLocked(config)
     }
 
@@ -928,7 +928,7 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
             .invoke(tetheringManager, prefer)
     }
 
-    private fun startRoutingEngineLocked(config: HotspotRoutingLaunchConfig, fd: Int) {
+    private fun startRoutingEngineLocked(config: HotspotRoutingLaunchConfig, tunPfd: ParcelFileDescriptor) {
         val lease = checkNotNull(coreLease) { "Core lease is unavailable" }
         val stagedDir = stageNativeAssets(lease)
         val configFile = File(stagedDir, "config.json")
@@ -937,8 +937,15 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         // 否则 engine.New → chnroute.Load 直接 permission denied,startRouting 报 -2。
         configFile.writeText(relocateRoutingFilesForShell(config.engineContent, stagedDir))
 
+        // Go sing-tun 用 os.NewFile 直接包传入的 fd 号(不 dup),StopRouter 关栈时 close 它。
+        // 若把 TestNetworkManager 原 PFD 的 fd 号直接给 Go,cleanupRouting 的 release() 再
+        // tun.close() 就是 fdsan double-close(fd 75 实测 SIGABRT,关路由即闪退,整个特权
+        // 进程死给你看)。dup 出独立 fd 交 Go 独占并 detachFd 转移 fdsan 所有权;原 PFD 始终
+        // 归 TestNetworkHandle.release() 关闭。失败路径 Go 的 startRouter 自己关 goFd
+        // (bridge closeFdOnErr),Kotlin 绝不碰——与 VpnService.establishVpn 同款归属。
+        val goFd = tunPfd.dup().detachFd()
         try {
-            smartproxy.mobile.Mobile.startRouter(configFile.absolutePath, fd.toLong(), true)
+            smartproxy.mobile.Mobile.startRouter(configFile.absolutePath, goFd.toLong(), true)
             check(smartproxy.mobile.Mobile.isRunning()) { "SmartProxy tethering core did not start" }
         } catch (error: Throwable) {
             stopRoutingEngineLocked()
