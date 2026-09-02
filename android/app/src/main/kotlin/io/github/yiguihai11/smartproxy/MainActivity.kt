@@ -121,8 +121,12 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.lifecycleScope
+import io.github.yiguihai11.smartproxy.shizuku.ShizukuShell
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 首页 = 纯启动器(§4.4),UI 参考 Ultimate VPN Free(com.open.hotspot.vpn.free)
@@ -263,25 +267,46 @@ class MainActivity : ComponentActivity() {
      *  Optimizations=true 会让 OriginOS 引导永远不出现。因此:
      *   - OriginOS 系:弹自定义引导 + 深链本应用详情页(耗电管理→允许后台运行),
      *     不看 AOSP 豁免状态(豁免与否都得引导,受 ask 上限约束);
-     *   - 其它厂商:AOSP「忽略电池优化」系统弹框,已豁免即跳过。
-     *  已引导满 MAX_BATTERY_OPT_ASKS 次则整体跳过,防误触无限弹。 */
+     *   - 其它厂商:已豁免即跳过;有 Shizuku(shell)则 `dumpsys deviceidle whitelist
+     *     +pkg` 静默加白、不弹窗,失败/无 Shizuku 才回退 AOSP「忽略电池优化」系统弹框。
+     *  弹框路径受 MAX_BATTERY_OPT_ASKS 次上限约束防误触;Shizuku 静默成功不计次数。 */
     private fun maybeRequestBatteryOptimizationExemption() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
-        if (AppPrefs.batteryOptAskCount(this) >= MAX_BATTERY_OPT_ASKS) return
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        if (!isOriginOS() && pm.isIgnoringBatteryOptimizations(packageName)) return
-        AppPrefs.setBatteryOptAskCount(this, AppPrefs.batteryOptAskCount(this) + 1)
+        // OriginOS(vivo/iQOO)智能冻结独立于 AOSP doze 白名单,shell 加白也盖不住,
+        // 只能走厂商深链引导。
         if (isOriginOS()) {
+            if (AppPrefs.batteryOptAskCount(this) >= MAX_BATTERY_OPT_ASKS) return
+            AppPrefs.setBatteryOptAskCount(this, AppPrefs.batteryOptAskCount(this) + 1)
             batteryDialogVisible = true
-        } else {
-            runCatching {
-                startActivity(Intent(
-                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                    Uri.parse("package:$packageName")
-                ))
-            }.onFailure {
-                android.util.Log.w("SmartProxyVpn", "[MainActivity] Battery-optimization dialog unavailable: ${it.message}")
+            return
+        }
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        if (pm.isIgnoringBatteryOptimizations(packageName)) return
+        // 有 Shizuku(shell uid):免 root 一条 dumpsys 静默进 doze 白名单,不弹系统框;
+        // 没装/没授权/命令失败,再回退 AOSP「忽略电池优化」系统弹框。
+        if (ShizukuShell.available()) {
+            lifecycleScope.launch {
+                val ok = withContext(Dispatchers.IO) { ShizukuShell.addBatteryWhitelist(packageName) }
+                if (!ok || !pm.isIgnoringBatteryOptimizations(packageName)) {
+                    showAospBatteryOptDialog()
+                }
             }
+            return
+        }
+        showAospBatteryOptDialog()
+    }
+
+    /** AOSP「忽略电池优化」系统弹框,受 MAX_BATTERY_OPT_ASKS 次数上限约束,防误触无限弹。 */
+    private fun showAospBatteryOptDialog() {
+        if (AppPrefs.batteryOptAskCount(this) >= MAX_BATTERY_OPT_ASKS) return
+        AppPrefs.setBatteryOptAskCount(this, AppPrefs.batteryOptAskCount(this) + 1)
+        runCatching {
+            startActivity(Intent(
+                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                Uri.parse("package:$packageName")
+            ))
+        }.onFailure {
+            android.util.Log.w("SmartProxyVpn", "[MainActivity] Battery-optimization dialog unavailable: ${it.message}")
         }
     }
 
