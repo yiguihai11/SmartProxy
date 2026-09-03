@@ -82,7 +82,9 @@ object AppPrefs {
     }
 
     fun setSelectedApps(context: Context, apps: Set<String>) {
-        sp(context).edit().putStringSet(KEY_SELECTED_APPS, apps).apply()
+        // HashSet 防御性拷贝:SharedPreferencesImpl 内部直接引用传入的 Set 对象,
+        // 若引用未变(如同一实例改写)会导致变更不写盘。
+        sp(context).edit().putStringSet(KEY_SELECTED_APPS, HashSet(apps)).apply()
     }
 
     /** 「禁止联网」拦截的应用包名列表(仅仅绕过/黑名单模式可用,白名单模式 UI 禁用)。
@@ -91,7 +93,7 @@ object AppPrefs {
         sp(context).getStringSet(KEY_BLOCKED_APPS, emptySet()) ?: emptySet()
 
     fun setBlockedApps(context: Context, apps: Set<String>) {
-        sp(context).edit().putStringSet(KEY_BLOCKED_APPS, apps).apply()
+        sp(context).edit().putStringSet(KEY_BLOCKED_APPS, HashSet(apps)).apply()
     }
 
     /** 启动注入的 IPv4 DNS 服务器(默认 223.5.5.5)。 */
@@ -115,7 +117,7 @@ object AppPrefs {
         sp(context).getStringSet(KEY_EXCLUDED_ROUTES, emptySet()) ?: emptySet()
 
     fun setExcludedRoutes(context: Context, routes: Set<String>) {
-        sp(context).edit().putStringSet(KEY_EXCLUDED_ROUTES, routes).apply()
+        sp(context).edit().putStringSet(KEY_EXCLUDED_ROUTES, HashSet(routes)).apply()
     }
 
     /** 主题模式:auto = 跟随系统(深色/浅色),light / dark = 手动锁定。默认 auto。 */

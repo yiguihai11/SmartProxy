@@ -113,6 +113,6 @@ object NotificationHelper {
      */
     fun isForegroundNotificationVisible(context: Context): Boolean {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        return nm.activeNotifications.any { it.id == NOTIFICATION_ID }
+        return nm.activeNotifications?.any { it.id == NOTIFICATION_ID } == true
     }
 }

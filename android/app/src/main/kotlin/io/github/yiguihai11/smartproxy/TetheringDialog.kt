@@ -309,7 +309,12 @@ fun TetheringDialog(
                     }
                 }
             } else {
-                tetheringService = null
+                if (tetheringService != null) {
+                    runCatching {
+                        Shizuku.unbindUserService(userServiceArgs, serviceConnection, false)
+                    }
+                    tetheringService = null
+                }
             }
         }
     }
@@ -490,10 +495,8 @@ fun TetheringDialog(
             Shizuku.removeBinderDeadListener(binderDeadListener)
             Shizuku.removeRequestPermissionResultListener(permissionResultListener)
             runCatching { tetheringService?.setStatusListener(null) }
-            if (tetheringService != null || state.operation == TetheringOperation.CONNECTING) {
-                runCatching {
-                    Shizuku.unbindUserService(userServiceArgs, serviceConnection, false)
-                }
+            runCatching {
+                Shizuku.unbindUserService(userServiceArgs, serviceConnection, false)
             }
             tetheringService = null
         }

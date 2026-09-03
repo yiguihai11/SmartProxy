@@ -179,7 +179,13 @@ class LogcatActivity : ComponentActivity() {
                         "-s", "SmartProxyVpn:V", "AndroidRuntime:W", "System.err"
                     )
                 )
-                process.inputStream.bufferedReader().use { it.readText() }
+                try {
+                    val text = process.inputStream.bufferedReader().use { it.readText() }
+                    process.waitFor()
+                    text
+                } finally {
+                    runCatching { process.destroy() }
+                }
             }
         }
         result
@@ -200,7 +206,11 @@ class LogcatActivity : ComponentActivity() {
         withContext(Dispatchers.IO) {
             runCatching {
                 val p = Runtime.getRuntime().exec(arrayOf("logcat", "-c"))
-                p.waitFor()
+                try {
+                    p.waitFor()
+                } finally {
+                    runCatching { p.destroy() }
+                }
             }
         }
         lines = emptyList()

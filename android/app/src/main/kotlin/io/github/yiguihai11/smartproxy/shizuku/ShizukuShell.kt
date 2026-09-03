@@ -3,6 +3,7 @@ package io.github.yiguihai11.smartproxy.shizuku
 import android.content.pm.PackageManager
 import android.util.Log
 import rikka.shizuku.Shizuku
+import java.util.concurrent.TimeUnit
 
 /**
  * 以 shell(uid 2000,Shizuku ADB/Root 模式)身份跑单条系统命令的薄封装。
@@ -53,7 +54,12 @@ object ShizukuShell {
             .apply { isDaemon = true; start() }
         return try {
             runCatching { process.inputStream.bufferedReader().readText() }
-            val code = process.waitFor()
+            val completed = process.waitFor(10, TimeUnit.SECONDS)
+            if (!completed) {
+                Log.w(TAG, "${cmd.joinToString(" ")} timed out after 10s")
+                return false
+            }
+            val code = process.exitValue()
             if (code != 0) Log.w(TAG, "${cmd.joinToString(" ")} exited $code")
             code == 0
         } catch (e: Throwable) {
