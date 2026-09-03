@@ -874,7 +874,10 @@ private fun TetheringSectionCard(
             }
 
             extraContent?.let {
-                Box(Modifier.padding(start = 32.dp)) {
+                // 必须用 Column 不是 Box:extraContent 可含多个垂直子元素(Shizuku 卡片的
+                // 下载按钮 + 授权/刷新 Row),Box 会把子节点堆叠在同一格,导致按钮视觉重叠、
+                // 上层盖住下层点不到。单子元素时 Column 与 Box 表现一致,无副作用。
+                Column(Modifier.padding(start = 32.dp)) {
                     it()
                 }
             }
