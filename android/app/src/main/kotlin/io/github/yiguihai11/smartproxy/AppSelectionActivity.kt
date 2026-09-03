@@ -197,7 +197,9 @@ private fun AppSelectionScreen(
     val context = LocalContext.current
     var allApps by remember { mutableStateOf<List<AppEnumerator.AppInfo>>(emptyList()) }
     var loaded by remember { mutableStateOf(false) }
-    var tab by remember { mutableStateOf(0) }      // 0 全部 / 1 用户 / 2 系统
+    // 默认停「用户」tab:全量枚举后「全部」会被 com.android.* 系统包刷屏(对齐
+    // v2rayNG 默认只列用户应用);系统组件在「系统」tab 一个不少,需要时切过去。
+    var tab by remember { mutableStateOf(1) }      // 0 全部 / 1 用户 / 2 系统
     var query by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
@@ -218,7 +220,7 @@ private fun AppSelectionScreen(
     val initialBlocked = remember { blocked }
     val collator = remember { Collator.getInstance(Locale.CHINA) }
     val visible = remember(allApps, tab, query, initialSelected, initialBlocked) {
-        val q = query.trim().lowercase()
+        val q = query.trim()
         allApps
             .filter { a ->
                 val tabOk = when (tab) {
@@ -226,7 +228,8 @@ private fun AppSelectionScreen(
                     1 -> !a.system
                     else -> a.system
                 }
-                tabOk && (q.isEmpty() || a.label.lowercase().contains(q) || a.pkg.lowercase().contains(q))
+                // ignoreCase 显式忽略大小写:不依赖 locale lowercasing,搜 "youtube"/"YouTube" 都中。
+                tabOk && (q.isEmpty() || a.label.contains(q, ignoreCase = true) || a.pkg.contains(q, ignoreCase = true))
             }
             .sortedWith { a, b ->
                 val ra = blockSortRank(initialSelected, initialBlocked, a.pkg)
