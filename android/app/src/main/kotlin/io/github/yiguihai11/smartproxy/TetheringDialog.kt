@@ -644,42 +644,29 @@ fun TetheringDialog(
                     titleColor = purpleDark,
                     detailColor = greyText
                 ) {
-                    // 未安装 / 已安装未启动 / 版本过旧:引导用户到官网下载或查看启动教程。
-                    if (state.shizukuStatus == ShizukuStatus.NOT_INSTALLED ||
-                        state.shizukuStatus == ShizukuStatus.NOT_RUNNING ||
-                        state.shizukuStatus == ShizukuStatus.UNSUPPORTED
-                    ) {
-                        Spacer(Modifier.height(6.dp))
-                        OutlinedButton(
-                            onClick = { openShizukuDownloadPage() },
-                            enabled = !state.operation.isToggleInProgress,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(38.dp)
-                        ) {
-                            Text(
-                                text = stringResource(R.string.shizuku_download_button),
-                                fontSize = 12.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
+                    // 单行两钮:授权(左) + 刷新(右)。没装 Shizuku 时左钮无授权可请,
+                    // 动态换成「下载」引到官网——省掉一条独占整行的下载按钮。
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        val needDownload = state.shizukuStatus == ShizukuStatus.NOT_INSTALLED
                         OutlinedButton(
-                            onClick = { requestPermission() },
-                            enabled = state.shizukuStatus.canRequestPermission && !state.operation.isToggleInProgress,
+                            onClick = {
+                                if (needDownload) openShizukuDownloadPage() else requestPermission()
+                            },
+                            enabled = (needDownload || state.shizukuStatus.canRequestPermission) &&
+                                !state.operation.isToggleInProgress,
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.weight(1f).height(40.dp)
                         ) {
                             Text(
-                                text = stringResource(R.string.shizuku_request_permission),
+                                text = stringResource(
+                                    if (needDownload) R.string.shizuku_download_button
+                                    else R.string.shizuku_request_permission
+                                ),
                                 fontSize = 12.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
