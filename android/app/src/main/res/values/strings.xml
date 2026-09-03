@@ -204,6 +204,7 @@
     <string name="shizuku_routing_status_error">Routing error</string>
     <string name="shizuku_routing_status_unavailable">Routing status unavailable</string>
     <string name="shizuku_routing_status_start_vpn">Please start SmartProxy in VPN mode first</string>
+    <string name="shizuku_routing_status_need_permission">Grant Shizuku permission above first</string>
     <string name="shizuku_routing_enabled">SmartProxy tethering enabled</string>
     <string name="shizuku_routing_disabled">SmartProxy tethering disabled</string>
     <string name="shizuku_routing_operation_failed">Tethering routing failed (error %1$d): %2$s</string>
@@ -222,6 +223,7 @@
     <string name="shizuku_hotspot_status_starting">Starting hotspot…</string>
     <string name="shizuku_hotspot_status_stopping">Stopping hotspot…</string>
     <string name="shizuku_hotspot_status_unavailable">Hotspot status unavailable</string>
+    <string name="shizuku_hotspot_status_need_permission">Grant Shizuku permission above first</string>
     <string name="shizuku_hotspot_enabled">Wi-Fi hotspot enabled</string>
     <string name="shizuku_hotspot_disabled">Wi-Fi hotspot disabled</string>
     <string name="shizuku_hotspot_operation_failed">Hotspot operation failed (error %1$d)</string>

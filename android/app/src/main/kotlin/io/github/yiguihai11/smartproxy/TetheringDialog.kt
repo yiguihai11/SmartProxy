@@ -510,12 +510,16 @@ fun TetheringDialog(
     val dividerLine = if (ThemeState.isDark) Color(0xFF4A3741) else Color(0xFFF0DCE5)
 
     val serviceConnected = tetheringService != null
+    // 授权就绪 = Shizuku 授权弹窗点过并允许(READY)。仅 binder 绑上(serviceConnected)不算:
+    // 授权前热点/路由开关若可点,用户打开后实际跑不了(操作失败 toast),体验像坏按钮。
+    val shizukuReady = state.shizukuStatus == ShizukuStatus.READY
 
     val routingStatusRes = when {
         state.operation == TetheringOperation.CONNECTING -> R.string.shizuku_routing_status_connecting
         state.operation == TetheringOperation.CHECKING -> R.string.shizuku_routing_status_checking
         state.operation == TetheringOperation.STARTING_ROUTING -> R.string.shizuku_routing_status_starting
         state.operation == TetheringOperation.STOPPING_ROUTING -> R.string.shizuku_routing_status_stopping
+        !shizukuReady -> R.string.shizuku_routing_status_need_permission
         !serviceConnected -> R.string.shizuku_routing_status_unavailable
         state.routingState == ShizukuTetheringService.ROUTING_STATE_ACTIVE -> R.string.shizuku_routing_status_active
         state.routingState == ShizukuTetheringService.ROUTING_STATE_STARTING -> R.string.shizuku_routing_status_starting
@@ -526,7 +530,8 @@ fun TetheringDialog(
         else -> R.string.shizuku_routing_status_start_vpn
     }
 
-    val routingToggleEnabled = serviceConnected &&
+    val routingToggleEnabled = shizukuReady &&
+        serviceConnected &&
         state.operation == TetheringOperation.NONE &&
         when (state.routingState) {
             ShizukuTetheringService.ROUTING_STATE_ACTIVE,
@@ -541,6 +546,7 @@ fun TetheringDialog(
         state.operation == TetheringOperation.CHECKING -> R.string.shizuku_hotspot_status_checking
         state.operation == TetheringOperation.STARTING_HOTSPOT -> R.string.shizuku_hotspot_status_starting
         state.operation == TetheringOperation.STOPPING_HOTSPOT -> R.string.shizuku_hotspot_status_stopping
+        !shizukuReady -> R.string.shizuku_hotspot_status_need_permission
         !serviceConnected -> R.string.shizuku_hotspot_status_unavailable
         state.hotspotEnabled && state.routingActive -> R.string.shizuku_hotspot_status_enabled
         state.hotspotEnabled && state.routingState == ShizukuTetheringService.ROUTING_STATE_WAITING ->
@@ -550,7 +556,8 @@ fun TetheringDialog(
         else -> R.string.shizuku_hotspot_status_unavailable
     }
 
-    val hotspotToggleEnabled = serviceConnected &&
+    val hotspotToggleEnabled = shizukuReady &&
+        serviceConnected &&
         state.operation == TetheringOperation.NONE &&
         (state.hotspotEnabled ||
             state.tetheringStateKnown &&
