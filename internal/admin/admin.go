@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	mdns "github.com/miekg/dns"
@@ -41,7 +43,7 @@ type Server struct {
 	dns          *dns.Handler
 	chnroute     *chnroute.Trie
 	logBuf       *logbuf.RingBuffer
-	adminAuth    *config.AdminAuthConf
+	adminAuth    atomic.Pointer[config.AdminAuthConf]
 	startTime    time.Time
 	reloadConfig func()
 	configSrc    func() *config.Config
@@ -100,7 +102,12 @@ func (s *Server) SetAdminAuth(auth *config.AdminAuthConf) {
 		slog.Warn("ignoring config reload that disables panel auth on a LAN-exposed listener; restart the proxy to rebind the panel to loopback")
 		return
 	}
-	s.adminAuth = auth
+	s.adminAuth.Store(auth)
+}
+
+// AdminAuth returns the currently effective panel auth configuration.
+func (s *Server) AdminAuth() *config.AdminAuthConf {
+	return s.adminAuth.Load()
 }
 
 func (s *Server) SetReloadConfig(fn func()) {
@@ -309,7 +316,7 @@ func authConfEffective(c *config.AdminAuthConf) bool {
 
 // authEnabled reports whether Basic Auth is actually configured on the panel.
 func (s *Server) authEnabled() bool {
-	return authConfEffective(s.adminAuth)
+	return authConfEffective(s.adminAuth.Load())
 }
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
@@ -324,9 +331,10 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if s.authEnabled() {
+		auth := s.adminAuth.Load()
+		if authConfEffective(auth) {
 			u, p, ok := r.BasicAuth()
-			if !ok || u != s.adminAuth.Username || p != s.adminAuth.Password {
+			if !ok || subtle.ConstantTimeCompare([]byte(u), []byte(auth.Username)) != 1 || subtle.ConstantTimeCompare([]byte(p), []byte(auth.Password)) != 1 {
 				w.Header().Set("WWW-Authenticate", `Basic realm="Admin Console"`)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
@@ -1494,7 +1502,7 @@ func (s *Server) handleACLAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	content := "\n" + strings.Join(lines, "\n") + "\n"
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		http.Error(w, "append failed: "+err.Error(), http.StatusInternalServerError)
 		return

@@ -44,6 +44,8 @@ type UIDResolver interface {
 // SetUIDResolver 注册 UID 反查回调(Android 侧 establish 前调用一次;可重复调用覆盖)。
 // StartRouter 启动引擎时把它注入 TUN handler。
 func SetUIDResolver(r UIDResolver) {
+	engineMu.Lock()
+	defer engineMu.Unlock()
 	uidResolver = r
 	slog.Info("[Go-Bridge] SetUIDResolver called", "set", r != nil)
 }

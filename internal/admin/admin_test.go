@@ -1490,17 +1490,17 @@ func TestSetAdminAuthFailClosedOnExposedListener(t *testing.T) {
 	s.SetAdminAuth(good)
 
 	s.SetAdminAuth(&config.AdminAuthConf{Enabled: true, Username: "admin", Password: ""})
-	if !authConfEffective(s.adminAuth) {
+	if !authConfEffective(s.AdminAuth()) {
 		t.Fatal("downgrade to empty password applied on exposed listener; want old credentials kept")
 	}
 	s.SetAdminAuth(&config.AdminAuthConf{Enabled: false, Username: "", Password: ""})
-	if !authConfEffective(s.adminAuth) {
+	if !authConfEffective(s.AdminAuth()) {
 		t.Fatal("disabling auth on exposed listener applied; want old credentials kept")
 	}
 
 	s.tcpExposed = false
 	s.SetAdminAuth(&config.AdminAuthConf{Enabled: false, Username: "", Password: ""})
-	if authConfEffective(s.adminAuth) {
+	if authConfEffective(s.AdminAuth()) {
 		t.Fatal("disabling auth on loopback bind should be allowed")
 	}
 }
