@@ -40,7 +40,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Column
@@ -340,6 +339,13 @@ private fun copyPanelUrl(context: Context, url: String) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     cm.setPrimaryClip(ClipData.newPlainText("smartproxy_panel_url", url))
     Toast.makeText(context, context.getString(R.string.toast_copy_url, url), Toast.LENGTH_SHORT).show()
+}
+
+/** 点按复制面板账号/密码:只拷原始值(不带"账号:/密码:"前缀),Toast 反馈拷的是哪个。 */
+private fun copyPanelCredential(context: Context, value: String, toastRes: Int) {
+    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    cm.setPrimaryClip(ClipData.newPlainText("smartproxy_panel_auth", value))
+    Toast.makeText(context, context.getString(toastRes), Toast.LENGTH_SHORT).show()
 }
 
 /** §4.4:点击用 Intent.createChooser 弹浏览器选择器,不锁系统默认浏览器。 */
@@ -1497,6 +1503,7 @@ private fun SwitchCard(
  *  底部居中箭头展开(§4.4)。auth 非空(admin_auth 启用)时在 URL 下方显示登录凭据。 */
 @Composable
 private fun PanelCard(url: String?, auth: Pair<String, String>?, onCopy: (String) -> Unit, onOpen: (String) -> Unit) {
+    val context = LocalContext.current
     Card(
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = CardSurface),
@@ -1522,12 +1529,27 @@ private fun PanelCard(url: String?, auth: Pair<String, String>?, onCopy: (String
                 Text(url, fontSize = 13.sp, color = GreyText)
                 if (auth != null) {
                     Spacer(Modifier.height(6.dp))
-                    // 出厂随机密码人手记不住:长按选中即可复制账号/密码(不进 URL、不进 QR)。
-                    SelectionContainer {
-                        Column {
-                            Text(stringResource(R.string.panel_user, auth.first), fontSize = 12.sp, color = GreyText)
-                            Text(stringResource(R.string.panel_pass, auth.second), fontSize = 12.sp, color = GreyText)
-                        }
+                    // 出厂随机密码人手记不住:点账号行复制账号、点密码行复制密码,Toast 反馈
+                    // (不进 URL、不进 QR)。整行 clickable + padding 放大触摸区,替代长按选词。
+                    Column {
+                        Text(
+                            stringResource(R.string.panel_user, auth.first),
+                            fontSize = 12.sp,
+                            color = GreyText,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { copyPanelCredential(context, auth.first, R.string.toast_copy_user) }
+                                .padding(vertical = 4.dp)
+                        )
+                        Text(
+                            stringResource(R.string.panel_pass, auth.second),
+                            fontSize = 12.sp,
+                            color = GreyText,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { copyPanelCredential(context, auth.second, R.string.toast_copy_pass) }
+                                .padding(vertical = 4.dp)
+                        )
                     }
                 }
                 Spacer(Modifier.height(10.dp))

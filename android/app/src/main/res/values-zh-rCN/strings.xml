@@ -104,6 +104,8 @@
     <string name="battery_settings">去设置</string>
     <string name="battery_dismiss">知道了</string>
     <string name="toast_copy_url">已复制: %1$s</string>
+    <string name="toast_copy_user">账号已复制</string>
+    <string name="toast_copy_pass">密码已复制</string>
     <string name="chooser_open_panel">选择浏览器打开管理面板</string>
 
     <!-- App selection -->

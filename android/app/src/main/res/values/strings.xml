@@ -104,6 +104,8 @@
     <string name="battery_settings">Go to settings</string>
     <string name="battery_dismiss">Got it</string>
     <string name="toast_copy_url">Copied: %1$s</string>
+    <string name="toast_copy_user">Username copied</string>
+    <string name="toast_copy_pass">Password copied</string>
     <string name="chooser_open_panel">Open admin panel with browser</string>
 
     <!-- App selection -->
