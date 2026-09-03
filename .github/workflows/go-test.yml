@@ -58,7 +58,7 @@ jobs:
       # token 未配时上传失败但不打断本 job(fail_ci_if_error: false),避免外部
       # 服务未就绪把构建卡黄 —— 配好 token 后下一次 Go 改动自动出覆盖率徽章。
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.out
