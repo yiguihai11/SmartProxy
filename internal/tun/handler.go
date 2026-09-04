@@ -634,6 +634,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 		sniff := quic.NewSniff(quicHold, q.MaxBuffered)
 		sniff.Ingest(firstDgram)
 		if !sniff.QUIC() {
+			slog.Info("UDP QUIC flow: non-QUIC payload on QUIC port, proxying", "dst", dst)
 			return newProxyRemote(dst, host, port, nil) // 该端口上的非 QUIC 载荷(罕见)照旧代理
 		}
 		sni := sniff.SNI()
@@ -644,10 +645,13 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 			r2, s2 := h.upstreamMgr.SelectProxy(host, port, sni, h.ruleEng)
 			switch r2 {
 			case "direct":
+				slog.Info("UDP QUIC flow: domain rule direct, no blackhole watch",
+					"dst", dst, "sni", sni)
 				return startDirectRemote(dst, host, port, nil) // 域名规则强制直连
 			case "fallback":
 				// 域名 ACL 未命中 → 国外 QUIC 目标,落到下方 B 直连判死观察
 			default:
+				slog.Info("UDP QUIC flow: domain rule proxy", "dst", dst, "sni", sni)
 				return newProxyRemote(dst, host, port, s2) // 域名规则指定代理
 			}
 		}
@@ -658,8 +662,11 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 		key := dst.String()
 		snipedSNI := sni // 判死回调写域名黑名单用(可能为空)
 		wd := quic.NewWatchdog(quicTimeout, func(reason string) {
-			slog.Info("UDP QUIC flow judged dead (GFW blackhole), switching to proxy",
-				"dst", dst, "reason", reason)
+			args := []any{"dst", dst, "reason", reason}
+			if snipedSNI != "" {
+				args = append(args, "sni", snipedSNI)
+			}
+			slog.Info("UDP QUIC flow judged dead (GFW blackhole), switching to proxy", args...)
 			h.router.BlacklistIP(host, port, "quic:"+reason)
 			if snipedSNI != "" {
 				h.router.BlacklistDomain(snipedSNI, port, "quic:"+reason)
@@ -671,6 +678,11 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 			wd.Stop()
 			return nil, err
 		}
+		trialArgs := []any{"dst", dst, "timeout_ms", int(quicTimeout / time.Millisecond)}
+		if sni != "" {
+			trialArgs = append(trialArgs, "sni", sni)
+		}
+		slog.Info("UDP QUIC flow: direct trial (blackhole watch)", trialArgs...)
 		return entry, nil
 	}
 
@@ -827,6 +839,11 @@ func (h *TUNHandler) remoteUDPReader(tunConn N.PacketConn, entry *udpRemoteEntry
 			return
 		}
 		if !entry.isProxy && entry.wd != nil {
+			// 首个服务器回包 = 流存活、保持直连,打一条日志(Monitoring 仅在首个回包前
+			// 为 true → 每流只打一次);再解除判死。
+			if entry.wd.Monitoring() {
+				slog.Info("UDP QUIC flow: direct alive (server replied), keeping direct", "dst", entry.dst)
+			}
 			entry.wd.OnServerReply() // 任意服务器回包 = 流存活,解除判死
 		}
 		payloadStart := 0

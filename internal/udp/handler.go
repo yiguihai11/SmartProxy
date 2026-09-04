@@ -404,6 +404,8 @@ func (h *Handler) routeForeignFallback(ctx context.Context, ip string, port int,
 	sniff := quic.NewSniff(h.quicHold, h.quicMaxBuffered)
 	sniff.Ingest(firstPayload)
 	if !sniff.QUIC() {
+		slog.Info("UDP QUIC flow: non-QUIC payload on QUIC port, proxying",
+			"target", net.JoinHostPort(ip, strconv.Itoa(port)))
 		rc, err := h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, nil)
 		return rc, true, nil, err
 	}
@@ -415,12 +417,16 @@ func (h *Handler) routeForeignFallback(ctx context.Context, ip string, port int,
 		r2, s2 := h.upstreamMgr.SelectProxy(ip, port, sni, h.ruleEngine)
 		switch r2 {
 		case "direct":
+			slog.Info("UDP QUIC flow: domain rule direct, no blackhole watch",
+				"target", net.JoinHostPort(ip, strconv.Itoa(port)), "sni", sni)
 			d := net.Dialer{Timeout: 5 * time.Second, Control: DirectUDPControl}
 			rc, err := d.DialContext(ctx, "udp", net.JoinHostPort(ip, strconv.Itoa(port)))
 			return rc, false, nil, err
 		case "fallback":
 			// 域名 ACL 未命中 → 国外 QUIC 目标,落 B 直连判死观察
 		default:
+			slog.Info("UDP QUIC flow: domain rule proxy",
+				"target", net.JoinHostPort(ip, strconv.Itoa(port)), "sni", sni)
 			if s2 != nil {
 				rc, err := s2.UDPAssociate(ctx, ip, port)
 				return rc, true, nil, err
@@ -441,11 +447,20 @@ func (h *Handler) routeForeignFallback(ctx context.Context, ip string, port int,
 			slog.Debug("UDP QUIC dummy write failed", "target", net.JoinHostPort(ip, strconv.Itoa(port)), "error", derr)
 		}
 	}
+	snipedSNI := sni // 判死日志带 SNI;可能为空(未抠到 / ECH)
 	wd := quic.NewWatchdog(h.quicTimeout, func(reason string) {
-		slog.Info("SOCKS5-UDP QUIC flow judged dead (GFW blackhole), switching to proxy",
-			"target", net.JoinHostPort(ip, strconv.Itoa(port)), "reason", reason)
+		args := []any{"target", net.JoinHostPort(ip, strconv.Itoa(port)), "reason", reason}
+		if snipedSNI != "" {
+			args = append(args, "sni", snipedSNI)
+		}
+		slog.Info("UDP QUIC flow judged dead (GFW blackhole), switching to proxy", args...)
 		h.quicFlowDead(*sessRef, key, ip, port)
 	})
+	trialArgs := []any{"target", net.JoinHostPort(ip, strconv.Itoa(port)), "timeout_ms", int(h.quicTimeout / time.Millisecond)}
+	if sni != "" {
+		trialArgs = append(trialArgs, "sni", sni)
+	}
+	slog.Info("UDP QUIC flow: direct trial (blackhole watch)", trialArgs...)
 	return rc, false, wd, nil
 }
 
@@ -530,6 +545,16 @@ func (h *Handler) pipeDownstream(sess *udpSession) {
 				return
 			}
 		} else {
+			// 直连观察中的 QUIC 流:任意服务器回包 = 流存活,解除判死。之前这里漏喂
+			// OnServerReply,reply 标志恒不置位 → timeout_ms 后活流也被误判死热切代理。
+			// Monitoring() 仅在首个回包前为 true,保证 alive 日志每流只打一次。
+			if wd := sess.wd; wd != nil {
+				if wd.Monitoring() {
+					slog.Info("UDP QUIC flow: direct alive (server replied), keeping direct",
+						"target", net.JoinHostPort(sess.key.targetIP, strconv.Itoa(int(sess.key.targetPort))))
+				}
+				wd.OnServerReply()
+			}
 			DirectBytesDown.Add(int64(n))
 			copy(buf, sess.respHeader)
 			if _, err := h.conn.WriteTo(buf[:hdrLen+n], sess.clientAddr); err != nil {
