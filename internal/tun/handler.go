@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -485,6 +486,11 @@ type udpRemoteEntry struct {
 	wd *quic.Watchdog
 }
 
+// errBlockedDomain 表示目标按 QUIC 外层 SNI 命中 ACL block 域名规则,应丢流不建会话。
+// 与普通拨号错误不同:sender 识别后把该 dst 记入 blockedDst,本会话内静默丢弃后续包,
+// 不重复嗅探/刷日志。block IP/端口在更上层 UDP 入口(:371/:378)已拦,这里只补域名型。
+var errBlockedDomain = errors.New("blocked domain by ACL")
+
 func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, source M.Socksaddr, destination M.Socksaddr) {
 	defer conn.Close()
 
@@ -512,11 +518,12 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 	defer sess.signalClose()
 
 	var (
-		mu       sync.Mutex
-		remotes  = make(map[string]*udpRemoteEntry)
-		remoteWg sync.WaitGroup // tracks remoteUDPReader goroutines (one per dialed remote)
-		sendWg   sync.WaitGroup // tracks the udpSend goroutine
-		errCh    = make(chan error, 8)
+		mu         sync.Mutex
+		remotes    = make(map[string]*udpRemoteEntry)
+		blockedDst = make(map[string]struct{}) // 按 SNI 命中 ACL block 域名而判丢的 dst:会话内不再重复嗅探/刷日志
+		remoteWg   sync.WaitGroup              // tracks remoteUDPReader goroutines (one per dialed remote)
+		sendWg     sync.WaitGroup              // tracks the udpSend goroutine
+		errCh      = make(chan error, 8)
 	)
 
 	// QUIC 智能配置快照(每次会话读当前值;判死窗口/嗅探预算/哑包开关)。
@@ -642,6 +649,19 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 			sni = "" // 真 ECH:外层 SNI 是混淆占位,域名规则作废
 		}
 		if sni != "" {
+			// SNI 域名命中 ACL block 规则 → 丢流不建会话。block IP/端口在上层 UDP 入口
+			// 已拦(:371/:378),域名型目标只能等抠出 SNI 才识别;DoH/预解析 IP 等绕过智能
+			// DNS 的场景靠这里兜底。getOrCreateRemote 把该 dst 记入 blockedDst 静默后续包。
+			if h.ruleEng.IsDomainBlocked(sni) {
+				slog.Info("UDP QUIC flow: blocked domain by SNI, dropping", "dst", dst, "sni", sni)
+				return nil, errBlockedDomain
+			}
+			// 动态域名黑名单(此前 TCP smart 超时 / QUIC 判死写入,见 BlacklistDomain):同
+			// 域名换 IP 的 QUIC 目标(CDN/Google 轮换)直接走代理,不再对新 IP 重复直连判死。
+			if h.router.IsDomainBlacklisted(sni, port) {
+				slog.Info("UDP target on dynamic blacklist, going proxy", "dst", dst, "sni", sni)
+				return newProxyRemote(dst, host, port, nil)
+			}
 			r2, s2 := h.upstreamMgr.SelectProxy(host, port, sni, h.ruleEng)
 			switch r2 {
 			case "direct":
@@ -695,11 +715,21 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 			mu.Unlock()
 			return entry, nil
 		}
+		_, dropped := blockedDst[key]
 		mu.Unlock()
+		if dropped {
+			// 本会话已判该 dst 按 ACL block 丢流:直接丢弃,不重复嗅探/刷日志
+			return nil, errBlockedDomain
+		}
 
 		// Slow path: dial outside the lock (up to 10s), without blocking forwarding to other destinations in the same session
 		entry, err := dialRemote(dst, firstDgram)
 		if err != nil {
+			if errors.Is(err, errBlockedDomain) {
+				mu.Lock()
+				blockedDst[key] = struct{}{}
+				mu.Unlock()
+			}
 			return nil, err
 		}
 

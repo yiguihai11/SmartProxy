@@ -3,6 +3,7 @@ package udp
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -23,11 +24,17 @@ import (
 	"smartproxy/internal/dns"
 	"smartproxy/internal/dpi"
 	"smartproxy/internal/quic"
+	"smartproxy/internal/route"
 	"smartproxy/internal/rules"
 	"smartproxy/internal/upstream"
 )
 
 const maxUDPSessions = 500
+
+// errBlockedDomainByACL 表示 QUIC 目标按外层 SNI 命中 ACL block 域名规则,应丢包不建会话。
+// 与拨号错误区分:handleGenericUDP 识别后不落 Error 日志(block Info 已在识别处打一次)。
+// block IP/端口在 onPacket 入口(:253/:257)已拦,这里只补域名型(IP 型 QUIC 抠出 SNI 才可判)。
+var errBlockedDomainByACL = errors.New("blocked domain by ACL (QUIC SNI)")
 
 var (
 	ActiveSessions  atomic.Int32
@@ -99,6 +106,7 @@ type udpSession struct {
 
 type Handler struct {
 	chnroute       *chnroute.Trie
+	router         *route.Router // 动态黑名单读写(QUIC 判死写、入口查);与 TUN seam 共享同一实例
 	ruleEngine     *rules.Engine
 	upstreamMgr    *upstream.Manager
 	dnsHandler     *dns.Handler
@@ -133,7 +141,7 @@ var udpBufPool = sync.Pool{
 	},
 }
 
-func NewHandler(cn *chnroute.Trie, re *rules.Engine,
+func NewHandler(cn *chnroute.Trie, router *route.Router, re *rules.Engine,
 	mgr *upstream.Manager, dh *dns.Handler,
 	clientIP string, conn net.PacketConn,
 	relaxedUDPOrigin bool, idleTimeout time.Duration,
@@ -141,6 +149,7 @@ func NewHandler(cn *chnroute.Trie, re *rules.Engine,
 
 	return &Handler{
 		chnroute:         cn,
+		router:           router,
 		ruleEngine:       re,
 		upstreamMgr:      mgr,
 		dnsHandler:       dh,
@@ -285,7 +294,11 @@ func (h *Handler) handleGenericUDP(ctx context.Context, payload, fullData []byte
 		return h.createUDPSession(ctx, clientAddr, ip, port, key, domain, payload)
 	})
 	if err != nil {
-		slog.Error("failed to create UDP session", "target", targetAddr, "error", err)
+		// ACL block(按 SNI 判)是"主动丢弃"不是拨号失败,识别 Info 已在 routeForeignFallback
+		// 打一次,这里不落 Error。其余错误照旧。
+		if !errors.Is(err, errBlockedDomainByACL) {
+			slog.Error("failed to create UDP session", "target", targetAddr, "error", err)
+		}
 		return
 	}
 	sess := v.(*udpSession)
@@ -328,8 +341,19 @@ func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip 
 		}
 		framed = true
 	default:
-		// fallback + 国外:普通国外 UDP 走代理;QUIC 候选先进 routeForeignFallback 嗅探
-		remoteConn, framed, wd, err = h.routeForeignFallback(ctx, ip, port, domain, key, firstPayload, &sessHolder)
+		// fallback + 国外:先前已被动态黑名单(此前 TCP smart 超时 / QUIC 判死写入)的目标,
+		// 新会话直接走代理,不再重试 QUIC 直连判死观察(跨会话记忆,与 TUN seam 一致)。
+		// 仅 IP 型目标适用(域名型下方直接走代理、不需黑名单判断;ip==域名 时按 IP 查天然
+		// 不命中)。router 为 nil(SOCKS5 seam 未接路由时)退回历史行为。
+		if domain == "" && h.router != nil && h.router.IsIPBlacklisted(ip, port) {
+			slog.Info("UDP target on dynamic blacklist, going proxy",
+				"target", net.JoinHostPort(ip, strconv.Itoa(port)))
+			remoteConn, err = h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, nil)
+			framed = true
+		} else {
+			// fallback + 国外:普通国外 UDP 走代理;QUIC 候选先进 routeForeignFallback 嗅探
+			remoteConn, framed, wd, err = h.routeForeignFallback(ctx, ip, port, domain, key, firstPayload, &sessHolder)
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -414,6 +438,22 @@ func (h *Handler) routeForeignFallback(ctx context.Context, ip string, port int,
 		sni = "" // 真 ECH:外层 SNI 是混淆占位,域名规则作废
 	}
 	if sni != "" {
+		// SNI 域名命中 ACL block 规则 → 丢包不建会话。block IP/端口在 onPacket 入口已拦
+		// (:253/:257),域名型目标靠 ATYP 域名已判;IP 型 QUIC 的 block 域名只能等抠出 SNI
+		// 后在这里兜底(DoH / 预解析 IP 绕过智能 DNS 的场景)。
+		if h.ruleEngine.IsDomainBlocked(sni) {
+			slog.Info("UDP QUIC flow: blocked domain by SNI, dropping",
+				"target", net.JoinHostPort(ip, strconv.Itoa(port)), "sni", sni)
+			return nil, false, nil, errBlockedDomainByACL
+		}
+		// 动态域名黑名单(此前 TCP smart 超时 / QUIC 判死写入):同域名换 IP 的 QUIC 目标
+		// (CDN/Google 轮换)直接走代理,不再对新 IP 重复直连判死(跨会话记忆)。
+		if h.router != nil && h.router.IsDomainBlacklisted(sni, port) {
+			slog.Info("UDP target on dynamic blacklist, going proxy",
+				"target", net.JoinHostPort(ip, strconv.Itoa(port)), "sni", sni)
+			rc, err := h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, nil)
+			return rc, true, nil, err
+		}
 		r2, s2 := h.upstreamMgr.SelectProxy(ip, port, sni, h.ruleEngine)
 		switch r2 {
 		case "direct":
@@ -454,7 +494,7 @@ func (h *Handler) routeForeignFallback(ctx context.Context, ip string, port int,
 			args = append(args, "sni", snipedSNI)
 		}
 		slog.Info("UDP QUIC flow judged dead (GFW blackhole), switching to proxy", args...)
-		h.quicFlowDead(*sessRef, key, ip, port)
+		h.quicFlowDead(*sessRef, key, ip, port, snipedSNI, reason)
 	})
 	trialArgs := []any{"target", net.JoinHostPort(ip, strconv.Itoa(port)), "timeout_ms", int(h.quicTimeout / time.Millisecond)}
 	if sni != "" {
@@ -464,9 +504,11 @@ func (h *Handler) routeForeignFallback(ctx context.Context, ip string, port int,
 	return rc, false, wd, nil
 }
 
-// quicFlowDead 是 B 路径判死回调:会话出向从直连热切为默认 UDP-capable 上游。判死只发生
-// 一次(Watchdog 内部保证),重复回调/会话已清理时安全返回。
-func (h *Handler) quicFlowDead(sess *udpSession, key udpSessionKey, ip string, port int) {
+// quicFlowDead 是 B 路径判死回调:会话出向从直连热切为默认 UDP-capable 上游,并把目标
+// (IP + 抠到的 SNI)写入动态黑名单 —— 之后新建的会话(本 handler / TUN seam 共享同一
+// Router)对该目标直接走代理,不再重复直连判死。判死只发生一次(Watchdog 内部保证),
+// 重复回调/会话已清理时安全返回。
+func (h *Handler) quicFlowDead(sess *udpSession, key udpSessionKey, ip string, port int, sni, reason string) {
 	if sess == nil {
 		return
 	}
@@ -479,6 +521,13 @@ func (h *Handler) quicFlowDead(sess *udpSession, key udpSessionKey, ip string, p
 	old := sess.snap.Load()
 	if old == nil || old.framed {
 		return // 早已是代理或已关闭
+	}
+	// 写动态黑名单:IP + (抠到的)SNI 域名。SNI 为空(未抠到 / 真 ECH)只写 IP。
+	if h.router != nil {
+		h.router.BlacklistIP(ip, port, "quic:"+reason)
+		if sni != "" {
+			h.router.BlacklistDomain(sni, port, "quic:"+reason)
+		}
 	}
 	pconn, err := h.upstreamMgr.UDPAssociateSelected(context.Background(), ip, port, nil)
 	if err != nil {

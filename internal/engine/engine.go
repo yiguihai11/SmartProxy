@@ -616,7 +616,7 @@ func (e *Engine) handleUDPAssociate(ctx context.Context, conn net.Conn, clientIP
 
 	slog.Debug("UDP ASSOCIATE bound", "addr", localAddr, "client", clientIP, "bindHost", bindHost)
 
-	udpHandler := udp.NewHandler(e.Chnroute, e.RuleEng,
+	udpHandler := udp.NewHandler(e.Chnroute, e.Router, e.RuleEng,
 		e.UpstreamMgr, e.DNSHandler, clientIP, udpConn,
 		e.Config.Load().Listen.RelaxedUDPOriginCheck,
 		time.Duration(e.Config.Load().Listen.UDPAssociateIdleTimeout)*time.Second,
