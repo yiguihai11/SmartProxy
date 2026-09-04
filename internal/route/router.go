@@ -286,6 +286,34 @@ func (r *Router) BlacklistSnapshot() (ipEntries, domainEntries []BlacklistEntry)
 	return r.ipBlacklist.Entries(), r.domainBlacklist.Entries()
 }
 
+// --- UDP smart 决策入口(QUIC 黑洞自愈用,供 TUN / SOCKS5-UDP 两条 seam 共用) ---
+
+// IsIPBlacklisted 报告目标 IP:port 是否命中动态黑名单。命中表示此前该目标直连被证
+// 死(TCP smart 或 QUIC 黑洞判死),TCP 与 UDP 一律直接走代理,不再尝试直连。
+func (r *Router) IsIPBlacklisted(ip string, port int) bool {
+	return r.ipBlacklist.IsBlacklisted(ip, port)
+}
+
+// IsDomainBlacklisted 报告域名:port 是否命中动态黑名单(UDP 域名型目标用)。
+func (r *Router) IsDomainBlacklisted(domain string, port int) bool {
+	return r.domainBlacklist.IsBlacklisted(domain, port)
+}
+
+// BlacklistIP 把目标 IP 加入动态黑名单(QUIC 判死回调 / 其它"直连判死"后调用),
+// 生存期取 blacklist_ttl。之后该 IP 的 TCP smart 直连与 UDP 路由都会改走代理。
+func (r *Router) BlacklistIP(ip string, port int, reason string) {
+	cfg := r.cfg.Load()
+	r.ipBlacklist.Add(ip, port, cfg.blacklistTTL, reason)
+	slog.Info("blacklisted ip (UDP smart)", "ip", ip, "port", port, "reason", reason)
+}
+
+// BlacklistDomain 把目标域名加入动态黑名单(UDP 域名型目标判死时按 SNI/ATYP 域名写)。
+func (r *Router) BlacklistDomain(domain string, port int, reason string) {
+	cfg := r.cfg.Load()
+	r.domainBlacklist.Add(domain, port, cfg.blacklistTTL, reason)
+	slog.Info("blacklisted domain (UDP smart)", "domain", domain, "port", port, "reason", reason)
+}
+
 func (r *Router) RemoveFromBlacklist(host string, port int, typ string) {
 	switch typ {
 	case "ip":

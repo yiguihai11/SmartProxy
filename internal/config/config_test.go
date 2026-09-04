@@ -675,3 +675,67 @@ func TestMarshal_NilSlicesRenderEmptyArray(t *testing.T) {
 		t.Errorf("inet6_address serialized as null, want []")
 	}
 }
+
+// --- smart_proxy.quic：默认值只在 Enabled 时填充、Validate 只在 Enabled 时生效 ---
+
+func TestQuicApplyDefaults_WhenEnabled(t *testing.T) {
+	cfg := &Config{SmartProxy: SmartProxyConf{Enabled: true, Timeout: 3, BlacklistTTL: 300, Quic: SmartProxyQuicConf{Enabled: true}}}
+	cfg.applyDefaults()
+	q := cfg.SmartProxy.Quic
+	if len(q.Ports) != 3 || q.Ports[0] != 443 || q.Ports[1] != 8443 || q.Ports[2] != 853 {
+		t.Errorf("Quic.Ports: got %v, want [443 8443 853]", q.Ports)
+	}
+	if q.MaxBuffered != 2048 {
+		t.Errorf("Quic.MaxBuffered: got %d, want 2048", q.MaxBuffered)
+	}
+	if q.HoldMs != 8 {
+		t.Errorf("Quic.HoldMs: got %d, want 8", q.HoldMs)
+	}
+	if q.TimeoutMs != 1000 {
+		t.Errorf("Quic.TimeoutMs: got %d, want 1000", q.TimeoutMs)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate: %v", err)
+	}
+}
+
+func TestQuicApplyDefaults_NotWhenDisabled(t *testing.T) {
+	// Enabled=false 时 applyDefaults 必须原样放过 QUIC 字段 —— 保持与历史行为逐字节一致
+	cfg := &Config{SmartProxy: SmartProxyConf{Enabled: true, Timeout: 3, BlacklistTTL: 300}}
+	cfg.applyDefaults()
+	q := cfg.SmartProxy.Quic
+	if q.Enabled {
+		t.Error("Quic.Enabled must stay false by default")
+	}
+	if len(q.Ports) != 0 || q.MaxBuffered != 0 || q.HoldMs != 0 || q.TimeoutMs != 0 {
+		t.Errorf("disabled quic must stay zero-valued, got %+v", q)
+	}
+}
+
+func TestQuicValidate_RejectsBadWhenEnabled(t *testing.T) {
+	cfg := DefaultConfig()
+	q := &cfg.SmartProxy.Quic
+	q.Enabled = true
+	q.Ports = []int{443, 70000} // 越界端口
+	q.MaxBuffered = 0
+	q.TimeoutMs = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected validation error for enabled quic with bad fields")
+	}
+	// 修好应放行
+	q.Ports = []int{443}
+	q.MaxBuffered = 2048
+	q.HoldMs = 8
+	q.TimeoutMs = 1000
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate after fixing: %v", err)
+	}
+}
+
+func TestQuicValidate_IgnoredWhenDisabled(t *testing.T) {
+	// Enabled=false 时即便字段全零也不报错 —— 老配置(没有 quic 段)必须照常加载
+	cfg := DefaultConfig()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("default config with quic disabled must validate, got %v", err)
+	}
+}

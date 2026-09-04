@@ -92,6 +92,18 @@
       80,
       443
     ],
-    "blacklist_ttl": 3600
+    "blacklist_ttl": 3600,
+    "quic": {
+      "enabled": false,
+      "ports": [
+        443,
+        8443,
+        853
+      ],
+      "max_buffered": 2048,
+      "hold_ms": 8,
+      "dummy": false,
+      "timeout_ms": 1000
+    }
   }
 }

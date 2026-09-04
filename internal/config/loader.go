@@ -56,6 +56,20 @@ func (c *Config) applyDefaults() {
 	if len(c.SmartProxy.Ports) == 0 {
 		c.SmartProxy.Ports = []int{80, 443}
 	}
+	if q := &c.SmartProxy.Quic; q.Enabled {
+		if len(q.Ports) == 0 {
+			q.Ports = []int{443, 8443, 853}
+		}
+		if q.MaxBuffered == 0 {
+			q.MaxBuffered = 2048
+		}
+		if q.HoldMs == 0 {
+			q.HoldMs = 8
+		}
+		if q.TimeoutMs == 0 {
+			q.TimeoutMs = 1000
+		}
+	}
 	if c.Listen.UDPAssociateIdleTimeout == 0 {
 		c.Listen.UDPAssociateIdleTimeout = 60
 	}

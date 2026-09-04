@@ -199,10 +199,28 @@ type DNSForeign struct {
 }
 
 type SmartProxyConf struct {
-	Enabled      bool  `json:"enabled"`
-	Timeout      int   `json:"timeout"`
-	Ports        []int `json:"ports"`
-	BlacklistTTL int   `json:"blacklist_ttl"`
+	Enabled      bool               `json:"enabled"`
+	Timeout      int                `json:"timeout"`
+	Ports        []int              `json:"ports"`
+	BlacklistTTL int                `json:"blacklist_ttl"`
+	Quic         SmartProxyQuicConf `json:"quic"`
+}
+
+// SmartProxyQuicConf 配置 UDP/443 QUIC(HTTP/3)被动 SNI 识别与 GFW 黑洞自愈。
+//
+// Enabled=false(默认)时全部 QUIC 逻辑不激活,UDP 路径与历史行为逐字节一致:
+//   - 不尝试解密 QUIC Initial、不按 SNI 选路、不先直连判死翻代理。
+//
+// 端口默认 {443,8443,853};有状态短窗(max_buffered/hold_ms)只影响 QUIC 候选流
+// 的首个数据报,非 QUIC 流零延迟放行;Dummy 仅在直连路径、转发真 Initial 前
+// 生效;TimeoutMs 是"直连建好无服务器回包即判 GFW 黑洞"的窗口。
+type SmartProxyQuicConf struct {
+	Enabled     bool  `json:"enabled"`
+	Ports       []int `json:"ports"`
+	MaxBuffered int   `json:"max_buffered"`
+	HoldMs      int   `json:"hold_ms"`
+	Dummy       bool  `json:"dummy"`
+	TimeoutMs   int   `json:"timeout_ms"`
 }
 
 func (c *Config) Validate() error {
@@ -219,6 +237,25 @@ func (c *Config) Validate() error {
 	}
 	if c.SmartProxy.BlacklistTTL <= 0 {
 		errs = append(errs, "smart_proxy.blacklist_ttl must be positive")
+	}
+	if q := c.SmartProxy.Quic; q.Enabled {
+		if len(q.Ports) == 0 {
+			errs = append(errs, "smart_proxy.quic.ports must not be empty when quic is enabled")
+		}
+		if q.MaxBuffered <= 0 {
+			errs = append(errs, "smart_proxy.quic.max_buffered must be positive")
+		}
+		if q.HoldMs < 0 {
+			errs = append(errs, "smart_proxy.quic.hold_ms must not be negative")
+		}
+		if q.TimeoutMs <= 0 {
+			errs = append(errs, "smart_proxy.quic.timeout_ms must be positive")
+		}
+		for _, p := range q.Ports {
+			if p < 1 || p > 65535 {
+				errs = append(errs, fmt.Sprintf("smart_proxy.quic.ports contains invalid port %d", p))
+			}
+		}
 	}
 	for i, p := range c.Upstream.Proxies {
 		if p.URL == "" {

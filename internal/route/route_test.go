@@ -234,3 +234,33 @@ func TestRouter_UpdateConfig(t *testing.T) {
 		t.Errorf("expected 5s timeout after update, got %v", cfg.smartTimeout)
 	}
 }
+
+// --- QUIC 黑洞自愈导出入口：判死回调写黑名单，路由侧再查（TUN/SOCKS5-UDP seam 共用） ---
+
+func TestRouter_QuicBlacklistIP(t *testing.T) {
+	r := newRouter()
+	r.BlacklistIP("203.0.113.9", 443, "quic:no server reply within timeout")
+	if !r.IsIPBlacklisted("203.0.113.9", 443) {
+		t.Error("ip:443 should be blacklisted after QUIC death")
+	}
+	if r.IsIPBlacklisted("203.0.113.9", 80) {
+		t.Error("different port must not match")
+	}
+	if r.IsIPBlacklisted("198.51.100.7", 443) {
+		t.Error("different ip must not match")
+	}
+}
+
+func TestRouter_QuicBlacklistDomain(t *testing.T) {
+	r := newRouter()
+	r.BlacklistDomain("video.example.com", 443, "quic:initial retransmission with no server reply")
+	if !r.IsDomainBlacklisted("video.example.com", 443) {
+		t.Error("domain:443 should be blacklisted after QUIC death")
+	}
+	if r.IsDomainBlacklisted("video.example.com", 80) {
+		t.Error("different port must not match")
+	}
+	if r.IsDomainBlacklisted("other.example.com", 443) {
+		t.Error("different domain must not match")
+	}
+}

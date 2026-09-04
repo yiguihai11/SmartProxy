@@ -619,7 +619,8 @@ func (e *Engine) handleUDPAssociate(ctx context.Context, conn net.Conn, clientIP
 	udpHandler := udp.NewHandler(e.Chnroute, e.RuleEng,
 		e.UpstreamMgr, e.DNSHandler, clientIP, udpConn,
 		e.Config.Load().Listen.RelaxedUDPOriginCheck,
-		time.Duration(e.Config.Load().Listen.UDPAssociateIdleTimeout)*time.Second)
+		time.Duration(e.Config.Load().Listen.UDPAssociateIdleTimeout)*time.Second,
+		e.Config.Load().SmartProxy.Quic)
 	udpHandler.StartCleaner()
 	defer udpHandler.Close()
 

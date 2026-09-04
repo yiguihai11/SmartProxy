@@ -25,6 +25,7 @@ import (
 	"smartproxy/internal/dpi"
 	"smartproxy/internal/fwmark"
 	"smartproxy/internal/netutil"
+	"smartproxy/internal/quic"
 	"smartproxy/internal/relay"
 	"smartproxy/internal/route"
 	"smartproxy/internal/rules"
@@ -477,6 +478,11 @@ type udpRemoteEntry struct {
 	dst         M.Socksaddr
 	isProxy     bool
 	proxyHeader []byte // pre-built SOCKS5 UDP header (only used on the proxy path)
+
+	// QUIC 黑洞判死观察(仅 B 路径的直连 remote 非 nil):直连期间喂客户端 datagram
+	// 做 Initial 重传检测、回包解除;判死回调把该 dst 热切换成代理 remote。重传检测按
+	// 每包解出的 DCID 分组,无需单独存流 DCID。
+	wd *quic.Watchdog
 }
 
 func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, source M.Socksaddr, destination M.Socksaddr) {
@@ -513,37 +519,34 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 		errCh    = make(chan error, 8)
 	)
 
-	dialRemote := func(dst M.Socksaddr) (*udpRemoteEntry, error) {
-		host := dst.Addr.String()
-		port := int(dst.Port)
+	// QUIC 智能配置快照(每次会话读当前值;判死窗口/嗅探预算/哑包开关)。
+	q := h.config.Load().SmartProxy.Quic
+	quicHold := time.Duration(q.HoldMs) * time.Millisecond
+	quicTimeout := time.Duration(q.TimeoutMs) * time.Millisecond
 
-		result, selected := h.upstreamMgr.SelectProxy(host, port, "", h.ruleEng)
+	// dialDirect 打开一条直连 UDP socket(fwmark/1MB 缓冲/禁分片与 SOCKS5 路径共用
+	// DirectUDPControl,dial 超时对齐 5s)。
+	dialDirect := func(host string, port int) (net.Conn, error) {
+		d := net.Dialer{Timeout: 5 * time.Second, Control: udp.DirectUDPControl}
+		return d.DialContext(ctx, "udp", net.JoinHostPort(host, fmt.Sprintf("%d", port)))
+	}
 
+	// newProxyRemote 建一条走 UDP-capable 上游的代理 remote。dst 为该条 UDP 流的真实目标
+	// (每包 pktDst),回包按它写回 tun;proxySel==nil 走聚合默认 fallback(判死/黑名单命中
+	// 时传 nil 强制走默认上游)。
+	newProxyRemote := func(dst M.Socksaddr, host string, port int, proxySel *upstream.Proxy) (*udpRemoteEntry, error) {
 		var remote net.Conn
 		var err error
-		isProxy := false
-
-		if result == "direct" || (result == "fallback" && h.router.IsDomesticByIP(host)) {
-			// 直连 UDP socket 选项(fwmark/1MB 缓冲/禁分片)与 SOCKS5 路径共用
-			// udp.DirectUDPControl,保证两端直连 socket 行为一致;dial 超时也对齐 5s。
-			d := net.Dialer{Timeout: 5 * time.Second, Control: udp.DirectUDPControl}
-			remote, err = d.DialContext(ctx, "udp", net.JoinHostPort(host, fmt.Sprintf("%d", port)))
+		if proxySel == nil {
+			remote, err = h.upstreamMgr.UDPAssociate(ctx, host, port, "", h.ruleEng)
 		} else {
-			isProxy = true
-			if selected == nil {
-				remote, err = h.upstreamMgr.UDPAssociate(ctx, host, port, "", h.ruleEng)
-			} else {
-				remote, err = selected.UDPAssociate(ctx, host, port)
-			}
+			remote, err = proxySel.UDPAssociate(ctx, host, port)
 		}
 		if err != nil {
 			return nil, err
 		}
-
-		entry := &udpRemoteEntry{conn: remote, dst: dst, isProxy: isProxy}
-		if isProxy {
-			entry.proxyHeader = buildSocks5UDPHeader(host, port)
-		}
+		entry := &udpRemoteEntry{conn: remote, dst: dst, isProxy: true}
+		entry.proxyHeader = buildSocks5UDPHeader(host, port)
 		remoteWg.Add(1)
 		safego.Go("tun.remoteUDPReader", func() {
 			defer remoteWg.Done()
@@ -553,7 +556,125 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 		return entry, nil
 	}
 
-	getOrCreateRemote := func(dst M.Socksaddr) (*udpRemoteEntry, error) {
+	// startDirectRemote 建一条直连 remote 并启动回包 reader。wd 非 nil 时该 remote 处于
+	// QUIC 判死观察(哑包按开关先垫、Begin 启动计时)。
+	startDirectRemote := func(dst M.Socksaddr, host string, port int, wd *quic.Watchdog) (*udpRemoteEntry, error) {
+		rc, err := dialDirect(host, port)
+		if err != nil {
+			return nil, err
+		}
+		entry := &udpRemoteEntry{conn: rc, dst: dst, isProxy: false, wd: wd}
+		if q.Dummy && wd != nil { // 哑包垫首(GFW 首包启发对抗);失败不致命
+			if _, werr := rc.Write(quic.NewDummyDatagram()); werr != nil {
+				slog.Debug("TUN QUIC dummy write failed", "error", werr)
+			}
+		}
+		if wd != nil {
+			wd.Begin()
+		}
+		remoteWg.Add(1)
+		safego.Go("tun.remoteUDPReader", func() {
+			defer remoteWg.Done()
+			defer rc.Close()
+			h.remoteUDPReader(conn, entry, errCh)
+		})
+		return entry, nil
+	}
+
+	// switchToProxy 判死回调:把 remotes[key] 从直连热切换成代理。若 remotes[key] 已非
+	// 判死前的直连(会话被并发替换/清理),丢弃新建代理不破坏现状;代理回包地址沿用旧
+	// 直连的 dst,保证只切换出向路径、回包路径不变。
+	switchToProxy := func(key, host string, port int) {
+		pentry, err := newProxyRemote(destination, host, port, nil)
+		if err != nil {
+			slog.Warn("QUIC flow dead but proxy fallback dial failed, staying direct",
+				"dst", destination, "error", err)
+			return
+		}
+		mu.Lock()
+		cur, ok := remotes[key]
+		if !ok || cur.isProxy { // 会话已清理 / 早已是代理(竞态重复切换)
+			mu.Unlock()
+			pentry.conn.Close()
+			return
+		}
+		pentry.dst = cur.dst
+		remotes[key] = pentry
+		mu.Unlock()
+		// 关掉旧直连:其 reader 见 wd.Dead 静默退出,不会经 errCh 误杀整个会话
+		cur.conn.Close()
+		slog.Info("UDP QUIC flow switched to proxy after blackhole", "dst", destination)
+	}
+
+	dialRemote := func(dst M.Socksaddr, firstDgram []byte) (*udpRemoteEntry, error) {
+		host := dst.Addr.String()
+		port := int(dst.Port)
+
+		result, selected := h.upstreamMgr.SelectProxy(host, port, "", h.ruleEng)
+		switch {
+		case result == "direct":
+			return startDirectRemote(dst, host, port, nil) // ACL 强制直连
+		case result != "fallback":
+			return newProxyRemote(dst, host, port, selected) // ACL 指定代理
+		}
+
+		// fallback:chnroute 国内直连;判死过/国外再按 QUIC 智能决策
+		if h.router.IsDomesticByIP(host) {
+			return startDirectRemote(dst, host, port, nil) // 国内直连,无判死观察
+		}
+		if h.router.IsIPBlacklisted(host, port) {
+			slog.Info("UDP target on dynamic blacklist, going proxy", "dst", dst)
+			return newProxyRemote(dst, host, port, nil)
+		}
+		if !q.Enabled || !intIn(q.Ports, port) {
+			return newProxyRemote(dst, host, port, nil) // 普通国外 UDP 走代理(现状)
+		}
+
+		// B 候选(国外 + QUIC 端口):首包短窗嗅探确认 QUIC,并尽力抠 SNI 走域名规则
+		sniff := quic.NewSniff(quicHold, q.MaxBuffered)
+		sniff.Ingest(firstDgram)
+		if !sniff.QUIC() {
+			return newProxyRemote(dst, host, port, nil) // 该端口上的非 QUIC 载荷(罕见)照旧代理
+		}
+		sni := sniff.SNI()
+		if e := sniff.ECH(); e != nil && e.Real {
+			sni = "" // 真 ECH:外层 SNI 是混淆占位,域名规则作废
+		}
+		if sni != "" {
+			r2, s2 := h.upstreamMgr.SelectProxy(host, port, sni, h.ruleEng)
+			switch r2 {
+			case "direct":
+				return startDirectRemote(dst, host, port, nil) // 域名规则强制直连
+			case "fallback":
+				// 域名 ACL 未命中 → 国外 QUIC 目标,落到下方 B 直连判死观察
+			default:
+				return newProxyRemote(dst, host, port, s2) // 域名规则指定代理
+			}
+		}
+
+		// B 落地:国外 QUIC 先直连、挂判死 watchdog。判死条件 = Initial 重传 OR
+		// timeout_ms 窗口内零服务器回包;回包即活。判死 → 写动态黑名单(IP+SNI)+
+		// 热切换该 dst 到 UDP-capable 上游。
+		key := dst.String()
+		snipedSNI := sni // 判死回调写域名黑名单用(可能为空)
+		wd := quic.NewWatchdog(quicTimeout, func(reason string) {
+			slog.Info("UDP QUIC flow judged dead (GFW blackhole), switching to proxy",
+				"dst", dst, "reason", reason)
+			h.router.BlacklistIP(host, port, "quic:"+reason)
+			if snipedSNI != "" {
+				h.router.BlacklistDomain(snipedSNI, port, "quic:"+reason)
+			}
+			switchToProxy(key, host, port)
+		})
+		entry, err := startDirectRemote(dst, host, port, wd)
+		if err != nil {
+			wd.Stop()
+			return nil, err
+		}
+		return entry, nil
+	}
+
+	getOrCreateRemote := func(dst M.Socksaddr, firstDgram []byte) (*udpRemoteEntry, error) {
 		key := dst.String()
 
 		// Fast path: the destination already exists, return under the lock without dialing
@@ -565,7 +686,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 		mu.Unlock()
 
 		// Slow path: dial outside the lock (up to 10s), without blocking forwarding to other destinations in the same session
-		entry, err := dialRemote(dst)
+		entry, err := dialRemote(dst, firstDgram)
 		if err != nil {
 			return nil, err
 		}
@@ -601,7 +722,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 
 			sess.lastActive.Store(time.Now().Unix())
 
-			entry, err := getOrCreateRemote(pktDst)
+			entry, err := getOrCreateRemote(pktDst, buffer.Bytes())
 			if err != nil {
 				slog.Debug("TUN UDP no remote for", "dst", pktDst, "error", err)
 				buffer.Release()
@@ -629,7 +750,26 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 				udp.ProxyBytesUp.Add(int64(len(proxyHeader) + payloadLen))
 				relay.UDPBufPool.Put(pktBufPtr)
 			} else {
+				// QUIC 判死观察中:每包先解密喂 watchdog(仅 Monitoring 期;判死条件 = Initial
+				// 重传 OR 超时零回包,已见回包即退出本分支)。喂完即判死 → 回调已把该 dst 热切
+				// 代理并关闭旧直连,本包丢弃,后续包走新代理。
+				if wd := entry.wd; wd != nil && wd.Monitoring() {
+					dcid, segs, _ := dpi.DecryptInitialDatagram(buffer.Bytes())
+					if len(segs) > 0 {
+						wd.OnClientDatagram(dcid, segs)
+					}
+					if wd.Dead() {
+						buffer.Release()
+						continue
+					}
+				}
 				if _, err := entry.conn.Write(buffer.Bytes()); err != nil {
+					// 写失败若正逢判死热切关闭旧直连(竞态窗口),属预期:丢本包,下一包自动
+					// 走代理 remote,不误杀整个会话。
+					if entry.wd != nil && entry.wd.Dead() {
+						buffer.Release()
+						continue
+					}
 					buffer.Release()
 					select {
 					case errCh <- err:
@@ -675,11 +815,19 @@ func (h *TUNHandler) remoteUDPReader(tunConn N.PacketConn, entry *udpRemoteEntry
 	for {
 		n, err := entry.conn.Read(rawBuf)
 		if err != nil {
+			// QUIC 判死直连被热切/主动关闭属预期:静默退出,不让 errCh 误杀整个会话
+			// (switchToProxy 已用代理 remote 接管回包)。
+			if entry.wd != nil && entry.wd.Dead() {
+				return
+			}
 			select {
 			case errCh <- err:
 			default:
 			}
 			return
+		}
+		if !entry.isProxy && entry.wd != nil {
+			entry.wd.OnServerReply() // 任意服务器回包 = 流存活,解除判死
 		}
 		payloadStart := 0
 		if entry.isProxy {
@@ -1015,4 +1163,14 @@ func buildSocks5UDPHeader(host string, port int) []byte {
 	copy(buf[4:20], ip.To16())
 	binary.BigEndian.PutUint16(buf[20:22], uint16(port))
 	return buf
+}
+
+// intIn 报告 v 是否在 int 切片内(QUIC 端口白名单用,量小不引 sort)。
+func intIn(list []int, v int) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }

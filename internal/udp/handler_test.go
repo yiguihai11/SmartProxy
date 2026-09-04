@@ -11,6 +11,7 @@ import (
 	mdns "github.com/miekg/dns"
 
 	"smartproxy/internal/chnroute"
+	"smartproxy/internal/config"
 	"smartproxy/internal/dns"
 	"smartproxy/internal/netutil"
 	"smartproxy/internal/rules"
@@ -217,7 +218,7 @@ func buildDNSQuery(domain string) []byte {
 
 func TestNewHandler(t *testing.T) {
 
-	h := NewHandler(nil, nil, nil, nil, "127.0.0.1", nil, false, 0)
+	h := NewHandler(nil, nil, nil, nil, "127.0.0.1", nil, false, 0, config.SmartProxyQuicConf{})
 
 	if h.chnroute != nil {
 		t.Error("chnroute should be nil if passed nil")
@@ -280,7 +281,7 @@ func TestHandleDNS_CacheHitRewritesTransactionID(t *testing.T) {
 	}
 	defer hConn.Close()
 
-	h := NewHandler(nil, &rules.Engine{}, nil, dh, "127.0.0.1", hConn, true, 60*time.Second)
+	h := NewHandler(nil, &rules.Engine{}, nil, dh, "127.0.0.1", hConn, true, 60*time.Second, config.SmartProxyQuicConf{})
 
 	h.handleDNS(context.Background(), queryWire, client.LocalAddr(), "8.8.8.8", 53, "8.8.8.8", 53)
 
@@ -409,7 +410,7 @@ func TestHandleDNS_PrivatePathRejectsMismatchedID(t *testing.T) {
 	}
 	defer hConn.Close()
 
-	h := NewHandler(chnroute.New(), &rules.Engine{}, nil, dh, "127.0.0.1", hConn, true, 60*time.Second)
+	h := NewHandler(chnroute.New(), &rules.Engine{}, nil, dh, "127.0.0.1", hConn, true, 60*time.Second, config.SmartProxyQuicConf{})
 	ip := srvAddr.IP.String()
 	h.handleDNS(context.Background(), queryWire, client.LocalAddr(), ip, srvAddr.Port, ip, srvAddr.Port)
 
@@ -449,7 +450,7 @@ func TestHandleDNS_PrivatePathAcceptsMatchingID(t *testing.T) {
 	}
 	defer hConn.Close()
 
-	h := NewHandler(chnroute.New(), &rules.Engine{}, nil, dh, "127.0.0.1", hConn, true, 60*time.Second)
+	h := NewHandler(chnroute.New(), &rules.Engine{}, nil, dh, "127.0.0.1", hConn, true, 60*time.Second, config.SmartProxyQuicConf{})
 	ip := srvAddr.IP.String()
 	h.handleDNS(context.Background(), queryWire, client.LocalAddr(), ip, srvAddr.Port, ip, srvAddr.Port)
 

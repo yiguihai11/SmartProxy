@@ -111,6 +111,18 @@
 | `Timeout` | `timeout` | `3` | 建连探测超时（秒） |
 | `Ports` | `ports` | `[80, 443]` | 智能代理目标端口 |
 | `BlacklistTTL` | `blacklist_ttl` | `300` | 失败黑名单 TTL（秒） |
+| `Quic` | `quic` | 见下（默认 `enabled=false`） | UDP/443 QUIC(HTTP/3) 被动 SNI 嗅探 + GFW 黑洞自愈子结构，字段见下表 |
+
+`smart_proxy.quic` 子结构：`Enabled=false`（默认）时全部 QUIC 逻辑不激活，UDP 路径与历史行为逐字节一致；端口默认 `{443,8443,853}`。有状态短窗只影响 QUIC 候选流的首数据报，非 QUIC 流零延迟放行；`dummy` 仅在直连路径转发真 Initial 前生效；`timeout_ms` 是"直连建好无服务器回包即判 GFW 黑洞"的窗口。
+
+| Go 字段 | JSON 键 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `Enabled` | `enabled` | `false` | 是否激活 QUIC 识别 + 黑洞自愈 |
+| `Ports` | `ports` | `[443, 8443, 853]` | 走 QUIC 嗅探的 UDP 目标端口 |
+| `MaxBuffered` | `max_buffered` | `2048` | CRYPTO 重组预算（字节） |
+| `HoldMs` | `hold_ms` | `8` | 短窗（毫秒）：抠 SNI 的观测窗口 |
+| `Dummy` | `dummy` | `false` | 直连判死前是否先垫一个 QUIC 哑包 |
+| `TimeoutMs` | `timeout_ms` | `1000` | 直连无服务器回包判死窗口（毫秒） |
 
 ## §3 校验规则 Validate()
 
@@ -122,6 +134,7 @@
 | `dns.query_timeout > 0` | 必须为正 |
 | `smart_proxy.timeout > 0` | 必须为正 |
 | `smart_proxy.blacklist_ttl > 0` | 必须为正 |
+| `smart_proxy.quic` 启用时 | `ports` 非空、每端口在 1~65535、`max_buffered > 0`、`hold_ms >= 0`、`timeout_ms > 0`；`enabled=false` 时不校验（老配置无 `quic` 段照常加载） |
 | `dns.cache.size > 0` | 必须为正 |
 | 每个 `upstream.proxies[i].url` 非空 | 空 URL 报错 |
 | 健康检查启用时 | `health_check.url` 非空、`interval > 0`、`timeout > 0` |
