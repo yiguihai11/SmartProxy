@@ -51,6 +51,23 @@ func TestDashboardVariantInjection(t *testing.T) {
 	if i := strings.Index(zhDashboardHTML, `window.SP_LANG='zh'`); i < 0 || i > strings.Index(zhDashboardHTML, "<body>") {
 		t.Error("zh boot script must land in <head>, before <body>")
 	}
+	// Regression: </head> must appear EXACTLY once in the English source. A stray
+	// literal inside a JS comment makes init() inject zhBoot into the comment,
+	// whose own </script> prematurely closes the outer script and the remaining
+	// boot code renders as visible text ("乱码").
+	if n := strings.Count(dashboardHTML, "</head>"); n != 1 {
+		t.Errorf("dashboard.html must contain exactly one literal </head>, got %d", n)
+	}
+	// zhBoot must sit before the single real </head>, and </head> before <body>.
+	zBoot := strings.Index(zhDashboardHTML, `window.SP_LANG='zh'`)
+	zHead := strings.Index(zhDashboardHTML, "</head>")
+	zBody := strings.Index(zhDashboardHTML, "<body>")
+	if zBoot < 0 || zHead < 0 || zBody < 0 {
+		t.Fatal("zh variant missing boot/head/body anchors")
+	}
+	if !(zBoot < zHead && zHead < zBody) {
+		t.Errorf("order must be zhBoot < </head> < <body> (got boot=%d head=%d body=%d)", zBoot, zHead, zBody)
+	}
 }
 
 func TestHandleDashboardServesLangVariants(t *testing.T) {

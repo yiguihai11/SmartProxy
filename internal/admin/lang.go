@@ -322,8 +322,9 @@ func mustJSON(v any) string {
 	return string(buf)
 }
 
-// zhBoot is injected before </head> on zh requests (runs after the static boot
-// script at the top of <head>, so it can override SP_LANG and install dicts).
+// zhBoot is injected right before the real closing </head> on zh requests (runs
+// after the static boot script at the top of <head>, so it can override SP_LANG
+// and install dicts).
 var zhBoot = func() string {
 	// Serialise prefixes longest-first: JS picks the first startswith match.
 	sorted := append([]struct{ Pre, Zh string }(nil), zhPrefixes...)
@@ -347,5 +348,18 @@ var zhDashboardHTML string
 
 func init() {
 	zhDashboardHTML = strings.Replace(dashboardHTML, `<html lang="en">`, `<html lang="zh-CN">`, 1)
-	zhDashboardHTML = strings.Replace(zhDashboardHTML, "</head>", zhBoot+"\n</head>", 1)
+	// 注入点必须落在真正闭合 <head> 的那个 </head> 上 —— 即首个 <body> 之前的最后一个
+	// "</head>"。绝不能按"第一处字面 </head>"替换:dashboard.html 里 JS 注释中若出现
+	// "</head>" 字样(曾有过),会把 zhBoot 整段塞进注释中间、由其自带 </script> 提前终结
+	// 外层 <script>,剩余 boot 源码便以纯文本喷到页面(表现为"乱码")。
+	body := strings.Index(zhDashboardHTML, "<body")
+	if body < 0 {
+		panic("dashboard.html: <body> not found")
+	}
+	closeHead := strings.LastIndex(zhDashboardHTML[:body], "</head>")
+	if closeHead < 0 {
+		panic("dashboard.html: closing </head> not found before <body>")
+	}
+	// 插到 </head> 起始之前,zhBoot 因此仍在 <head> 内(紧随静态 boot script)。
+	zhDashboardHTML = zhDashboardHTML[:closeHead] + zhBoot + "\n" + zhDashboardHTML[closeHead:]
 }

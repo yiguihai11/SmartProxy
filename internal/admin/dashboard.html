@@ -199,9 +199,10 @@ tr:last-child td{border-bottom:none}
 @media(max-width:480px){.main{padding:12px 8px;padding-right:calc(8px + var(--sar,0px));padding-bottom:calc(12px + var(--sab,0px))}.view-meta{gap:6px;font-size:.76rem;flex-wrap:wrap}.table-wrap{overflow-x:auto}.search-input{min-width:80px;font-size:.75rem;padding:5px 8px}.toolbar{gap:4px}.batch-bar{padding:4px 8px;gap:4px;font-size:.75rem}.batch-bar .count{font-size:.75rem}.batch-bar select{font-size:.72rem;padding:3px 5px}.pagination{gap:2px;margin-top:8px}.btn,.btn-sm{padding:2px 8px;font-size:.72rem}.page-input{width:40px;padding:3px 4px;font-size:.72rem}.page-info{font-size:.72rem}th,td{padding:3px 4px;font-size:.7rem}.td-chk,.th-chk{width:22px}.cb-row{width:12px;height:12px}.dialog{width:100vw;padding:12px;padding-bottom:calc(12px + var(--sab,0px));border-radius:var(--radius)}.dialog-title{font-size:.88rem}.dialog-select{font-size:.78rem;padding:6px 8px}.dialog-list{max-height:80px;font-size:.74rem;padding:4px 8px}.tag{font-size:.68rem;padding:0 5px;height:16px}}
 </style>
 <script>
-/* i18n boot. English is the canonical UI language; on zh requests the server
-   injects SP_LANG/'zh' + SP_I18N(_PRE/_HTML) before </head>, and a zh launcher
-   near </body> walks the DOM. t()/tf() here are the only translation API used
+/* i18n boot. English is the canonical UI language. On zh requests the server
+   (lang.go init) injects SP_LANG/'zh' + the SP_I18N dicts (zhBoot script) right
+   before the real closing-head tag, and a zh launcher right before the
+   closing-body tag walks the DOM. t()/tf() are the only translation API used
    from JS; they are identity when no dictionary is installed (English). */
 window.SP_LANG=window.SP_LANG||'en';
 function __norm(s){return String(s==null?'':s).replace(/\s+/g,' ').trim()}
