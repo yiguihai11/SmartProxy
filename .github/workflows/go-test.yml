@@ -67,7 +67,7 @@ jobs:
         env:
           DASHBOARD_DUMP_DIR: ${{ github.workspace }}/.ci-i18n
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
       - name: Node smoke test (dashboard i18n JS)
