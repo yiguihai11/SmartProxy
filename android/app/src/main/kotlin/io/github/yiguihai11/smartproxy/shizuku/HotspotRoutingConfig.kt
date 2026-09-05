@@ -24,9 +24,10 @@ internal data class HotspotRoutingParameters(
 )
 
 internal object HotspotRoutingConfig {
-    const val SHIZUKU_TUN_ADDR_V4 = "172.29.0.1/30"
-    const val SHIZUKU_TUN_ADDR_V6 = "fdfe:dcba:9876::1/64"
-    const val SHIZUKU_TUN_DNS_HINT_V6 = "fdfe:dcba:9876::53"
+    // Upstream v2rayNG shizuku-tethering-compatible test network addresses.
+    const val SHIZUKU_TUN_ADDR_V4 = "192.0.2.2/24"
+    const val SHIZUKU_TUN_ADDR_V6 = "2001:db8:9877::1/64"
+    const val SHIZUKU_TUN_DNS_HINT_V6 = "fdfe:dcba:9877::53"
 
     fun parametersFromSnapshot(snapshot: HotspotRoutingSnapshot): HotspotRoutingParameters {
         requireRoutableSnapshot(snapshot)
