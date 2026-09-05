@@ -257,19 +257,28 @@ func countNodes(n *node) int {
 	return c + countNodes(n.left) + countNodes(n.right)
 }
 
-func (t *Trie) CountV4() int { return countLeavesByFamily(t.root.Load().root, true) }
+// CountV4 and CountV6 report the stored prefixes of each family: every trie node
+// carrying a prefix (n.plen > 0) whose key is an IPv4 / IPv6 address — terminal
+// leaves AND aggregate ancestors alike — so CountV4()+CountV6() always equals
+// Count() and each badge matches how many v4/v6 prefixes were actually loaded.
+//
+// (Counting only terminal leaves would silently drop aggregate prefixes that sit
+// above a longer, nested prefix of either family in the shared trie — e.g. a v4
+// 10.0.0.0/8 above 10.1.0.0/16, or a v4 36.0.16.0/20 above an IPv6 entry whose
+// bit path it shares — leaving the family split not adding up to the total.)
+func (t *Trie) CountV4() int { return countPrefixNodesByFamily(t.root.Load().root, true) }
 
-func (t *Trie) CountV6() int { return countLeavesByFamily(t.root.Load().root, false) }
+func (t *Trie) CountV6() int { return countPrefixNodesByFamily(t.root.Load().root, false) }
 
-func countLeavesByFamily(n *node, v4 bool) int {
+func countPrefixNodesByFamily(n *node, v4 bool) int {
 	if n == nil {
 		return 0
 	}
 	c := 0
-	if n.bitPos == leafPos && n.key.Is4() == v4 {
+	if n.plen > 0 && n.key.Is4() == v4 {
 		c = 1
 	}
-	return c + countLeavesByFamily(n.left, v4) + countLeavesByFamily(n.right, v4)
+	return c + countPrefixNodesByFamily(n.left, v4) + countPrefixNodesByFamily(n.right, v4)
 }
 
 func (t *Trie) Pull(other *Trie) {

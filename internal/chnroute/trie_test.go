@@ -724,3 +724,53 @@ func TestTrieCountV4V6_OnlyV4(t *testing.T) {
 		t.Errorf("expected 0 v6, got %d", v6)
 	}
 }
+
+// A v4 aggregate sitting above a more-specific v4 prefix is still a loaded v4
+// prefix and must be counted (leaf-only counting dropped it, so CountV4()+CountV6()
+// no longer equalled Count()).
+func TestTrieCountV4V6_NestedSameFamily(t *testing.T) {
+	tr := New()
+	tr.Insert(netip.MustParsePrefix("10.0.0.0/8"))    // aggregate ancestor
+	tr.Insert(netip.MustParsePrefix("10.1.0.0/16"))   // leaf below it
+	tr.Insert(netip.MustParsePrefix("2001:db8::/32")) // leaf
+	if v4 := tr.CountV4(); v4 != 2 {
+		t.Errorf("expected 2 v4 (incl. aggregate 10.0.0.0/8), got %d", v4)
+	}
+	if v6 := tr.CountV6(); v6 != 1 {
+		t.Errorf("expected 1 v6, got %d", v6)
+	}
+	if total := tr.Count(); total != 3 {
+		t.Errorf("expected Count()=3, got %d", total)
+	}
+}
+
+// Cross-family nesting in the shared bit trie: a v4 prefix whose bit path a longer
+// IPv6 prefix shares must still count as a v4 prefix (seen in real chnroute data:
+// v4 36.x aggregates sit above 2400:: v6 entries). Ensures CountV4()+CountV6()==Count().
+func TestTrieCountV4V6_NestedCrossFamily(t *testing.T) {
+	tr := New()
+	tr.Insert(netip.MustParsePrefix("36.0.16.0/20")) // shares bit path with the v6 below
+	tr.Insert(netip.MustParsePrefix("2400:1000::/32"))
+	if v4 := tr.CountV4(); v4 != 1 {
+		t.Errorf("expected 1 v4 (36.0.16.0/20), got %d", v4)
+	}
+	if v6 := tr.CountV6(); v6 != 1 {
+		t.Errorf("expected 1 v6, got %d", v6)
+	}
+	if total := tr.Count(); total != 2 {
+		t.Errorf("expected Count()=2, got %d", total)
+	}
+}
+
+func TestTrieCountV4V6_SumEqualsCount(t *testing.T) {
+	tr := New()
+	for _, p := range []string{
+		"10.0.0.0/8", "10.1.0.0/16", "36.0.16.0/20", "2400:1000::/32",
+		"192.168.0.0/16", "2001:db8::/32", "fe80::/10", "::1/128",
+	} {
+		tr.Insert(netip.MustParsePrefix(p))
+	}
+	if v4, v6, total := tr.CountV4(), tr.CountV6(), tr.Count(); v4+v6 != total {
+		t.Errorf("CountV4()+CountV6()=%d+%d != Count()=%d", v4, v6, total)
+	}
+}
