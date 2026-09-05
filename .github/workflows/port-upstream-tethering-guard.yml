@@ -1,0 +1,111 @@
+name: Port upstream tethering guard
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  port:
+    if: github.event.head_commit.message == 'chore: prepare upstream tethering guard port'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Port upstream fail-closed guard
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('android/app/src/main/kotlin/io/github/yiguihai11/smartproxy/shizuku/ShizukuTetheringService.kt')
+          s = p.read_text()
+
+          s = s.replace(
+              'import java.util.concurrent.atomic.AtomicInteger\n',
+              'import java.util.concurrent.atomic.AtomicInteger\nimport java.util.concurrent.atomic.AtomicLong\n',
+              1,
+          )
+          s = s.replace(
+              '    private val wrongUpstreamWarningTypes = AtomicInteger(0)\n',
+              '    private val wrongUpstreamWarningTypes = AtomicInteger(0)\n    // Invalidates a concurrent tethering-start attempt when Android briefly selects\n    // an unprotected physical upstream before switching to the TestNetwork.\n    private val upstreamRejections = AtomicLong(0)\n',
+              1,
+          )
+          s = s.replace(
+              '    private fun startTetheringTypeAttemptLocked(type: Int, alreadyEnabled: Boolean): Int {\n        val bit = tetheringTypeBit(type)\n',
+              '    private fun startTetheringTypeAttemptLocked(type: Int, alreadyEnabled: Boolean): Int {\n        val rejection = upstreamRejections.get()\n        val bit = tetheringTypeBit(type)\n',
+              1,
+          )
+          s = s.replace(
+              '        if (!awaitProtectedUpstream(expectedUpstream)) {\n',
+              '        if (!awaitProtectedUpstream(expectedUpstream) || rejection != upstreamRejections.get()) {\n',
+              1,
+          )
+          s = s.replace(
+              '    private fun onTetheringChanged() = runRoutingWork<Unit> {\n        enforceProtectedUpstreamLocked()\n        notifyStatusChangedLocked()\n    }\n\n    private fun enforceProtectedUpstreamLocked() {\n        val expected = testInterfaceName ?: return\n        val actual = upstreamMonitor?.currentInterfaceNames ?: return\n        if (actual.isBlank() || TetheringPlatformCompat.isProtectedUpstream(actual, expected)) return\n\n        val activeTypes = getActiveTetheringTypes()\n        val affectedTypes = activeTypes.coerceAtLeast(0) or requestedTetheringTypes or\n            (routingSession?.desiredTetheringTypes ?: 0)\n        if (affectedTypes == 0) return\n\n        wrongUpstreamWarningTypes.updateAndGet { it or affectedTypes }\n        Log.e(TAG, "Android moved tethering to unprotected upstream $actual; stopping downstreams")\n        val result = stopActiveTetheringLocked(clearDesired = false, activeTypes = activeTypes)\n        if (result != RESULT_OK) {\n            Log.e(TAG, "Unable to stop downstreams: $result")\n        }\n    }\n',
+              '''    private fun onTetheringChanged() {
+        // This callback must not wait behind routingWorker: Android can temporarily
+        // move tethering to the physical network while the worker is blocked waiting
+        // for a start/stop callback. Stop the downstream asynchronously and let the
+        // rejection counter invalidate the overlapping startup attempt.
+        stopUnprotectedDownstreams()
+        notifyStatusChangedLocked()
+    }
+
+    private fun stopUnprotectedDownstreams() {
+        val expected = testInterfaceName ?: return
+        val actual = upstreamMonitor?.currentInterfaceNames ?: return
+        if (actual.isBlank() || TetheringPlatformCompat.isProtectedUpstream(actual, expected)) return
+
+        val activeTypes = upstreamMonitor?.currentInterfaces?.let(::tetheringTypeMask)
+            ?: getActiveTetheringTypes()
+        val affectedTypes = activeTypes.coerceAtLeast(0) or requestedTetheringTypes or
+            (routingSession?.desiredTetheringTypes ?: 0)
+        if (affectedTypes == 0) return
+
+        upstreamRejections.incrementAndGet()
+        wrongUpstreamWarningTypes.updateAndGet { it or affectedTypes }
+        Log.e(TAG, "Android moved tethering to unprotected upstream $actual; stopping downstreams")
+
+        forEachTetheringType(affectedTypes) { type, _ ->
+            if (usesPublicTetheringApi()) {
+                runCatching {
+                    TetheringApi36.requestStopTethering(tetheringManager, type, executor) { result ->
+                        if (result != RESULT_OK) {
+                            Log.e(TAG, "Unable to stop downstream type $type: $result")
+                        }
+                    }
+                }.onFailure {
+                    Log.e(TAG, "Unable to request stop for downstream type $type", it)
+                }
+            } else {
+                val result = runCatching {
+                    TetheringPlatformCompat.stopTethering(tetheringManager, type)
+                }.getOrDefault(RESULT_INTERNAL_ERROR)
+                if (result != RESULT_OK) {
+                    Log.e(TAG, "Unable to stop downstream type $type: $result")
+                }
+            }
+        }
+    }
+''',
+              1,
+          )
+          p.write_text(s)
+
+      - name: Verify port
+        run: |
+          grep -n "upstreamRejections" android/app/src/main/kotlin/io/github/yiguihai11/smartproxy/shizuku/ShizukuTetheringService.kt
+          grep -n "stopUnprotectedDownstreams" android/app/src/main/kotlin/io/github/yiguihai11/smartproxy/shizuku/ShizukuTetheringService.kt
+          grep -n "rejection != upstreamRejections.get()" android/app/src/main/kotlin/io/github/yiguihai11/smartproxy/shizuku/ShizukuTetheringService.kt
+
+      - name: Commit and remove helper workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add android/app/src/main/kotlin/io/github/yiguihai11/smartproxy/shizuku/ShizukuTetheringService.kt
+          git rm .github/workflows/port-upstream-tethering-guard.yml
+          git commit -m 'fix(android): port upstream tethering rejection guard'
+          git push
