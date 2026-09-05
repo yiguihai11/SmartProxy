@@ -258,5 +258,78 @@ function paramTShadow(html) {
   check(lang + ' no i18n param-shadowing (param `t` must not call t())', bad.length === 0, bad.join('; '));
 });
 
-console.log(fails ? ('\n' + fails + ' FAILURE(S)') : '\nALL PASS');
-process.exit(fails ? 1 : 0);
+// body-level fn extractor (sv() lives in a body script, not <head>; fnSrc inside
+// the 3b IIFE is scoped away, so 3c needs its own). Keeps a leading `async `.
+function fnFrom(html, name) {
+  const start = html.indexOf('function ' + name + '(');
+  if (start < 0) return '';
+  const s0 = start - 6;
+  const from = (s0 >= 0 && html.slice(s0, start) === 'async ') ? s0 : start;
+  let i = html.indexOf('{', start), depth = 0;
+  for (; i < html.length; i++) {
+    if (html[i] === '{') depth++;
+    else if (html[i] === '}') { depth--; if (depth === 0) break; }
+  }
+  return html.slice(from, i + 1);
+}
+
+// ── 3c. sv() save-button regression (Config / ACL / Chnroute sub-tabs) ──
+// User report: after clicking Save the button permanently relabelled to
+// '保存 配置' (sv() reverted to tf('Save {0}',[t(tab)])) and no later save stuck
+// (sv() never wrote the PUT body back to the cfgD snapshot, so the next sub-tab
+// switch rebuilt the editors from stale pre-save content). sv() must now revert
+// to the resting label t('Save') = '保存', re-enable, and mirror saved text into
+// cfgD; a failed PUT must surface the backend reason instead of a bare 'Error'.
+async function checkSvRegression() {
+  // the en block above reset t() to identity — restore the zh dict/t first.
+  try { (0, eval)(headInlineScripts(zh)); }
+  catch (e) { check('zh head restore for sv()', false, e && e.message); return; }
+  const src = fnFrom(zh, 'sv');
+  if (!src) { check('zh sv() source found', false); return; }
+  try { (0, eval)(src); }
+  catch (e) { check('zh eval sv()', false, e && e.message); return; }
+
+  const mkBtn = function () { return { disabled: false, textContent: '' }; };
+  const realFetch = global.fetch, realTO = global.setTimeout,
+        realEvent = global.event, realAlert = global.alert;
+  global.setTimeout = function (fn) { fn(); };   // revert fires synchronously, no 2s wait
+  try {
+    // success: cfgD mirrors the PUT body; button back to resting '保存', enabled
+    const b = mkBtn();
+    global.event = { target: b };
+    global.cfgD = {};
+    global.cm_cfg = { getValue: function () { return '{"proxy_group":"auto"}'; } };
+    global.fetch = function () { return Promise.resolve({ ok: true }); };
+    await sv('cfg');
+    check('sv success: cfgD synced', global.cfgD.cfg === '{"proxy_group":"auto"}', JSON.stringify(global.cfgD.cfg));
+    check('sv success: revert label', b.textContent === '保存', JSON.stringify(b.textContent));
+    check('sv success: re-enabled', b.disabled === false);
+
+    // failure: backend reason surfaced through alert; button still reverts
+    let lastAlert = '';
+    const b2 = mkBtn();
+    global.event = { target: b2 };
+    global.alert = function (m) { lastAlert = m; };
+    global.fetch = function () {
+      return Promise.resolve({ ok: false, status: 400, text: function () { return Promise.resolve('validation failed'); } });
+    };
+    await sv('cfg');
+    check('sv fail: backend reason surfaced', lastAlert.indexOf('Save failed: ') === 0 && lastAlert.indexOf('validation failed') >= 0, JSON.stringify(lastAlert));
+    check('sv fail: revert label', b2.textContent === '保存', JSON.stringify(b2.textContent));
+    check('sv fail: re-enabled', b2.disabled === false);
+  } catch (e) {
+    check('sv() regression run', false, e && e.stack || e);
+  } finally {
+    global.fetch = realFetch; global.setTimeout = realTO;
+    global.event = realEvent; global.alert = realAlert;
+    delete global.cfgD; delete global.cm_cfg;
+  }
+}
+
+checkSvRegression().then(function () {
+  console.log(fails ? ('\n' + fails + ' FAILURE(S)') : '\nALL PASS');
+  process.exit(fails ? 1 : 0);
+}).catch(function (e) {
+  console.log('CRASH ' + (e && e.stack || e));
+  process.exit(1);
+});

@@ -226,7 +226,6 @@ var zhStrings = map[string]string{
 	"{0} records":                "{0} 条记录",
 	"{0} selected":               "已选 {0} 项",
 	"Add ACL Rule ({0} entries)": "添加 ACL 规则（{0} 条）",
-	"Save {0}":                    "保存 {0}",
 
 	// placeholders (English-meaningful; example IPs stay as-is, handled by attr dict entry below)
 	"Search host, reason...":                 "搜索主机、原因…",

@@ -2005,22 +2005,28 @@ async function sv(name){
   var map={cfg:['cfg-editor','/config','Config'],acl:['acl-editor','/acl','ACL'],chn:['chn-editor','/chnroute','Chnroute']};
   if(!map[name])return;
   var cm=window['cm_'+name];
-  if(cm){val=cm.getValue()}else{return}
-  var btn=event.target;btn.disabled=true;btn.textContent=t('Saving...');
+  if(!cm)return;
+  var val=cm.getValue();
+  var btn=event.target;
+  function revert(){btn.textContent=t('Save');btn.disabled=false}
+  btn.disabled=true;btn.textContent=t('Saving...');
   try{
     var r=await fetch(map[name][1],{method:'PUT',body:val});
     if(r.ok){
+      cfgD[name]=val;             // keep the cfgD snapshot in sync: showCfg() rebuilds each
+                                  // editor from cfgD on sub-tab switch, so a saved config must
+                                  // land back in cfgD or flipping tabs resurrects the stale
+                                  // pre-save content and re-saving overwrites it again.
       btn.textContent=t('Saved');
-      setTimeout(function(){btn.textContent=tf('Save {0}',[t(map[name][2])]);btn.disabled=false},2000)
+      setTimeout(revert,2000)
     }else{
-      alert('Error');
-      btn.textContent=tf('Save {0}',[t(map[name][2])]);
-      btn.disabled=false
+      var detail='';try{detail=await r.text()}catch(_e){}
+      alert('Save failed: '+(detail||('HTTP '+r.status)));
+      revert()
     }
   }catch(e){
-    alert(e.message);
-    btn.textContent=tf('Save {0}',[t(map[name][2])]);
-    btn.disabled=false
+    alert('Save failed: '+e.message);
+    revert()
   }
 }
 function copyCfg(){
