@@ -357,7 +357,7 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         } else {
             clearCoreLifetimeWatchLocked()
         }
-        result
+        return result
     }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
