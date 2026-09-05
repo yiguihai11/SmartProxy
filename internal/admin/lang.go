@@ -162,7 +162,6 @@ var zhStrings = map[string]string{
 	"Camera is not available in this browser — use image upload or Ctrl+V paste below.": "当前浏览器无法使用摄像头 — 请使用下方图片上传或 Ctrl+V 粘贴。",
 	"Camera unavailable ({0}) — use image upload or Ctrl+V paste below.":                "摄像头不可用（{0}）— 请使用下方图片上传或 Ctrl+V 粘贴。",
 	"No QR found — try a sharper screenshot.":                                           "未识别到二维码 — 请尝试更清晰的截图。",
-	"QR render failed: {0}": "二维码生成失败：{0}",
 
 	// export dialog / toasts
 	"Export SS Link":                           "导出 SS 链接",
@@ -266,6 +265,7 @@ var zhPrefixes = []struct{ Pre, Zh string }{
 	{"File not usable: ", "文件不可用："},
 	{"Save failed: ", "保存失败："},
 	{"Delete failed: ", "删除失败："},
+	{"QR render failed: ", "二维码渲染失败："},
 	{"udp failures: ", "UDP 失败："},
 	{"tcp failures: ", "TCP 失败："},
 	{"Auto-scroll: ", "自动滚动："},
