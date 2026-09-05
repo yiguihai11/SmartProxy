@@ -30,15 +30,24 @@ internal object TetheringApi36 {
     ): TetheringUpstreamMonitor {
         val manager = service as TetheringManager
         val interfaceNames = AtomicReference<String?>(null)
+        val interfaces = AtomicReference<List<ActiveTetheringInterface>?>(null)
+        val interfacesReceived = CountDownLatch(1)
         val changeExecutor = newTetheringChangeExecutor()
-        val callback = UpstreamCallback(connectivityManager, interfaceNames, changeExecutor, onChanged)
+        val callback = UpstreamCallback(
+            connectivityManager,
+            interfaceNames,
+            interfaces,
+            interfacesReceived,
+            changeExecutor,
+            onChanged,
+        )
         try {
             manager.registerTetheringEventCallback(executor, callback)
         } catch (error: Throwable) {
             changeExecutor.shutdownNow()
             throw error
         }
-        return TetheringUpstreamMonitor(interfaceNames) {
+        return TetheringUpstreamMonitor(interfaceNames, interfaces, interfacesReceived) {
             runCatching { manager.unregisterTetheringEventCallback(callback) }
             changeExecutor.shutdownNow()
         }
@@ -60,20 +69,15 @@ internal object TetheringApi36 {
                 callbackReceived.countDown()
             }
         }
-
         return try {
             manager.registerTetheringEventCallback(executor, callback)
-            if (callbackReceived.await(timeoutSeconds, TimeUnit.SECONDS)) {
-                result
-            } else {
-                null
-            }
+            if (callbackReceived.await(timeoutSeconds, TimeUnit.SECONDS)) result else null
         } finally {
             runCatching { manager.unregisterTetheringEventCallback(callback) }
         }
     }
 
-    fun stopTethering(
+    fun startTethering(
         service: Any,
         type: Int,
         executor: Executor,
@@ -82,17 +86,16 @@ internal object TetheringApi36 {
         val manager = service as TetheringManager
         var result = ShizukuTetheringService.RESULT_INTERNAL_ERROR
         val callbackReceived = CountDownLatch(1)
-        val request = TetheringManager.TetheringRequest.Builder(type).build()
-        manager.stopTethering(
-            request,
+        manager.startTethering(
+            TetheringManager.TetheringRequest.Builder(type).build(),
             executor,
-            object : TetheringManager.StopTetheringCallback {
-                override fun onStopTetheringSucceeded() {
+            object : TetheringManager.StartTetheringCallback {
+                override fun onTetheringStarted() {
                     result = ShizukuTetheringService.RESULT_OK
                     callbackReceived.countDown()
                 }
 
-                override fun onStopTetheringFailed(error: Int) {
+                override fun onTetheringFailed(error: Int) {
                     result = error
                     callbackReceived.countDown()
                 }
@@ -105,13 +108,60 @@ internal object TetheringApi36 {
         }
     }
 
+    fun stopTethering(
+        service: Any,
+        type: Int,
+        executor: Executor,
+        timeoutSeconds: Long,
+    ): Int {
+        var result = ShizukuTetheringService.RESULT_INTERNAL_ERROR
+        val callbackReceived = CountDownLatch(1)
+        requestStopTethering(service, type, executor) {
+            result = it
+            callbackReceived.countDown()
+        }
+        return if (callbackReceived.await(timeoutSeconds, TimeUnit.SECONDS)) {
+            result
+        } else {
+            ShizukuTetheringService.RESULT_INTERNAL_ERROR
+        }
+    }
+
+    /** Dispatch without waiting, so emergency shutdown can stop every downstream immediately. */
+    fun requestStopTethering(
+        service: Any,
+        type: Int,
+        executor: Executor,
+        onResult: (Int) -> Unit,
+    ) {
+        val manager = service as TetheringManager
+        val request = TetheringManager.TetheringRequest.Builder(type).build()
+        manager.stopTethering(
+            request,
+            executor,
+            object : TetheringManager.StopTetheringCallback {
+                override fun onStopTetheringSucceeded() {
+                    onResult(ShizukuTetheringService.RESULT_OK)
+                }
+
+                override fun onStopTetheringFailed(error: Int) {
+                    onResult(error)
+                }
+            },
+        )
+    }
+
     private class UpstreamCallback(
         private val connectivityManager: ConnectivityManager,
         private val interfaceNames: AtomicReference<String?>,
+        private val tetheredInterfaces: AtomicReference<List<ActiveTetheringInterface>?>,
+        private val interfacesReceived: CountDownLatch,
         private val changeExecutor: ExecutorService,
         private val onChanged: () -> Unit,
     ) : TetheringManager.TetheringEventCallback {
         override fun onTetheredInterfacesChanged(interfaces: Set<TetheringInterface>) {
+            tetheredInterfaces.set(interfaces.map { ActiveTetheringInterface(it.type, it.`interface`) })
+            interfacesReceived.countDown()
             notifyChanged()
         }
 
