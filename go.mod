@@ -15,6 +15,7 @@ require (
 	github.com/v2fly/v2ray-core/v5 v5.45.1
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
+	golang.org/x/text v0.41.0
 	google.golang.org/protobuf v1.36.12
 )
 
@@ -43,7 +44,6 @@ require (
 	golang.org/x/mobile v0.0.0-20260821160754-b994778512bb // indirect
 	golang.org/x/mod v0.39.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
 	golang.org/x/tools v0.49.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260120221211-b8f7ae30c516 // indirect

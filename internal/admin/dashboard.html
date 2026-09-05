@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
@@ -33,6 +33,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);display:flex
 .theme-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;background:var(--surface2);border:1px solid var(--border);cursor:pointer;font-size:.9rem;line-height:1;padding:9px 12px;border-radius:8px;transition:background .15s;color:var(--text2);font-family:var(--font)}
 .theme-btn:hover{background:var(--border);color:var(--text)}
 .theme-btn span{font-size:.82rem}
+.theme-btn + .theme-btn{margin-top:8px}
 .hamburger{position:fixed;top:calc(var(--sat) + 14px);left:calc(var(--sal) + 14px);z-index:40;display:none;align-items:center;justify-content:center;width:34px;height:34px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text2);font-size:1.05rem;line-height:1;cursor:pointer;transition:background .15s}
 .hamburger:hover{background:var(--surface2);color:var(--text)}
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:20;opacity:0;visibility:hidden;transition:opacity .25s ease;pointer-events:none}
@@ -197,6 +198,18 @@ tr:last-child td{border-bottom:none}
 @media(max-width:800px){.sidebar{width:60px}.sidebar-header{padding:16px var(--sal,0);justify-content:center;gap:2px}.sidebar-logo{width:32px;height:32px;font-size:.85rem}.sidebar-title{display:none}.theme-btn{font-size:.82rem}.nav-item{padding:6px 0;justify-content:center;margin:0 2px;flex-direction:column;align-items:center;gap:1px}.nav-item span:not(.nav-icon){display:block;font-size:.58rem;line-height:1.15;text-align:center;word-break:keep-all}.nav-item.section{display:none}.main{margin-left:60px;padding:20px 16px;padding-right:calc(16px + var(--sar,0px));padding-bottom:calc(20px + var(--sab,0px))}.cards-6,.cards-4,.cards-3{grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}.proxy-grid{grid-template-columns:1fr}.toolbar{flex-wrap:wrap;gap:6px}.search-input{min-width:120px;font-size:.8rem;padding:6px 10px}.pagination{gap:4px}.page-input{width:50px;padding:4px 6px;font-size:.78rem}.batch-bar{flex-wrap:wrap;padding:6px 10px;gap:6px;font-size:.8rem}.batch-bar select{font-size:.78rem;padding:4px 6px}.dialog{width:92vw;padding:16px;max-height:90vh}.dialog-title{font-size:.95rem}.dialog-select{font-size:.82rem;padding:7px 8px}.dialog-list{max-height:100px;font-size:.78rem;padding:6px 10px;overflow-x:auto}th,td{padding:5px 6px;font-size:.75rem}.td-chk,.th-chk{width:28px}.cb-row{width:14px;height:14px}#bl-table td:nth-child(5),#cache-body td:nth-child(4){font-size:.7rem;word-break:break-all}.hamburger{display:flex}.sidebar{width:min(62vw,250px);transform:translateX(-100%);transition:transform .25s ease;z-index:30;box-shadow:none}.sidebar.open{transform:translateX(0);box-shadow:0 8px 40px rgba(0,0,0,.4)}.sidebar-header{padding:14px;justify-content:flex-start}.sidebar-title{display:block}.sidebar-logo{width:32px;height:32px;font-size:.88rem}.sidebar-close{display:block}.sidebar-footer{padding:10px 12px}.nav-item{flex-direction:row;align-items:center;gap:10px;padding:10px 12px;margin:0 0 2px;justify-content:flex-start}.nav-item span:not(.nav-icon){display:inline;font-size:.88rem;line-height:1.2;text-align:left;word-break:normal}.nav-item.section{display:block;padding:14px 12px 6px;font-size:.68rem}.main{margin-left:0;padding:20px 16px;padding-right:calc(16px + var(--sar,0px));padding-bottom:calc(20px + var(--sab,0px))}.view-title,.view-meta{margin-left:48px}.config-actions{flex-wrap:wrap}.proxy-card .actions{flex-wrap:wrap}}
 @media(max-width:480px){.main{padding:12px 8px;padding-right:calc(8px + var(--sar,0px));padding-bottom:calc(12px + var(--sab,0px))}.view-meta{gap:6px;font-size:.76rem;flex-wrap:wrap}.table-wrap{overflow-x:auto}.search-input{min-width:80px;font-size:.75rem;padding:5px 8px}.toolbar{gap:4px}.batch-bar{padding:4px 8px;gap:4px;font-size:.75rem}.batch-bar .count{font-size:.75rem}.batch-bar select{font-size:.72rem;padding:3px 5px}.pagination{gap:2px;margin-top:8px}.btn,.btn-sm{padding:2px 8px;font-size:.72rem}.page-input{width:40px;padding:3px 4px;font-size:.72rem}.page-info{font-size:.72rem}th,td{padding:3px 4px;font-size:.7rem}.td-chk,.th-chk{width:22px}.cb-row{width:12px;height:12px}.dialog{width:100vw;padding:12px;padding-bottom:calc(12px + var(--sab,0px));border-radius:var(--radius)}.dialog-title{font-size:.88rem}.dialog-select{font-size:.78rem;padding:6px 8px}.dialog-list{max-height:80px;font-size:.74rem;padding:4px 8px}.tag{font-size:.68rem;padding:0 5px;height:16px}}
 </style>
+<script>
+/* i18n boot. English is the canonical UI language; on zh requests the server
+   injects SP_LANG/'zh' + SP_I18N(_PRE/_HTML) before </head>, and a zh launcher
+   near </body> walks the DOM. t()/tf() here are the only translation API used
+   from JS; they are identity when no dictionary is installed (English). */
+window.SP_LANG=window.SP_LANG||'en';
+function __norm(s){return String(s==null?'':s).replace(/\s+/g,' ').trim()}
+var __nrm=null,__nrmD=null;
+function __id(){var d=window.SP_I18N||null;if(!d)return null;if(__nrmD!==d){__nrmD=d;__nrm={};for(var k in d)if(Object.prototype.hasOwnProperty.call(d,k))__nrm[__norm(k)]=d[k]}return __nrm}
+function t(s){var n=__id();if(n){var z=__norm(s);if(Object.prototype.hasOwnProperty.call(n,z))return n[z]}return s}
+function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').join(a[i]);return s}
+</script>
 </head>
 <body>
 <button class="hamburger" id="hamburger" onclick="toggleDrawer()" aria-label="Toggle menu">☰</button>
@@ -217,14 +230,17 @@ tr:last-child td{border-bottom:none}
     <div class="nav-item" data-view="tls"><span class="nav-icon">🔐</span><span>TLS Cert</span></div>
     <div class="nav-item" data-view="config"><span class="nav-icon">C</span><span>Config</span></div>
   </div>
-  <div class="sidebar-footer"><button class="theme-btn" id="theme-btn" onclick="toggleTheme()" title="Toggle theme">☀️</button></div>
+  <div class="sidebar-footer">
+    <button class="theme-btn" id="theme-btn" onclick="toggleTheme()" title="Toggle theme">☀️</button>
+    <button class="theme-btn" id="lang-btn" onclick="toggleLang()" title="Switch panel language">🌐 <span id="lang-label">中文</span></button>
+  </div>
 </div>
 
 <div class="main">
 <div class="health-banner" id="health-banner" onclick="navTo('health')" title="Go to Proxies">
-  <div class="hb-msg"><span class="hb-ico">⚠</span><span>所有代理节点不可用，经代理的联网已中断</span></div>
-  <div class="hb-go">点击查看节点状态 →</div>
-  <button class="btn btn-sm primary" onclick="event.stopPropagation();resetAutoCircuits()">一键恢复节点</button>
+  <div class="hb-msg"><span class="hb-ico">⚠</span><span>All proxy nodes are unavailable — proxied internet is down</span></div>
+  <div class="hb-go">Click to view node status →</div>
+  <button class="btn btn-sm primary" onclick="event.stopPropagation();resetAutoCircuits()">Restore nodes</button>
 </div>
 <div class="view active" id="view-dashboard">
   <div class="view-title">Overview</div>
@@ -336,7 +352,7 @@ tr:last-child td{border-bottom:none}
   <div class="view-title">TLS Certificate</div>
   <div class="view-meta"><span class="dot"></span><span>Built-in root CA &amp; CA-signed leaf</span></div>
   <div class="card" style="max-width:720px;line-height:1.7;color:var(--text2)">
-    <p style="margin-bottom:16px">The panel serves HTTPS with a short-lived <b>leaf</b>
+    <p data-i18n="tls1" style="margin-bottom:16px">The panel serves HTTPS with a short-lived <b>leaf</b>
       certificate signed by a built-in root CA (<code>admin.crt</code>). Install that CA as a
       <b>trusted certificate authority</b> on each device that opens the panel — the leaf is
       then trusted automatically and the "untrusted" warning disappears. The CA is a stable
@@ -344,7 +360,7 @@ tr:last-child td{border-bottom:none}
       addresses change, so a device only needs it installed once. Android 7.0+ requires a
       lock-screen PIN to install a CA; iOS needs the profile installed then trusted in
       Settings &gt; General &gt; VPN &amp; Device Management.</p>
-    <p style="margin-bottom:16px">The leaf covers <code>localhost</code>,
+    <p data-i18n="tls2" style="margin-bottom:16px">The leaf covers <code>localhost</code>,
       <code>127.0.0.1</code>, <code>::1</code> and every name/IP in
       <code>admin_cert_sans</code> (config <code>listen</code> block). If a LAN address is
       missing, add it there and restart — only the leaf is re-signed; the CA stays the same,
@@ -383,10 +399,10 @@ function applyTheme(){
 function setThemeBtn(){
   var btn=document.getElementById('theme-btn');
   if(!btn)return;
-  var map={auto:['🌓','自动'],light:['☀️','浅色'],dark:['🌙','深色']};
+  var map={auto:['🌓',t('Auto')],light:['☀️',t('Light')],dark:['🌙',t('Dark')]};
   var m=map[_themeMode];
   btn.innerHTML=m[0]+' <span>'+m[1]+'</span>';
-  btn.title=_themeMode==='auto'?'跟随系统深浅色,点击切换':'点击切换主题';
+  btn.title=_themeMode==='auto'?t('Follow system theme — click to switch'):t('Click to switch theme');
 }
 function initTheme(){
   // 默认「自动」:跟随系统深浅色(iOS/Android/Windows/macOS 浏览器/WebView 均支持
@@ -410,6 +426,15 @@ function toggleTheme(){
 }
 function syncTheme(){applyTheme();setThemeBtn()}
 initTheme();
+
+function toggleLang(){
+  var n=window.SP_LANG==='zh'?'en':'zh';
+  var d=new Date();d.setTime(d.getTime()+365*24*3600*1000);
+  document.cookie='sp_lang='+n+';path=/;expires='+d.toUTCString()+';SameSite=Lax';
+  location.reload();
+}
+function initLangBtn(){var e=document.getElementById('lang-label');if(e)e.textContent=window.SP_LANG==='zh'?'English':'中文'}
+initLangBtn();
 
 function fmtNum(n){
   if(n>=1e9)return (n/1e9).toFixed(1)+' GB';
@@ -475,7 +500,7 @@ function drawTrafficChart(s){
   window.trafficChart=new Chart(canvas.getContext('2d'),{
     type:'doughnut',
     data:{
-      labels:['TCP Proxy','TCP Direct','UDP Proxy','UDP Direct'],
+      labels:[t('TCP Proxy'),t('TCP Direct'),t('UDP Proxy'),t('UDP Direct')],
       datasets:[{data:[tp,td,up,ud],backgroundColor:['#5b6ef5','#3ccf8e','#06b6d4','#f97316'],borderWidth:0}]
     },
     options:{
@@ -566,8 +591,8 @@ function lhealth(d){
     var anyUp=p.health.available||(udpScheme&&p.udp_health&&p.udp_health.available);
     // A node whose circuits are BOTH down is off: show "off", never "tcp_and_udp" (which would
     // read as "both work" right next to an Enable button and two down badges).
-    var dispMode=anyUp?p.mode:'off';
-    var capTxt=(anyUp&&p.udp_capability&&p.udp_capability!=='unknown')?' · '+p.udp_capability:'';
+    var dispMode=t(anyUp?p.mode:'off');
+    var capTxt=(anyUp&&p.udp_capability&&p.udp_capability!=='unknown')?' · '+t(p.udp_capability):'';
     // Show the node's friendly ss:// name when it has one; the alias (the config key used for
     // edit/delete) stays visible when it differs from the displayed name.
     var dispName=p.name||p.alias;
@@ -579,8 +604,8 @@ function lhealth(d){
     var tcClk=tc.c==='na'?'':' onclick="toggleCircuit('+i+',\'tcp\')"';
     var ucClk=uc.c==='na'?'':' onclick="toggleCircuit('+i+',\'udp\')"';
     return '<div class="proxy-card"><div class="top"><div><div class="alias">'+dispName+'</div><div class="url">'+p.url+aliasTxt+' · '+dispMode+capTxt+'</div></div>'+
-      '<div class="circs"><span class="circ '+(tc.c+(tc.m?' manual':''))+'" title="'+(tc.m?(p.health.available?'TCP manually up — click to restore auto':'TCP manually down — click to force up'):'Click to toggle TCP')+'"'+tcClk+'><i class="dot"></i>TCP '+tc.t+'</span><span class="circ '+(uc.c+(uc.m?' manual':''))+'" title="'+(uc.m?(p.udp_health&&p.udp_health.available?'UDP manually up — click to restore auto':'UDP manually down — click to force up'):'Click to toggle UDP')+'"'+ucClk+'><i class="dot"></i>UDP '+uc.t+'</span></div></div>'+
-      '<div class="stats"><span>latency: '+lat+'</span><span>tcp failures: '+(p.health.manual?'manual':p.health.consecutive_failures)+'</span><span>udp failures: '+(p.udp_health?(p.udp_health.manual?'manual':p.udp_health.consecutive_failures):'n/a')+'</span></div>'+
+      '<div class="circs"><span class="circ '+(tc.c+(tc.m?' manual':''))+'" title="'+(tc.m?(p.health.available?'TCP manually up — click to restore auto':'TCP manually down — click to force up'):'Click to toggle TCP')+'"'+tcClk+'><i class="dot"></i>TCP '+t(tc.t)+'</span><span class="circ '+(uc.c+(uc.m?' manual':''))+'" title="'+(uc.m?(p.udp_health&&p.udp_health.available?'UDP manually up — click to restore auto':'UDP manually down — click to force up'):'Click to toggle UDP')+'"'+ucClk+'><i class="dot"></i>UDP '+t(uc.t)+'</span></div></div>'+
+      '<div class="stats"><span>latency: '+lat+'</span><span>tcp failures: '+(p.health.manual?t('manual'):p.health.consecutive_failures)+'</span><span>udp failures: '+(p.udp_health?(p.udp_health.manual?t('manual'):p.udp_health.consecutive_failures):t('n/a'))+'</span></div>'+
       '<div class="actions">'+
       '<button class="btn btn-sm primary" onclick="openProxyDialog('+i+')">Edit</button>'+
       '<button class="btn btn-sm danger" onclick="deleteProxy('+i+')">Delete</button>'+
@@ -609,7 +634,7 @@ async function resetAutoCircuits(){
     var r=await fetch('/health/reset-auto',{method:'POST'});
     if(!r.ok){var t=await r.text();throw new Error('Reset failed ('+r.status+'): '+t)}
     var j=await r.json().catch(function(){return {}});
-    var msg=(j.reset>0)?('已恢复 '+j.reset+' 个电路（临时，再次检测失败将重新关闭）'):'当前没有因检测异常而自动关闭的电路';
+    var msg=(j.reset>0)?tf('Restored {0} circuit(s) (temporary; a failed re-check will close them again)',[j.reset]):t('No circuits were auto-closed due to failed checks');
     var toast=document.getElementById('copy-toast');
     if(toast)showCopyToast(toast,msg);else alert(msg);
   }catch(e){ alert(e.message) }
@@ -971,7 +996,7 @@ function startQRCamera(){
     })
     .catch(function(err){
       var st=document.getElementById('qr-status');
-      st.textContent='Camera unavailable ('+err.name+') — use image upload or Ctrl+V paste below.';
+      st.textContent=tf('Camera unavailable ({0}) — use image upload or Ctrl+V paste below.',[err.name]);
       document.getElementById('qr-cam-wrap').style.display='none';
     });
 }
@@ -1170,7 +1195,7 @@ async function saveProxy(){
   }
   var plugin=buildPlugin();
   if(plugin)url+='?plugin='+encodeURIComponent(plugin);
-  try{var chk=new URL(url);if(!chk.hostname)throw new Error('bad host')}catch(e){alert('Invalid server address: '+server);return}
+  try{var chk=new URL(url);if(!chk.hostname)throw new Error('bad host')}catch(e){alert(tf('Invalid server address: {0}',[server]));return}
   var udpintcp=document.getElementById('proxy-udpintcp').checked;
   var editing=document.getElementById('proxy-dialog').dataset.alias||'';
   try{
@@ -1180,11 +1205,11 @@ async function saveProxy(){
       if(editing){
         for(var i=0;i<ps.length;i++){
           if(ps[i].alias===editing){ps[i].alias=alias;ps[i].url=url;ps[i].udp_in_tcp=udpintcp;return}
-          if(ps[i].alias===alias){alert('Alias "'+alias+'" already exists');throw new Error('dup')}
+          if(ps[i].alias===alias){alert(tf('Alias "{0}" already exists',[alias]));throw new Error('dup')}
         }
         ps.push(entry());
       }else{
-        for(var i=0;i<ps.length;i++){if(ps[i].alias===alias){alert('Alias "'+alias+'" already exists');throw new Error('dup')}}
+        for(var i=0;i<ps.length;i++){if(ps[i].alias===alias){alert(tf('Alias "{0}" already exists',[alias]));throw new Error('dup')}}
         ps.push(entry());
       }
     });
@@ -1199,7 +1224,7 @@ async function saveProxy(){
 async function deleteProxy(i){
   var p=healthD.health.proxies[i];
   if(!p)return;
-  if(!confirm('Delete proxy "'+p.alias+'" ?'))return;
+  if(!confirm(tf('Delete proxy "{0}" ?',[p.alias])))return;
   try{
     await putProxyConfig(function(cfg){
       cfg.upstream.proxies=cfg.upstream.proxies.filter(function(x){return x.alias!==p.alias});
@@ -1285,7 +1310,7 @@ async function fbCreateFile(){
     if(!r.ok)throw new Error(data.error||('HTTP '+r.status));
     closeNewFileModal();
     fbLoad(fbCwd);
-    showCopyToast(document.getElementById('copy-toast'),'Created: '+name);
+    showCopyToast(document.getElementById('copy-toast'),tf('Created: {0}',[name]));
   }catch(e){
     errEl.textContent='Create failed: '+e.message;
     errEl.style.display='block';
@@ -1321,7 +1346,7 @@ function applyFileSelection(path){
     cfg.routing[key]=path;
     var out=JSON.stringify(cfg,null,2);
     if(cm)cm.setValue(out);else cfgD.cfg=out;
-    showCopyToast(document.getElementById('copy-toast'),'Selected: '+path);
+    showCopyToast(document.getElementById('copy-toast'),tf('Selected: {0}',[path]));
     setTimeout(function(){
       showCopyToast(document.getElementById('copy-toast'),'Go to Config tab and click Save to apply');
     },1300);
@@ -1387,7 +1412,7 @@ function rbl(t){
     dd.innerHTML='<div class="filter-option '+(blFilter==='all'?'selected':'')+'" data-value="all" onclick="setBLFilter(\'all\')">All</div>'+
       Object.keys(types).sort().map(function(k){return '<div class="filter-option '+(blFilter===k?'selected':'')+'" data-value="'+k+'" onclick="setBLFilter(\''+k+'\')">'+k.charAt(0).toUpperCase()+k.slice(1)+'</div>'}).join('');
     var ft=document.getElementById('bl-filter-trigger');
-    if(ft)ft.textContent='Type: '+(blFilter==='all'?'All':blFilter.charAt(0).toUpperCase()+blFilter.slice(1))+' ▾';
+    if(ft)ft.textContent=tf('Type: {0} ▾',[blFilter==='all'?t('All'):blFilter.charAt(0).toUpperCase()+blFilter.slice(1)]);
   }
   var totalPages=Math.max(1,Math.ceil(allFl.length/blPageSize));
   if(blPage>totalPages)blPage=totalPages;
@@ -1405,7 +1430,7 @@ function rbl(t){
   document.getElementById('bl-next').disabled=blPage>=totalPages;
   var pi=document.getElementById('bl-page-input');if(pi&&document.activeElement!==pi)pi.value=blPage;
   document.getElementById('bl-page-info').textContent='/'+totalPages;
-  document.getElementById('bl-info').textContent=allFl.length+' entries';
+  document.getElementById('bl-info').textContent=tf('{0} entries',[allFl.length]);
   var cbAll=document.getElementById('bl-cb-all');
   if(cbAll)cbAll.checked=anyOnPage&&pageItems.every(function(e){return blSelected[blKey(e)]});
   blUpdateBatchBar();
@@ -1479,8 +1504,9 @@ function blUpdateBatchBar(){
   var bar=document.getElementById('bl-batch-bar');
   var cnt=document.getElementById('bl-batch-count');
   var n=Object.keys(blSelected).length;
-  if(n>0){bar.classList.add('show');cnt.textContent=n+' selected'}
-  else{bar.classList.remove('show');cnt.textContent='0 selected'}
+  cnt.textContent=tf('{0} selected',[n]);
+  if(n>0)bar.classList.add('show');
+  else bar.classList.remove('show');
 }
 function blOpenACL(host,typ){
   openACLDialog([{value:host,type:typ,source:'blacklist'}]);
@@ -1514,7 +1540,7 @@ async function dbl(h){
 async function blDeleteSelected(){
   var keys=Object.keys(blSelected);
   if(!keys.length)return;
-  confirmDelete('Delete '+keys.length+' selected blacklist entr'+(keys.length>1?'ies':'y')+'?',function(){
+  confirmDelete(tf('Delete {0} selected blacklist entr{1}?',[keys.length,keys.length>1?'ies':'y']),function(){
     var todo=keys.slice();
     (function next(){var k=todo.shift();if(!k){loadBlacklist();return}delete blSelected[k];var p=k.split('||');fetch('/blacklist?host='+encodeURIComponent(p[0])+'&type='+p[1],{method:'DELETE'}).then(next).catch(next)})();
   });
@@ -1556,7 +1582,7 @@ function renderCache(){
     dd.innerHTML='<div class="filter-option '+(cacheFilter==='all'?'selected':'')+'" data-value="all" onclick="setCacheFilter(\'all\')">All</div>'+
       Object.keys(allTypes).sort().map(function(k){return '<div class="filter-option '+(cacheFilter==k?'selected':'')+'" data-value="'+k+'" onclick="setCacheFilter(\''+k+'\')">'+(cacheTypes[k]||k)+'</div>'}).join('');
     var ft=document.getElementById('cache-filter-trigger');
-    if(ft)ft.textContent='Type: '+(cacheFilter==='all'?'All':(cacheTypes[parseInt(cacheFilter)]||cacheFilter))+' ▾';
+    if(ft)ft.textContent=tf('Type: {0} ▾',[cacheFilter==='all'?t('All'):(cacheTypes[parseInt(cacheFilter)]||cacheFilter)]);
   }
   var totalPages=Math.max(1,Math.ceil(allFl.length/cachePageSize));
   if(cachePage>totalPages)cachePage=totalPages;
@@ -1578,7 +1604,7 @@ function renderCache(){
   document.getElementById('cache-next').disabled=cachePage>=totalPages;
   var pi=document.getElementById('cache-page-input');if(pi&&document.activeElement!==pi)pi.value=cachePage;
   document.getElementById('cache-page-info').textContent='/'+totalPages;
-  document.getElementById('cache-info').textContent=allFl.length+' entries';
+  document.getElementById('cache-info').textContent=tf('{0} entries',[allFl.length]);
   var cbAll=document.getElementById('cache-cb-all');
   if(cbAll)cbAll.checked=pageItems.every(function(e){return cacheSelected[cacheKey(e)]});
   cacheUpdateBatchBar();
@@ -1604,13 +1630,14 @@ function cacheUpdateBatchBar(){
   var bar=document.getElementById('cache-batch-bar');
   var cnt=document.getElementById('cache-batch-count');
   var n=Object.keys(cacheSelected).length;
-  if(n>0){bar.classList.add('show');cnt.textContent=n+' selected'}
-  else{bar.classList.remove('show');cnt.textContent='0 selected'}
+  cnt.textContent=tf('{0} selected',[n]);
+  if(n>0)bar.classList.add('show');
+  else bar.classList.remove('show');
 }
 async function cacheDeleteSelected(){
   var keys=Object.keys(cacheSelected);
   if(!keys.length)return;
-  confirmDelete('Delete '+keys.length+' selected DNS cache entr'+(keys.length>1?'ies':'y')+'?',function(){
+  confirmDelete(tf('Delete {0} selected DNS cache entr{1}?',[keys.length,keys.length>1?'ies':'y']),function(){
     var todo=keys.slice();
     (function next(){var k=todo.shift();if(!k){loadCache();return}delete cacheSelected[k];var p=k.split(':');var qname=p.slice(0,-1).join(':');fetch('/cache?qname='+encodeURIComponent(qname)+'&qtype='+p[p.length-1],{method:'DELETE'}).then(next).catch(next)})();
   });
@@ -1624,7 +1651,7 @@ function cacheOpenACL(qname){
 var cachePinQname='',cachePinQtype=0;
 function openCachePinDialog(qname,qtype,answers){
   cachePinQname=qname;cachePinQtype=qtype;
-  document.getElementById('cachepin-desc').textContent=qname+' — '+(cacheTypes[qtype]||qtype)+' record';
+  document.getElementById('cachepin-desc').textContent=tf('{0} — {1} record',[qname,(cacheTypes[qtype]||qtype)]);
   var list=(answers||'').split('\n').filter(function(s){return s.length});
   document.getElementById('cachepin-current').innerHTML=list.map(function(a){return '<span>'+a+'</span>'}).join('');
   document.getElementById('cachepin-ip').value=list.join(', ');
@@ -1650,7 +1677,7 @@ function confirmCachePin(){
     closeCachePinDialog();
     cacheSelected={};
     loadCache();
-    setTimeout(function(){alert('Pinned: '+d.host+' → '+(d.ip||[]).join(', ')+'\nPersistent static record, hot-applied')},100);
+    setTimeout(function(){alert(tf('Pinned: {0} → {1}\nPersistent static record, hot-applied',[d.host,(d.ip||[]).join(', ')]))},100);
   }).catch(function(e){alert('Error: '+e.message)}).finally(function(){btn.disabled=false;btn.textContent='Pin as static record'});
 }
 // ---- DNS page tabs: cache ↔ static records ----
@@ -1685,7 +1712,7 @@ function staticGetFiltered(){
 function renderStatic(){
   var el=document.getElementById('static-list');
   var rows=staticGetFiltered();
-  document.getElementById('static-info').textContent=rows.length+' records';
+  document.getElementById('static-info').textContent=tf('{0} records',[rows.length]);
   if(!rows.length){
     el.innerHTML='<div style="padding:32px;text-align:center;color:var(--text2)">No static records</div>';
     return;
@@ -1741,7 +1768,7 @@ function staticDeleteIP(host,ip){
   }).then(function(d){staticData=d.records;renderStatic()}).catch(function(e){alert('Error: '+e.message)});
 }
 function staticDeleteHost(host){
-  confirmDelete('Delete static record for "'+host+'"?',function(){
+  confirmDelete(tf('Delete static record for "{0}"?',[host]),function(){
     fetch('/dns/static?host='+encodeURIComponent(host),{method:'DELETE'}).then(function(r){
       return r.json().then(function(d){
         if(r.ok)return d;
@@ -1862,7 +1889,7 @@ function openACLDialog(entries,presetAction){
   aclDialogEntries=entries;
   var list=document.getElementById('acl-entries-list');
   list.innerHTML=entries.map(function(e){return '<span>'+e.value+' ('+e.type+')</span>'}).join('');
-  document.getElementById('acl-title').textContent='Add ACL Rule'+(entries.length>1?' ('+entries.length+' entries)':'');
+  document.getElementById('acl-title').textContent=entries.length>1?tf('Add ACL Rule ({0} entries)',[entries.length]):t('Add ACL Rule');
   document.getElementById('acl-action').value=presetAction||'block';
   onACLActionChange();
   document.getElementById('acl-overlay').classList.add('show');
@@ -1918,7 +1945,7 @@ function confirmACL(){
         if(v==='blacklist'){blSelected={};loadBlacklist()}
         else if(v==='cache'){cacheSelected={};loadCache()}
         closeACLDialog();
-        if(data.skipped>0)setTimeout(function(){alert(data.count+' added, '+data.skipped+' skipped (duplicates)')},100);
+        if(data.skipped>0)setTimeout(function(){alert(tf('{0} added, {1} skipped (duplicates)',[data.count,data.skipped]))},100);
       });
     }else{r.text().then(function(t){alert('Error: '+t)})}
   }).catch(function(e){alert('Error: '+e.message)}).finally(function(){btn.disabled=false;btn.textContent='Add'});
@@ -2083,7 +2110,7 @@ function toggleLogsFilter(){
 function setLogsFilter(val){
   logsFilter=val;
   var tr=document.getElementById('logs-filter-trigger');
-  if(tr)tr.textContent='Level: '+(val==='all'?'All':val)+' ▾';
+  if(tr)tr.textContent=tf('Level: {0} ▾',[val==='all'?t('All'):val]);
   document.querySelectorAll('#logs-filter-dropdown .filter-option').forEach(function(o){
     o.classList.toggle('selected',o.dataset.value===val);
   });
@@ -2126,11 +2153,11 @@ function renderLogs(){
     });
   }
   var info=document.getElementById('logs-info');
-  if(info)info.textContent=fl.length+' / '+logsData.length+' entries';
+  if(info)info.textContent=tf('{0} / {1} entries',[fl.length,logsData.length]);
   var box=document.getElementById('logs-box');
   if(!box)return;
   if(!fl.length){
-    box.innerHTML='<div style="color:var(--text3);text-align:center;padding:40px 0;">No logs available</div>';
+    box.innerHTML='<div style="color:var(--text3);text-align:center;padding:40px 0;">'+t('No logs available')+'</div>';
     return;
   }
   box.innerHTML=fl.map(function(e){
@@ -2178,7 +2205,7 @@ document.getElementById('logs-box').addEventListener('click',function(e){
   }
 });
 function showCopyToast(el,msg){
-  el.textContent=msg;el.style.opacity='1';
+  el.textContent=t(msg);el.style.opacity='1';
   if(window._copyToastTimer)clearTimeout(window._copyToastTimer);
   window._copyToastTimer=setTimeout(function(){el.style.opacity='0'},1200);
 }
@@ -2193,7 +2220,7 @@ function fallbackCopy(text,toast){
 function exportSSLink(i){
   var p=(i>=0&&healthD.health.proxies[i])||null;
   if(!p||p.scheme!=='ss')return;
-  document.getElementById('export-title').textContent='Export — '+p.alias;
+  document.getElementById('export-title').textContent=tf('Export — {0}',[p.alias]);
   // /health 已把密码打码(见后端 MaskProxyURL),导出链接/二维码需要真实 URL,
   // 走 /export 按 alias 取回(面板有鉴权兜底)。
   fetch('/export?alias='+encodeURIComponent(p.alias)).then(function(r){return r.ok?r.json():Promise.reject(r.status)}).then(function(d){
@@ -2485,7 +2512,7 @@ es.onmessage=function(e){
     <div id="qr-img-wrap">
       <div class="dialog-label">Upload a QR image</div>
       <input type="file" id="qr-file" accept="image/*" class="dialog-input" onchange="decodeImageFile(this.files&&this.files[0])">
-      <div class="dialog-desc" style="margin-top:8px">…or press <b>Ctrl+V</b> anywhere to paste a screenshot.</div>
+      <div class="dialog-desc" data-i18n="qr-hint" style="margin-top:8px">…or press <b>Ctrl+V</b> anywhere to paste a screenshot.</div>
     </div>
     <div class="dialog-actions">
       <button class="btn btn-sm primary" onclick="closeQRScanner()">Close</button>
@@ -2533,5 +2560,82 @@ es.onmessage=function(e){
   </div>
 </div>
 <div class="copy-toast" id="copy-toast"></div>
+<script>
+/* zh launcher: runtime DOM translation for the zh variant (English requests skip
+   everything here — SP_LANG is 'en' so the whole block is a no-op). Three passes:
+     1. whole-text-node / placeholder / title / aria-label exact match (normalised)
+     2. longest-prefix match (for "Error: <backend msg>" style concatenations)
+     3. whole-subtree innerHTML swap for [data-i18n] markers whose Chinese word
+        order would break per-text-node translation
+   Native alert()/confirm() (not DOM, so the walker can't reach them) are
+   intercepted and run the same whole-then-prefix lookups. The MutationObserver
+   (childList + attributes + characterData) keeps dynamically-rendered rows
+   translated; it is installed synchronously before any fetch callback runs, so
+   there is no English flash. Idempotent: translated Chinese no longer matches
+   any English key, so re-walks settle immediately. */
+if(window.SP_LANG==='zh')(function(){
+  var HTMLd=window.SP_I18N_HTML||null;
+  function skipEl(el){return !!(el&&el.closest&&el.closest('#logs-box,.CodeMirror,textarea'))}
+  function trText(tn){
+    if(!tn||!tn.nodeValue)return;
+    if(skipEl(tn.parentElement))return;
+    var v=tn.nodeValue,nv=__norm(v);
+    if(!nv)return;
+    var idx=__id();
+    if(idx&&Object.prototype.hasOwnProperty.call(idx,nv)){if(tn.nodeValue!==idx[nv])tn.nodeValue=idx[nv];return}
+    var P=window.SP_I18N_PRE;
+    if(P&&P.k&&P.k.length){for(var i=0;i<P.k.length;i++){if(v.indexOf(P.k[i])===0){var z=P.v[i]+v.slice(P.k[i].length);if(tn.nodeValue!==z)tn.nodeValue=z;return}}}
+  }
+  var A=['title','placeholder','aria-label'];
+  function trAttr(el){
+    if(!el||el.nodeType!==1||skipEl(el))return;
+    for(var i=0;i<A.length;i++){
+      var raw=el.getAttribute(A[i]);
+      if(!raw)continue;
+      var nv=__norm(raw),z=null,idx=__id();
+      if(idx&&Object.prototype.hasOwnProperty.call(idx,nv))z=idx[nv];
+      else{var P=window.SP_I18N_PRE;if(P&&P.k){for(var j=0;j<P.k.length;j++)if(raw.indexOf(P.k[j])===0){z=P.v[j]+raw.slice(P.k[j].length);break}}}
+      if(z&&raw!==z)el.setAttribute(A[i],z);
+    }
+  }
+  function trNode(el){
+    if(!el)return;
+    if(el.nodeType===1){
+      if(skipEl(el))return;
+      var mk=el.getAttribute&&el.getAttribute('data-i18n');
+      if(mk&&HTMLd&&Object.prototype.hasOwnProperty.call(HTMLd,mk)){
+        el.innerHTML=HTMLd[mk];el.removeAttribute('data-i18n');return;
+      }
+      trAttr(el);
+      var kids=el.childNodes;
+      for(var i=0;i<kids.length;i++){
+        var c=kids[i];
+        if(c.nodeType===3)trText(c);
+        else if(c.nodeType===1)trNode(c);
+      }
+    }
+  }
+  trNode(document.body);
+  new MutationObserver(function(muts){
+    for(var i=0;i<muts.length;i++){
+      var m=muts[i];
+      if(m.type==='childList'){for(var j=0;j<m.addedNodes.length;j++)trNode(m.addedNodes[j])}
+      else if(m.type==='attributes')trAttr(m.target);
+      else if(m.type==='characterData')trText(m.target);
+    }
+  }).observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:A,characterData:true});
+  function dlg(s){
+    if(typeof s!=='string')return s;
+    var nv=__norm(s),idx=__id();
+    if(idx&&Object.prototype.hasOwnProperty.call(idx,nv))return idx[nv];
+    var P=window.SP_I18N_PRE;
+    if(P&&P.k){for(var i=0;i<P.k.length;i++)if(s.indexOf(P.k[i])===0)return P.v[i]+s.slice(P.k[i].length)}
+    return s;
+  }
+  var _al=window.alert,_cf=window.confirm;
+  window.alert=function(m){return _al(dlg(m))};
+  window.confirm=function(m){return _cf(dlg(m))};
+})();
+</script>
 </body>
 </html>
