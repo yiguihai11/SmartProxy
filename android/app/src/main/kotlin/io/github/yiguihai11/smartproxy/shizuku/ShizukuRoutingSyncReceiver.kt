@@ -141,25 +141,18 @@ private object ShizukuRoutingSyncDispatcher {
                     "Core-start update has no protected-network lease"
                 }
                 val parameters = HotspotRoutingConfig.parametersFromSnapshot(snapshot)
-                val syncResult = service.synchronizeRouting(
+                // 无活会话时服务端 synchronizeRouting 已用 fresh-自愈补一次完整启动(仅当本
+                // UserService 进程没被显式停过),这里不再无条件 startRouting 复活——那会把
+                // 「用户显式停掉的路由」在下一次主 core 换代时又拉起来。INVALID 留给外层按失效
+                // 会话处理(清 token)。
+                service.synchronizeRouting(
                     update.token,
                     parameters.profileName,
                     parameters.dnsServers.toTypedArray(),
                     parameters.ipv6Enabled,
+                    parameters.launchId,
                     coreLease,
                 )
-                if (syncResult != ShizukuTetheringService.RESULT_INVALID_SESSION) {
-                    syncResult
-                } else {
-                    Log.i(TAG, "Recreating Shizuku tethering after its UserService was lost")
-                    service.startRouting(
-                        parameters.profileName,
-                        parameters.dnsServers.toTypedArray(),
-                        parameters.ipv6Enabled,
-                        update.token,
-                        coreLease,
-                    )
-                }
             }
             HotspotRoutingSync.EVENT_CORE_START_FAILED -> {
                 service.notifyCoreStartFailed(update.token, update.detail)

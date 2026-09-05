@@ -25,6 +25,8 @@ import java.util.concurrent.Callable
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -83,6 +85,17 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         Thread(r, "ShizukuTetheringRouting").apply { isDaemon = true }.also { workerThread = it }
     }
     @Volatile private var workerThread: Thread? = null
+
+    // 本 UserService 进程是否还没被「显式启动/停止」过。刚随 Shizuku 复活时 fresh=true;
+    // startRouting 成功或任何显式停(stopRouting/destroy)后置 false。synchronizeRouting 撞到
+    // 空会话时:fresh → 自动补一次完整启动(单跳自愈,覆盖 Shizuku 重启丢会话);
+    // 非 fresh → RESULT_INVALID_SESSION,让 App 显式重建(用户已停就不该被旧事件复活)。
+    @Volatile private var freshUserService = true
+    // 引擎健康心跳:ACTIVE 期每 2s fixed-delay 探一次 Mobile.isRunning(),引擎意外死亡 →
+    // ERROR + 通知 UI。只在 routingWorker 上启停与回调(见 setRoutingActiveLocked /
+    // stopRoutingEngineLocked),绝不直接在心跳线程碰 Locked 状态。
+    private var healthScheduler: ScheduledExecutorService? = null
+    private var engineHealthCheck: ScheduledFuture<*>? = null
 
     /**
      * 把状态变更丢到 [routingWorker] 串行执行,binder 线程同步等结果(调用方本来就忍受同等
@@ -260,6 +273,9 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
                 activeTetheringTypes = activeTypes,
                 ipv6TetheringTypes = ipv6Types,
                 warning = consumeWarningLocked(),
+                // 「会话开关」的信号:routingSession 非空即认为路由会话存在(fail-closed 下引擎
+                // ERROR 也会保留会话,让 UI 仍能关掉),跟 routingState 只反映瞬时引擎状态。
+                hasRoutingSession = routingSession != null,
             )
         }
     }
@@ -274,23 +290,45 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         dnsServers: Array<out String>,
         ipv6Enabled: Boolean,
         syncToken: String,
+        launchId: String,
         coreLease: ICoreTetheringLease,
     ): Int = runRoutingWork {
+        startRoutingInternal(profileName, dnsServers, ipv6Enabled, syncToken, launchId, coreLease)
+    }
+
+    /**
+     * 真正的路由启动(调用方保证在 routingWorker 上)。synchronizeRouting 的 fresh-自愈分支直接
+     * 复用它,不套第二次 runRoutingWork(runRoutingWork 对 worker 线程就地执行,重入无害)。
+     */
+    private fun startRoutingInternal(
+        profileName: String,
+        dnsServers: Array<out String>,
+        ipv6Enabled: Boolean,
+        syncToken: String,
+        launchId: String,
+        coreLease: ICoreTetheringLease,
+    ): Int {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            return@runRoutingWork RESULT_ROUTING_FAILED
+            return RESULT_ROUTING_FAILED
+        }
+        // launchId 代次校验:停→启竞态里在途的旧 EVENT 带旧 launchId,isCurrentLaunch 判 false
+        // 即静默丢弃——绝不把已换代(或已死)主 core 的配置应用到一个还活着的会话上。
+        if (!coreLease.isCurrentLaunch(launchId)) {
+            Log.i(TAG, "Ignoring tethering routing start for a replaced core launch")
+            return RESULT_OK
         }
         if (syncToken.isBlank()) {
             routingDetail = "Tethering synchronization token is empty"
-            return@runRoutingWork RESULT_INVALID_SESSION
+            return RESULT_INVALID_SESSION
         }
         val activeTypes = getActiveTetheringTypes()
         if (activeTypes < 0) {
             setRoutingError("Unable to determine active tethering before enabling its protected route")
-            return@runRoutingWork RESULT_ROUTING_FAILED
+            return RESULT_ROUTING_FAILED
         }
         val engineConfig = runCatching { readEngineConfig(coreLease) }.getOrElse {
             setRoutingError(rootCauseMessage(it))
-            return@runRoutingWork RESULT_ROUTING_FAILED
+            return RESULT_ROUTING_FAILED
         }
         val launchConfig = HotspotRoutingLaunchConfig(
             engineContent = engineConfig,
@@ -310,11 +348,12 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         } catch (error: Throwable) {
             clearCoreLifetimeWatchLocked()
             setRoutingError(rootCauseMessage(error))
-            return@runRoutingWork RESULT_ROUTING_FAILED
+            return RESULT_ROUTING_FAILED
         }
         val result = startRoutingLocked(launchConfig, activeTypes)
         if (result == RESULT_OK) {
             routingSession = newSession
+            freshUserService = false
         } else {
             clearCoreLifetimeWatchLocked()
         }
@@ -381,6 +420,8 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
             return tetheringResult
         }
         routingSession = null
+        // 显式停过一次就不再 fresh:此后的同步必须走显式 startRouting 重建,防旧事件复活。
+        freshUserService = false
         routingState = ROUTING_STATE_STOPPING
         routingDetail = "Stopping SmartProxy tethering routing"
         cleanupRouting()
@@ -444,25 +485,43 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         profileName: String,
         dnsServers: Array<out String>,
         ipv6Enabled: Boolean,
+        launchId: String,
         coreLease: ICoreTetheringLease,
     ): Int = runRoutingWork {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             return@runRoutingWork RESULT_ROUTING_FAILED
         }
-        val session = findRoutingSession(token) ?: return@runRoutingWork RESULT_INVALID_SESSION
-        val result = runCatching {
-            val launchConfig = HotspotRoutingLaunchConfig(
-                engineContent = readEngineConfig(coreLease),
-                profileName = profileName,
-                dnsServers = dnsServers.toList(),
-                ipv6Enabled = ipv6Enabled,
-            )
-            watchCoreLifetimeLocked(coreLease)
-            applyRoutingConfigLocked(launchConfig, session)
-            RESULT_OK
-        }.getOrElse {
-            failRoutingSynchronizationLocked(it, session)
-            RESULT_ROUTING_FAILED
+        // 同 startRouting:代次不符的同步静默丢弃。
+        if (!coreLease.isCurrentLaunch(launchId)) {
+            Log.i(TAG, "Ignoring tethering synchronization for a replaced core launch")
+            return@runRoutingWork RESULT_OK
+        }
+        val session = findRoutingSession(token)
+        val result = if (session == null) {
+            // 没有活会话:仅当本 UserService 进程 fresh(没被显式启/停过,典型是 Shizuku 重启
+            // 复活后)才补一次完整启动单跳自愈;用户显式停过就保持停,INVALID 让 App 清 token。
+            if (freshUserService) {
+                Log.i(TAG, "Fresh UserService without a routing session; recreating it")
+                startRoutingInternal(profileName, dnsServers, ipv6Enabled, token, launchId, coreLease)
+            } else {
+                Log.w(TAG, "Rejecting routing synchronization after an explicit stop")
+                RESULT_INVALID_SESSION
+            }
+        } else {
+            runCatching {
+                val launchConfig = HotspotRoutingLaunchConfig(
+                    engineContent = readEngineConfig(coreLease),
+                    profileName = profileName,
+                    dnsServers = dnsServers.toList(),
+                    ipv6Enabled = ipv6Enabled,
+                )
+                watchCoreLifetimeLocked(coreLease)
+                applyRoutingConfigLocked(launchConfig, session)
+                RESULT_OK
+            }.getOrElse {
+                failRoutingSynchronizationLocked(it, session)
+                RESULT_ROUTING_FAILED
+            }
         }
         notifyStatusChangedLocked()
         result
@@ -1037,10 +1096,35 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
             .also { require(it.isNotBlank()) { "Tethering engine configuration is empty" } }
     }
 
+    private fun startEngineHealthCheck() {
+        if (engineHealthCheck != null) return
+        val scheduler = healthScheduler ?: Executors.newSingleThreadScheduledExecutor { r ->
+            Thread(r, "ShizukuCoreHealth").apply { isDaemon = true }
+        }.also { healthScheduler = it }
+        // fixed-delay 2s:任务在心跳线程起头,状态迁移与上报经 runRoutingWork 回 worker 串行
+        // (runRoutingWork 对 worker 就地执行,重入无害),心跳线程绝不直接碰 Locked 状态。
+        engineHealthCheck = scheduler.scheduleWithFixedDelay({
+            runRoutingWork {
+                if (routingState != ROUTING_STATE_ACTIVE) return@runRoutingWork
+                if (!smartproxy.mobile.Mobile.isRunning()) {
+                    stopEngineHealthCheck()
+                    setRoutingError("SmartProxy core stopped unexpectedly")
+                    notifyStatusChangedLocked()
+                }
+            }
+        }, 2L, 2L, TimeUnit.SECONDS)
+    }
+
+    private fun stopEngineHealthCheck() {
+        engineHealthCheck?.cancel(false)
+        engineHealthCheck = null
+    }
+
     private fun setRoutingActiveLocked(config: HotspotRoutingLaunchConfig) {
         routingProfileName = config.profileName
         routingState = ROUTING_STATE_ACTIVE
         updateRoutingDetailLocked()
+        startEngineHealthCheck()
     }
 
     private fun setRoutingError(detail: String) {
@@ -1060,6 +1144,7 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
     }
 
     private fun stopRoutingEngineLocked() {
+        stopEngineHealthCheck()
         runCatching { smartproxy.mobile.Mobile.stopRouter() }
             .onFailure { Log.w(TAG, "Unable to stop tethering router", it) }
     }

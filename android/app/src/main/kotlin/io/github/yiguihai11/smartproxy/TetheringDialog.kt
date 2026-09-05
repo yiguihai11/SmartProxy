@@ -65,6 +65,7 @@ import io.github.yiguihai11.smartproxy.shizuku.IShizukuTetheringService
 import io.github.yiguihai11.smartproxy.shizuku.ITetheringStatusListener
 import io.github.yiguihai11.smartproxy.shizuku.ShizukuTetheringService
 import io.github.yiguihai11.smartproxy.shizuku.TetheringCoreSync
+import io.github.yiguihai11.smartproxy.shizuku.TetheringStatusSnapshot
 import io.github.yiguihai11.smartproxy.shizuku.tetheringTypeBit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -123,11 +124,18 @@ data class TetheringUiState(
     val ipv6TetheringTypes: Int = ShizukuTetheringService.TETHERING_TYPES_UNKNOWN,
     val ipv6Enabled: Boolean = false,
     val coreRunning: Boolean = false,
+    // 与 Shizuku UserService 的 binder 会话在否。断开把 shell 状态全清零但保留 coreRunning:
+    // 主 core 是 app 进程自己的,跟 Shizuku binder 生死无关(规格见 TetheringUiStateTest)。
+    val serviceConnected: Boolean = false,
+    // 服务端 UserService 里存在活着的 routingSession(routingSession != null)。与 routingState 是
+    // 两回事:引擎崩溃会把 routingState 置 ERROR 但会话还在(fail-closed 仍能关),所以「会话开」只
+    // 看 hasRoutingSession,routingState 只决定文案与可操作性。
+    val hasRoutingSession: Boolean = false,
 ) {
     val routingActive: Boolean
         get() = routingState == ShizukuTetheringService.ROUTING_STATE_ACTIVE
     val routingSessionEnabled: Boolean
-        get() = routingActive || routingState == ShizukuTetheringService.ROUTING_STATE_WAITING
+        get() = hasRoutingSession
     val hotspotEnabled: Boolean
         get() = activeTetheringTypes >= 0 &&
             activeTetheringTypes and tetheringTypeBit(ShizukuTetheringService.TETHERING_TYPE_WIFI) != 0
@@ -154,6 +162,37 @@ fun TetheringUiState.ipMode(type: Int): TetheringIpMode? {
         TetheringIpMode.IPV4_ONLY
     }
 }
+
+/** 连接状态翻转:断开(假)清 UserService 侧 shell 状态;连接(真)只置位、保留现有状态。 */
+fun TetheringUiState.withServiceConnection(connected: Boolean): TetheringUiState {
+    return if (connected) {
+        copy(serviceConnected = true)
+    } else {
+        copy(
+            serviceConnected = false,
+            operation = TetheringOperation.NONE,
+            routingState = ShizukuTetheringService.ROUTING_STATE_DISABLED,
+            routingDetail = "",
+            activeTetheringTypes = ShizukuTetheringService.TETHERING_TYPES_UNKNOWN,
+            ipv6TetheringTypes = ShizukuTetheringService.TETHERING_TYPES_UNKNOWN,
+            hasRoutingSession = false,
+        )
+    }
+}
+
+/** 全量状态快照:替换 shell 状态并清任何在途操作。用于(重)连接后的一次性加载。 */
+fun TetheringUiState.withTetheringStatus(
+    status: TetheringStatusSnapshot,
+    ipv6Enabled: Boolean,
+): TetheringUiState = copy(
+    operation = TetheringOperation.NONE,
+    routingState = status.routingState,
+    routingDetail = status.routingDetail,
+    activeTetheringTypes = status.activeTetheringTypes,
+    ipv6TetheringTypes = status.ipv6TetheringTypes,
+    ipv6Enabled = ipv6Enabled,
+    hasRoutingSession = status.hasRoutingSession,
+)
 
 /**
  * 侧边栏网络共享模态对话框 (Tethering Dialog)
@@ -201,6 +240,7 @@ fun TetheringDialog(
                             routingDetail = status.routingDetail,
                             activeTetheringTypes = status.activeTetheringTypes,
                             ipv6TetheringTypes = status.ipv6TetheringTypes,
+                            hasRoutingSession = status.hasRoutingSession,
                         )
                     }
                 }
@@ -223,15 +263,9 @@ fun TetheringDialog(
                     val status = withContext(Dispatchers.IO) {
                         runCatching { service.getStatus(ipv6) }.getOrNull()
                     }
+                    state = state.withServiceConnection(true)
                     if (status != null) {
-                        state = state.copy(
-                            operation = TetheringOperation.NONE,
-                            routingState = status.routingState,
-                            routingDetail = status.routingDetail,
-                            activeTetheringTypes = status.activeTetheringTypes,
-                            ipv6TetheringTypes = status.ipv6TetheringTypes,
-                            ipv6Enabled = ipv6,
-                        )
+                        state = state.withTetheringStatus(status, ipv6Enabled = ipv6)
                         if (status.warning == ShizukuTetheringService.RESULT_UNPROTECTED_UPSTREAM) {
                             toast(R.string.shizuku_tethering_wrong_upstream)
                         }
@@ -243,12 +277,7 @@ fun TetheringDialog(
 
             override fun onServiceDisconnected(name: ComponentName) {
                 tetheringService = null
-                state = state.copy(
-                    operation = TetheringOperation.NONE,
-                    routingState = ShizukuTetheringService.ROUTING_STATE_DISABLED,
-                    routingDetail = "",
-                    activeTetheringTypes = ShizukuTetheringService.TETHERING_TYPES_UNKNOWN,
-                )
+                state = state.withServiceConnection(false)
             }
         }
     }
@@ -305,6 +334,7 @@ fun TetheringDialog(
                             activeTetheringTypes = status.activeTetheringTypes,
                             ipv6TetheringTypes = status.ipv6TetheringTypes,
                             ipv6Enabled = ipv6,
+                            hasRoutingSession = status.hasRoutingSession,
                         )
                     }
                 }
@@ -315,6 +345,7 @@ fun TetheringDialog(
                     }
                     tetheringService = null
                 }
+                state = state.withServiceConnection(false)
             }
         }
     }
@@ -366,6 +397,10 @@ fun TetheringDialog(
                         val lease = TetheringCoreSync.getCoreLease() ?: run {
                             return@withContext ShizukuTetheringService.RESULT_ROUTING_FAILED
                         }
+                        val launchSnapshot = TetheringCoreSync.getCurrentSnapshot(context, coreRunning = true)
+                        if (!launchSnapshot.running) {
+                            return@withContext ShizukuTetheringService.RESULT_ROUTING_FAILED
+                        }
                         val dnsV4 = AppPrefs.dnsV4(context).ifBlank { AppPrefs.DEFAULT_DNS_V4 }
                         val dnsV6 = AppPrefs.dnsV6(context).ifBlank { AppPrefs.DEFAULT_DNS_V6 }
                         val syncToken = UUID.randomUUID().toString()
@@ -375,6 +410,7 @@ fun TetheringDialog(
                             arrayOf(dnsV4, dnsV6),
                             state.ipv6Enabled,
                             syncToken,
+                            launchSnapshot.launchId,
                             lease,
                         )
                     } else {
@@ -420,6 +456,10 @@ fun TetheringDialog(
                     var routingStartedHere = false
                     if (enable && !state.routingActive) {
                         val lease = TetheringCoreSync.getCoreLease() ?: return@withContext ShizukuTetheringService.RESULT_ROUTING_FAILED
+                        val launchSnapshot = TetheringCoreSync.getCurrentSnapshot(context, coreRunning = true)
+                        if (!launchSnapshot.running) {
+                            return@withContext ShizukuTetheringService.RESULT_ROUTING_FAILED
+                        }
                         val dnsV4 = AppPrefs.dnsV4(context).ifBlank { AppPrefs.DEFAULT_DNS_V4 }
                         val dnsV6 = AppPrefs.dnsV6(context).ifBlank { AppPrefs.DEFAULT_DNS_V6 }
                         val syncToken = UUID.randomUUID().toString()
@@ -429,6 +469,7 @@ fun TetheringDialog(
                             arrayOf(dnsV4, dnsV6),
                             state.ipv6Enabled,
                             syncToken,
+                            launchSnapshot.launchId,
                             lease,
                         )
                         if (routingResult != ShizukuTetheringService.RESULT_OK) {
@@ -539,7 +580,9 @@ fun TetheringDialog(
         when (state.routingState) {
             ShizukuTetheringService.ROUTING_STATE_ACTIVE,
             ShizukuTetheringService.ROUTING_STATE_WAITING -> true
-            ShizukuTetheringService.ROUTING_STATE_ERROR,
+            ShizukuTetheringService.ROUTING_STATE_ERROR ->
+                // 会话还在(fail-closed:引擎死但没显式停)→ 允许关掉;否则看主 core 能否重开。
+                state.hasRoutingSession || state.coreRunning
             ShizukuTetheringService.ROUTING_STATE_DISABLED -> state.coreRunning
             else -> false
         }

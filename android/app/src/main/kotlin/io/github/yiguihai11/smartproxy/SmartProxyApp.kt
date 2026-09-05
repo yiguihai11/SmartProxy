@@ -1,6 +1,7 @@
 package io.github.yiguihai11.smartproxy
 
 import android.app.Application
+import io.github.yiguihai11.smartproxy.shizuku.ShizukuForegroundRecovery
 
 /**
  * Application 入口:config.json 真源就位。Go→Android 反向桥(自动重启)已删除
@@ -18,6 +19,12 @@ class SmartProxyApp : Application() {
         runCatching {
             ConfigProvider.ensureRuntimeFiles(this)
             ConfigProvider.ensureConfig(this)
+        }
+        // Android 14+ 受保护共享恢复兜底:Shizuku 的 replacement-Binder 通知可能被系统推迟到
+        // 进程回前台,这里挂全局生命周期回调在每次 resume 时请求替换 Binder。register 内部只在
+        // SDK≥34 且主进程注册(SharedProcess 与 shell UserService 进程都不该挂)。
+        runCatching {
+            ShizukuForegroundRecovery.register(this)
         }
     }
 }

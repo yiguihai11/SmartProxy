@@ -8,6 +8,10 @@ data class HotspotRoutingSnapshot(
     val profileName: String = "",
     val ipv6Enabled: Boolean = false,
     val vpnDnsServers: List<String> = emptyList(),
+    // 每次主 core 启动生成一次(createSnapshot)。服务端用它识别「这份 config 属于哪一代主
+    // core」:停→启竞态里在途的旧 EVENT_CORE_STARTED 带旧 launchId,isCurrentLaunch 判 false
+    // 即静默丢弃,不会把已换代(或已死)主 core 的配置应用到一个还活着的会话上。
+    val launchId: String = "",
 ) : Serializable
 
 internal data class HotspotRoutingLaunchConfig(
@@ -21,6 +25,7 @@ internal data class HotspotRoutingParameters(
     val profileName: String,
     val dnsServers: List<String>,
     val ipv6Enabled: Boolean,
+    val launchId: String,
 )
 
 internal object HotspotRoutingConfig {
@@ -35,6 +40,9 @@ internal object HotspotRoutingConfig {
             profileName = snapshot.profileName,
             dnsServers = snapshot.vpnDnsServers,
             ipv6Enabled = snapshot.ipv6Enabled,
+            launchId = snapshot.launchId.also {
+                require(it.isNotBlank()) { "Hotspot snapshot has no core-launch id" }
+            },
         )
     }
 

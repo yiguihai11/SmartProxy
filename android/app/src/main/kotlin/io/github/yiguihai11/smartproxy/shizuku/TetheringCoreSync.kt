@@ -16,6 +16,7 @@ import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuProvider
 import java.io.File
 import java.io.Serializable
+import java.util.UUID
 
 data class HotspotRoutingSync(
     val token: String,
@@ -38,33 +39,35 @@ object TetheringCoreSync {
     private var snapshot = HotspotRoutingSnapshot()
     private val coreLease = CoreTetheringLease()
     private var watchingShizuku = false
+    // Shizuku binder 死亡 → 恢复只对「仍在跑的主 core」生效;显式 stop / 换代(核心启停)必须让
+    // 它失效。用不可变状态机表达,避免几个过程式布尔在 binder 事件与前台事件之间互相覆盖
+    // (规格见 TetheringCoreSyncTest)。
     @Volatile
-    private var recoverWhenShizukuReturns = false
-    @Volatile
-    private var foregroundRecoveryRequested = false
+    private var recoveryState = TetheringRecoveryState()
 
     private val binderReceivedListener = Shizuku.OnBinderReceivedListener {
-        if (!recoverWhenShizukuReturns) return@OnBinderReceivedListener
-        recoverWhenShizukuReturns = false
-        foregroundRecoveryRequested = false
+        val recovery = recoveryState.onBinderReceived()
+        recoveryState = recovery.state
+        if (recovery.action != TetheringRecoveryAction.RECOVER) return@OnBinderReceivedListener
         val currentSnapshot = snapshot.takeIf { it.running } ?: return@OnBinderReceivedListener
         Log.i(TAG, "Shizuku restarted; recovering protected tethering")
         send(SmartProxyVpnService.getAppContext() ?: return@OnBinderReceivedListener, HotspotRoutingSync.EVENT_CORE_STARTED, currentSnapshot)
     }
 
     private val binderDeadListener = Shizuku.OnBinderDeadListener {
-        recoverWhenShizukuReturns = snapshot.running
-        foregroundRecoveryRequested = false
+        recoveryState = recoveryState.onBinderDied()
     }
 
     fun onStarting() {
         clearCoreState()
+        recoveryState = recoveryState.onCoreStopped()
     }
 
     fun onStarted(service: Service, coreConfig: String) {
         val currentSnapshot = createSnapshot(service)
         coreLease.attach(service, currentSnapshot, coreConfig)
         snapshot = currentSnapshot
+        recoveryState = recoveryState.onCoreStarted()
         watchShizuku(service)
         send(service, HotspotRoutingSync.EVENT_CORE_STARTED, snapshot)
     }
@@ -76,21 +79,25 @@ object TetheringCoreSync {
     fun onStopping(service: Service) {
         send(service, HotspotRoutingSync.EVENT_CORE_STOPPING)
         clearCoreState()
+        recoveryState = recoveryState.onCoreStopped()
     }
 
     fun clear() = clearCoreState()
 
     fun onAppForegrounded(context: Context) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
-            !recoverWhenShizukuReturns || foregroundRecoveryRequested
-        ) return
+        val recovery = recoveryState.onAppForegrounded(Build.VERSION.SDK_INT)
+        recoveryState = recovery.state
+        if (recovery.action != TetheringRecoveryAction.REQUEST_BINDER) return
 
-        foregroundRecoveryRequested = true
-        runCatching { ShizukuProvider.requestBinderForNonProviderProcess(context) }
-            .onFailure {
-                foregroundRecoveryRequested = false
+        // Android 14+ 会把 Shizuku 的 replacement-Binder 通知延迟到 app 进程回前台;回前台时主动
+        // 请求它恢复受保护共享。请求失败清 coalesce 位允许下次回前台再试,但失败绝不上抛。
+        runCoreSyncHook(
+            block = { ShizukuProvider.requestBinderForNonProviderProcess(context) },
+            onError = {
+                recoveryState = recoveryState.onForegroundRequestFailed()
                 Log.e(TAG, "Unable to request Shizuku recovery", it)
-            }
+            },
+        )
     }
 
     private fun clearCoreState() {
@@ -103,7 +110,12 @@ object TetheringCoreSync {
         watchingShizuku = true
         Shizuku.addBinderReceivedListener(binderReceivedListener)
         Shizuku.addBinderDeadListener(binderDeadListener)
-        recoverWhenShizukuReturns = !Shizuku.pingBinder()
+        // 首次绑定也可能落在 Shizuku 服务已死的窗口:与 binder 死亡事件同路径标记待恢复,
+        // 等恢复事件(或前台兜底)到达时若主 core 仍在跑则重推配置。
+        if (!Shizuku.pingBinder()) {
+            recoveryState = recoveryState.onBinderDied()
+            Log.i(TAG, "Shizuku binder is dead on first watch; waiting for its recovery")
+        }
         ShizukuProvider.requestBinderForNonProviderProcess(context)
     }
 
@@ -125,6 +137,7 @@ object TetheringCoreSync {
             profileName = "SmartProxy",
             ipv6Enabled = tun.inet6 != null,
             vpnDnsServers = listOf(dnsV4, dnsV6),
+            launchId = UUID.randomUUID().toString().replace("-", ""),
         )
     }
 
@@ -149,6 +162,78 @@ object TetheringCoreSync {
     }
 }
 
+/**
+ * One recovery transition: an action for the caller plus the resulting state.
+ *
+ * 状态机规格见 TetheringCoreSyncTest:binder 死亡只对「仍在跑的主 core」标 RECOVER;显式停 core
+ * 全量重置;Android 14+ 前台请求 binder 有 API 下界,且同一 pending 未完成前再去重(coalesced)。
+ */
+class TetheringRecoveryResult(
+    val action: TetheringRecoveryAction,
+    val state: TetheringRecoveryState,
+)
+
+enum class TetheringRecoveryAction { NONE, RECOVER, REQUEST_BINDER }
+
+data class TetheringRecoveryState(
+    val coreRunning: Boolean = false,
+    val recoverWhenShizukuReturns: Boolean = false,
+    val foregroundRequestPending: Boolean = false,
+) {
+    fun onCoreStarted(): TetheringRecoveryState = copy(coreRunning = true)
+
+    fun onCoreStopped(): TetheringRecoveryState = TetheringRecoveryState()
+
+    fun onBinderDied(): TetheringRecoveryState = copy(recoverWhenShizukuReturns = coreRunning)
+
+    fun onBinderReceived(): TetheringRecoveryResult {
+        val recover = coreRunning && recoverWhenShizukuReturns
+        return if (recover) {
+            TetheringRecoveryResult(
+                TetheringRecoveryAction.RECOVER,
+                copy(recoverWhenShizukuReturns = false, foregroundRequestPending = false),
+            )
+        } else {
+            TetheringRecoveryResult(TetheringRecoveryAction.NONE, this)
+        }
+    }
+
+    fun onAppForegrounded(sdkInt: Int): TetheringRecoveryResult {
+        val shouldRequest = sdkInt >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+            recoverWhenShizukuReturns && !foregroundRequestPending
+        return if (shouldRequest) {
+            TetheringRecoveryResult(
+                TetheringRecoveryAction.REQUEST_BINDER,
+                copy(foregroundRequestPending = true),
+            )
+        } else {
+            TetheringRecoveryResult(TetheringRecoveryAction.NONE, this)
+        }
+    }
+
+    fun onForegroundRequestFailed(): TetheringRecoveryState =
+        copy(foregroundRequestPending = false)
+}
+
+/**
+ * Runs a Shizuku-side sync hook so a failure can never leak into the primary core's start path
+ * (spec: TetheringCoreSyncTest). True only when [block] completes; any failure is reported through
+ * [onError] — an onError that itself throws is swallowed too.
+ */
+fun runCoreSyncHook(block: () -> Unit, onError: (Throwable) -> Unit): Boolean {
+    return try {
+        block()
+        true
+    } catch (error: Throwable) {
+        try {
+            onError(error)
+        } catch (_: Throwable) {
+            // 状态/日志回调自己挂了也不能再上抛:主 core 不该被共享功能的失败拖垮。
+        }
+        false
+    }
+}
+
 internal class CoreTetheringLease : ICoreTetheringLease.Stub() {
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
@@ -159,11 +244,13 @@ internal class CoreTetheringLease : ICoreTetheringLease.Stub() {
     // 引擎运行文件(chnroute.txt / acl.txt)在 cacheDir;Shizuku 用户服务以 shell UID 运行,
     // 读不了主应用私有路径,必须把 cacheDir 资源一并暴露给它 stage 到 /data/local/tmp。
     private var assetCacheDirectory: File? = null
+    private var launchId: String? = null
 
     @Synchronized
     fun attach(context: Context, snapshot: HotspotRoutingSnapshot, coreConfig: String) {
         connectivityManager = context.getSystemService(ConnectivityManager::class.java)
         routingSnapshot = snapshot
+        launchId = snapshot.launchId.takeIf { it.isNotBlank() }
         this.coreConfig = coreConfig
         assetDirectory = context.filesDir
         assetCacheDirectory = context.cacheDir
@@ -172,10 +259,15 @@ internal class CoreTetheringLease : ICoreTetheringLease.Stub() {
     @Synchronized
     fun clearEngineConfig() {
         routingSnapshot = null
+        launchId = null
         coreConfig = null
         assetDirectory = null
         assetCacheDirectory = null
     }
+
+    /** 主 core 进程内校验:只有「当前这一代 core 启动」的配置才是活会话能用的。 */
+    @Synchronized
+    override fun isCurrentLaunch(launchId: String): Boolean = this.launchId == launchId
 
     @Synchronized
     override fun openEngineConfig(): ParcelFileDescriptor {
