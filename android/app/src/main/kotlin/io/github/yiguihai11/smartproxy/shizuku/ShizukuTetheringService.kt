@@ -27,6 +27,7 @@ import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Privileged Shizuku process that controls Android tethering and owns its proxy upstream.
@@ -73,6 +74,7 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
     private var requestedTetheringTypes = 0
     // getStatus 在 binder 线程 getAndSet 清零,worker 端 or 位标记,用原子整数免锁。
     private val wrongUpstreamWarningTypes = AtomicInteger(0)
+    private val upstreamRejections = AtomicLong(0)
     @Volatile private var coreLease: ICoreTetheringLease? = null
     @Volatile private var coreLifetime: LifetimeWatch? = null
     private var stagedAssetFingerprint = ""
@@ -652,6 +654,7 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
     }
 
     private fun startTetheringTypeAttemptLocked(type: Int, alreadyEnabled: Boolean): Int {
+        val rejection = upstreamRejections.get()
         val bit = tetheringTypeBit(type)
         val expectedUpstream = testInterfaceName
         if (!isRoutingReadyLocked() || testTun == null || expectedUpstream.isNullOrBlank()) {
@@ -681,7 +684,7 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
             }
         }
 
-        if (!awaitProtectedUpstream(expectedUpstream)) {
+        if (!awaitProtectedUpstream(expectedUpstream) || rejection != upstreamRejections.get()) {
             val actualUpstream = readUpstreamInterface()
             Log.e(TAG, "Refusing tethering type $type on unprotected upstream ${actualUpstream.ifBlank { "<none>" }}")
             val result = if (actualUpstream.isBlank()) {
@@ -727,9 +730,40 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         }
     }
 
-    private fun onTetheringChanged() = runRoutingWork<Unit> {
-        enforceProtectedUpstreamLocked()
+    private fun onTetheringChanged() {
+        stopUnprotectedDownstreams()
         notifyStatusChangedLocked()
+    }
+
+    private fun stopUnprotectedDownstreams() {
+        val expected = testInterfaceName ?: return
+        val actual = upstreamMonitor?.currentInterfaceNames ?: return
+        if (actual.isBlank() || TetheringPlatformCompat.isProtectedUpstream(actual, expected)) return
+
+        val activeTypes = upstreamMonitor?.currentInterfaces?.let(::tetheringTypeMask)
+            ?: getActiveTetheringTypes()
+        val affectedTypes = activeTypes.coerceAtLeast(0) or requestedTetheringTypes or
+            (routingSession?.desiredTetheringTypes ?: 0)
+        if (affectedTypes == 0) return
+
+        upstreamRejections.incrementAndGet()
+        wrongUpstreamWarningTypes.updateAndGet { it or affectedTypes }
+        Log.e(TAG, "Android moved tethering to unprotected upstream $actual; stopping downstreams")
+        forEachTetheringType(affectedTypes) { type, _ ->
+            if (usesPublicTetheringApi()) {
+                runCatching {
+                    TetheringApi36.requestStopTethering(tetheringManager, type, executor) { result ->
+                        if (result != RESULT_OK) Log.e(TAG, "Unable to stop downstream type $type: $result")
+                    }
+                }.onFailure {
+                    Log.e(TAG, "Unable to request stop for downstream type $type", it)
+                }
+            } else {
+                val result = runCatching { TetheringPlatformCompat.stopTethering(tetheringManager, type) }
+                    .getOrDefault(RESULT_INTERNAL_ERROR)
+                if (result != RESULT_OK) Log.e(TAG, "Unable to stop downstream type $type: $result")
+            }
+        }
     }
 
     private fun enforceProtectedUpstreamLocked() {
