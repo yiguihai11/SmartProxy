@@ -119,5 +119,35 @@ catch (e) { check('en head scripts execute', false, e && e.message); }
 check('en SP_LANG defaults to en', window.SP_LANG === 'en', window.SP_LANG);
 check('en no dict + t() is identity', window.SP_I18N === undefined && window.t('Overview') === 'Overview');
 
+// ── 4. i18n param-shadowing regression ───────────────────
+// A function whose parameter is named `t` shadows the global translation
+// function t(); if its body then calls t('...') it throws at runtime and the
+// whole view goes blank (seen in rbl: param `t` + t('All') → "t is not a
+// function" whenever the blacklist had entries). Scan en+zh scripts for any
+// function whose param list includes `t` and whose body calls t(...).
+function paramTShadow(html) {
+  const re = /function\s+([A-Za-z_$][\w$]*)?\s*\(([^)]*)\)\s*\{/g;
+  const bad = [];
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const params = m[2].split(',').map(function (s) { return s.trim(); });
+    if (params.indexOf('t') < 0) continue;
+    let i = m.index + m[0].length - 1; // points at the opening '{'
+    let depth = 0;
+    for (; i < html.length; i++) {
+      if (html[i] === '{') depth++;
+      else if (html[i] === '}') { depth--; if (depth === 0) break; }
+    }
+    const body = html.slice(m.index + m[0].length, i);
+    if (/\bt\s*\(/.test(body)) bad.push((m[1] || '<anon>') + '(' + m[2].trim() + ')');
+  }
+  return bad;
+}
+['en', 'zh'].forEach(function (lang) {
+  const h = lang === 'en' ? en : zh;
+  const bad = paramTShadow(h);
+  check(lang + ' no i18n param-shadowing (param `t` must not call t())', bad.length === 0, bad.join('; '));
+});
+
 console.log(fails ? ('\n' + fails + ' FAILURE(S)') : '\nALL PASS');
 process.exit(fails ? 1 : 0);

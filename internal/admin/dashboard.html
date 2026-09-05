@@ -1391,8 +1391,8 @@ function blGetFiltered(){
 }
 function blKey(e){return e.host+':'+e.type}
 function blSelKey(host,typ){return host+':'+typ}
-function rbl(t){
-  blFilter=t;
+function rbl(f){
+  blFilter=f;
   var allFl=blGetFiltered();
   var el=document.getElementById('bl-table');
   if(!allFl.length){
