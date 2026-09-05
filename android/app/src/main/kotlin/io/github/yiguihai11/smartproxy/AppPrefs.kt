@@ -58,6 +58,7 @@ object AppPrefs {
     private const val KEY_SPEED_METER_DOWN_LABEL = "speed_meter_down_label"
     private const val KEY_SPEED_METER_UP_COLOR = "speed_meter_up_color"
     private const val KEY_SPEED_METER_DOWN_COLOR = "speed_meter_down_color"
+    private const val KEY_SPEED_METER_SWAP_ORDER = "speed_meter_swap_order"
 
     private fun sp(context: Context) =
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -274,6 +275,14 @@ object AppPrefs {
 
     fun setSpeedMeterDownColor(context: Context, value: Int) {
         sp(context).edit().putInt(KEY_SPEED_METER_DOWN_COLOR, value).apply()
+    }
+
+    /** 调换 ↑/↓ 显示左右位:false = [icon, ↑, ↓](上行在左,历史布局);true = [icon, ↓, ↑]。默认 false。 */
+    fun speedMeterSwapOrder(context: Context): Boolean =
+        sp(context).getBoolean(KEY_SPEED_METER_SWAP_ORDER, false)
+
+    fun setSpeedMeterSwapOrder(context: Context, value: Boolean) {
+        sp(context).edit().putBoolean(KEY_SPEED_METER_SWAP_ORDER, value).apply()
     }
 }
 

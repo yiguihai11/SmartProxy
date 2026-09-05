@@ -56,6 +56,7 @@ import kotlin.math.roundToInt
  *  - 全屏透明对话框 Activity + 自绘 scrim + 居中卡片;胶囊(TYPE_APPLICATION_OVERLAY)
  *    在窗口之上,拖动滑块即可实时预览。
  *  - 4 条滑块:胶囊大小 / 字号 / 图标大小 / 透明度(改即存:一动就写 AppPrefs + applySettingsInPlace)。
+ *  - 「⇅ 调换位置」按钮:翻转 ↑/↓ 的左右显示顺序(实时预览,见 SpeedMeterOverlay.arrangeRateOrder)。
  *  - 底部「恢复默认」/「完成」;点卡片外(scrim)关闭。
  *  无保存/取消:偏好即真源,每次改动即时生效,本页只是长按胶囊的便捷入口。
  */
@@ -93,6 +94,7 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
     var alpha by remember { mutableStateOf(AppPrefs.speedMeterAlpha(ctx).toFloat()) }
     var upLabel by remember { mutableStateOf(AppPrefs.speedMeterUpLabel(ctx)) }
     var downLabel by remember { mutableStateOf(AppPrefs.speedMeterDownLabel(ctx)) }
+    var swapOrder by remember { mutableStateOf(AppPrefs.speedMeterSwapOrder(ctx)) }
     var upColor by remember { mutableStateOf(AppPrefs.speedMeterUpColor(ctx)) }
     var downColor by remember { mutableStateOf(AppPrefs.speedMeterDownColor(ctx)) }
     // 颜色输入框文本(随选中色/输入同步;非法时红框不写入)。
@@ -247,6 +249,29 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
                         }
                     }
                 )
+                // 调换 ↑/↓ 显示左右位:点一下翻转并持久化。胶囊在设置页之上实时可见,
+                // 一按立刻看到 ↓ 挪到 ↑ 左边(反之亦然),预览即所得。
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        stringResource(R.string.speed_meter_rate_order),
+                        color = LabelColor,
+                        fontSize = 15.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = {
+                        val next = !swapOrder
+                        swapOrder = next
+                        AppPrefs.setSpeedMeterSwapOrder(ctx, next)
+                        applyAppearance()
+                    }) {
+                        Text(stringResource(R.string.speed_meter_swap_order), color = AccentColor)
+                    }
+                }
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -263,6 +288,7 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
                         AppPrefs.setSpeedMeterDownLabel(ctx, AppPrefs.SPEED_METER_DEFAULT_DOWN_LABEL)
                         AppPrefs.setSpeedMeterUpColor(ctx, AppPrefs.SPEED_METER_DEFAULT_UP_COLOR)
                         AppPrefs.setSpeedMeterDownColor(ctx, AppPrefs.SPEED_METER_DEFAULT_DOWN_COLOR)
+                        AppPrefs.setSpeedMeterSwapOrder(ctx, false) // 出厂:上行在左、下行在右
                         capsuleSize = AppPrefs.SPEED_METER_DEFAULT_CAPSULE_SIZE.toFloat()
                         fontSize = AppPrefs.SPEED_METER_DEFAULT_FONT_SIZE.toFloat()
                         iconSize = AppPrefs.SPEED_METER_DEFAULT_ICON_SIZE.toFloat()
@@ -273,6 +299,7 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
                         downColor = AppPrefs.SPEED_METER_DEFAULT_DOWN_COLOR
                         upColorHex = hexOf(AppPrefs.SPEED_METER_DEFAULT_UP_COLOR)
                         downColorHex = hexOf(AppPrefs.SPEED_METER_DEFAULT_DOWN_COLOR)
+                        swapOrder = false
                         applyAppearance()
                     }) {
                         Text(stringResource(R.string.speed_meter_restore_defaults), color = LabelColor)

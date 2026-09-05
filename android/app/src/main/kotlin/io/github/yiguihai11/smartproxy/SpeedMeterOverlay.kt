@@ -68,6 +68,8 @@ object SpeedMeterOverlay {
     private var iconView: ImageView? = null
     private var upView: TextView? = null
     private var downView: TextView? = null
+    /** 当前胶囊里 ↑/↓ 是否已是「下行在左」序(主线程)。仅做 diff:调换偏好变了才重排,避免滑块拖动时反复 remove/add。 */
+    private var rateSwapped = false
     /** 胶囊当前是否处于「显示(alpha=1)」态(仅主线程):状态翻转才启动淡入/淡出,避免每秒重启动画。 */
     private var capsuleShown = true
     /** 待触发的长按 runnable(attachDrag 里 postDelayed;hideOnMain 取消)。仅主线程。 */
@@ -180,6 +182,7 @@ object SpeedMeterOverlay {
         iconView = null
         upView = null
         downView = null
+        rateSwapped = false // 下次 show 重新按偏好排,勿带旧序判断
         appContext = null
         if (gateHeld) { ConnStatsGate.release(); gateHeld = false }
         prevTotals.clear()
@@ -231,7 +234,38 @@ object SpeedMeterOverlay {
         iconView = icon
         upView = up
         downView = down
+        rateSwapped = false // 与构造默认序(↑左 ↓右)对齐;偏好若已翻转由 arrangeRateOrder 纠偏
+        arrangeRateOrder(container, app)
         return container
+    }
+
+    /** 按 speedMeterSwapOrder 偏好重排 ↑/↓ 的左右位与间隔 padding(icon 恒最左):
+     *  false = [icon, ↑, ↓](上行靠左,历史布局),true = [icon, ↓, ↑]。
+     *  仅当实际序与偏好不一致才 remove/add —— 滑块拖动/开关实时预览每秒会多次进
+     *  applySettingsInPlace,每次都重排会闪;diff 命中后置 rateSwapped 记录当前序,幂等。需主线程。 */
+    private fun arrangeRateOrder(container: LinearLayout, app: Context) {
+        val up = upView ?: return
+        val down = downView ?: return
+        val swap = AppPrefs.speedMeterSwapOrder(app)
+        if (swap == rateSwapped) return // 布局序已匹配偏好,不动
+        val gapPad = dp(app, 4)
+        container.removeView(up)
+        container.removeView(down)
+        if (swap) {
+            // 下行挪到左侧紧贴图标,上行靠右带间隔
+            down.setPadding(0, 0, 0, 0)
+            up.setPadding(gapPad, 0, 0, 0)
+            container.addView(down)
+            container.addView(up)
+        } else {
+            // 回到历史布局:上行靠左,下行靠右带间隔
+            up.setPadding(0, 0, 0, 0)
+            down.setPadding(gapPad, 0, 0, 0)
+            container.addView(up)
+            container.addView(down)
+        }
+        rateSwapped = swap
+        container.requestLayout()
     }
 
     /** 改即存实时预览:原地改现有胶囊视图(不重建窗口,无闪烁),并按新尺寸/权限钳制位置。
@@ -271,6 +305,8 @@ object SpeedMeterOverlay {
         downView?.setTextColor(AppPrefs.speedMeterDownColor(app))
         upView?.let { if (it.text.toString().endsWith("--")) it.text = "$upLabel --" }
         downView?.let { if (it.text.toString().endsWith("--")) it.text = "$downLabel --" }
+        // ↑/↓ 左右序:偏好翻转则重排(内部 diff,未变时零开销),与胶囊大小等一样实时预览。
+        (cap as? LinearLayout)?.let { arrangeRateOrder(it, app) }
         cap.requestLayout()
         cap.invalidate()
 

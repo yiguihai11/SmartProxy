@@ -75,6 +75,8 @@
     <string name="speed_meter_down_label">Down label</string>
     <string name="speed_meter_up_color">Up color</string>
     <string name="speed_meter_down_color">Down color</string>
+    <string name="speed_meter_rate_order">Up/Down order</string>
+    <string name="speed_meter_swap_order">⇅ Swap sides</string>
 
     <!-- Admin panel card -->
     <string name="panel_title">Admin panel</string>

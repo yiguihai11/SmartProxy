@@ -75,6 +75,8 @@
     <string name="speed_meter_down_label">下行标签</string>
     <string name="speed_meter_up_color">上行颜色</string>
     <string name="speed_meter_down_color">下行颜色</string>
+    <string name="speed_meter_rate_order">上/下行顺序</string>
+    <string name="speed_meter_swap_order">⇅ 调换位置</string>
 
     <!-- Admin panel card -->
     <string name="panel_title">管理面板</string>
