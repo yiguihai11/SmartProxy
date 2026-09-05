@@ -1213,8 +1213,8 @@ private fun DnsChipRow(addresses: List<String>, onPick: (String) -> Unit) {
     }
 }
 
-/** 排除路由默认项:回环段——VPN 隧道内本地服务(SOCKS :1080 / 管理面板)留在本机。
- *  仅当用户排除列表为空时预填进输入框;已有自定义路由则不打扰。 */
+/** 排除路由默认项:回环段。仅供空输入框的灰色占位提示——需要回环直连(SOCKS :1080 /
+ *  管理面板不被隧道拦截)的用户自行填入;留空保存 = 纯真空,不排除任何路由。 */
 private const val DEFAULT_EXCLUDE_ROUTE = "127.0.0.1/8"
 
 /** 排除路由设置对话框(API 33+ builder.excludeRoute):每行一个 CIDR,不走 VPN 隧道直连。 */
@@ -1224,8 +1224,9 @@ private fun ExcludeRoutesDialog(
     onDismiss: () -> Unit,
     onSave: (Set<String>) -> Unit
 ) {
-    // 空列表 → 预填默认回环排除(用户可删可改);非空 → 原样显示现有路由。
-    val initialText = if (initialRoutes.isEmpty()) DEFAULT_EXCLUDE_ROUTE else initialRoutes.joinToString("\n")
+    // 纯真空:空列表打开即空输入框,留空保存 = 不排除任何路由;回环默认 127.0.0.1/8
+    // 只在输入框空着时以灰色占位提示(placeholder),不是真实内容,不会随保存写入。
+    val initialText = initialRoutes.joinToString("\n")
     var text by remember { mutableStateOf(initialText) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1236,6 +1237,15 @@ private fun ExcludeRoutesDialog(
                     value = text,
                     onValueChange = { text = it },
                     label = { Text(stringResource(R.string.dialog_exclude_hint)) },
+                    placeholder = {
+                        // 空态灰色提示(禁用观感):127.0.0.1/8 只是参考,输入任何内容即消失,
+                        // 不随保存写入,保证纯真空可存可保。
+                        Text(
+                            text = DEFAULT_EXCLUDE_ROUTE,
+                            fontSize = 13.sp,
+                            color = GreyText
+                        )
+                    },
                     modifier = Modifier.fillMaxWidth().height(160.dp)
                 )
                 Spacer(Modifier.height(8.dp))
