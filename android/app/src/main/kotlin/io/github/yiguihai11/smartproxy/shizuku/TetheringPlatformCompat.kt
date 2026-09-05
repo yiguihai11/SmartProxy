@@ -35,7 +35,12 @@ internal object TetheringPlatformCompat {
         require(Build.VERSION.SDK_INT in Build.VERSION_CODES.TIRAMISU until Build.VERSION_CODES.BAKLAVA)
         val callbackClass = Class.forName(TETHERING_EVENT_CALLBACK_CLASS)
         check(callbackClass.isInterface) { "Tethering event callback is not an interface" }
+        val interfaceClass = Class.forName("android.net.TetheringInterface")
+        val getType = interfaceClass.getMethod("getType")
+        val getInterface = interfaceClass.getMethod("getInterface")
         val interfaceNames = AtomicReference<String?>(null)
+        val interfaces = AtomicReference<List<ActiveTetheringInterface>?>(null)
+        val interfacesReceived = CountDownLatch(1)
         val changeExecutor = newTetheringChangeExecutor()
         val callback = Proxy.newProxyInstance(
             TetheringPlatformCompat::class.java.classLoader,
@@ -49,6 +54,17 @@ internal object TetheringPlatformCompat {
                     null
                 }
                 "onTetheredInterfacesChanged" -> {
+                    interfaces.set(runCatching {
+                        val downstreams = arguments?.firstOrNull() as? Set<*>
+                            ?: error("Tethering callback did not supply interface identities")
+                        downstreams.map { downstream ->
+                            ActiveTetheringInterface(
+                                getType.invoke(downstream) as Int,
+                                getInterface.invoke(downstream) as String,
+                            )
+                        }
+                    }.getOrNull())
+                    interfacesReceived.countDown()
                     runCatching { changeExecutor.execute(onChanged) }
                     null
                 }
@@ -72,9 +88,7 @@ internal object TetheringPlatformCompat {
             changeExecutor.shutdownNow()
             throw error
         }
-        return TetheringUpstreamMonitor(
-            interfaceNames,
-        ) {
+        return TetheringUpstreamMonitor(interfaceNames, interfaces, interfacesReceived) {
             runCatching { unregister.invoke(service, callback) }
             changeExecutor.shutdownNow()
         }
@@ -82,17 +96,12 @@ internal object TetheringPlatformCompat {
 
     internal fun isProtectedUpstream(actual: String, expected: String): Boolean {
         if (expected.isBlank()) return false
-        val interfaces = actual.split(',').map(String::trim).filter(String::isNotEmpty)
-        return interfaces.isNotEmpty() && interfaces.all { it == expected }
+        return actual.split(',').map(String::trim).filter(String::isNotEmpty)
+            .let { it.isNotEmpty() && it.all { name -> name == expected } }
     }
 
     @SuppressLint("NewApi")
-    fun startTethering(
-        service: Any,
-        type: Int,
-        executor: Executor,
-        timeoutSeconds: Long,
-    ): Int {
+    fun startTethering(service: Any, type: Int, executor: Executor, timeoutSeconds: Long): Int {
         require(Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
         val manager = service as TetheringManager
         var result = ShizukuTetheringService.RESULT_INTERNAL_ERROR
@@ -105,32 +114,25 @@ internal object TetheringPlatformCompat {
                     result = ShizukuTetheringService.RESULT_OK
                     callbackReceived.countDown()
                 }
-
                 override fun onTetheringFailed(error: Int) {
                     result = error
                     callbackReceived.countDown()
                 }
             },
         )
-        return if (callbackReceived.await(timeoutSeconds, TimeUnit.SECONDS)) {
-            result
-        } else {
-            ShizukuTetheringService.RESULT_INTERNAL_ERROR
-        }
+        return if (callbackReceived.await(timeoutSeconds, TimeUnit.SECONDS)) result
+        else ShizukuTetheringService.RESULT_INTERNAL_ERROR
     }
 
     fun getTetheredInterfaces(service: Any): List<ActiveTetheringInterface> {
         require(Build.VERSION.SDK_INT in Build.VERSION_CODES.TIRAMISU until Build.VERSION_CODES.BAKLAVA)
-        val interfaces = invokeStringList(service, "getTetheredIfaces")
+        val monitor = service
+        val interfaces = invokeStringList(monitor, "getTetheredIfaces")
             ?: error("TetheringManager.getTetheredIfaces is unavailable")
-
         val regexesByType = mapOf(
-            ShizukuTetheringService.TETHERING_TYPE_WIFI to
-                compileRegexes(invokeStringList(service, "getTetherableWifiRegexs")),
-            ShizukuTetheringService.TETHERING_TYPE_USB to
-                compileRegexes(invokeStringList(service, "getTetherableUsbRegexs")),
-            LEGACY_TETHERING_TYPE_BLUETOOTH to
-                compileRegexes(invokeStringList(service, "getTetherableBluetoothRegexs")),
+            ShizukuTetheringService.TETHERING_TYPE_WIFI to compileRegexes(invokeStringList(monitor, "getTetherableWifiRegexs")),
+            ShizukuTetheringService.TETHERING_TYPE_USB to compileRegexes(invokeStringList(monitor, "getTetherableUsbRegexs")),
+            LEGACY_TETHERING_TYPE_BLUETOOTH to compileRegexes(invokeStringList(monitor, "getTetherableBluetoothRegexs")),
         )
         return interfaces.map { interfaceName ->
             ActiveTetheringInterface(requireLegacyTetheringType(interfaceName, regexesByType), interfaceName)
@@ -140,8 +142,7 @@ internal object TetheringPlatformCompat {
     fun stopTethering(service: Any, type: Int): Int {
         require(Build.VERSION.SDK_INT in Build.VERSION_CODES.TIRAMISU until Build.VERSION_CODES.BAKLAVA)
         val method = service.javaClass.methods.firstOrNull {
-            it.name == "stopTethering" &&
-                it.parameterTypes.contentEquals(arrayOf(Integer.TYPE))
+            it.name == "stopTethering" && it.parameterTypes.contentEquals(arrayOf(Integer.TYPE))
         } ?: error("TetheringManager.stopTethering(int) is unavailable")
         method.invoke(service, type)
         return ShizukuTetheringService.RESULT_OK
@@ -150,12 +151,9 @@ internal object TetheringPlatformCompat {
     internal fun inferLegacyTetheringType(interfaceName: String): Int? {
         val name = interfaceName.lowercase()
         return when {
-            name.startsWith("wlan") || name.startsWith("ap") || name.startsWith("softap") ->
-                ShizukuTetheringService.TETHERING_TYPE_WIFI
-            name.startsWith("usb") || name.startsWith("rndis") ->
-                ShizukuTetheringService.TETHERING_TYPE_USB
-            name.startsWith("bt-pan") || name.startsWith("bnep") ->
-                LEGACY_TETHERING_TYPE_BLUETOOTH
+            name.startsWith("wlan") || name.startsWith("ap") || name.startsWith("softap") -> ShizukuTetheringService.TETHERING_TYPE_WIFI
+            name.startsWith("usb") || name.startsWith("rndis") -> ShizukuTetheringService.TETHERING_TYPE_USB
+            name.startsWith("bt-pan") || name.startsWith("bnep") -> LEGACY_TETHERING_TYPE_BLUETOOTH
             name.startsWith("p2p") -> LEGACY_TETHERING_TYPE_WIFI_P2P
             name.startsWith("ncm") -> LEGACY_TETHERING_TYPE_NCM
             name.startsWith("eth") -> LEGACY_TETHERING_TYPE_ETHERNET
@@ -165,15 +163,11 @@ internal object TetheringPlatformCompat {
 
     internal fun requireLegacyTetheringType(interfaceName: String, regexesByType: Map<Int, List<Regex>>): Int =
         inferLegacyTetheringType(interfaceName)
-            ?: regexesByType.entries.firstOrNull { (_, regexes) ->
-                regexes.any { it.matches(interfaceName) }
-            }?.key
+            ?: regexesByType.entries.firstOrNull { (_, regexes) -> regexes.any { it.matches(interfaceName) } }?.key
             ?: error("Unknown active tethering interface: $interfaceName")
 
     private fun invokeStringList(service: Any, methodName: String): List<String>? {
-        val method = service.javaClass.methods.firstOrNull {
-            it.name == methodName && it.parameterCount == 0
-        } ?: return null
+        val method = service.javaClass.methods.firstOrNull { it.name == methodName && it.parameterCount == 0 } ?: return null
         return when (val result = method.invoke(service)) {
             null -> null
             is Array<*> -> result.filterIsInstance<String>()
@@ -182,11 +176,9 @@ internal object TetheringPlatformCompat {
         }
     }
 
-    private fun compileRegexes(patterns: List<String>?): List<Regex> = patterns.orEmpty()
-        .mapNotNull { pattern -> runCatching { Regex(pattern) }.getOrNull() }
+    private fun compileRegexes(patterns: List<String>?): List<Regex> = patterns.orEmpty().mapNotNull { runCatching { Regex(it) }.getOrNull() }
 
-    private const val TETHERING_EVENT_CALLBACK_CLASS =
-        "android.net.TetheringManager\$TetheringEventCallback"
+    private const val TETHERING_EVENT_CALLBACK_CLASS = "android.net.TetheringManager\$TetheringEventCallback"
     private const val TRANSPORT_TEST = 7
     private const val LEGACY_TETHERING_TYPE_BLUETOOTH = 2
     private const val LEGACY_TETHERING_TYPE_WIFI_P2P = 3
@@ -196,32 +188,28 @@ internal object TetheringPlatformCompat {
 
 internal class TetheringUpstreamMonitor(
     private val interfaceNames: AtomicReference<String?>,
+    private val interfaces: AtomicReference<List<ActiveTetheringInterface>?>,
+    private val interfacesReceived: CountDownLatch,
     private val closeAction: () -> Unit,
 ) : AutoCloseable {
-    val currentInterfaceNames: String?
-        get() = interfaceNames.get()
-
+    val currentInterfaceNames: String? get() = interfaceNames.get()
+    val currentInterfaces: List<ActiveTetheringInterface>? get() = interfaces.get()
+    fun awaitInterfaces(timeoutSeconds: Long): List<ActiveTetheringInterface> {
+        check(interfacesReceived.await(timeoutSeconds, TimeUnit.SECONDS)) { "Timed out reading tethered interfaces" }
+        return checkNotNull(currentInterfaces) { "Unable to identify active tethering interfaces" }
+    }
     override fun close() = closeAction()
 }
 
 @ChecksSdkIntAtLeast(api = Build.VERSION_CODES.BAKLAVA)
 internal fun usesPublicTetheringApi(): Boolean = isPublicTetheringApiLevel(Build.VERSION.SDK_INT)
-
 internal fun isPublicTetheringApiLevel(sdkInt: Int): Boolean = sdkInt >= Build.VERSION_CODES.BAKLAVA
-
 internal fun upstreamInterfaceNames(connectivityManager: ConnectivityManager, network: Network?): String {
     val properties = network?.let(connectivityManager::getLinkProperties) ?: return ""
     return properties.interfaceName.orEmpty()
 }
-
-internal fun newTetheringChangeExecutor(): ExecutorService =
-    Executors.newSingleThreadExecutor { command ->
-        Thread(command, "TetheringUpstreamMonitor").apply { isDaemon = true }
-    }
-
-internal data class ActiveTetheringInterface(
-    val type: Int,
-    val name: String,
-)
-
+internal fun newTetheringChangeExecutor(): ExecutorService = Executors.newSingleThreadExecutor { command ->
+    Thread(command, "TetheringUpstreamMonitor").apply { isDaemon = true }
+}
+internal data class ActiveTetheringInterface(val type: Int, val name: String)
 internal fun tetheringTypeBit(type: Int): Int = if (type in 0..30) 1 shl type else 0
