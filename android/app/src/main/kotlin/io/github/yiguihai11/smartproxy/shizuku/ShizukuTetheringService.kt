@@ -906,7 +906,13 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         val properties = LinkProperties().apply {
             interfaceName = handle.interfaceName
             setLinkAddresses(addresses)
-            val configuredDns = dnsServers.map(InetAddress::getByName)
+            // 通告 DNS 跟随 IPv6 开关:主 VPN 没开 v6 时,testtun 没有 v6 链路,若仍把
+            // AppPrefs 的 v6 DNS(默认 2400:3200::1)通告给连接设备,设备会优先探测这个
+            // 不可达的 v6 resolver。与主 core 的 addDnsServer(按族加)行为对齐:关 v6 即
+            // 滤掉 v6 DNS;开 v6 且配置无 v6 DNS 时,才由下方 ULA hint 补内部地址来通告 /64。
+            val configuredDns = dnsServers.map(InetAddress::getByName).filter { dns ->
+                ipv6Enabled || dns !is Inet6Address
+            }
             setDnsServers(buildList {
                 addAll(configuredDns)
                 if (ipv6Enabled && configuredDns.none { it is Inet6Address }) {
