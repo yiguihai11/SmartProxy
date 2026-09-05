@@ -33,7 +33,7 @@ jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         # persist-credentials 默认 true:checkout 把远端设为 https 并把 GITHUB_TOKEN
         # 写入 git http.extraheader,后续 git push 自动携带,命令里无需也不应出现 token。
 

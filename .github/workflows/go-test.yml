@@ -31,10 +31,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: '1.27'
           cache: true
@@ -67,9 +67,9 @@ jobs:
         env:
           DASHBOARD_DUMP_DIR: ${{ github.workspace }}/.ci-i18n
       - name: Set up Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
       - name: Node smoke test (dashboard i18n JS)
         run: node scripts/dashboard-i18n.test.js "${{ github.workspace }}/.ci-i18n"
 

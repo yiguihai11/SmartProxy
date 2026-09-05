@@ -30,11 +30,11 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # Go 的 CodeQL 需要标准库快照,setup-go 保持一致(go-test / android-build 同 1.27)。
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: '1.27'
           cache: true
