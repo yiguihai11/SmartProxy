@@ -27,22 +27,19 @@ jobs:
           for old,new in reps:
             if old not in s: raise SystemExit('missing fragment: '+old[:80])
             s=s.replace(old,new,1)
-          old='''    private fun onTetheringChanged() = runRoutingWork<Unit> {\n        enforceProtectedUpstreamLocked()\n        notifyStatusChangedLocked()\n    }\n\n    private fun enforceProtectedUpstreamLocked() {\n'''
+          old='''    private fun onTetheringChanged() = runRoutingWork<Unit> {\n        enforceProtectedUpstreamLocked()\n        notifyStatusChangedLocked()\n    }'''
           if old not in s: raise SystemExit('missing callback fragment')
-          new='''    private fun onTetheringChanged() {\n        stopUnprotectedDownstreams()\n        notifyStatusChangedLocked()\n    }\n\n    private fun stopUnprotectedDownstreams() {\n'''
-          s=s.replace(old,new,1)
-          start=s.index('    private fun stopUnprotectedDownstreams() {')
-          end=s.index('\n    }', start)+6
-          oldfunc=s[start:end]
-          if 'enforceProtectedUpstreamLocked' not in oldfunc: raise SystemExit('unexpected function body')
-          newfunc='''    private fun stopUnprotectedDownstreams() {\n        val expected = testInterfaceName ?: return\n        val actual = upstreamMonitor?.currentInterfaceNames ?: return\n        if (actual.isBlank() || TetheringPlatformCompat.isProtectedUpstream(actual, expected)) return\n\n        val activeTypes = upstreamMonitor?.currentInterfaces?.let(::tetheringTypeMask)\n            ?: getActiveTetheringTypes()\n        val affectedTypes = activeTypes.coerceAtLeast(0) or requestedTetheringTypes or\n            (routingSession?.desiredTetheringTypes ?: 0)\n        if (affectedTypes == 0) return\n\n        upstreamRejections.incrementAndGet()\n        wrongUpstreamWarningTypes.updateAndGet { it or affectedTypes }\n        Log.e(TAG, "Android moved tethering to unprotected upstream $actual; stopping downstreams")\n        forEachTetheringType(affectedTypes) { type, _ ->\n            if (usesPublicTetheringApi()) {\n                runCatching {\n                    TetheringApi36.requestStopTethering(tetheringManager, type, executor) { result ->\n                        if (result != RESULT_OK) Log.e(TAG, "Unable to stop downstream type $type: $result")\n                    }\n                }.onFailure {\n                    Log.e(TAG, "Unable to request stop for downstream type $type", it)\n                }\n            } else {\n                val result = runCatching { TetheringPlatformCompat.stopTethering(tetheringManager, type) }\n                    .getOrDefault(RESULT_INTERNAL_ERROR)\n                if (result != RESULT_OK) Log.e(TAG, "Unable to stop downstream type $type: $result")\n            }\n        }\n    }'''
-          s=s[:start]+newfunc+s[end:]
+          s=s.replace(old, '''    private fun onTetheringChanged() {\n        stopUnprotectedDownstreams()\n        notifyStatusChangedLocked()\n    }''', 1)
+          marker='    private fun enforceProtectedUpstreamLocked() {'
+          if marker not in s: raise SystemExit('missing enforce marker')
+          newfunc='''    private fun stopUnprotectedDownstreams() {\n        val expected = testInterfaceName ?: return\n        val actual = upstreamMonitor?.currentInterfaceNames ?: return\n        if (actual.isBlank() || TetheringPlatformCompat.isProtectedUpstream(actual, expected)) return\n\n        val activeTypes = upstreamMonitor?.currentInterfaces?.let(::tetheringTypeMask)\n            ?: getActiveTetheringTypes()\n        val affectedTypes = activeTypes.coerceAtLeast(0) or requestedTetheringTypes or\n            (routingSession?.desiredTetheringTypes ?: 0)\n        if (affectedTypes == 0) return\n\n        upstreamRejections.incrementAndGet()\n        wrongUpstreamWarningTypes.updateAndGet { it or affectedTypes }\n        Log.e(TAG, "Android moved tethering to unprotected upstream $actual; stopping downstreams")\n        forEachTetheringType(affectedTypes) { type, _ ->\n            if (usesPublicTetheringApi()) {\n                runCatching {\n                    TetheringApi36.requestStopTethering(tetheringManager, type, executor) { result ->\n                        if (result != RESULT_OK) Log.e(TAG, "Unable to stop downstream type $type: $result")\n                    }\n                }.onFailure {\n                    Log.e(TAG, "Unable to request stop for downstream type $type", it)\n                }\n            } else {\n                val result = runCatching { TetheringPlatformCompat.stopTethering(tetheringManager, type) }\n                    .getOrDefault(RESULT_INTERNAL_ERROR)\n                if (result != RESULT_OK) Log.e(TAG, "Unable to stop downstream type $type: $result")\n            }\n        }\n    }\n\n'''
+          s=s.replace(marker, newfunc+marker, 1)
           p.write_text(s)
-      - name: Commit port
+      - name: Verify and commit port
         run: |
+          grep -n "upstreamRejections\|stopUnprotectedDownstreams\|rejection != upstreamRejections.get" android/app/src/main/kotlin/io/github/yiguihai11/smartproxy/shizuku/ShizukuTetheringService.kt
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add android/app/src/main/kotlin/io/github/yiguihai11/smartproxy/shizuku/ShizukuTetheringService.kt
           git commit -m 'fix(android): port upstream tethering rejection guard' || exit 0
           git push
-
