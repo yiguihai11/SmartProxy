@@ -46,7 +46,7 @@ var zhStrings = map[string]string{
 	"Upload": "上传", "Save": "保存", "Saved": "已保存",
 	"Saving...": "保存中…", "Adding...": "添加中…", "Pinning...": "固定中…",
 	"Cancel": "取消", "Close": "关闭", "Add": "添加", "Add Proxy": "添加代理",
-	"+ Add Proxy": "+ 添加代理", "+ Add": "+ 添加", "Prev": "上一页",
+	"+ Add Proxy": "+ 添加代理", "+ Add": "+ 添加", "Edit Proxy": "编辑代理", "Prev": "上一页",
 	"Next": "下一页", "Loading...": "加载中…", "Confirm": "确认",
 	"Copy": "复制", "Copied!": "已复制！", "Copy failed": "复制失败",
 	"Show": "显示", "Hide": "隐藏", "Parse": "解析", "Scan QR": "扫描二维码",
@@ -227,6 +227,7 @@ var zhStrings = map[string]string{
 	"{0} records":                "{0} 条记录",
 	"{0} selected":               "已选 {0} 项",
 	"Add ACL Rule ({0} entries)": "添加 ACL 规则（{0} 条）",
+	"Save {0}":                    "保存 {0}",
 
 	// placeholders (English-meaningful; example IPs stay as-is, handled by attr dict entry below)
 	"Search host, reason...":                 "搜索主机、原因…",

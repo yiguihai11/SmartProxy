@@ -724,7 +724,7 @@ function syncObfsRows(){
   var mr=document.getElementById('proxy-plugin-mode-row');
   if(mr)mr.style.display=p?'':'none';
   var ml=document.getElementById('proxy-plugin-mode-label');
-  if(ml)ml.textContent=isV2ray?'Transport mode':'Obfuscation wrapper';
+  if(ml)ml.textContent=t(isV2ray?'Transport mode':'Obfuscation wrapper');
   var hr=document.getElementById('proxy-obfs-host-row');
   if(hr)hr.style.display=(isObfs||isV2ray)?'':'none';
   var or=document.getElementById('proxy-obfs-httpopts-row');
@@ -750,7 +750,7 @@ function fillModeOptions(p){
   sel.innerHTML='';
   for(var i=0;i<opts.length;i++){
     var o=document.createElement('option');
-    o.value=opts[i][0];o.textContent=opts[i][1];
+    o.value=opts[i][0];o.textContent=t(opts[i][1]);
     sel.appendChild(o);
   }
   if(cur&&opts.length)sel.value=cur;
@@ -975,11 +975,11 @@ function openQRScanner(){
   imgWrap.style.display='';
   if(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia){
     camWrap.style.display='';
-    status.textContent='Requesting camera…';
+    status.textContent=t('Requesting camera…');
     startQRCamera();
   }else{
     camWrap.style.display='none';
-    status.textContent='Camera is not available in this browser — use image upload or Ctrl+V paste below.';
+    status.textContent=t('Camera is not available in this browser — use image upload or Ctrl+V paste below.');
   }
   ov.classList.add('show');
 }
@@ -990,7 +990,7 @@ function startQRCamera(){
       qr.stream=stream;
       qr.video.srcObject=stream;
       var st=document.getElementById('qr-status');
-      st.textContent='Point the camera at the QR code…';
+      st.textContent=t('Point the camera at the QR code…');
       qr.video.onloadedmetadata=function(){
         if(qr.active&&!qr.raf)qr.raf=requestAnimationFrame(scanQRFrame);
       };
@@ -1046,13 +1046,13 @@ function decodeImageFile(file){
       qr.detector.detect(c).then(function(bars){
         if(!qr.active)return;
         for(var i=0;i<bars.length;i++)if(bars[i].rawValue){finishQR(bars[i].rawValue);return}
-        status.textContent='No QR found — try a sharper screenshot.';
+        status.textContent=t('No QR found — try a sharper screenshot.');
       }).catch(function(){
-        decodeQrCanvas(c,function(t){if(t)finishQR(t);else status.textContent='No QR found — try a sharper screenshot.'});
+        decodeQrCanvas(c,function(txt){if(txt)finishQR(txt);else status.textContent=t('No QR found — try a sharper screenshot.')});
       });
       return;
     }
-    decodeQrCanvas(c,function(t){if(t)finishQR(t);else status.textContent='No QR found — try a sharper screenshot.'});
+    decodeQrCanvas(c,function(txt){if(txt)finishQR(txt);else status.textContent=t('No QR found — try a sharper screenshot.')});
   };
   img.onerror=function(){URL.revokeObjectURL(url)};
   img.src=url;
@@ -1089,9 +1089,9 @@ function closeQRScanner(){
 }
 function openProxyDialog(i){
   var p=(i>=0&&healthD.health.proxies[i])||null;
-  document.getElementById('proxy-title').textContent=p?'Edit Proxy':'Add Proxy';
+  document.getElementById('proxy-title').textContent=t(p?'Edit Proxy':'Add Proxy');
   document.getElementById('proxy-dialog').dataset.alias=p?p.alias:'';
-  document.getElementById('proxy-confirm').textContent=p?'Save':'Add';
+  document.getElementById('proxy-confirm').textContent=t(p?'Save':'Add');
   document.getElementById('proxy-alias').value=p?p.alias:'';
   document.getElementById('proxy-user').value='';
   document.getElementById('proxy-pass').value='';
@@ -1143,8 +1143,8 @@ function togglePassword(){
   if(!el||!btn)return;
   var show=el.type==='password';
   el.type=show?'text':'password';
-  btn.textContent=show?'Hide':'Show';
-  btn.title=show?'Hide password':'Show password';
+  btn.textContent=t(show?'Hide':'Show');
+  btn.title=t(show?'Hide password':'Show password');
 }
 function updateProxyPreview(){
   var el=document.getElementById('proxy-preview');
@@ -1296,9 +1296,9 @@ async function fbCreateFile(){
   var inp=document.getElementById('fb-new-name');
   var errEl=document.getElementById('fb-new-error');
   var name=inp.value.trim();
-  if(!name){errEl.textContent='Filename is empty';errEl.style.display='block';return}
+  if(!name){errEl.textContent=t('Filename is empty');errEl.style.display='block';return}
   if(name.indexOf('/')>=0||name.indexOf('\\')>=0||name.indexOf('..')>=0){
-    errEl.textContent='Invalid filename: "/" "\\" and ".." are not allowed';
+    errEl.textContent=t('Invalid filename: "/" "\\" and ".." are not allowed');
     errEl.style.display='block';
     return;
   }
@@ -1358,7 +1358,7 @@ function applyFileSelection(path){
   }
 }
 var blD=[],blFilter='all',blPage=1,blPageSize=15,blSearch='',blSelected={},blAuto=true;
-function toggleBLAuto(){blAuto=!blAuto;var b=document.getElementById('bl-auto-btn');if(b){b.textContent=blAuto?'Auto':'Paused';b.classList.toggle('active-auto',blAuto)}}
+function toggleBLAuto(){blAuto=!blAuto;var b=document.getElementById('bl-auto-btn');if(b){b.textContent=t(blAuto?'Auto':'Paused');b.classList.toggle('active-auto',blAuto)}}
 async function loadBlacklist(){
   try{
     blD=await jf('/blacklist');
@@ -1398,7 +1398,7 @@ function rbl(f){
   if(!allFl.length){
     el.innerHTML='<div style="padding:32px;text-align:center;color:var(--text2)">No entries</div>';
     document.getElementById('bl-pagination').style.display='none';
-    document.getElementById('bl-info').textContent='0 entries';
+    document.getElementById('bl-info').textContent=t('0 entries');
     blUpdateBatchBar();
     return
   }
@@ -1547,9 +1547,9 @@ async function blDeleteSelected(){
   });
 }
 var trafficAuto=true;
-function toggleTrafficAuto(){trafficAuto=!trafficAuto;var b=document.getElementById('traffic-auto-btn');if(b){b.textContent=trafficAuto?'Auto':'Paused';b.classList.toggle('active-auto',trafficAuto)}}
+function toggleTrafficAuto(){trafficAuto=!trafficAuto;var b=document.getElementById('traffic-auto-btn');if(b){b.textContent=t(trafficAuto?'Auto':'Paused');b.classList.toggle('active-auto',trafficAuto)}}
 var cacheData=[],cacheFilter='all',cachePage=1,cachePageSize=15,cacheSearch='',cacheSelected={},cacheAuto=true;
-function toggleCacheAuto(){cacheAuto=!cacheAuto;var b=document.getElementById('cache-auto-btn');if(b){b.textContent=cacheAuto?'Auto':'Paused';b.classList.toggle('active-auto',cacheAuto)}}
+function toggleCacheAuto(){cacheAuto=!cacheAuto;var b=document.getElementById('cache-auto-btn');if(b){b.textContent=t(cacheAuto?'Auto':'Paused');b.classList.toggle('active-auto',cacheAuto)}}
 var cacheTypes={1:'A',28:'AAAA',65:'HTTPS'};
 function cacheGetFiltered(){
   var fl=cacheFilter==='all'?cacheData:cacheData.filter(function(e){return e.qtype==parseInt(cacheFilter)});
@@ -1568,7 +1568,7 @@ function renderCache(){
   if(!allFl||!allFl.length){
     el.innerHTML='<div style="padding:32px;text-align:center;color:var(--text2)">No entries</div>';
     document.getElementById('cache-pagination').style.display='none';
-    document.getElementById('cache-info').textContent='0 entries';
+    document.getElementById('cache-info').textContent=t('0 entries');
     cacheUpdateBatchBar();
     return
   }
@@ -1668,7 +1668,7 @@ function confirmCachePin(){
   var ips=ip.split(',').map(function(s){return s.trim()}).filter(function(s){return s.length});
   if(!ips.length){alert('Enter at least one IP address');return}
   var btn=document.getElementById('cachepin-confirm');
-  btn.disabled=true;btn.textContent='Pinning...';
+  btn.disabled=true;btn.textContent=t('Pinning...');
   fetch('/cache',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({qname:cachePinQname,qtype:cachePinQtype,ip:ips})}).then(function(r){
     return r.json().then(function(d){
       if(r.ok)return d;
@@ -1679,7 +1679,7 @@ function confirmCachePin(){
     cacheSelected={};
     loadCache();
     setTimeout(function(){alert(tf('Pinned: {0} → {1}\nPersistent static record, hot-applied',[d.host,(d.ip||[]).join(', ')]))},100);
-  }).catch(function(e){alert('Error: '+e.message)}).finally(function(){btn.disabled=false;btn.textContent='Pin as static record'});
+  }).catch(function(e){alert('Error: '+e.message)}).finally(function(){btn.disabled=false;btn.textContent=t('Pin as static record')});
 }
 // ---- DNS page tabs: cache ↔ static records ----
 var dnsTab='cache',staticData=[],staticSearch='';
@@ -1748,7 +1748,7 @@ function confirmStaticAdd(){
   if(!ip){alert('Enter an IP address');return}
   var ips=ip.split(',').map(function(s){return s.trim()}).filter(function(s){return s.length});
   var btn=document.getElementById('staticadd-confirm');
-  btn.disabled=true;btn.textContent='Adding...';
+  btn.disabled=true;btn.textContent=t('Adding...');
   fetch('/dns/static',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({host:host,ip:ips})}).then(function(r){
     return r.json().then(function(d){
       if(r.ok)return d;
@@ -1758,7 +1758,7 @@ function confirmStaticAdd(){
     staticData=d.records;
     closeStaticAddDialog();
     renderStatic();
-  }).catch(function(e){alert('Error: '+e.message)}).finally(function(){btn.disabled=false;btn.textContent='Add'});
+  }).catch(function(e){alert('Error: '+e.message)}).finally(function(){btn.disabled=false;btn.textContent=t('Add')});
 }
 function staticDeleteIP(host,ip){
   fetch('/dns/static?host='+encodeURIComponent(host)+'&ip='+encodeURIComponent(ip),{method:'DELETE'}).then(function(r){
@@ -1797,7 +1797,7 @@ function confirmStaticEdit(){
   var ips=ip.split(',').map(function(s){return s.trim()}).filter(function(s){return s.length});
   if(!ips.length){alert('Enter at least one IP address');return}
   var btn=document.getElementById('staticedit-confirm');
-  btn.disabled=true;btn.textContent='Saving...';
+  btn.disabled=true;btn.textContent=t('Saving...');
   fetch('/dns/static',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({old_host:oldHost,host:host,ip:ips})}).then(function(r){
     return r.json().then(function(d){
       if(r.ok)return d;
@@ -1807,7 +1807,7 @@ function confirmStaticEdit(){
     staticData=d.records;
     closeStaticEditDialog();
     renderStatic();
-  }).catch(function(e){alert('Error: '+e.message)}).finally(function(){btn.disabled=false;btn.textContent='Save'});
+  }).catch(function(e){alert('Error: '+e.message)}).finally(function(){btn.disabled=false;btn.textContent=t('Save')});
 }
 function toggleCacheFilter(){
   var dd=document.getElementById('cache-filter-dropdown');
@@ -1850,7 +1850,7 @@ async function loadCache(){
     var r=await fetch('/cache?list=1');
     cacheData=await r.json();
     st('cache-time');
-    if(!Array.isArray(cacheData)){document.getElementById('cache-time').textContent='Error: bad response';return}
+    if(!Array.isArray(cacheData)){document.getElementById('cache-time').textContent=t('Error: bad response');return}
     cachePage=1;
     cacheSearch='';
     var sb=document.getElementById('cache-search');
@@ -1930,7 +1930,7 @@ function confirmACL(){
   var upstream=document.getElementById('acl-upstream').value;
   var entries=aclDialogEntries.map(function(e){return{type:e.type,value:e.value,action:action,upstream:action==='proxy'?upstream:''}});
   var btn=document.getElementById('acl-confirm');
-  btn.disabled=true;btn.textContent='Adding...';
+  btn.disabled=true;btn.textContent=t('Adding...');
   fetch('/acl/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({entries:entries})}).then(function(r){
     if(r.ok){
       r.json().then(function(data){
@@ -1949,7 +1949,7 @@ function confirmACL(){
         if(data.skipped>0)setTimeout(function(){alert(tf('{0} added, {1} skipped (duplicates)',[data.count,data.skipped]))},100);
       });
     }else{r.text().then(function(t){alert('Error: '+t)})}
-  }).catch(function(e){alert('Error: '+e.message)}).finally(function(){btn.disabled=false;btn.textContent='Add'});
+  }).catch(function(e){alert('Error: '+e.message)}).finally(function(){btn.disabled=false;btn.textContent=t('Add')});
 }
 var cfgD={};
 async function loadConfig(){
@@ -2006,20 +2006,20 @@ async function sv(name){
   if(!map[name])return;
   var cm=window['cm_'+name];
   if(cm){val=cm.getValue()}else{return}
-  var btn=event.target;btn.disabled=true;btn.textContent='Saving...';
+  var btn=event.target;btn.disabled=true;btn.textContent=t('Saving...');
   try{
     var r=await fetch(map[name][1],{method:'PUT',body:val});
     if(r.ok){
-      btn.textContent='Saved';
-      setTimeout(function(){btn.textContent='Save '+map[name][2];btn.disabled=false},2000)
+      btn.textContent=t('Saved');
+      setTimeout(function(){btn.textContent=tf('Save {0}',[t(map[name][2])]);btn.disabled=false},2000)
     }else{
       alert('Error');
-      btn.textContent='Save '+map[name][2];
+      btn.textContent=tf('Save {0}',[t(map[name][2])]);
       btn.disabled=false
     }
   }catch(e){
     alert(e.message);
-    btn.textContent='Save '+map[name][2];
+    btn.textContent=tf('Save {0}',[t(map[name][2])]);
     btn.disabled=false
   }
 }
@@ -2090,7 +2090,7 @@ var logsData=[],logsFilter='all',logsSearch='',logsAuto=true,logsAutoScroll=true
 function toggleLogsAuto(){
   logsAuto=!logsAuto;
   var b=document.getElementById('logs-auto-btn');
-  if(b){b.textContent=logsAuto?'Auto Refresh':'Paused';b.classList.toggle('active-auto',logsAuto)}
+  if(b){b.textContent=t(logsAuto?'Auto Refresh':'Paused');b.classList.toggle('active-auto',logsAuto)}
 }
 function toggleLogsAutoScroll(){
   logsAutoScroll=!logsAutoScroll;
@@ -2102,7 +2102,7 @@ function toggleLogsAutoScroll(){
 }
 function updateLogsScrollBtn(){
   var b=document.getElementById('logs-scroll-btn');
-  if(b){b.textContent='Auto-scroll: '+(logsAutoScroll?'ON':'OFF');b.classList.toggle('primary',logsAutoScroll)}
+  if(b){b.textContent=t('Auto-scroll: '+(logsAutoScroll?'ON':'OFF'));b.classList.toggle('primary',logsAutoScroll)}
 }
 function toggleLogsFilter(){
   var dd=document.getElementById('logs-filter-dropdown');
@@ -2620,7 +2620,13 @@ if(window.SP_LANG==='zh')(function(){
   new MutationObserver(function(muts){
     for(var i=0;i<muts.length;i++){
       var m=muts[i];
-      if(m.type==='childList'){for(var j=0;j<m.addedNodes.length;j++)trNode(m.addedNodes[j])}
+      // childList can add a BARE text node too: el.textContent='…' on an element
+      // that already had a (translated) text child does replace-all — it removes the
+      // old text node and appends a brand-new one. trNode only walks element
+      // subtrees, so without this a runtime relabel ('Auto'->'Paused', 'Error: '+msg
+      // prefix concats) stayed English forever in zh. Route bare text nodes through
+      // trText like characterData mutations.
+      if(m.type==='childList'){for(var j=0;j<m.addedNodes.length;j++){var a=m.addedNodes[j];if(a.nodeType===3)trText(a);else trNode(a)}}
       else if(m.type==='attributes')trAttr(m.target);
       else if(m.type==='characterData')trText(m.target);
     }

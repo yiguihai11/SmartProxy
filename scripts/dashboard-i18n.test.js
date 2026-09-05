@@ -111,6 +111,115 @@ if (tpl) {
   check('zh tf() substitutes {0} and {1}', typeof got === 'string' && got.indexOf('X') >= 0 && got.indexOf('Y') >= 0, JSON.stringify(got));
 } else check('zh two-placeholder template present', false);
 
+// ── 3b. zh runtime relabels stay Chinese ─────────────────────
+// The zh launcher's MutationObserver used to recurse only ELEMENT addedNodes, so a
+// bare text node — exactly what `el.textContent='…'` replace-all appends — was
+// never translated. Result: runtime relabels leaked English in zh ('paused'/'auto'
+// toggles, busy-state buttons, 'Error: '+msg prefix concats). Re-run the REAL
+// launcher + REAL toggle functions against a stub DOM and assert the labels come
+// out Chinese (the 'paused'/'auto' regression the user hit).
+(function () {
+  const lm = zh.indexOf('/* zh launcher:');
+  const le = zh.lastIndexOf('})();');
+  if (lm < 0 || le < 0 || le <= lm) { check('zh launcher found in body', false); return; }
+  const launcherSrc = zh.slice(lm, le + '})();'.length);
+
+  const observers = [];
+  function dispatch(records) { for (let i = 0; i < observers.length; i++) observers[i](records); }
+  function MiniMO(cb) { this.cb = cb; }
+  MiniMO.prototype.observe = function () { observers.push(this.cb); };
+  global.MutationObserver = MiniMO;
+
+  function mkEl(id) {
+    const e = {
+      nodeType: 1, id: id || '', childNodes: [], attributes: {}, parentElement: null,
+      classList: (function () { const s = new Set(); return {
+        add(c) { s.add(c); }, remove(c) { s.delete(c); }, toggle(c) { s.has(c) ? s.delete(c) : s.add(c); },
+        contains(c) { return s.has(c); } }; })(),
+      getAttribute(n) { return n in this.attributes ? this.attributes[n] : null; },
+      setAttribute(n, v) { this.attributes[n] = String(v); dispatch([{ type: 'attributes', target: this }]); },
+      removeAttribute(n) { delete this.attributes[n]; },
+      closest() { return null; },
+    };
+    Object.defineProperty(e, 'textContent', {
+      get() { return e.childNodes.map(function (c) { return c.nodeValue == null ? '' : c.nodeValue; }).join(''); },
+      set(v) {
+        const removed = e.childNodes.slice();
+        const tn = { nodeType: 3, nodeValue: String(v), parentElement: e };
+        e.childNodes = [tn];
+        dispatch([{ type: 'childList', addedNodes: [tn], removedNodes: removed }]);
+      },
+    });
+    return e;
+  }
+  const reg = {};
+  const body = mkEl('body');
+  function addEl(id, staticText) {
+    const e = mkEl(id); reg[id] = e; e.parentElement = body; body.childNodes.push(e);
+    if (staticText != null) { e.childNodes = [{ nodeType: 3, nodeValue: staticText, parentElement: e }]; }
+    return e;
+  }
+  // buttons relabelled at runtime, plus an empty status span for the prefix path.
+  addEl('bl-auto-btn', 'Auto');
+  addEl('traffic-auto-btn', 'Auto');
+  addEl('cache-auto-btn', 'Auto');
+  addEl('logs-auto-btn', 'Auto Refresh');
+  addEl('logs-scroll-btn', 'Auto-scroll: ON');
+  addEl('cache-time', '');
+  global.document = {
+    body: body,
+    getElementById(id) { return reg[id] || null; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    createElement(tag) { return mkEl(tag); },
+  };
+
+  // real launcher first (translates the static initial labels, installs observer)
+  try { (0, eval)(launcherSrc); }
+  catch (e) { check('zh launcher executes in DOM', false, e && e.message); return; }
+  function fnSrc(name) {
+    const start = zh.indexOf('function ' + name + '(');
+    if (start < 0) return '';
+    let i = zh.indexOf('{', start), depth = 0;
+    for (; i < zh.length; i++) {
+      if (zh[i] === '{') depth++;
+      else if (zh[i] === '}') { depth--; if (depth === 0) break; }
+    }
+    return zh.slice(start, i + 1);
+  }
+  ['toggleBLAuto', 'toggleTrafficAuto', 'toggleCacheAuto', 'toggleLogsAuto', 'toggleLogsAutoScroll', 'updateLogsScrollBtn'].forEach(function (f) {
+    const src = fnSrc(f);
+    if (!src) { check('zh fn ' + f + ' found', false); return; }
+    try { (0, eval)(src); } catch (e) { check('zh eval ' + f, false, e && e.message); }
+  });
+  const txt = function (id) { const el = document.getElementById(id); return el ? el.textContent : '(missing)'; };
+
+  // launcher translated the STATIC initial labels at load
+  check('zh static bl-auto label', txt('bl-auto-btn') === '自动', txt('bl-auto-btn'));
+  check('zh static logs-auto label', txt('logs-auto-btn') === '自动刷新', txt('logs-auto-btn'));
+  check('zh static logs-scroll label', txt('logs-scroll-btn') === '自动滚动：开', txt('logs-scroll-btn'));
+
+  // runtime toggles flip to Chinese — the exact 'paused'/'auto' regression
+  window.blAuto = true; window.trafficAuto = true; window.cacheAuto = true;
+  window.logsAuto = true; window.logsAutoScroll = true;
+  toggleBLAuto(); check('zh bl toggle off', txt('bl-auto-btn') === '已暂停', txt('bl-auto-btn'));
+  toggleBLAuto(); check('zh bl toggle on', txt('bl-auto-btn') === '自动', txt('bl-auto-btn'));
+  toggleTrafficAuto(); check('zh traffic toggle off', txt('traffic-auto-btn') === '已暂停', txt('traffic-auto-btn'));
+  toggleCacheAuto(); check('zh cache toggle off', txt('cache-auto-btn') === '已暂停', txt('cache-auto-btn'));
+  toggleLogsAuto(); check('zh logs toggle off', txt('logs-auto-btn') === '已暂停', txt('logs-auto-btn'));
+  toggleLogsAuto(); check('zh logs toggle on', txt('logs-auto-btn') === '自动刷新', txt('logs-auto-btn'));
+  toggleLogsAutoScroll(); check('zh autoscroll off', txt('logs-scroll-btn') === '自动滚动：关', txt('logs-scroll-btn'));
+  toggleLogsAutoScroll(); check('zh autoscroll on', txt('logs-scroll-btn') === '自动滚动：开', txt('logs-scroll-btn'));
+
+  // prefix path: a RAW 'Error: '+msg relabel (no t()) must still come out Chinese —
+  // the observer now routes bare added text nodes through trText + SP_I18N_PRE.
+  document.getElementById('cache-time').textContent = 'Error: boom';
+  check('zh raw prefix relabel translated', txt('cache-time') === '错误：boom', txt('cache-time'));
+
+  delete global.MutationObserver;
+  delete global.document;
+})();
+
 // en: fresh, identity behaviour — must stay English, no dict.
 global.SP_LANG = undefined; global.SP_I18N = undefined; global.SP_I18N_PRE = undefined; global.SP_I18N_HTML = undefined;
 const enCode = headInlineScripts(en);
