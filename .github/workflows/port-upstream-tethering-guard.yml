@@ -14,7 +14,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Port upstream fail-closed guard
         shell: python {0}
         run: |
@@ -90,18 +89,17 @@ jobs:
                   raise SystemExit(f'expected source fragment not found: {old[:80]!r}')
               s = s.replace(old, new, 1)
           p.write_text(s)
-
       - name: Verify port
         run: |
           grep -n "upstreamRejections" android/app/src/main/kotlin/io/github/yiguihai11/smartproxy/shizuku/ShizukuTetheringService.kt
           grep -n "stopUnprotectedDownstreams" android/app/src/main/kotlin/io/github/yiguihai11/smartproxy/shizuku/ShizukuTetheringService.kt
           grep -n "rejection != upstreamRejections.get()" android/app/src/main/kotlin/io/github/yiguihai11/smartproxy/shizuku/ShizukuTetheringService.kt
-
-      - name: Commit and remove helper workflow
+      - name: Commit and remove helper
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add android/app/src/main/kotlin/io/github/yiguihai11/smartproxy/shizuku/ShizukuTetheringService.kt
           git rm .github/workflows/port-upstream-tethering-guard.yml
+          git rm .github/workflows/port-upstream-tethering-guard.trigger
           git commit -m 'fix(android): port upstream tethering rejection guard'
           git push
