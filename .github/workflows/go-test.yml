@@ -14,12 +14,16 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/go-test.yml'
+      - 'internal/admin/dashboard.html'  # 面板 UI/JS 变更同样触发回归(含下方 node i18n 冒烟)
+      - 'scripts/**'
   pull_request:
     paths:
       - '**/*.go'
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/go-test.yml'
+      - 'internal/admin/dashboard.html'
+      - 'scripts/**'
   workflow_dispatch:
 
 jobs:
@@ -52,6 +56,22 @@ jobs:
 
       - name: Build
         run: go build -tags with_gvisor ./...
+
+      # i18n JS 冒烟(面板中英双语):go 先把 en/zh 两变体 dump 成文件(平时跑
+      # go test 该测试自动 Skip),node 再真实执行面板 head 的 boot+zhBoot 脚本,
+      # 验证 zh 字典安装/t() 全量命中/无 JS 注释泄漏到页面 —— 专防「注释里写裸
+      # </head> 导致 zhBoot 注入进注释、boot 源码喷成乱码」这类 Go 字符串测试
+      # 抓不到的 JS 层回归(见 scripts/dashboard-i18n.test.js)。
+      - name: Dump dashboard en/zh variants
+        run: go test -count=1 -run TestDashboardDumpForNodeSmoke ./internal/admin/
+        env:
+          DASHBOARD_DUMP_DIR: ${{ github.workspace }}/.ci-i18n
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Node smoke test (dashboard i18n JS)
+        run: node scripts/dashboard-i18n.test.js "${{ github.workspace }}/.ci-i18n"
 
       # Codecov 覆盖率徽章的数据源。CODECOV_TOKEN 需在 repo Settings→Secrets and
       # variables→Actions 配好(codecov.io 用 GitHub 登录后在仓库页拿 token)。
