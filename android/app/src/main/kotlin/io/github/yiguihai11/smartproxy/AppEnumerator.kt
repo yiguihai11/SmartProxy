@@ -34,6 +34,26 @@ object AppEnumerator {
     /** pkg → ImageBitmap 图标。上限 64 个,超出逐出最久未用。 */
     private val iconCache = object : LruCache<String, ImageBitmap>(64) {}
 
+    // 进程级应用列表缓存(§5 预加载):进入 App 时后台 load() 填一次,点进应用选择页
+    // cached() 直接命中、零等待。权威源永远是 PackageManager——广播收到装/卸事件后
+    // invalidate() + 后台 refresh() 重拉;进程被杀缓存随之消失,冷启动重新预加载即最新。
+    @Volatile
+    private var listCache: List<AppInfo>? = null
+
+    /** 现缓存快照;未预加载过/已被广播失效时为 null(调用方据此决定等不等)。 */
+    fun cached(): List<AppInfo>? = listCache
+
+    /** 取列表:有缓存直接返回(秒开),没有则现场拉取并写缓存(冷启动预加载前就点进页面的兜底)。 */
+    fun load(context: Context): List<AppInfo> = listCache ?: list(context).also { listCache = it }
+
+    /** 强制权威重拉并替换缓存(装/卸/替换广播后保新鲜)。 */
+    fun refresh(context: Context): List<AppInfo> = list(context).also { listCache = it }
+
+    /** 失效缓存(包事件后置 listCache=null;图标缓存不必清——包还在时留着,被卸的包不再查询)。 */
+    fun invalidate() {
+        listCache = null
+    }
+
     fun list(context: Context): List<AppInfo> {
         val pm = context.packageManager
         val selected = AppPrefs.selectedApps(context)
@@ -51,6 +71,25 @@ object AppEnumerator {
                 )
             }
             .toList()
+    }
+
+    /**
+     * 后台暖图标:cache 未满时按 list 顺序 decode 至多 budget 个(默认 = 缓存上限),已在
+     * 缓存直接跳过不重复解码。跑在 IO 线程、不 gate 任何渲染——首屏常见 app 命中缓存后,
+     * 滚动中真正 miss 的图标才在 UI 侧按需 decode。预加载线程 load 后调它把首屏(list 头部)
+     * 填进缓存;之后(进程存续 / 再次进入页面)cache 已满,整段跳过,零成本。
+     */
+    fun warmIcons(context: Context, apps: List<AppInfo>, budget: Int = iconCache.maxSize()) {
+        // 缓存已满就整段跳过:继续扫后面的 miss 会 put+逐出最早项,把预加载填的首屏
+        // (list 头部)挤掉,反而让首屏主线程 decode。冷启动 cache 空时才会真正填充。
+        if (iconCache.size() >= iconCache.maxSize()) return
+        var remaining = budget
+        for (app in apps) {
+            if (remaining <= 0) return
+            if (iconCache.get(app.pkg) != null) continue
+            iconBitmap(context, app.pkg)
+            remaining--
+        }
     }
 
     /** 应用图标(96px);解析失败返回 null(UI 显示占位)。缓存防重复解码。 */

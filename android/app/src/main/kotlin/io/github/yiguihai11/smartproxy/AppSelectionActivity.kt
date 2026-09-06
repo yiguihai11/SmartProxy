@@ -203,12 +203,16 @@ private fun AppSelectionScreen(
     var query by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
-        val list = withContext(Dispatchers.IO) {
-            AppEnumerator.list(context).also { apps ->
-                // 预热图标缓存:IO 线程解码,主线程滚动只读缓存不卡顿。
-                apps.forEach { AppEnumerator.iconBitmap(context, it.pkg) }
-            }
+        // 预加载命中(进程启动已后台填好缓存):先用缓存渲染,秒开不转圈。图标也已由
+        // 预加载线程暖到缓存,首屏不再主线程逐个 decode。
+        val snapshot = AppEnumerator.cached()
+        if (snapshot != null) {
+            allApps = snapshot
+            loaded = true
         }
+        // 权威源加载:预加载过则 load() 命中同一缓存、近零开销;冷启动预加载未完成就点进
+        // 页面时现场拉取兜底。列表渲染不 gate 在图标 decode 上(那笔成本已挪给预加载线程)。
+        val list = withContext(Dispatchers.IO) { AppEnumerator.load(context) }
         allApps = list
         loaded = true
     }
