@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/url"
 	"strconv"
@@ -22,6 +21,8 @@ import (
 	"github.com/sagernet/sing/common/buf"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
+
+	"smartproxy/internal/trace"
 )
 
 // ss:// upstream: SmartProxy connects to the remote SS server directly with the
@@ -422,7 +423,7 @@ func (p *Proxy) ssUDPAssociate(ctx context.Context, targetHost string, targetPor
 	if err != nil {
 		return nil, err
 	}
-	slog.Debug("ss UDP relay established", "proxy", MaskProxyURL(p.URL), "serverAddr", raddr)
+	trace.Log(ctx).Debug("ss UDP relay established", "proxy", MaskProxyURL(p.URL), "serverAddr", raddr)
 	return &ssUDPConn{NetPacketConn: p.ssMethod.DialPacketConn(udpConn)}, nil
 }
 

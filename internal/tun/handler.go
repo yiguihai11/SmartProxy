@@ -31,6 +31,7 @@ import (
 	"smartproxy/internal/route"
 	"smartproxy/internal/rules"
 	"smartproxy/internal/safego"
+	"smartproxy/internal/trace"
 	"smartproxy/internal/udp"
 
 	"smartproxy/internal/upstream"
@@ -197,14 +198,19 @@ func (h *TUNHandler) PrepareConnection(network string, source M.Socksaddr, desti
 }
 
 func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	// TUN TCP 入口:每条连接在此分配 flow id。sing-tun 回调的 ctx 是栈级共享的,
+	// 只 WithValue 派生(绝不 WithCancel/Timeout),后台 relay goroutine 拿走后也不会
+	// 被入口返回取消;此后整条链路日志带同一个号。
+	ctx = trace.WithFlow(ctx, trace.NextID())
+	ll := trace.Log(ctx)
 	host := destination.Addr.String()
 	port := int(destination.Port)
 
 	// Logged once per connection; at tens of thousands of connections/second, INFO is pure overhead, so the hot path is demoted to Debug
-	slog.Debug("TUN new connection", "src", source, "dst", destination)
+	ll.Debug("TUN new connection", "src", source, "dst", destination)
 
 	if h.ruleEng == nil || h.router == nil {
-		slog.Error("TUN handler not fully initialized (ruleEng or router is nil), closing connection")
+		ll.Error("TUN handler not fully initialized (ruleEng or router is nil), closing connection")
 		conn.Close()
 		if onClose != nil {
 			onClose(fmt.Errorf("handler not initialized"))
@@ -213,7 +219,7 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 	}
 
 	if h.ruleEng.IsPortBlocked(port) {
-		slog.Info("TUN blocked port by rule", "port", port)
+		ll.Info("TUN blocked port by rule", "port", port)
 		if port == 80 || port == 443 {
 			netutil.SendEnhancedBlock(conn, port)
 		} else {
@@ -225,7 +231,7 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 		return
 	}
 	if h.ruleEng.IsIPBlocked(host) {
-		slog.Info("TUN blocked IP by rule", "ip", host)
+		ll.Info("TUN blocked IP by rule", "ip", host)
 		if port == 80 || port == 443 {
 			netutil.SendEnhancedBlock(conn, port)
 		} else {
@@ -237,7 +243,7 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 		return
 	}
 	if h.isUIDBlocked(6, source, destination) {
-		slog.Info("TUN blocked UID by per-app rule", "src", source, "dst", destination)
+		ll.Info("TUN blocked UID by per-app rule", "src", source, "dst", destination)
 		// 复用现有 block 模式:80/443 SetLinger(0)→RST,其余直接 Close(gvisor 半握手关闭
 		// 同样发 RST),被拦应用立刻看到连接被拒,而不是黑洞卡死。
 		netutil.SendEnhancedBlock(conn, port)
@@ -267,7 +273,7 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 	if !smartEnabled {
 		remote, isProxy, err := h.router.EstablishConnection(ctx, host, port, "", h.ruleEng)
 		if err != nil {
-			slog.Error("TUN failed to establish connection", "host", host, "port", port, "error", err)
+			ll.Error("TUN failed to establish connection", "host", host, "port", port, "error", err)
 			// 成功路径的 remove 在 relay goroutine 的 defer 里;失败分支不建 goroutine,
 			// 必须在这里手动摘表,否则代理故障时每个失败连接漏一个句柄,liveTCP 只增不减。
 			h.liveTCP.remove(hd)
@@ -301,11 +307,12 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host string, port int, rec *connRecord, hd *tcpHandle) {
 	defer conn.Close()
 	defer h.liveTCP.remove(hd)
+	ll := trace.Log(ctx)
 
 	firstPkt, err := ReadClientHello(conn, 3*time.Second)
 	if err != nil {
 		if err != io.EOF {
-			slog.Info("TUN error reading first packet", "error", err)
+			ll.Info("TUN error reading first packet", "error", err)
 		}
 		return
 	}
@@ -315,9 +322,9 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 	hd.setHost(domain)
 	if domain != "" {
 		// Logged once per connection; the hot path is demoted to Debug
-		slog.Debug("extracted domain", "domain", domain)
+		ll.Debug("extracted domain", "domain", domain)
 		if h.ruleEng.IsDomainBlocked(domain) {
-			slog.Info("TUN blocked domain (static rule)", "domain", domain)
+			ll.Info("TUN blocked domain (static rule)", "domain", domain)
 			netutil.SendEnhancedBlock(conn, port)
 			return
 		}
@@ -327,41 +334,45 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 	if isDomestic {
 		remote, isProxy, err := h.router.EstablishConnection(ctx, host, port, domain, h.ruleEng)
 		if err != nil {
-			slog.Error("TUN failed to establish domestic connection", "host", host, "port", port, "domain", domain, "error", err)
+			ll.Error("TUN failed to establish domestic connection", "host", host, "port", port, "domain", domain, "error", err)
 			return
 		}
 		defer remote.Close()
 		hd.setRemote(remote)
 		if len(firstPkt) > 0 {
 			if _, err := remote.Write(firstPkt); err != nil {
-				slog.Debug("TUN error forwarding first packet", "error", err)
+				ll.Debug("TUN error forwarding first packet", "error", err)
 				return
 			}
 		}
-		slog.Info("TUN domestic connection established", "host", host, "port", port, "domain", domain)
+		ll.Info("TUN domestic connection established", "host", host, "port", port, "domain", domain)
 		relay.TCPRelay(ctx, conn, remote, isProxy, nil)
 		return
 	}
 
 	remote, prefix, isProxy, err := h.router.SmartConnectWithFallback(ctx, host, port, domain, firstPkt, h.ruleEng)
 	if err != nil {
-		slog.Error("TUN smart connect failed", "host", host, "port", port, "domain", domain, "error", err)
+		ll.Error("TUN smart connect failed", "host", host, "port", port, "domain", domain, "error", err)
 		return
 	}
 	defer remote.Close()
 	hd.setRemote(remote)
-	slog.Info("TUN smart connection established", "host", host, "port", port, "domain", domain)
+	ll.Info("TUN smart connection established", "host", host, "port", port, "domain", domain)
 	relay.TCPRelay(ctx, conn, remote, isProxy, prefix)
 }
 
 func (h *TUNHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	// TUN UDP 入口:每条 UDP 流会话在此分配 flow id(同样只 WithValue——handleDNS /
+	// handleGenericUDP 各自在自己的 goroutine 里跑,取消语义由调用方控制,这里只贴值)。
+	ctx = trace.WithFlow(ctx, trace.NextID())
+	ll := trace.Log(ctx)
 	host := destination.Addr.String()
 	port := int(destination.Port)
 
-	slog.Debug("TUN new packet connection", "src", source, "dst", destination)
+	ll.Debug("TUN new packet connection", "src", source, "dst", destination)
 
 	if h.ruleEng == nil {
-		slog.Error("TUN handler not fully initialized (ruleEng is nil), closing packet connection")
+		ll.Error("TUN handler not fully initialized (ruleEng is nil), closing packet connection")
 		conn.Close()
 		if onClose != nil {
 			onClose(fmt.Errorf("handler not initialized"))
@@ -399,7 +410,7 @@ func (h *TUNHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketCon
 	// 禁止联网:53 端口先放给 DNS 管线(被拦应用能解析、但数据连不上 → 直观的"无网络"),
 	// 其余 UDP 命中已拦 UID 直接丢,不建会话不转发。
 	if h.isUIDBlocked(17, source, destination) {
-		slog.Info("TUN blocked UID by per-app rule", "src", source, "dst", destination)
+		ll.Info("TUN blocked UID by per-app rule", "src", source, "dst", destination)
 		conn.Close()
 		if onClose != nil {
 			onClose(nil)
@@ -494,8 +505,13 @@ var errBlockedDomain = errors.New("blocked domain by ACL")
 func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, source M.Socksaddr, destination M.Socksaddr) {
 	defer conn.Close()
 
+	// 本函数 = 一条 UDP 流会话的完整生命周期(入口已注入 flow id)。会话内所有 goroutine
+	// (udpSend / remoteUDPReader / 判死回调)都是本函数派生的闭包或经参数携带,统一用这一个
+	// 绑定了 flow 的 logger,slog.Logger 并发安全。
+	ll := trace.Log(ctx)
+
 	if h.upstreamMgr == nil || h.router == nil || h.ruleEng == nil {
-		slog.Error("handleGenericUDP: handler not fully initialized (upstreamMgr, router, or ruleEng is nil)")
+		ll.Error("handleGenericUDP: handler not fully initialized (upstreamMgr, router, or ruleEng is nil)")
 		return
 	}
 
@@ -558,7 +574,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 		safego.Go("tun.remoteUDPReader", func() {
 			defer remoteWg.Done()
 			defer remote.Close()
-			h.remoteUDPReader(conn, entry, errCh)
+			h.remoteUDPReader(ll, conn, entry, errCh)
 		})
 		return entry, nil
 	}
@@ -573,7 +589,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 		entry := &udpRemoteEntry{conn: rc, dst: dst, isProxy: false, wd: wd}
 		if q.Dummy && wd != nil { // 哑包垫首(GFW 首包启发对抗);失败不致命
 			if _, werr := rc.Write(quic.NewDummyDatagram()); werr != nil {
-				slog.Debug("TUN QUIC dummy write failed", "error", werr)
+				ll.Debug("TUN QUIC dummy write failed", "error", werr)
 			}
 		}
 		if wd != nil {
@@ -583,7 +599,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 		safego.Go("tun.remoteUDPReader", func() {
 			defer remoteWg.Done()
 			defer rc.Close()
-			h.remoteUDPReader(conn, entry, errCh)
+			h.remoteUDPReader(ll, conn, entry, errCh)
 		})
 		return entry, nil
 	}
@@ -594,7 +610,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 	switchToProxy := func(key, host string, port int) {
 		pentry, err := newProxyRemote(destination, host, port, nil)
 		if err != nil {
-			slog.Warn("QUIC flow dead but proxy fallback dial failed, staying direct",
+			ll.Warn("QUIC flow dead but proxy fallback dial failed, staying direct",
 				"dst", destination, "error", err)
 			return
 		}
@@ -610,14 +626,14 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 		mu.Unlock()
 		// 关掉旧直连:其 reader 见 wd.Dead 静默退出,不会经 errCh 误杀整个会话
 		cur.conn.Close()
-		slog.Info("UDP QUIC flow switched to proxy after blackhole", "dst", destination)
+		ll.Info("UDP QUIC flow switched to proxy after blackhole", "dst", destination)
 	}
 
 	dialRemote := func(dst M.Socksaddr, firstDgram []byte) (*udpRemoteEntry, error) {
 		host := dst.Addr.String()
 		port := int(dst.Port)
 
-		result, selected := h.upstreamMgr.SelectProxy(host, port, "", h.ruleEng)
+		result, selected := h.upstreamMgr.SelectProxy(ctx, host, port, "", h.ruleEng)
 		switch {
 		case result == "direct":
 			return startDirectRemote(dst, host, port, nil) // ACL 强制直连
@@ -630,7 +646,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 			return startDirectRemote(dst, host, port, nil) // 国内直连,无判死观察
 		}
 		if h.router.IsIPBlacklisted(host, port) {
-			slog.Info("UDP target on dynamic blacklist, going proxy", "dst", dst)
+			ll.Info("UDP target on dynamic blacklist, going proxy", "dst", dst)
 			return newProxyRemote(dst, host, port, nil)
 		}
 		if !q.Enabled || !intIn(q.Ports, port) {
@@ -641,7 +657,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 		sniff := quic.NewSniff(quicHold, q.MaxBuffered)
 		sniff.Ingest(firstDgram)
 		if !sniff.QUIC() {
-			slog.Info("UDP QUIC flow: non-QUIC payload on QUIC port, proxying", "dst", dst)
+			ll.Info("UDP QUIC flow: non-QUIC payload on QUIC port, proxying", "dst", dst)
 			return newProxyRemote(dst, host, port, nil) // 该端口上的非 QUIC 载荷(罕见)照旧代理
 		}
 		sni := sniff.SNI()
@@ -653,25 +669,25 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 			// 已拦(:371/:378),域名型目标只能等抠出 SNI 才识别;DoH/预解析 IP 等绕过智能
 			// DNS 的场景靠这里兜底。getOrCreateRemote 把该 dst 记入 blockedDst 静默后续包。
 			if h.ruleEng.IsDomainBlocked(sni) {
-				slog.Info("UDP QUIC flow: blocked domain by SNI, dropping", "dst", dst, "sni", sni)
+				ll.Info("UDP QUIC flow: blocked domain by SNI, dropping", "dst", dst, "sni", sni)
 				return nil, errBlockedDomain
 			}
 			// 动态域名黑名单(此前 TCP smart 超时 / QUIC 判死写入,见 BlacklistDomain):同
 			// 域名换 IP 的 QUIC 目标(CDN/Google 轮换)直接走代理,不再对新 IP 重复直连判死。
 			if h.router.IsDomainBlacklisted(sni, port) {
-				slog.Info("UDP target on dynamic blacklist, going proxy", "dst", dst, "sni", sni)
+				ll.Info("UDP target on dynamic blacklist, going proxy", "dst", dst, "sni", sni)
 				return newProxyRemote(dst, host, port, nil)
 			}
-			r2, s2 := h.upstreamMgr.SelectProxy(host, port, sni, h.ruleEng)
+			r2, s2 := h.upstreamMgr.SelectProxy(ctx, host, port, sni, h.ruleEng)
 			switch r2 {
 			case "direct":
-				slog.Info("UDP QUIC flow: domain rule direct, no blackhole watch",
+				ll.Info("UDP QUIC flow: domain rule direct, no blackhole watch",
 					"dst", dst, "sni", sni)
 				return startDirectRemote(dst, host, port, nil) // 域名规则强制直连
 			case "fallback":
 				// 域名 ACL 未命中 → 国外 QUIC 目标,落到下方 B 直连判死观察
 			default:
-				slog.Info("UDP QUIC flow: domain rule proxy", "dst", dst, "sni", sni)
+				ll.Info("UDP QUIC flow: domain rule proxy", "dst", dst, "sni", sni)
 				return newProxyRemote(dst, host, port, s2) // 域名规则指定代理
 			}
 		}
@@ -686,7 +702,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 			if snipedSNI != "" {
 				args = append(args, "sni", snipedSNI)
 			}
-			slog.Info("UDP QUIC flow judged dead (GFW blackhole), switching to proxy", args...)
+			ll.Info("UDP QUIC flow judged dead (GFW blackhole), switching to proxy", args...)
 			h.router.BlacklistIP(host, port, "quic:"+reason)
 			if snipedSNI != "" {
 				h.router.BlacklistDomain(snipedSNI, port, "quic:"+reason)
@@ -702,7 +718,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 		if sni != "" {
 			trialArgs = append(trialArgs, "sni", sni)
 		}
-		slog.Info("UDP QUIC flow: direct trial (blackhole watch)", trialArgs...)
+		ll.Info("UDP QUIC flow: direct trial (blackhole watch)", trialArgs...)
 		return entry, nil
 	}
 
@@ -766,7 +782,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 
 			entry, err := getOrCreateRemote(pktDst, buffer.Bytes())
 			if err != nil {
-				slog.Debug("TUN UDP no remote for", "dst", pktDst, "error", err)
+				ll.Debug("TUN UDP no remote for", "dst", pktDst, "error", err)
 				buffer.Release()
 				continue
 			}
@@ -830,7 +846,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 	case <-ctx.Done():
 	case <-errCh:
 	case <-sess.closeCh:
-		slog.Debug("TUN UDP session closed by cleaner", "key", sessKey)
+		ll.Debug("TUN UDP session closed by cleaner", "key", sessKey)
 	}
 
 	// Shut the sender down first: closing the tun packet conn makes its ReadPacket fail, and
@@ -850,7 +866,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 	remoteWg.Wait()
 }
 
-func (h *TUNHandler) remoteUDPReader(tunConn N.PacketConn, entry *udpRemoteEntry, errCh chan<- error) {
+func (h *TUNHandler) remoteUDPReader(ll *slog.Logger, tunConn N.PacketConn, entry *udpRemoteEntry, errCh chan<- error) {
 	pktBufPtr := relay.UDPBufPool.Get().(*[]byte)
 	rawBuf := *pktBufPtr
 	defer relay.UDPBufPool.Put(pktBufPtr)
@@ -872,7 +888,7 @@ func (h *TUNHandler) remoteUDPReader(tunConn N.PacketConn, entry *udpRemoteEntry
 			// 首个服务器回包 = 流存活、保持直连,打一条日志(Monitoring 仅在首个回包前
 			// 为 true → 每流只打一次);再解除判死。
 			if entry.wd.Monitoring() {
-				slog.Info("UDP QUIC flow: direct alive (server replied), keeping direct", "dst", entry.dst)
+				ll.Info("UDP QUIC flow: direct alive (server replied), keeping direct", "dst", entry.dst)
 			}
 			entry.wd.OnServerReply() // 任意服务器回包 = 流存活,解除判死
 		}
@@ -931,15 +947,16 @@ func (h *TUNHandler) getUDPTimeout(port int) time.Duration {
 
 func (h *TUNHandler) handleDNS(ctx context.Context, conn N.PacketConn, host string, port int) {
 	defer conn.Close()
+	ll := trace.Log(ctx)
 
 	if h.dnsHandler == nil || h.ruleEng == nil {
-		slog.Error("handleDNS: handler not fully initialized (dnsHandler or ruleEng is nil)")
+		ll.Error("handleDNS: handler not fully initialized (dnsHandler or ruleEng is nil)")
 		return
 	}
 
 	for {
 		if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
-			slog.Debug("DNS SetReadDeadline failed", "error", err)
+			ll.Debug("DNS SetReadDeadline failed", "error", err)
 			return
 		}
 		buffer := buf.NewPacket()
@@ -957,7 +974,7 @@ func (h *TUNHandler) handleDNS(ctx context.Context, conn N.PacketConn, host stri
 			// Use buf.As instead of buf.With: With does not set end, so Bytes() returns an empty slice, which would write the DNS response as an empty datagram.
 			respBuf := buf.As(response)
 			if err := conn.WritePacket(respBuf, addr); err != nil {
-				slog.Debug("DNS write response failed", "error", err)
+				ll.Debug("DNS write response failed", "error", err)
 			}
 			respBuf.Release()
 		}

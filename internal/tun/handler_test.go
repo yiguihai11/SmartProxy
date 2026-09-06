@@ -822,7 +822,7 @@ func TestRemoteUDPReader_WritesNonEmptyPayload(t *testing.T) {
 	}
 	errCh := make(chan error, 1)
 	h := &TUNHandler{}
-	h.remoteUDPReader(tunConn, entry, errCh)
+	h.remoteUDPReader(slog.Default(), tunConn, entry, errCh)
 
 	if captured == nil {
 		t.Fatal("no WritePacket call captured")

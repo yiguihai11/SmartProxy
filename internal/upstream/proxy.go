@@ -21,6 +21,7 @@ import (
 	"github.com/sagernet/sing-shadowsocks"
 	"smartproxy/internal/fwmark"
 	"smartproxy/internal/netutil"
+	"smartproxy/internal/trace"
 )
 
 const proxyDialTimeout = 10 * time.Second
@@ -559,12 +560,12 @@ func (p *Proxy) socks5Connect(ctx context.Context, targetHost string, targetPort
 // rawUDPAssociate skips the SOCKS5 handshake and uses the upstream directly as a raw
 // UDP relay. It relies on a UDP relay on the upstream's UDP port that "does not check
 // the source and does not require ASSOCIATE" (e.g. shadowsocks-android's udp_only fallback instance), which forwards any frame carrying a SOCKS5 UDP header.
-func (p *Proxy) rawUDPAssociate(raddr *net.UDPAddr) (*UDPProxyConn, error) {
+func (p *Proxy) rawUDPAssociate(ctx context.Context, raddr *net.UDPAddr) (*UDPProxyConn, error) {
 	udpConn, err := net.DialUDP("udp", nil, raddr)
 	if err != nil {
 		return nil, err
 	}
-	slog.Debug("raw UDP relay established", "proxy", p.Host, "remoteAddr", raddr)
+	trace.Log(ctx).Debug("raw UDP relay established", "proxy", p.Host, "remoteAddr", raddr)
 	return &UDPProxyConn{UDPConn: udpConn}, nil
 }
 
@@ -573,14 +574,14 @@ func (p *Proxy) rawUDPAssociate(raddr *net.UDPAddr) (*UDPProxyConn, error) {
 // 0x07 CommandNotSupported, or a bad bind reply). Raw UDP is fire-and-forget — packets drop
 // silently if no relay listens there — so a failure here means the node has no working UDP
 // relay at all.
-func (p *Proxy) rawFallback(cause error) (*UDPProxyConn, error) {
+func (p *Proxy) rawFallback(ctx context.Context, cause error) (*UDPProxyConn, error) {
 	raddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(p.Host, strconv.Itoa(p.Port)))
 	if err != nil {
 		return nil, fmt.Errorf("UDP ASSOCIATE failed (%v) and raw UDP relay unreachable: %w", cause, err)
 	}
-	slog.Warn("UDP ASSOCIATE failed, falling back to raw UDP relay",
+	trace.Log(ctx).Warn("UDP ASSOCIATE failed, falling back to raw UDP relay",
 		"proxy", p.Host, "udpAddr", raddr, "cause", cause)
-	conn, err := p.rawUDPAssociate(raddr)
+	conn, err := p.rawUDPAssociate(ctx, raddr)
 	if err != nil {
 		return nil, fmt.Errorf("UDP ASSOCIATE failed (%v) and raw UDP relay failed: %w", cause, err)
 	}
@@ -605,7 +606,7 @@ func (p *Proxy) socks5UDPAssociate(ctx context.Context, targetHost string, targe
 		if err != nil {
 			return nil, err
 		}
-		return p.rawUDPAssociate(raddr)
+		return p.rawUDPAssociate(ctx, raddr)
 	}
 	// Known-raw node whose recheck is due: schedule the next recheck now, so a failed recheck
 	// (which falls back to the raw relay below) does not retry ASSOCIATE on every association.
@@ -615,34 +616,34 @@ func (p *Proxy) socks5UDPAssociate(ctx context.Context, targetHost string, targe
 
 	conn, err := p.dial(ctx)
 	if err != nil {
-		return p.rawFallback(err)
+		return p.rawFallback(ctx, err)
 	}
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
 
 	if err := p.socks5Handshake(conn); err != nil {
 		conn.Close()
-		return p.rawFallback(err)
+		return p.rawFallback(ctx, err)
 	}
 	req := []byte{0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0}
 	if _, err := conn.Write(req); err != nil {
 		conn.Close()
-		return p.rawFallback(err)
+		return p.rawFallback(ctx, err)
 	}
 	resp := make([]byte, 4)
 	if _, err := io.ReadFull(conn, resp); err != nil {
 		conn.Close()
-		return p.rawFallback(err)
+		return p.rawFallback(ctx, err)
 	}
 	if resp[1] != 0x00 {
 		conn.Close()
 		// Any rep, including 0x07 (CommandNotSupported): the upstream's SOCKS5 may serve TCP
 		// only, but the same host:port usually hosts a matching raw UDP relay — fall back to it.
-		return p.rawFallback(fmt.Errorf("UDP ASSOCIATE rejected: rep=%d", resp[1]))
+		return p.rawFallback(ctx, fmt.Errorf("UDP ASSOCIATE rejected: rep=%d", resp[1]))
 	}
 	bndAddr, bndPort, err := readSOCKS5BindAddr(conn, resp[3])
 	if err != nil {
 		conn.Close()
-		return p.rawFallback(err)
+		return p.rawFallback(ctx, err)
 	}
 	conn.SetDeadline(time.Time{})
 
@@ -650,22 +651,22 @@ func (p *Proxy) socks5UDPAssociate(ctx context.Context, targetHost string, targe
 		bndAddr = p.Host
 	}
 
-	slog.Debug("UDP ASSOCIATE response",
+	trace.Log(ctx).Debug("UDP ASSOCIATE response",
 		"proxy", p.Host, "bindAddr", bndAddr, "bindPort", bndPort,
 		"target", fmt.Sprintf("%s:%d", targetHost, targetPort))
 
 	raddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(bndAddr, fmt.Sprintf("%d", bndPort)))
 	if err != nil {
 		conn.Close()
-		return p.rawFallback(err)
+		return p.rawFallback(ctx, err)
 	}
 	udpConn, err := net.DialUDP("udp", nil, raddr)
 	if err != nil {
-		slog.Error("UDP ASSOCIATE dial failed", "proxy", p.Host, "bindAddr", raddr, "error", err)
+		trace.Log(ctx).Error("UDP ASSOCIATE dial failed", "proxy", p.Host, "bindAddr", raddr, "error", err)
 		conn.Close()
-		return p.rawFallback(err)
+		return p.rawFallback(ctx, err)
 	}
-	slog.Debug("UDP ASSOCIATE established",
+	trace.Log(ctx).Debug("UDP ASSOCIATE established",
 		"proxy", p.Host, "localAddr", udpConn.LocalAddr(), "remoteAddr", raddr)
 	return &UDPProxyConn{UDPConn: udpConn, tcpConn: conn}, nil
 }
@@ -709,7 +710,7 @@ func (p *Proxy) socks5UDPInTCP(ctx context.Context) (net.Conn, error) {
 	}
 	conn.SetDeadline(time.Time{})
 
-	slog.Debug("UDP-in-TCP relay established", "proxy", p.Host)
+	trace.Log(ctx).Debug("UDP-in-TCP relay established", "proxy", p.Host)
 	return newUDPInTCPConn(conn), nil
 }
 

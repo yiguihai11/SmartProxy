@@ -3,12 +3,13 @@ package relay
 import (
 	"context"
 	"io"
-	"log/slog"
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"smartproxy/internal/safego"
+	"smartproxy/internal/trace"
 )
 
 var (
@@ -50,17 +51,22 @@ func TCPRelay(ctx context.Context, client, remote net.Conn, proxy bool, prefix [
 	ActiveConns.Add(1)
 	defer ActiveConns.Add(-1)
 
+	// 整条转发的结束锚点:grep "flow=N" 从入口日志一路追到这里(up/down 字节 + 耗时)。
+	start := time.Now()
+	ll := trace.Log(ctx)
+	var up, down atomic.Int64
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 
 	safego.Go("relay.tcp.c2r", func() {
 		defer wg.Done()
-		relayDirection(ctx, remote, client, "c2r", proxy, nil)
+		up.Store(relayDirection(ctx, remote, client, "c2r", proxy, nil))
 	})
 
 	safego.Go("relay.tcp.r2c", func() {
 		defer wg.Done()
-		relayDirection(ctx, client, remote, "r2c", proxy, prefix)
+		down.Store(relayDirection(ctx, client, remote, "r2c", proxy, prefix))
 	})
 
 	done := make(chan struct{})
@@ -71,13 +77,17 @@ func TCPRelay(ctx context.Context, client, remote net.Conn, proxy bool, prefix [
 
 	select {
 	case <-done:
-		slog.Debug("TCP relay finished")
 	case <-ctx.Done():
-		slog.Debug("TCP relay cancelled by context", "error", ctx.Err())
+		ll.Debug("TCP relay cancelled by context", "error", ctx.Err())
 		client.Close()
 		remote.Close()
 		wg.Wait()
 	}
+	// wg.Wait 与两个方向 goroutine 的 Done 同步,up/down 此刻已定;不加原子也安全,
+	// atomic 仅为局部读数防呆。
+	ll.Info("TCP relay finished",
+		"up", up.Load(), "down", down.Load(),
+		"duration_ms", time.Since(start).Milliseconds(), "proxy", proxy)
 }
 
 // tcpSplice uses the internal splice optimization of the Go standard library to
@@ -95,7 +105,8 @@ func tcpSplice(dst, src *net.TCPConn) (int64, bool) {
 	return 0, true
 }
 
-func relayDirection(ctx context.Context, dst, src net.Conn, direction string, proxy bool, prefix []byte) {
+func relayDirection(ctx context.Context, dst, src net.Conn, direction string, proxy bool, prefix []byte) int64 {
+	ll := trace.Log(ctx)
 	total := int64(0)
 	var err error
 
@@ -105,7 +116,7 @@ func relayDirection(ctx context.Context, dst, src net.Conn, direction string, pr
 		wn, werr := dst.Write(prefix)
 		total += int64(wn)
 		if werr != nil || wn != len(prefix) {
-			slog.Debug(direction+" relay prefix write failed", "error", werr)
+			ll.Debug(direction+" relay prefix write failed", "error", werr)
 			goto done
 		}
 	}
@@ -129,7 +140,7 @@ func relayDirection(ctx context.Context, dst, src net.Conn, direction string, pr
 		err = cerr
 	}
 	if err != nil && err != io.EOF {
-		slog.Debug(direction+" relay error", "error", err)
+		ll.Debug(direction+" relay error", "error", err)
 	}
 
 done:
@@ -155,4 +166,5 @@ done:
 	if tcpSrc, ok := src.(*net.TCPConn); ok {
 		tcpSrc.CloseRead()
 	}
+	return total
 }

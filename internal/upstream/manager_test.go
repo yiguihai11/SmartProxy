@@ -335,7 +335,7 @@ func TestSelectProxy_FallbackWithoutEngine(t *testing.T) {
 			{Alias: "p1", URL: "socks5://127.0.0.1:1080"},
 		},
 	})
-	result, proxy := m.SelectProxy("1.2.3.4", 443, "example.com", nil)
+	result, proxy := m.SelectProxy(context.Background(), "1.2.3.4", 443, "example.com", nil)
 	if result != "fallback" {
 		t.Errorf("expected fallback, got %s", result)
 	}
@@ -352,7 +352,7 @@ func TestSelectProxy_DirectByRule(t *testing.T) {
 	})
 
 	eng := newEngineWithRules("proxy ip 8.8.8.8 direct\n")
-	result, proxy := m.SelectProxy("8.8.8.8", 0, "", eng)
+	result, proxy := m.SelectProxy(context.Background(), "8.8.8.8", 0, "", eng)
 	if result != "direct" {
 		t.Errorf("expected direct, got %s", result)
 	}
@@ -368,7 +368,7 @@ func TestSelectProxy_AliasByRule(t *testing.T) {
 		},
 	})
 	eng := newEngineWithRules("proxy domain google.com us\n")
-	result, proxy := m.SelectProxy("", 0, "google.com", eng)
+	result, proxy := m.SelectProxy(context.Background(), "", 0, "google.com", eng)
 	if result != "" {
 		t.Errorf("expected empty result, got %s", result)
 	}
@@ -387,7 +387,7 @@ func TestSelectProxy_AliasNotFound(t *testing.T) {
 		},
 	})
 	eng := newEngineWithRules("proxy domain example.com nonexistent\n")
-	result, proxy := m.SelectProxy("", 0, "example.com", eng)
+	result, proxy := m.SelectProxy(context.Background(), "", 0, "example.com", eng)
 	if result != "fallback" {
 		t.Errorf("expected fallback for unknown alias, got %s", result)
 	}
@@ -668,7 +668,7 @@ func TestReload_ConcurrentAccess(t *testing.T) {
 					return
 				default:
 				}
-				m.SelectProxy("1.2.3.4", 443, "", nil)
+				m.SelectProxy(context.Background(), "1.2.3.4", 443, "", nil)
 				m.orderedProxies()
 			}
 		}()
@@ -695,7 +695,7 @@ func TestReload_ConcurrentAccess(t *testing.T) {
 	}()
 
 	for range 200 {
-		m.SelectProxy("1.2.3.4", 443, "", nil)
+		m.SelectProxy(context.Background(), "1.2.3.4", 443, "", nil)
 	}
 	close(stop)
 	wg.Wait()

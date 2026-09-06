@@ -367,6 +367,7 @@ type engineSpec struct {
 	strategy string              // upstream.default 策略(默认代理走谁)
 	listen   string              // SOCKS5 监听地址,默认 127.0.0.1;IPv6 测试用 "::1"
 	tun      *config.TUNConfig   // 非 nil = 启用真实 TUN 设备(tun_e2e_test.go 用)
+	quic     *config.SmartProxyQuicConf // 非 nil = 启用 QUIC 被动识别 + 判死自愈(quic_blackhole_e2e_test.go 用)
 }
 
 // startEngine 起一个引擎,SOCKS5 监听随机端口,返回引擎(Stop 由 t.Cleanup 处理)。
@@ -410,6 +411,9 @@ func startEngine(t testing.TB, spec engineSpec) *Engine {
 	}
 	if spec.tun != nil {
 		cfg.TUN = *spec.tun
+	}
+	if spec.quic != nil {
+		cfg.SmartProxy.Quic = *spec.quic
 	}
 
 	eng, err := New(cfg, dir)

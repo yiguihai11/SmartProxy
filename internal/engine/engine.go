@@ -27,6 +27,7 @@ import (
 	"smartproxy/internal/route"
 	"smartproxy/internal/rules"
 	"smartproxy/internal/socks5"
+	"smartproxy/internal/trace"
 	"smartproxy/internal/tun"
 	"smartproxy/internal/udp"
 	"smartproxy/internal/upstream"
@@ -316,6 +317,10 @@ func (e *Engine) handleClient(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// SOCKS5 TCP 入口:每条连接在此分配 flow id(只加 value,取消语义沿用上面的
+	// WithCancel),此后握手 / CONNECT / UDP ASSOCIATE / 转发日志全带同一个号。
+	ctx = trace.WithFlow(ctx, trace.NextID())
+	ll := trace.Log(ctx)
 
 	conn.SetDeadline(time.Now().Add(30 * time.Second))
 	defer conn.SetDeadline(time.Time{})
@@ -336,7 +341,7 @@ func (e *Engine) handleClient(ctx context.Context, conn net.Conn) {
 	if strings.HasPrefix(rawIP, "::ffff:") {
 		clientIP = rawIP[7:]
 	}
-	slog.Debug("new connection", "remote", remoteAddr, "client_ip", clientIP)
+	ll.Debug("new connection", "remote", remoteAddr, "client_ip", clientIP)
 
 	auth := e.Config.Load().Listen.Auth
 	serverUser := ""
@@ -347,7 +352,7 @@ func (e *Engine) handleClient(ctx context.Context, conn net.Conn) {
 	}
 
 	if err := socks5.Handshake(conn, serverUser, serverPass); err != nil {
-		slog.Warn("handshake failed", "remote", remoteAddr, "error", err)
+		ll.Warn("handshake failed", "remote", remoteAddr, "error", err)
 		return
 	}
 	// Clear the handshake deadline; it does not affect the subsequent long-lived relay connection
@@ -355,13 +360,13 @@ func (e *Engine) handleClient(ctx context.Context, conn net.Conn) {
 
 	req, err := socks5.ReceiveRequest(conn)
 	if err != nil {
-		slog.Error("failed to read request", "remote", remoteAddr, "error", err)
+		ll.Error("failed to read request", "remote", remoteAddr, "error", err)
 		if pe, ok := err.(*socks5.ProtocolError); ok {
 			socks5.SendReply(conn, pe.Reply, localIP, 0)
 		}
 		return
 	}
-	slog.Debug("request", "cmd", req.Command.String(), "dst", net.JoinHostPort(req.Host, strconv.Itoa(req.Port)))
+	ll.Debug("request", "cmd", req.Command.String(), "dst", net.JoinHostPort(req.Host, strconv.Itoa(req.Port)))
 
 	switch req.Command {
 	case socks5.CommandConnect:
@@ -369,18 +374,19 @@ func (e *Engine) handleClient(ctx context.Context, conn net.Conn) {
 	case socks5.CommandUDPAssociate:
 		e.handleUDPAssociate(ctx, conn, clientIP)
 	default:
-		slog.Info("unsupported command", "cmd", req.Command.String())
+		ll.Info("unsupported command", "cmd", req.Command.String())
 		socks5.SendReply(conn, socks5.ReplyCmdNotSupported, localIP, 0)
 	}
 }
 
 func (e *Engine) handleConnect(ctx context.Context, conn net.Conn, req *socks5.Request) {
+	ll := trace.Log(ctx)
 	host := req.Host
 	port := req.Port
 	localIP := conn.LocalAddr().(*net.TCPAddr).IP.String()
 
 	if e.RuleEng.IsPortBlocked(port) {
-		slog.Info("blocked port by rule", "port", port)
+		ll.Info("blocked port by rule", "port", port)
 		if port == 80 || port == 443 {
 			socks5.SendReply(conn, socks5.ReplySuccess, localIP, 0)
 			netutil.SendEnhancedBlock(conn, port)
@@ -390,7 +396,7 @@ func (e *Engine) handleConnect(ctx context.Context, conn net.Conn, req *socks5.R
 		return
 	}
 	if e.RuleEng.IsIPBlocked(host) {
-		slog.Info("blocked IP by rule", "ip", host)
+		ll.Info("blocked IP by rule", "ip", host)
 		if port == 80 || port == 443 {
 			socks5.SendReply(conn, socks5.ReplySuccess, localIP, 0)
 			netutil.SendEnhancedBlock(conn, port)
@@ -415,7 +421,7 @@ func (e *Engine) handleConnect(ctx context.Context, conn net.Conn, req *socks5.R
 		if net.ParseIP(host) == nil {
 			domain = host
 			if e.RuleEng.IsDomainBlocked(host) {
-				slog.Info("blocked domain by rule", "domain", host)
+				ll.Info("blocked domain by rule", "domain", host)
 				if port == 80 || port == 443 {
 					socks5.SendReply(conn, socks5.ReplySuccess, localIP, 0)
 					netutil.SendEnhancedBlock(conn, port)
@@ -427,7 +433,7 @@ func (e *Engine) handleConnect(ctx context.Context, conn net.Conn, req *socks5.R
 		}
 		remote, isProxy, err := e.Router.EstablishConnection(ctx, host, port, domain, e.RuleEng)
 		if err != nil {
-			slog.Error("failed to establish connection", "host", host, "port", port, "domain", domain, "error", err)
+			ll.Error("failed to establish connection", "host", host, "port", port, "domain", domain, "error", err)
 			socks5.SendReply(conn, replyForConnError(err), localIP, 0)
 			return
 		}
@@ -444,15 +450,15 @@ func (e *Engine) handleConnect(ctx context.Context, conn net.Conn, req *socks5.R
 	}
 	firstPkt, err := tun.ReadClientHello(conn, 3*time.Second)
 	if err != nil {
-		slog.Debug("error reading first packet", "error", err)
+		ll.Debug("error reading first packet", "error", err)
 		return
 	}
 
 	domain := tun.ExtractDomain(firstPkt)
 	if domain != "" {
-		slog.Debug("extracted domain", "domain", domain)
+		ll.Debug("extracted domain", "domain", domain)
 		if e.RuleEng.IsDomainBlocked(domain) {
-			slog.Info("blocked domain (static rule)", "domain", domain)
+			ll.Info("blocked domain (static rule)", "domain", domain)
 			netutil.SendEnhancedBlock(conn, port)
 			return
 		}
@@ -461,7 +467,7 @@ func (e *Engine) handleConnect(ctx context.Context, conn net.Conn, req *socks5.R
 	if isDomestic {
 		remote, isProxy, err := e.Router.EstablishConnection(ctx, host, port, domain, e.RuleEng)
 		if err != nil {
-			slog.Error("failed to establish domestic connection", "host", host, "port", port, "domain", domain, "error", err)
+			ll.Error("failed to establish domestic connection", "host", host, "port", port, "domain", domain, "error", err)
 			return
 		}
 		defer remote.Close()
@@ -476,11 +482,11 @@ func (e *Engine) handleConnect(ctx context.Context, conn net.Conn, req *socks5.R
 
 	remote, prefix, isProxy, err := e.Router.SmartConnectWithFallback(ctx, host, port, domain, firstPkt, e.RuleEng)
 	if err != nil {
-		slog.Error("smart connect failed", "host", host, "port", port, "domain", domain, "error", err)
+		ll.Error("smart connect failed", "host", host, "port", port, "domain", domain, "error", err)
 		return
 	}
 	defer remote.Close()
-	slog.Info("smart connection established", "host", host, "port", port, "domain", domain)
+	ll.Info("smart connection established", "host", host, "port", port, "domain", domain)
 	e.relayTCP(ctx, conn, remote, isProxy, prefix)
 }
 
@@ -554,16 +560,18 @@ type udpJob struct {
 }
 
 func (e *Engine) handleUDPAssociate(ctx context.Context, conn net.Conn, clientIP string) {
+	// ctx 已带控制 TCP 连接的 flow id;UDP 数据会话在 HandlePacket 内分配自己的 id 遮蔽。
+	ll := trace.Log(ctx)
 	var udpConn net.PacketConn
 	var err error
 
 	udpConn, err = net.ListenPacket("udp", ":0")
 	tcpLocal := conn.LocalAddr().(*net.TCPAddr)
 	if err != nil {
-		slog.Warn("failed to create dual-stack UDP socket, trying IPv4", "error", err)
+		ll.Warn("failed to create dual-stack UDP socket, trying IPv4", "error", err)
 		udpConn, err = net.ListenPacket("udp4", "0.0.0.0:0")
 		if err != nil {
-			slog.Error("failed to create UDP socket", "error", err)
+			ll.Error("failed to create UDP socket", "error", err)
 			socks5.SendReply(conn, socks5.ReplyGeneralFailure, tcpLocal.IP.String(), 0)
 			return
 		}
@@ -571,7 +579,7 @@ func (e *Engine) handleUDPAssociate(ctx context.Context, conn net.Conn, clientIP
 	// Enlarge the UDP socket send/receive buffers to reduce burst packet loss (best-effort, bounded by kernel limits)
 	if u, ok := udpConn.(*net.UDPConn); ok {
 		if err := udp.SetSocketBuffers(u); err != nil {
-			slog.Debug("failed to enlarge UDP socket buffers", "error", err)
+			ll.Debug("failed to enlarge UDP socket buffers", "error", err)
 		}
 	}
 
@@ -614,7 +622,7 @@ func (e *Engine) handleUDPAssociate(ctx context.Context, conn net.Conn, clientIP
 		return
 	}
 
-	slog.Debug("UDP ASSOCIATE bound", "addr", localAddr, "client", clientIP, "bindHost", bindHost)
+	ll.Debug("UDP ASSOCIATE bound", "addr", localAddr, "client", clientIP, "bindHost", bindHost)
 
 	udpHandler := udp.NewHandler(e.Chnroute, e.Router, e.RuleEng,
 		e.UpstreamMgr, e.DNSHandler, clientIP, udpConn,
@@ -656,11 +664,11 @@ func (e *Engine) handleUDPAssociate(ctx context.Context, conn net.Conn, clientIP
 				if isConnClosed(err) {
 					return
 				}
-				slog.Debug("UDP read error", "error", err)
+				ll.Debug("UDP read error", "error", err)
 				return
 			}
 			lastActive.Store(time.Now().Unix())
-			slog.Debug("received UDP packet from client", "addr", addr, "len", n)
+			ll.Debug("received UDP packet from client", "addr", addr, "len", n)
 			select {
 			case jobs <- udpJob{data: buf[:n], buf: bufPtr, addr: addr}:
 			default:
@@ -678,18 +686,18 @@ func (e *Engine) handleUDPAssociate(ctx context.Context, conn net.Conn, clientIP
 		for {
 			select {
 			case <-ctx.Done():
-				slog.Debug("TCP connection closed, stopping UDP session", "client", clientIP)
+				ll.Debug("TCP connection closed, stopping UDP session", "client", clientIP)
 				udpConn.Close()
 				return
 			case <-ticker.C:
 				if time.Since(time.Unix(lastActive.Load(), 0)) > idleTimeout {
 					if udpHandler.ActiveSessionCount() > 0 {
-						slog.Debug("UDP session idle but upstream active, keeping alive",
+						ll.Debug("UDP session idle but upstream active, keeping alive",
 							"activeSessions", udpHandler.ActiveSessionCount())
 						lastActive.Store(time.Now().Unix())
 						continue
 					}
-					slog.Debug("UDP ASSOCIATE idle timeout, closing",
+					ll.Debug("UDP ASSOCIATE idle timeout, closing",
 						"client", clientIP, "timeout", idleTimeout)
 					conn.Close()
 					udpConn.Close()
@@ -700,7 +708,7 @@ func (e *Engine) handleUDPAssociate(ctx context.Context, conn net.Conn, clientIP
 	}
 
 	<-ctx.Done()
-	slog.Debug("TCP connection closed, stopping UDP session", "client", clientIP)
+	ll.Debug("TCP connection closed, stopping UDP session", "client", clientIP)
 	udpConn.Close()
 }
 

@@ -26,6 +26,7 @@ import (
 	"smartproxy/internal/quic"
 	"smartproxy/internal/route"
 	"smartproxy/internal/rules"
+	"smartproxy/internal/trace"
 	"smartproxy/internal/upstream"
 )
 
@@ -93,6 +94,7 @@ type udpOutbound struct {
 
 type udpSession struct {
 	flowID uint64
+	log    *slog.Logger                 // 绑定会话 id 的 logger;会话内日志全经它,自动带 "flow",grep 一个号即可串联整条会话
 	snap   atomic.Pointer[udpOutbound] // 当前出向;判死热切时原子替换(读写无锁取当前值)
 	wd     *quic.Watchdog              // B 路径(国外 QUIC 先直连判死观察)非 nil;其余会话恒 nil
 
@@ -133,7 +135,6 @@ type Handler struct {
 	createGroup  singleflight.Group // serializes session creation for the same target, avoiding duplicate dials on concurrent first packets
 	stopCh       chan struct{}
 	closed       atomic.Bool
-	nextFlowID   atomic.Uint64
 }
 
 var udpBufPool = sync.Pool{
@@ -253,30 +254,34 @@ func (h *Handler) HandlePacket(ctx context.Context, data []byte, clientAddr net.
 		// 帧。并发安全(8 worker 共享同一条上游 TCP):net.TCPConn.Write 整个调用持运行时
 		// fdMutex 写锁,多 goroutine 写被串行化,帧不会交错。前提是【一帧一次 Write】。
 		if !h.forwardTo(sess, payload, data) {
-			slog.Debug("failed to write to remote in established session", "key", key.String())
+			sess.log.Debug("failed to write to remote in established session")
 			h.dropSession(sess)
 		}
 		return
 	}
 
-	slog.Debug("UDP packet (new session)", "from", clientAddr, "to", targetAddr)
+	// 新会话:在 SOCKS5-UDP 入口分配 flow id 并注入 ctx(遮蔽控制 TCP 连接的 id——
+	// UDP 会话是独立生命周期),此后 block / DNS / 建会话 / 转发日志全带同一个号。
+	ctx = trace.WithFlow(ctx, trace.NextID())
+	ll := trace.Log(ctx)
+	ll.Debug("UDP packet (new session)", "from", clientAddr, "to", targetAddr)
 
 	if h.ruleEngine.IsPortBlocked(port) {
-		slog.Info("UDP blocked port", "port", port)
+		ll.Info("UDP blocked port", "port", port)
 		return
 	}
 	if h.ruleEngine.IsIPBlocked(ip) {
-		slog.Info("UDP blocked IP", "ip", ip)
+		ll.Info("UDP blocked IP", "ip", ip)
 		return
 	}
 	if domain != "" && h.ruleEngine.IsDomainBlocked(domain) {
-		slog.Info("UDP blocked domain", "domain", domain)
+		ll.Info("UDP blocked domain", "domain", domain)
 		return
 	}
 
 	if port == 53 {
 		if !h.dnsHandler.Enabled() {
-			slog.Debug("DNS passthrough mode: forwarding raw UDP packet")
+			ll.Debug("DNS passthrough mode: forwarding raw UDP packet")
 			h.handleGenericUDP(ctx, payload, data, clientAddr, ip, port, domain)
 			return
 		}
@@ -299,14 +304,14 @@ func (h *Handler) handleGenericUDP(ctx context.Context, payload, fullData []byte
 		// ACL block(按 SNI 判)是"主动丢弃"不是拨号失败,识别 Info 已在 routeForeignFallback
 		// 打一次,这里不落 Error。其余错误照旧。
 		if !errors.Is(err, errBlockedDomainByACL) {
-			slog.Error("failed to create UDP session", "target", targetAddr, "error", err)
+			trace.Log(ctx).Error("failed to create UDP session", "target", targetAddr, "error", err)
 		}
 		return
 	}
 	sess := v.(*udpSession)
 
 	if !h.forwardTo(sess, payload, fullData) {
-		slog.Debug("failed to write first packet to remote", "target", targetAddr)
+		sess.log.Debug("failed to write first packet to remote")
 		h.dropSession(sess)
 	}
 }
@@ -316,12 +321,17 @@ func (h *Handler) handleGenericUDP(ctx context.Context, payload, fullData []byte
 // 也要命中(以前恒传 "" 使这类规则对 UDP 无效)。firstPayload 是触发建会话的那包原始
 // datagram(QUIC 智能仅在其"IP 型 + QUIC 端口 + fallback 国外"候选上做首包嗅探)。
 func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip string, port int, key udpSessionKey, domain string, firstPayload []byte) (*udpSession, error) {
-	flowID := h.nextFlowID.Add(1)
+	// flow id 已由 HandlePacket 入口注入 ctx;防御性兜底(白盒测试直接调本函数时)。
+	flowID, ok := trace.Flow(ctx)
+	if !ok {
+		flowID = trace.NextID()
+		ctx = trace.WithFlow(ctx, flowID)
+	}
 	// B 路径的 watchdog 判死回调经它取会话;会话构造完才赋值。判死只会在 Begin 之后
 	// (超时)或客户端重传喂入时触发,必晚于赋值,回调拿到的 sess 恒非 nil。
 	var sessHolder *udpSession
 
-	result, selected := h.upstreamMgr.SelectProxy(ip, port, domain, h.ruleEngine)
+	result, selected := h.upstreamMgr.SelectProxy(ctx, ip, port, domain, h.ruleEngine)
 
 	// framed=false → 直连(读写纯 payload,回包套 respHeader);true → UDP-capable 上游
 	// (读写整帧)。wd 仅在 B(国外 QUIC 先直连判死观察)非 nil。
@@ -349,13 +359,13 @@ func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip 
 		// 仅 IP 型目标适用(域名型下方直接走代理、不需黑名单判断;ip==域名 时按 IP 查天然
 		// 不命中)。router 为 nil(SOCKS5 seam 未接路由时)退回历史行为。
 		if domain == "" && h.router != nil && h.router.IsIPBlacklisted(ip, port) {
-			slog.Info("UDP target on dynamic blacklist, going proxy",
+			trace.Log(ctx).Info("UDP target on dynamic blacklist, going proxy",
 				"target", net.JoinHostPort(ip, strconv.Itoa(port)))
 			remoteConn, err = h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, nil)
 			framed = true
 		} else {
 			// fallback + 国外:普通国外 UDP 走代理;QUIC 候选先进 routeForeignFallback 嗅探
-			remoteConn, framed, wd, err = h.routeForeignFallback(ctx, ip, port, domain, key, firstPayload, flowID, &sessHolder)
+			remoteConn, framed, wd, err = h.routeForeignFallback(ctx, ip, port, domain, key, firstPayload, &sessHolder)
 		}
 	}
 	if err != nil {
@@ -369,6 +379,7 @@ func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip 
 	}
 	sess := &udpSession{
 		flowID:     flowID,
+		log:        trace.Log(ctx),
 		timeout:    timeout,
 		clientAddr: clientAddr,
 		key:        key,
@@ -385,7 +396,7 @@ func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip 
 	sess.lastActive.Store(time.Now().Unix())
 
 	if h.sessionCount.Load() >= maxUDPSessions {
-		slog.Warn("too many UDP sessions to upstream, dropping oldest",
+		sess.log.Warn("too many UDP sessions to upstream, dropping oldest",
 			"count", h.sessionCount.Load(), "max", maxUDPSessions)
 		// Recycle the most idle session (rather than an arbitrary one) to avoid evicting active sessions
 		h.sessionsMu.Lock()
@@ -410,6 +421,14 @@ func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip 
 	h.sessionsMu.Lock()
 	h.sessions[key] = sess
 	h.sessionsMu.Unlock()
+	route := "proxy"
+	switch {
+	case wd != nil:
+		route = "quic-direct-trial" // 国外 QUIC 先直连判死观察,判死后热切代理
+	case !framed:
+		route = "direct"
+	}
+	sess.log.Info("UDP session opened", "key", key.String(), "route", route)
 	safego.Go("udp.handler.pipeDownstream", func() { h.pipeDownstream(sess) })
 	return sess, nil
 }
@@ -422,8 +441,9 @@ func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip 
 //
 // 返回 (conn, framed, wd, err)。wd 非 nil 仅 B 路径。
 func (h *Handler) routeForeignFallback(ctx context.Context, ip string, port int, domain string,
-	key udpSessionKey, firstPayload []byte, flowID uint64, sessRef **udpSession) (net.Conn, bool, *quic.Watchdog, error) {
+	key udpSessionKey, firstPayload []byte, sessRef **udpSession) (net.Conn, bool, *quic.Watchdog, error) {
 
+	ll := trace.Log(ctx) // flow id 已在入口注入 ctx;会话尚未构造,用 ctx 绑局部 logger
 	if !h.quicEnabled || !intInList(h.quicPorts, port) || domain != "" {
 		rc, err := h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, nil)
 		return rc, true, nil, err
@@ -432,7 +452,7 @@ func (h *Handler) routeForeignFallback(ctx context.Context, ip string, port int,
 	sniff := quic.NewSniff(h.quicHold, h.quicMaxBuffered)
 	sniff.Ingest(firstPayload)
 	if !sniff.QUIC() {
-		slog.Info("UDP QUIC flow: non-QUIC payload on QUIC port, proxying",
+		ll.Info("UDP QUIC flow: non-QUIC payload on QUIC port, proxying",
 			"target", net.JoinHostPort(ip, strconv.Itoa(port)))
 		rc, err := h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, nil)
 		return rc, true, nil, err
@@ -446,22 +466,22 @@ func (h *Handler) routeForeignFallback(ctx context.Context, ip string, port int,
 		// (:253/:257),域名型目标靠 ATYP 域名已判;IP 型 QUIC 的 block 域名只能等抠出 SNI
 		// 后在这里兜底(DoH / 预解析 IP 绕过智能 DNS 的场景)。
 		if h.ruleEngine.IsDomainBlocked(sni) {
-			slog.Info("UDP QUIC flow: blocked domain by SNI, dropping",
+			ll.Info("UDP QUIC flow: blocked domain by SNI, dropping",
 				"target", net.JoinHostPort(ip, strconv.Itoa(port)), "sni", sni)
 			return nil, false, nil, errBlockedDomainByACL
 		}
 		// 动态域名黑名单(此前 TCP smart 超时 / QUIC 判死写入):同域名换 IP 的 QUIC 目标
 		// (CDN/Google 轮换)直接走代理,不再对新 IP 重复直连判死(跨会话记忆)。
 		if h.router != nil && h.router.IsDomainBlacklisted(sni, port) {
-			slog.Info("UDP target on dynamic blacklist, going proxy",
+			ll.Info("UDP target on dynamic blacklist, going proxy",
 				"target", net.JoinHostPort(ip, strconv.Itoa(port)), "sni", sni)
 			rc, err := h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, nil)
 			return rc, true, nil, err
 		}
-		r2, s2 := h.upstreamMgr.SelectProxy(ip, port, sni, h.ruleEngine)
+		r2, s2 := h.upstreamMgr.SelectProxy(ctx, ip, port, sni, h.ruleEngine)
 		switch r2 {
 		case "direct":
-			slog.Info("UDP QUIC flow: domain rule direct, no blackhole watch",
+			ll.Info("UDP QUIC flow: domain rule direct, no blackhole watch",
 				"target", net.JoinHostPort(ip, strconv.Itoa(port)), "sni", sni)
 			d := net.Dialer{Timeout: 5 * time.Second, Control: DirectUDPControl}
 			rc, err := d.DialContext(ctx, "udp", net.JoinHostPort(ip, strconv.Itoa(port)))
@@ -469,7 +489,7 @@ func (h *Handler) routeForeignFallback(ctx context.Context, ip string, port int,
 		case "fallback":
 			// 域名 ACL 未命中 → 国外 QUIC 目标,落 B 直连判死观察
 		default:
-			slog.Info("UDP QUIC flow: domain rule proxy",
+			ll.Info("UDP QUIC flow: domain rule proxy",
 				"target", net.JoinHostPort(ip, strconv.Itoa(port)), "sni", sni)
 			if s2 != nil {
 				rc, err := s2.UDPAssociate(ctx, ip, port)
@@ -488,23 +508,23 @@ func (h *Handler) routeForeignFallback(ctx context.Context, ip string, port int,
 	}
 	if h.quicDummy {
 		if _, derr := rc.Write(quic.NewDummyDatagram()); derr != nil {
-			slog.Debug("UDP QUIC dummy write failed", "target", net.JoinHostPort(ip, strconv.Itoa(port)), "error", derr)
+			ll.Debug("UDP QUIC dummy write failed", "target", net.JoinHostPort(ip, strconv.Itoa(port)), "error", derr)
 		}
 	}
 	snipedSNI := sni // 判死日志带 SNI;可能为空(未抠到 / ECH)
 	wd := quic.NewWatchdog(h.quicTimeout, func(reason string) {
-		args := []any{"flow", flowID, "target", net.JoinHostPort(ip, strconv.Itoa(port)), "reason", reason}
+		args := []any{"target", net.JoinHostPort(ip, strconv.Itoa(port)), "reason", reason}
 		if snipedSNI != "" {
 			args = append(args, "sni", snipedSNI)
 		}
-		slog.Info("UDP QUIC flow judged dead (GFW blackhole), switching to proxy", args...)
+		ll.Info("UDP QUIC flow judged dead (GFW blackhole), switching to proxy", args...)
 		h.quicFlowDead(*sessRef, key, ip, port, snipedSNI, reason)
 	})
-	trialArgs := []any{"flow", flowID, "target", net.JoinHostPort(ip, strconv.Itoa(port)), "timeout_ms", int(h.quicTimeout / time.Millisecond)}
+	trialArgs := []any{"target", net.JoinHostPort(ip, strconv.Itoa(port)), "timeout_ms", int(h.quicTimeout / time.Millisecond)}
 	if sni != "" {
 		trialArgs = append(trialArgs, "sni", sni)
 	}
-	slog.Info("UDP QUIC flow: direct trial (blackhole watch)", trialArgs...)
+	ll.Info("UDP QUIC flow: direct trial (blackhole watch)", trialArgs...)
 	return rc, false, wd, nil
 }
 
@@ -526,9 +546,8 @@ func (h *Handler) quicFlowDead(sess *udpSession, key udpSessionKey, ip string, p
 	if old == nil || old.framed {
 		return // 早已是代理或已关闭
 	}
-	flow := sess.flowID
 	target := net.JoinHostPort(ip, strconv.Itoa(port))
-	slog.Info("UDP QUIC flow: switching DIRECT -> PROXY", "flow", flow, "target", target, "reason", reason)
+	sess.log.Info("UDP QUIC flow: switching DIRECT -> PROXY", "target", target, "reason", reason)
 	// 写动态黑名单:IP + (抠到的)SNI 域名。SNI 为空(未抠到 / 真 ECH)只写 IP。
 	if h.router != nil {
 		h.router.BlacklistIP(ip, port, "quic:"+reason)
@@ -536,12 +555,14 @@ func (h *Handler) quicFlowDead(sess *udpSession, key udpSessionKey, ip string, p
 			h.router.BlacklistDomain(sni, port, "quic:"+reason)
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// 判死回调在 watchdog 自己的 goroutine、且会话 ctx 可能已取消,用 Background 派生;
+	// 只把 flow 值贴回去,让热切拨号的上游日志带同一 flow 号。
+	ctx, cancel := context.WithTimeout(trace.WithFlow(context.Background(), sess.flowID), 10*time.Second)
 	defer cancel()
-	slog.Info("UDP QUIC flow: proxy UDP ASSOCIATE start", "flow", flow, "target", target)
-	pconn, err := h.upstreamMgr.UDPAssociateSelected(upstream.WithFlowID(ctx, flow), ip, port, nil)
+	sess.log.Info("UDP QUIC flow: proxy UDP ASSOCIATE start", "target", target)
+	pconn, err := h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, nil)
 	if err != nil {
-		slog.Error("UDP QUIC flow: proxy UDP ASSOCIATE failed", "flow", flow, "target", target, "error", err)
+		sess.log.Error("UDP QUIC flow: proxy UDP ASSOCIATE failed", "target", target, "error", err)
 		// Do not leave a dead direct socket in the session. The dynamic blacklist makes the
 		// next client retransmission create a fresh session and try proxy directly.
 		h.dropSession(sess)
@@ -549,8 +570,8 @@ func (h *Handler) quicFlowDead(sess *udpSession, key udpSessionKey, ip string, p
 	}
 	sess.snap.Store(&udpOutbound{conn: pconn, framed: true})
 	old.conn.Close() // 解除直连 reader 阻塞;reader 见出向已换 → 续读代理
-	slog.Info("UDP QUIC flow: proxy UDP ASSOCIATE success", "flow", flow, "target", target)
-	slog.Info("UDP QUIC flow switched to proxy after blackhole", "flow", flow, "target", target)
+	sess.log.Info("UDP QUIC flow: proxy UDP ASSOCIATE success", "target", target)
+	sess.log.Info("UDP QUIC flow switched to proxy after blackhole", "target", target)
 }
 
 func (h *Handler) getSessionTimeout(port int) time.Duration {
@@ -562,7 +583,7 @@ func (h *Handler) getSessionTimeout(port int) time.Duration {
 
 func (h *Handler) pipeDownstream(sess *udpSession) {
 	defer func() {
-		slog.Debug("pipeDownstream exiting", "key", sess.key.String())
+		sess.log.Debug("UDP session closed", "key", sess.key.String())
 		h.closeSession(sess)
 		h.sessionsMu.Lock()
 		delete(h.sessions, sess.key)
@@ -593,9 +614,9 @@ func (h *Handler) pipeDownstream(sess *udpSession) {
 				continue // 出向被热切替换(旧 conn 关闭解除阻塞):读新出向
 			}
 			if out.framed {
-				slog.Debug("Read from remote (proxy) failed", "key", sess.key.String(), "error", err)
+				sess.log.Debug("Read from remote (proxy) failed", "error", err)
 			} else {
-				slog.Debug("Read from remote failed", "key", sess.key.String(), "error", err)
+				sess.log.Debug("Read from remote failed", "error", err)
 			}
 			return
 		}
@@ -603,7 +624,7 @@ func (h *Handler) pipeDownstream(sess *udpSession) {
 		if out.framed {
 			ProxyBytesDown.Add(int64(n))
 			if _, err := h.conn.WriteTo(buf[:n], sess.clientAddr); err != nil {
-				slog.Debug("WriteTo client (proxy) failed", "key", sess.key.String(), "error", err)
+				sess.log.Debug("WriteTo client (proxy) failed", "error", err)
 				return
 			}
 		} else {
@@ -612,15 +633,14 @@ func (h *Handler) pipeDownstream(sess *udpSession) {
 			// Monitoring() 仅在首个回包前为 true,保证 alive 日志每流只打一次。
 			if wd := sess.wd; wd != nil {
 				if wd.Monitoring() {
-					slog.Info("UDP QUIC flow: direct alive (server replied), keeping direct",
-						"target", net.JoinHostPort(sess.key.targetIP, strconv.Itoa(int(sess.key.targetPort))))
+					sess.log.Info("UDP QUIC flow: direct alive (server replied), keeping direct")
 				}
 				wd.OnServerReply()
 			}
 			DirectBytesDown.Add(int64(n))
 			copy(buf, sess.respHeader)
 			if _, err := h.conn.WriteTo(buf[:hdrLen+n], sess.clientAddr); err != nil {
-				slog.Debug("WriteTo client failed", "key", sess.key.String(), "error", err)
+				sess.log.Debug("WriteTo client failed", "error", err)
 				return
 			}
 		}
@@ -668,7 +688,7 @@ func (h *Handler) forwardTo(sess *udpSession, payload, fullData []byte) bool {
 					return false
 				}
 				ProxyBytesUp.Add(int64(len(fullData)))
-				slog.Debug("UDP QUIC flow: first packet forwarded via proxy", "flow", sess.flowID, "target", net.JoinHostPort(sess.key.targetIP, strconv.Itoa(int(sess.key.targetPort))), "bytes", len(fullData))
+				sess.log.Debug("UDP QUIC flow: first packet forwarded via proxy", "bytes", len(fullData))
 			}
 			return true
 		}
@@ -738,7 +758,7 @@ func (h *Handler) StartCleaner() {
 				var toClose []*udpSession
 				for k, sess := range h.sessions {
 					if now-sess.lastActive.Load() > int64(sess.timeout.Seconds()) {
-						slog.Debug("recycling UDP session", "key", sess.key.String(), "timeout", sess.timeout)
+						sess.log.Debug("UDP session recycled (idle timeout)", "timeout", sess.timeout)
 						delete(h.sessions, k)
 						toClose = append(toClose, sess)
 					}
@@ -786,7 +806,7 @@ func (h *Handler) handleDNS(ctx context.Context, payload []byte, clientAddr net.
 	if response != nil {
 		h.sendDNSResponse(response, clientAddr, origIP, origPort)
 	} else {
-		slog.Warn("DNS handler returned nil, no response sent to client",
+		trace.Log(ctx).Warn("DNS handler returned nil, no response sent to client",
 			"client", clientAddr, "dnsTarget", fmt.Sprintf("%s:%d", realIP, realPort))
 	}
 }

@@ -13,19 +13,8 @@ import (
 
 	"smartproxy/internal/config"
 	"smartproxy/internal/rules"
+	"smartproxy/internal/trace"
 )
-
-type flowIDContextKey struct{}
-
-// WithFlowID attaches a UDP/TUN flow correlation ID to upstream connection logs.
-func WithFlowID(ctx context.Context, id uint64) context.Context {
-	return context.WithValue(ctx, flowIDContextKey{}, id)
-}
-
-func flowID(ctx context.Context) (uint64, bool) {
-	id, ok := ctx.Value(flowIDContextKey{}).(uint64)
-	return id, ok
-}
 
 type Manager struct {
 	mu             sync.RWMutex
@@ -216,13 +205,17 @@ type ProxyEntry struct {
 	UDPInTCP bool
 }
 
-func (m *Manager) SelectProxy(targetIP string, targetPort int, domain string, engine *rules.Engine) (string, *Proxy) {
+func (m *Manager) SelectProxy(ctx context.Context, targetIP string, targetPort int, domain string, engine *rules.Engine) (string, *Proxy) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	// 选路发生在某条流的会话建立里:日志必须带 flow id(TUN/SOCKS5 入口注入的 ctx 一路
+	// 传到这里),否则 "proxy rule matched" 这条最关键的选路日志会掉号,破坏 grep flow=N
+	// 从入口追到转出的整条链。测试传 context.Background() 时 trace.Log 退回 slog.Default。
+	ll := trace.Log(ctx)
 	if engine != nil {
 		alias, matched := engine.MatchProxyRule(targetIP, targetPort, domain)
 		if matched {
-			slog.Info("proxy rule matched", "alias", alias)
+			ll.Info("proxy rule matched", "alias", alias)
 			if alias == "direct" {
 				return "direct", nil
 			}
@@ -230,7 +223,7 @@ func (m *Manager) SelectProxy(targetIP string, targetPort int, domain string, en
 			if ok && proxy != nil {
 				return "", proxy
 			}
-			slog.Warn("alias not found, falling back to default", "alias", alias)
+			ll.Warn("alias not found, falling back to default", "alias", alias)
 			return "fallback", nil
 		}
 	}
@@ -238,25 +231,26 @@ func (m *Manager) SelectProxy(targetIP string, targetPort int, domain string, en
 }
 
 func (m *Manager) ConnectDefault(ctx context.Context, host string, port int) (net.Conn, error) {
+	ll := trace.Log(ctx)
 	for _, proxy := range m.orderedProxies() {
 		if proxy.IsUDPOnly() {
-			slog.Debug("skipping udp_only proxy for TCP", "url", MaskProxyURL(proxy.URL))
+			ll.Debug("skipping udp_only proxy for TCP", "url", MaskProxyURL(proxy.URL))
 			continue
 		}
 		if !proxy.IsAvailable() {
-			slog.Debug("skipping unhealthy proxy", "url", MaskProxyURL(proxy.URL))
+			ll.Debug("skipping unhealthy proxy", "url", MaskProxyURL(proxy.URL))
 			continue
 		}
-		slog.Info("trying default proxy", "url", MaskProxyURL(proxy.URL))
+		ll.Info("trying default proxy", "url", MaskProxyURL(proxy.URL))
 		conn, err := proxy.Connect(ctx, host, port)
 		if err != nil {
-			slog.Warn("default proxy failed", "url", MaskProxyURL(proxy.URL), "error", err)
+			ll.Warn("default proxy failed", "url", MaskProxyURL(proxy.URL), "error", err)
 			if m.healthChecker != nil {
 				m.healthChecker.RecordFailure(proxy, err)
 			}
 			continue
 		}
-		slog.Info("connected via", "url", MaskProxyURL(proxy.URL))
+		ll.Info("connected via", "url", MaskProxyURL(proxy.URL))
 		if m.healthChecker != nil {
 			m.healthChecker.RecordSuccess(proxy, 0)
 		}
@@ -313,7 +307,8 @@ func (m *Manager) orderedProxies() []*Proxy {
 }
 
 func (m *Manager) Connect(ctx context.Context, host string, port int, domain string, engine *rules.Engine) (net.Conn, string) {
-	result, selected := m.SelectProxy(host, port, domain, engine)
+	ll := trace.Log(ctx)
+	result, selected := m.SelectProxy(ctx, host, port, domain, engine)
 	if result == "direct" {
 		return nil, "direct"
 	}
@@ -328,22 +323,22 @@ func (m *Manager) Connect(ctx context.Context, host string, port int, domain str
 		return nil, "failed"
 	}
 	if selected.IsUDPOnly() {
-		slog.Warn("rule selected a udp_only proxy for TCP, connection failed", "url", MaskProxyURL(selected.URL))
+		ll.Warn("rule selected a udp_only proxy for TCP, connection failed", "url", MaskProxyURL(selected.URL))
 		return nil, "failed"
 	}
 	// An explicit manual "Disable" is honored even by rule routing: a disabled node must
 	// never carry traffic, whatever the rule says. Auto-opened circuits (probe failures)
 	// are still tried — rules are explicit intent and a live recovery may succeed.
 	if selected.health.IsManuallyDisabled() {
-		slog.Warn("rule selected a manually-disabled proxy for TCP, connection failed", "url", MaskProxyURL(selected.URL))
+		ll.Warn("rule selected a manually-disabled proxy for TCP, connection failed", "url", MaskProxyURL(selected.URL))
 		return nil, "failed"
 	}
 	if !selected.IsAvailable() {
-		slog.Warn("selected proxy is unhealthy but still using it due to rule", "alias", MaskProxyURL(selected.URL))
+		ll.Warn("selected proxy is unhealthy but still using it due to rule", "alias", MaskProxyURL(selected.URL))
 	}
 	conn, err := selected.Connect(ctx, host, port)
 	if err != nil {
-		slog.Error("proxy connect failed", "url", MaskProxyURL(selected.URL), "error", err)
+		ll.Error("proxy connect failed", "url", MaskProxyURL(selected.URL), "error", err)
 		if m.healthChecker != nil {
 			m.healthChecker.RecordFailure(selected, err)
 		}
@@ -370,17 +365,18 @@ func (m *Manager) DiscardDNSUDP(conn net.Conn) {
 }
 
 func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domain string, engine *rules.Engine) (net.Conn, error) {
-	result, selected := m.SelectProxy(host, port, domain, engine)
+	ll := trace.Log(ctx)
+	result, selected := m.SelectProxy(ctx, host, port, domain, engine)
 	if result == "direct" {
 		return nil, fmt.Errorf("UDP direct is not supported")
 	}
 	if selected != nil {
 		// Honor an explicit manual "Disable" even under rule routing, mirroring Connect.
 		if selected.udpHealth.IsManuallyDisabled() {
-			slog.Warn("rule selected a manually-disabled proxy for UDP, connection failed", "url", MaskProxyURL(selected.URL))
+			ll.Warn("rule selected a manually-disabled proxy for UDP, connection failed", "url", MaskProxyURL(selected.URL))
 			return nil, fmt.Errorf("proxy %s is manually disabled for UDP", MaskProxyURL(selected.URL))
 		}
-		slog.Debug("UDPAssociate: using selected proxy by rule",
+		ll.Debug("UDPAssociate: using selected proxy by rule",
 			"proxy", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port))
 		conn, err := selected.UDPAssociate(ctx, host, port)
 		// First-detection capability record from real traffic: a raw-only node is learned
@@ -402,10 +398,10 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 	for _, proxy := range m.orderedProxies() {
 		if proxy.SupportsUDP() {
 			if !proxy.IsUDPAvailable() {
-				slog.Debug("UDPAssociate: skipping unhealthy proxy", "proxy", MaskProxyURL(proxy.URL))
+				ll.Debug("UDPAssociate: skipping unhealthy proxy", "proxy", MaskProxyURL(proxy.URL))
 				continue
 			}
-			slog.Debug("UDPAssociate: trying proxy", "proxy", MaskProxyURL(proxy.URL),
+			ll.Debug("UDPAssociate: trying proxy", "proxy", MaskProxyURL(proxy.URL),
 				"target", fmt.Sprintf("%s:%d", host, port))
 			conn, err := proxy.UDPAssociate(ctx, host, port)
 			if m.healthChecker != nil {
@@ -419,10 +415,10 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 				if proxy.needsCapabilityClassify() {
 					proxy.classifyUDPCapability(conn)
 				}
-				slog.Debug("UDPAssociate: proxy succeeded", "proxy", MaskProxyURL(proxy.URL))
+				ll.Debug("UDPAssociate: proxy succeeded", "proxy", MaskProxyURL(proxy.URL))
 				return conn, nil
 			}
-			slog.Warn("UDPAssociate: proxy failed, trying next",
+			ll.Warn("UDPAssociate: proxy failed, trying next",
 				"proxy", MaskProxyURL(proxy.URL), "error", err)
 		}
 	}
@@ -432,12 +428,10 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 // UDPAssociateSelected uses a pre-selected proxy for UDP ASSOCIATE
 // (skipping the duplicate SelectProxy match)
 func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port int, selected *Proxy) (net.Conn, error) {
+	ll := trace.Log(ctx)
 	if selected != nil {
-		args := []any{"proxy", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port)}
-		if id, ok := flowID(ctx); ok {
-			args = append(args, "flow", id)
-		}
-		slog.Debug("UDPAssociateSelected: using pre-selected proxy", args...)
+		ll.Debug("UDPAssociateSelected: using pre-selected proxy",
+			"proxy", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port))
 		conn, err := selected.UDPAssociate(ctx, host, port)
 		if err == nil && selected.needsCapabilityClassify() {
 			selected.classifyUDPCapability(conn)
@@ -455,10 +449,10 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 	for _, proxy := range m.orderedProxies() {
 		if proxy.SupportsUDP() {
 			if !proxy.IsUDPAvailable() {
-				slog.Debug("UDPAssociateSelected: skipping unhealthy proxy", "proxy", MaskProxyURL(proxy.URL))
+				ll.Debug("UDPAssociateSelected: skipping unhealthy proxy", "proxy", MaskProxyURL(proxy.URL))
 				continue
 			}
-			slog.Debug("UDPAssociateSelected: trying proxy", "proxy", MaskProxyURL(proxy.URL),
+			ll.Debug("UDPAssociateSelected: trying proxy", "proxy", MaskProxyURL(proxy.URL),
 				"target", fmt.Sprintf("%s:%d", host, port))
 			conn, err := proxy.UDPAssociate(ctx, host, port)
 			if m.healthChecker != nil {
@@ -472,14 +466,10 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 				if proxy.needsCapabilityClassify() {
 					proxy.classifyUDPCapability(conn)
 				}
-				args := []any{"proxy", MaskProxyURL(proxy.URL)}
-				if id, ok := flowID(ctx); ok {
-					args = append(args, "flow", id)
-				}
-				slog.Debug("UDPAssociateSelected: proxy succeeded", args...)
+				ll.Debug("UDPAssociateSelected: proxy succeeded", "proxy", MaskProxyURL(proxy.URL))
 				return conn, nil
 			}
-			slog.Warn("UDPAssociateSelected: proxy failed, trying next",
+			ll.Warn("UDPAssociateSelected: proxy failed, trying next",
 				"proxy", MaskProxyURL(proxy.URL), "error", err)
 		}
 	}

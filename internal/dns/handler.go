@@ -20,6 +20,7 @@ import (
 	"smartproxy/internal/netutil"
 	"smartproxy/internal/relay"
 	"smartproxy/internal/rules"
+	"smartproxy/internal/trace"
 	"smartproxy/internal/upstream"
 )
 
@@ -130,10 +131,12 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 	if !cfg.enabled {
 		return nil
 	}
+	// ctx 由入口(TUN UDP / SOCKS5-UDP)注入 flow id;查日志从这一条一直追到转发结束。
+	ll := trace.Log(ctx)
 
 	msg := new(dns.Msg)
 	if err := msg.Unpack(queryWire); err != nil {
-		slog.Error("invalid DNS query", "error", err)
+		ll.Error("invalid DNS query", "error", err)
 		return nil
 	}
 	if len(msg.Question) == 0 {
@@ -144,13 +147,13 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 	qname = strings.ToLower(qname)
 	qtype := msg.Question[0].Qtype
 	// Logging INFO for every query is pure overhead under high query rates; the hot path is downgraded to Debug
-	slog.Debug("handling DNS query", "qname", qname, "qtype", qtype)
+	ll.Debug("handling DNS query", "qname", qname, "qtype", qtype)
 
 	// Static records are authoritative overrides: answer before block rules so an
 	// explicit hosts-style entry always wins over a blocklist or stale cache.
 	if m := h.staticRecords.Load(); m != nil && len(*m) > 0 {
 		if ips, ok := (*m)[qname]; ok {
-			slog.Debug("static record hit", "qname", qname)
+			ll.Debug("static record hit", "qname", qname)
 			if resp, ok := buildStaticResponse(msg, ips); ok {
 				return resp
 			}
@@ -158,12 +161,12 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 	}
 
 	if engine != nil && engine.IsDomainBlocked(qname) {
-		slog.Info("blocked DNS query", "domain", qname)
+		ll.Info("blocked DNS query", "domain", qname)
 		return h.buildFakeResponse(queryWire)
 	}
 
 	if cached := h.cache.Get(qname, qtype); cached != nil {
-		slog.Debug("DNS cache hit", "qname", qname, "qtype", qtype, "responseLen", len(cached))
+		ll.Debug("DNS cache hit", "qname", qname, "qtype", qtype, "responseLen", len(cached))
 		if len(cached) >= 2 && (cached[0] != queryWire[0] || cached[1] != queryWire[1]) {
 			cachedCp := make([]byte, len(cached))
 			copy(cachedCp, cached)
@@ -188,26 +191,32 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 		// independent budget so one client's disconnect only costs itself.
 		fctx, cancel := context.WithTimeout(context.Background(), cfg.queryTimeout)
 		defer cancel()
+		// 取消语义独立,但 flow 值仍带过:把入口的 flow id 贴到 fctx 上,共享查询的上游
+		// 拨号日志能串回发起者;ctx 无 id(如测试传 background)时 fll 退回 slog.Default。
+		if id, ok := trace.Flow(ctx); ok {
+			fctx = trace.WithFlow(fctx, id)
+		}
+		fll := trace.Log(fctx)
 
 		// Private/local DNS servers (LAN router, self-hosted) must be queried directly:
 		// chnroute never classifies them as domestic, and the foreign/proxy branch
 		// cannot reach them — routing them there SERVFAILs. SOCKS5 and TUN UDP paths
 		// share this one pipeline, so both treat private targets identically.
 		if isPrivateIP(targetIP) {
-			slog.Debug("querying private DNS directly", "target", fmt.Sprintf("%s:%d", targetIP, targetPort))
+			fll.Debug("querying private DNS directly", "target", fmt.Sprintf("%s:%d", targetIP, targetPort))
 			presp, perr := h.QueryUDPVerifyID(fctx, queryWire, targetIP, targetPort)
 			if perr != nil {
 				// 私有 DNS 直连失败/响应 ID 不匹配时静默丢弃(返回 nil 让 HandleDNS 不回复),
 				// 与 SOCKS5 历史语义一致:伪造或失配的响应绝不转发、绝不缓存,客户端靠自身
 				// 解析器超时重试。不要在这里改回 SERVFAIL——会违反
 				// TestHandleDNS_PrivatePathRejectsMismatchedID 钉死的「不回复」语义。
-				slog.Warn("private DNS query failed, dropping", "target", fmt.Sprintf("%s:%d", targetIP, targetPort), "error", perr)
+				fll.Warn("private DNS query failed, dropping", "target", fmt.Sprintf("%s:%d", targetIP, targetPort), "error", perr)
 				return nil, nil
 			}
-			if h.IsDNSClean(presp) {
+			if h.isDNSClean(fll, presp) {
 				h.cache.Set(qname, qtype, presp, 0)
 			} else {
-				slog.Warn("private DNS response polluted, returning as-is", "qname", qname)
+				fll.Warn("private DNS response polluted, returning as-is", "qname", qname)
 			}
 			return presp, nil
 		}
@@ -218,10 +227,10 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 		var rerr error
 
 		if isDomestic {
-			slog.Debug("querying domestic DNS", "target", fmt.Sprintf("%s:%d", targetIP, targetPort))
+			fll.Debug("querying domestic DNS", "target", fmt.Sprintf("%s:%d", targetIP, targetPort))
 			resp, rerr = h.QueryUDPVerifyID(fctx, queryWire, targetIP, targetPort)
 			if rerr != nil {
-				slog.Warn("domestic DNS query failed, falling back to foreign DNS",
+				fll.Warn("domestic DNS query failed, falling back to foreign DNS",
 					"qname", qname, "error", rerr)
 				foreignHost := cfg.foreignIPv4
 				foreignPort := cfg.foreignIPv4Port
@@ -231,17 +240,17 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 				}
 				resp, rerr = h.queryForeignDNSWithRetry(fctx, queryWire, foreignHost, foreignPort)
 				if rerr != nil {
-					slog.Error("foreign DNS fallback also failed, answering SERVFAIL", "qname", qname, "error", rerr)
+					fll.Error("foreign DNS fallback also failed, answering SERVFAIL", "qname", qname, "error", rerr)
 					return h.buildSERVFAIL(queryWire), nil
 				}
 				h.cache.Set(qname, qtype, resp, 0)
 				return resp, nil
 			}
 		} else {
-			slog.Debug("querying foreign DNS via proxy", "target", fmt.Sprintf("%s:%d", targetIP, targetPort))
+			fll.Debug("querying foreign DNS via proxy", "target", fmt.Sprintf("%s:%d", targetIP, targetPort))
 			resp, rerr = h.queryForeignDNSWithRetry(fctx, queryWire, targetIP, targetPort)
 			if rerr != nil {
-				slog.Error("foreign DNS query failed, answering SERVFAIL", "error", rerr)
+				fll.Error("foreign DNS query failed, answering SERVFAIL", "error", rerr)
 				return h.buildSERVFAIL(queryWire), nil
 			}
 		}
@@ -255,7 +264,7 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 				}
 				return resp, nil
 			} else {
-				slog.Warn("domestic DNS response polluted, falling back to foreign DNS", "qname", qname)
+				fll.Warn("domestic DNS response polluted, falling back to foreign DNS", "qname", qname)
 				foreignHost := cfg.foreignIPv4
 				foreignPort := cfg.foreignIPv4Port
 				if strings.Contains(targetIP, ":") {
@@ -264,7 +273,7 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 				}
 				fallback, ferr := h.queryForeignDNSWithRetry(fctx, queryWire, foreignHost, foreignPort)
 				if ferr != nil || fallback == nil {
-					slog.Warn("foreign DNS fallback failed, answering SERVFAIL",
+					fll.Warn("foreign DNS fallback failed, answering SERVFAIL",
 						"qname", qname, "foreignTarget", fmt.Sprintf("%s:%d", foreignHost, foreignPort),
 						"error", ferr, "queryLen", len(queryWire))
 					return h.buildSERVFAIL(queryWire), nil
@@ -378,12 +387,13 @@ func (h *Handler) queryUDP(ctx context.Context, queryWire []byte, host string, p
 }
 
 func (h *Handler) queryViaProxy(ctx context.Context, queryWire []byte, dnsHost string, dnsPort int, timeout time.Duration) ([]byte, error) {
-	slog.Debug("querying DNS via proxy", "dns", fmt.Sprintf("%s:%d", dnsHost, dnsPort),
+	ll := trace.Log(ctx)
+	ll.Debug("querying DNS via proxy", "dns", fmt.Sprintf("%s:%d", dnsHost, dnsPort),
 		"queryLen", len(queryWire))
 
 	udpConn, err := h.upstreamMgr.AcquireDNSUDP(ctx, dnsHost, dnsPort)
 	if err != nil {
-		slog.Error("UDP ASSOCIATE failed for DNS", "dns", fmt.Sprintf("%s:%d", dnsHost, dnsPort), "error", err)
+		ll.Error("UDP ASSOCIATE failed for DNS", "dns", fmt.Sprintf("%s:%d", dnsHost, dnsPort), "error", err)
 		return nil, fmt.Errorf("UDP ASSOCIATE failed: %w", err)
 	}
 
@@ -396,7 +406,7 @@ func (h *Handler) queryViaProxy(ctx context.Context, queryWire []byte, dnsHost s
 		}
 	}()
 
-	slog.Debug("UDP ASSOCIATE established for DNS",
+	ll.Debug("UDP ASSOCIATE established for DNS",
 		"dns", fmt.Sprintf("%s:%d", dnsHost, dnsPort),
 		"localAddr", udpConn.LocalAddr())
 
@@ -411,7 +421,7 @@ func (h *Handler) queryViaProxy(ctx context.Context, queryWire []byte, dnsHost s
 	header = append(header, portBuf...)
 
 	packet := append(header, queryWire...)
-	slog.Debug("sending DNS query through proxy UDP",
+	ll.Debug("sending DNS query through proxy UDP",
 		"dns", fmt.Sprintf("%s:%d", dnsHost, dnsPort),
 		"totalPacketLen", len(packet), "headerLen", len(header), "payloadLen", len(queryWire))
 
@@ -419,10 +429,10 @@ func (h *Handler) queryViaProxy(ctx context.Context, queryWire []byte, dnsHost s
 	udpConn.SetDeadline(deadline)
 	writeStart := time.Now()
 	if _, err := udpConn.Write(packet); err != nil {
-		slog.Error("failed to write DNS query to proxy UDP", "error", err)
+		ll.Error("failed to write DNS query to proxy UDP", "error", err)
 		return nil, err
 	}
-	slog.Debug("DNS query written to proxy UDP", "writeLatency", time.Since(writeStart))
+	ll.Debug("DNS query written to proxy UDP", "writeLatency", time.Since(writeStart))
 
 	pktPtr := relay.PacketPool.Get().(*[]byte)
 	buf := *pktPtr
@@ -431,30 +441,30 @@ func (h *Handler) queryViaProxy(ctx context.Context, queryWire []byte, dnsHost s
 	readLatency := time.Since(readStart)
 	relay.PacketPool.Put(pktPtr)
 	if err != nil {
-		slog.Error("DNS proxy read error",
+		ll.Error("DNS proxy read error",
 			"dns", fmt.Sprintf("%s:%d", dnsHost, dnsPort),
 			"error", err,
 			"timeout", timeout,
 			"readWait", readLatency)
 		return nil, fmt.Errorf("DNS proxy read error: %w", err)
 	}
-	slog.Debug("DNS response received from proxy",
+	ll.Debug("DNS response received from proxy",
 		"responseLen", n, "readLatency", readLatency)
 
 	data := make([]byte, n)
 	copy(data, buf[:n])
 	if len(data) < 4 {
-		slog.Error("UDP response too short from proxy", "len", len(data))
+		ll.Error("UDP response too short from proxy", "len", len(data))
 		return nil, fmt.Errorf("UDP response too short")
 	}
 	respAtyp := data[3]
-	slog.Debug("proxy UDP response header",
+	ll.Debug("proxy UDP response header",
 		"atyp", respAtyp, "totalLen", len(data))
 	var payloadOffset int
 	switch respAtyp {
 	case 0x01:
 		payloadOffset = 4 + 4 + 2
-		slog.Debug("proxy response IPv4", "ip", net.IP(data[4:8]).String(),
+		ll.Debug("proxy response IPv4", "ip", net.IP(data[4:8]).String(),
 			"port", binary.BigEndian.Uint16(data[8:10]))
 	case 0x03:
 		if len(data) < 5 {
@@ -463,29 +473,32 @@ func (h *Handler) queryViaProxy(ctx context.Context, queryWire []byte, dnsHost s
 		domainLen := int(data[4])
 		payloadOffset = 4 + 1 + domainLen + 2
 		domain := string(data[5 : 5+domainLen])
-		slog.Debug("proxy response domain", "domain", domain,
+		ll.Debug("proxy response domain", "domain", domain,
 			"port", binary.BigEndian.Uint16(data[5+domainLen:5+domainLen+2]))
 	case 0x04:
 		payloadOffset = 4 + 16 + 2
-		slog.Debug("proxy response IPv6", "ip", net.IP(data[4:20]).String(),
+		ll.Debug("proxy response IPv6", "ip", net.IP(data[4:20]).String(),
 			"port", binary.BigEndian.Uint16(data[20:22]))
 	default:
-		slog.Warn("unknown response address type", "atyp", respAtyp)
+		ll.Warn("unknown response address type", "atyp", respAtyp)
 		payloadOffset = 4
 	}
 	if payloadOffset >= len(data) {
 		return nil, fmt.Errorf("UDP response payload offset out of range: offset=%d len=%d", payloadOffset, len(data))
 	}
 	dnsPayload := data[payloadOffset:]
-	slog.Debug("DNS payload extracted from proxy response", "payloadLen", len(dnsPayload))
+	ll.Debug("DNS payload extracted from proxy response", "payloadLen", len(dnsPayload))
 
 	success = true
 	return dnsPayload, nil
 }
 
-func (h *Handler) isDNSClean(wire []byte) bool {
+// isDNSClean 判定响应是否"干净"(无污染/无公网 IP 绕过国内)。在 DNS 查询流内被调时必须
+// 传绑了 flow 的 logger(调用方 handleQuery 的 fll / 216 行),否则污染判定日志会掉号;
+// 无 ctx 场景(公开 IsDNSClean / 测试)传 slog.Default 与原行为一致。
+func (h *Handler) isDNSClean(ll *slog.Logger, wire []byte) bool {
 	if h.chnroute.IsEmpty() {
-		slog.Debug("ChnRoute not loaded, skipping DNS pollution check")
+		ll.Debug("ChnRoute not loaded, skipping DNS pollution check")
 		return true
 	}
 	msg := new(dns.Msg)
@@ -497,7 +510,7 @@ func (h *Handler) isDNSClean(wire []byte) bool {
 		case dns.TypeA, dns.TypeAAAA:
 			ip := extractIP(rr)
 			if ip != "" && !h.chnroute.Contains(net.ParseIP(ip)) {
-				slog.Debug("polluted DNS response found foreign IP", "ip", ip)
+				ll.Debug("polluted DNS response found foreign IP", "ip", ip)
 				return false
 			}
 		}
@@ -638,20 +651,21 @@ func (h *Handler) buildFakeResponse(queryWire []byte) []byte {
 // pollution check, and if not polluted and IP preference is enabled, filters further.
 // Returns (output wire, whether the preference cache was hit, whether it is clean).
 func (h *Handler) isDNSCleanAndPrefer(ctx context.Context, wire []byte, qname string) (out []byte, preferCached, clean bool) {
+	ll := trace.Log(ctx)
 	msg := new(dns.Msg)
 	if err := msg.Unpack(wire); err != nil {
 		return wire, false, false
 	}
 
 	if h.chnroute.IsEmpty() {
-		slog.Debug("ChnRoute not loaded, skipping DNS pollution check")
+		ll.Debug("ChnRoute not loaded, skipping DNS pollution check")
 	} else {
 		for _, rr := range msg.Answer {
 			switch rr.Header().Rrtype {
 			case dns.TypeA, dns.TypeAAAA:
 				ip := extractIP(rr)
 				if ip != "" && !h.chnroute.Contains(net.ParseIP(ip)) {
-					slog.Debug("polluted DNS response found foreign IP", "ip", ip)
+					ll.Debug("polluted DNS response found foreign IP", "ip", ip)
 					return wire, false, false
 				}
 			}
@@ -669,6 +683,8 @@ func (h *Handler) isDNSCleanAndPrefer(ctx context.Context, wire []byte, qname st
 
 // filterIPPreference selects the fastest IP from the parsed response and repacks it (called when IP preference is enabled).
 func (h *Handler) filterIPPreference(ctx context.Context, pref *Preference, msg *dns.Msg, origWire []byte, qname string) ([]byte, bool) {
+	// 探测回链经 Preference 自带 ctx(不带 flow 的独立探测/测试路径退回全局日志)。
+	ll := trace.Log(ctx)
 	var aIPs []string
 	var aaaaIPs []string
 	var otherAnswers []dns.RR
@@ -724,13 +740,13 @@ func (h *Handler) filterIPPreference(ctx context.Context, pref *Preference, msg 
 		if err != nil {
 			return origWire, false
 		}
-		slog.Debug("DNS response filtered by IP preference",
+		ll.Debug("DNS response filtered by IP preference",
 			"qname", qname, "bestA", bestA, "bestAAAA", bestAAAA)
 		return wire, true
 	}
 
 	if len(aIPs)+len(aaaaIPs) > 0 {
-		slog.Warn("DNS IP preference probes all failed, returning original uncached",
+		ll.Warn("DNS IP preference probes all failed, returning original uncached",
 			"qname", qname, "aCount", len(aIPs), "aaaaCount", len(aaaaIPs))
 	}
 	return origWire, false
@@ -788,7 +804,7 @@ func (h *Handler) QueryUDP(ctx context.Context, queryWire []byte, host string, p
 }
 
 func (h *Handler) IsDNSClean(wire []byte) bool {
-	return h.isDNSClean(wire)
+	return h.isDNSClean(slog.Default(), wire)
 }
 
 func encodeSOCKS5Addr(host string) (byte, []byte) {

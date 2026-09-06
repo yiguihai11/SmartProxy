@@ -1,11 +1,17 @@
 package relay
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"smartproxy/internal/trace"
 )
 
 func makeConnPair(t *testing.T) (net.Conn, net.Conn) {
@@ -217,6 +223,65 @@ func TestTCPRelay_LargeData(t *testing.T) {
 			t.Errorf("mismatch at byte %d: expected %d, got %d", i, payload[i], received[i])
 			break
 		}
+	}
+}
+
+// TestTCPRelay_FinishedLogCarriesFlow 钉住转发结束锚点契约:ctx 带 flow id 时,
+// "TCP relay finished" 必须落在带同一 flow=N 的 logger 上,且 up/down 字节正确结算。
+// 这是 grep "flow=N" 从入口日志一路追到转发结束的最后一段;回归时若 ctx 链断掉
+// (比如某入口不再 WithFlow),此测试即失败。
+func TestTCPRelay_FinishedLogCarriesFlow(t *testing.T) {
+	old := slog.Default()
+	defer slog.SetDefault(old)
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	srcR, srcW := makeConnPair(t)
+	dstR, dstW := makeConnPair(t)
+
+	var received []byte
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		b := make([]byte, 65536)
+		for {
+			n, err := dstR.Read(b)
+			if n > 0 {
+				received = append(received, b[:n]...)
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	const payload = "quick-close-data"
+	srcW.Write([]byte(payload))
+	srcW.Close()
+
+	// r2c 方向无远端回包会一直阻塞读,靠超时 ctx 走 cancel 分支收尾(同 DataThenEOF);
+	// cancel 分支同样会打 "TCP relay finished"。
+	base, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ctx := trace.WithFlow(base, 4242)
+	TCPRelay(ctx, srcR, dstW, false, nil)
+	dstW.Close()
+	wg.Wait()
+
+	if string(received) != payload {
+		t.Fatalf("expected %q, got %q", payload, received)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "TCP relay finished") {
+		t.Fatalf("relay finished anchor log missing:\n%s", out)
+	}
+	if !strings.Contains(out, "flow=4242") {
+		t.Fatalf("finished log must carry the ctx flow id:\n%s", out)
+	}
+	// up = c2r 转发的 payload 字节;down = 0(远端无回包即关闭)
+	if !strings.Contains(out, "up="+strconv.Itoa(len(payload))) || !strings.Contains(out, "down=0") {
+		t.Fatalf("finished log byte counters wrong (want up=%d down=0):\n%s", len(payload), out)
 	}
 }
 

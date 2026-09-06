@@ -6,6 +6,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"smartproxy/internal/trace"
 )
 
 type poolEntry struct {
@@ -42,6 +44,8 @@ func (p *UDPAssociatePool) Acquire(
 	provider func(context.Context, string, int) (net.Conn, error),
 ) (net.Conn, error) {
 
+	// 池命中/新建是 UDP 会话建立的一段(ctx 由拨号调用方带 flow),池管理日志跟上。
+	ll := trace.Log(ctx)
 	for i := 0; i < 10; i++ {
 		p.mu.Lock()
 		if n := len(p.conns); n > 0 {
@@ -51,7 +55,7 @@ func (p *UDPAssociatePool) Acquire(
 
 			// TTL eviction: a connection older than 15s has likely been closed by the proxy side
 			if time.Since(entry.createdAt) > 15*time.Second {
-				slog.Debug("udp pool: TTL expired, discarding",
+				ll.Debug("udp pool: TTL expired, discarding",
 					"age", time.Since(entry.createdAt))
 				entry.conn.Close()
 				continue
@@ -62,21 +66,21 @@ func (p *UDPAssociatePool) Acquire(
 			if probe, ok := entry.conn.(tcpProbeConn); ok {
 				if err := probe.ProbeTCP(); err != nil {
 					alive = false
-					slog.Debug("udp pool: probe failed, discarding",
+					ll.Debug("udp pool: probe failed, discarding",
 						"error", err)
 					entry.conn.Close()
 					continue
 				}
 			}
 			if alive {
-				slog.Debug("udp pool: acquired from pool",
+				ll.Debug("udp pool: acquired from pool",
 					"createdAt", entry.createdAt.Format(time.RFC3339))
 				return entry.conn, nil
 			}
 		}
 		p.mu.Unlock()
 
-		slog.Debug("udp pool: pool empty, creating new connection")
+		ll.Debug("udp pool: pool empty, creating new connection")
 		conn, err := provider(ctx, host, port)
 		if err != nil {
 			return nil, err
@@ -84,7 +88,7 @@ func (p *UDPAssociatePool) Acquire(
 		return conn, nil
 	}
 
-	slog.Warn("udp pool: too many stale connections, creating new anyway")
+	ll.Warn("udp pool: too many stale connections, creating new anyway")
 	return provider(ctx, host, port)
 }
 

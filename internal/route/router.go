@@ -18,6 +18,7 @@ import (
 	"smartproxy/internal/fwmark"
 	"smartproxy/internal/netutil"
 	"smartproxy/internal/rules"
+	"smartproxy/internal/trace"
 	"smartproxy/internal/upstream"
 )
 
@@ -90,29 +91,30 @@ func (r *Router) isDomesticHost(host string) bool {
 func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 	domain string, engine *rules.Engine) (net.Conn, bool, error) {
 
-	result, selected := r.upstreamMgr.SelectProxy(host, port, domain, engine)
+	ll := trace.Log(ctx)
+	result, selected := r.upstreamMgr.SelectProxy(ctx, host, port, domain, engine)
 	switch {
 	case result == "direct":
-		slog.Info("proxy rule forces direct connection", "host", host, "port", port, "domain", domain)
+		ll.Info("proxy rule forces direct connection", "host", host, "port", port, "domain", domain)
 		conn, err := dialTCP(ctx, host, port, 10*time.Second)
 		return conn, false, err
 	case result != "fallback":
 		if selected.IsUDPOnly() {
-			slog.Warn("rule selected a udp_only proxy for TCP", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port)
+			ll.Warn("rule selected a udp_only proxy for TCP", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port)
 			return nil, false, errors.New("proxy is udp_only, cannot serve TCP")
 		}
-		slog.Info("using proxy alias from rule", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port, "domain", domain)
+		ll.Info("using proxy alias from rule", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port, "domain", domain)
 		conn, err := selected.Connect(ctx, host, port)
 		return conn, true, err
 	}
 
 	if r.isDomesticHost(host) {
-		slog.Info("using direct connection (domestic)", "host", host, "port", port, "domain", domain)
+		ll.Info("using direct connection (domestic)", "host", host, "port", port, "domain", domain)
 		conn, err := dialTCP(ctx, host, port, 10*time.Second)
 		return conn, false, err
 	}
 
-	slog.Info("using upstream proxy (non-smart)", "host", host, "port", port, "domain", domain)
+	ll.Info("using upstream proxy (non-smart)", "host", host, "port", port, "domain", domain)
 	conn, status := r.upstreamMgr.Connect(ctx, host, port, domain, engine)
 	if status != "proxy" {
 		return nil, false, errors.New("failed to connect via upstream")
@@ -166,11 +168,12 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 	domain string, firstPkt []byte, engine *rules.Engine) (net.Conn, []byte, bool, error) {
 
 	cfg := r.cfg.Load()
+	ll := trace.Log(ctx)
 
-	result, selected := r.upstreamMgr.SelectProxy(host, port, domain, engine)
+	result, selected := r.upstreamMgr.SelectProxy(ctx, host, port, domain, engine)
 	switch {
 	case result == "direct":
-		slog.Info("proxy rule forces direct connection", "host", host, "port", port, "domain", domain)
+		ll.Info("proxy rule forces direct connection", "host", host, "port", port, "domain", domain)
 		conn, err := dialTCP(ctx, host, port, cfg.smartTimeout)
 		if err != nil {
 			return nil, nil, false, err
@@ -182,10 +185,10 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 		return conn, nil, false, nil
 	case result != "fallback":
 		if selected.IsUDPOnly() {
-			slog.Warn("rule selected a udp_only proxy for TCP", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port)
+			ll.Warn("rule selected a udp_only proxy for TCP", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port)
 			return nil, nil, false, errors.New("proxy is udp_only, cannot serve TCP")
 		}
-		slog.Info("using proxy alias from rule", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port, "domain", domain)
+		ll.Info("using proxy alias from rule", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port, "domain", domain)
 		conn, err := selected.Connect(ctx, host, port)
 		if err != nil {
 			return nil, nil, false, err
@@ -198,7 +201,7 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 	}
 
 	if (domain != "" && r.domainBlacklist.IsBlacklisted(domain, port)) || r.ipBlacklist.IsBlacklisted(host, port) {
-		slog.Info("dynamic blacklist matched, using proxy directly", "host", host, "port", port, "domain", domain)
+		ll.Info("dynamic blacklist matched, using proxy directly", "host", host, "port", port, "domain", domain)
 		conn, err := r.upstreamMgr.ConnectDefault(ctx, host, port)
 		if err != nil {
 			return nil, nil, false, err
@@ -210,11 +213,11 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 		return conn, nil, true, nil
 	}
 
-	slog.Info("attempting smart proxy direct connection", "host", host, "port", port, "domain", domain, "timeout", cfg.smartTimeout)
+	ll.Info("attempting smart proxy direct connection", "host", host, "port", port, "domain", domain, "timeout", cfg.smartTimeout)
 	conn, err := dialTCP(ctx, host, port, cfg.smartTimeout)
 	if err != nil {
 		shortReason := simplifyError(err, host, port)
-		slog.Warn("direct connection failed, falling back to proxy", "host", host, "port", port, "domain", domain, "reason", shortReason)
+		ll.Warn("direct connection failed, falling back to proxy", "host", host, "port", port, "domain", domain, "reason", shortReason)
 		r.addToBlacklists(host, port, domain, shortReason)
 
 		proxyConn, pErr := r.upstreamMgr.ConnectDefault(ctx, host, port)
@@ -231,7 +234,7 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 	if _, err := conn.Write(firstPkt); err != nil {
 		conn.Close()
 		shortReason := simplifyError(err, host, port)
-		slog.Warn("direct connection failed after write, falling back to proxy", "host", host, "port", port, "domain", domain, "reason", shortReason)
+		ll.Warn("direct connection failed after write, falling back to proxy", "host", host, "port", port, "domain", domain, "reason", shortReason)
 		r.addToBlacklists(host, port, domain, shortReason)
 
 		proxyConn, pErr := r.upstreamMgr.ConnectDefault(ctx, host, port)
@@ -253,7 +256,7 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 	if readErr != nil {
 		conn.Close()
 		shortReason := simplifyError(readErr, host, port)
-		slog.Warn("direct connection failed on read verify, falling back to proxy", "host", host, "port", port, "domain", domain, "reason", shortReason)
+		ll.Warn("direct connection failed on read verify, falling back to proxy", "host", host, "port", port, "domain", domain, "reason", shortReason)
 		r.addToBlacklists(host, port, domain, shortReason)
 
 		proxyConn, pErr := r.upstreamMgr.ConnectDefault(ctx, host, port)
@@ -267,7 +270,7 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 		return proxyConn, nil, true, nil
 	}
 
-	slog.Info("direct connection successfully verified, keeping direct", "host", host, "port", port, "domain", domain)
+	ll.Info("direct connection successfully verified, keeping direct", "host", host, "port", port, "domain", domain)
 	// Return the raw connection plus the first byte already read, which relay replays before
 	// splicing, avoiding a prefixedConn that would break zero-copy.
 	return conn, oneByte, false, nil

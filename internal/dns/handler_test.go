@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -312,7 +313,7 @@ func TestIsDNSClean_EmptyChnroute(t *testing.T) {
 	h := NewHandler(100, 60, "", "", cn, nil, 3, "0.0.0.0", "::", false, PreferNone, nil, true)
 
 	resp := makeDNSResponseWithA("example.com", "8.8.8.8", 60)
-	if !h.isDNSClean(resp) {
+	if !h.isDNSClean(slog.Default(), resp) {
 		t.Error("empty chnroute should always return clean")
 	}
 }
@@ -325,7 +326,7 @@ func TestIsDNSClean_DomesticIP(t *testing.T) {
 	h := NewHandler(100, 60, "", "", cn, nil, 3, "0.0.0.0", "::", false, PreferNone, nil, true)
 
 	resp := makeDNSResponseWithA("example.com", "1.1.1.1", 60)
-	if !h.isDNSClean(resp) {
+	if !h.isDNSClean(slog.Default(), resp) {
 		t.Error("domestic IP should be clean")
 	}
 }
@@ -337,7 +338,7 @@ func TestIsDNSClean_ForeignIP(t *testing.T) {
 	h := NewHandler(100, 60, "", "", cn, nil, 3, "0.0.0.0", "::", false, PreferNone, nil, true)
 
 	resp := makeDNSResponseWithA("example.com", "8.8.8.8", 60)
-	if h.isDNSClean(resp) {
+	if h.isDNSClean(slog.Default(), resp) {
 		t.Error("foreign IP should be polluted")
 	}
 }
@@ -349,7 +350,7 @@ func TestIsDNSClean_ForeignIPv6(t *testing.T) {
 	h := NewHandler(100, 60, "", "", cn, nil, 3, "0.0.0.0", "::", false, PreferNone, nil, true)
 
 	resp := makeDNSResponseWithAAAA("example.com", "2001:4860:4860::8888", 60)
-	if h.isDNSClean(resp) {
+	if h.isDNSClean(slog.Default(), resp) {
 		t.Error("foreign IPv6 should be polluted")
 	}
 }
@@ -360,7 +361,7 @@ func TestIsDNSClean_BadWire(t *testing.T) {
 
 	h := NewHandler(100, 60, "", "", cn, nil, 3, "0.0.0.0", "::", false, PreferNone, nil, true)
 
-	if h.isDNSClean([]byte{0x00}) {
+	if h.isDNSClean(slog.Default(), []byte{0x00}) {
 		t.Error("bad wire should return false")
 	}
 }
