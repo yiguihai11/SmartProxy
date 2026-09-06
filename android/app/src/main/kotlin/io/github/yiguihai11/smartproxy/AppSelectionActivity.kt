@@ -1,9 +1,14 @@
 package io.github.yiguihai11.smartproxy
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.core.content.ContextCompat
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
@@ -96,11 +101,32 @@ class AppSelectionActivity : ComponentActivity() {
     /** 「禁止联网」拦截的应用包名集合(§5 第一期仅在仅绕过/黑名单模式可用,与 selected 互斥)。 */
     private var blocked by mutableStateOf<Set<String>>(emptySet())
 
+    // ── 装/卸实时刷新 ──────────────────────────────────────────
+    // 页面开着时收到 PACKAGE_ADDED/REMOVED/REPLACED → refreshTick++ 重启 LaunchedEffect,
+    // 走权威 refresh 重拉并替换列表(新装的立刻出现、被卸的立刻消失)。与 SmartProxyApp
+    // 的全局缓存订阅并存:那里保缓存新鲜(下次进入秒开仍是新的),这里保页面不退出也实时。
+    private var refreshTick by mutableStateOf(0)
+
+    private val pkgChangeFilter = IntentFilter().apply {
+        addAction(Intent.ACTION_PACKAGE_ADDED)
+        addAction(Intent.ACTION_PACKAGE_REMOVED)
+        addAction(Intent.ACTION_PACKAGE_REPLACED)
+        addDataScheme("package")
+    }
+
+    private val pkgChangeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            refreshTick++
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         mode = AppPrefs.globalMode(this)
         selected = AppPrefs.selectedApps(this)
         blocked = AppPrefs.blockedApps(this)
+        // 页面存活期间订阅装/卸 → 列表实时刷新(生命周期终点注销,见 onDestroy)。
+        ContextCompat.registerReceiver(this, pkgChangeReceiver, pkgChangeFilter, ContextCompat.RECEIVER_EXPORTED)
         enableEdgeToEdge()
         setContent {
             // 主题(§7):与首页同源(同一份 AppPrefs.themeMode + 深色色板)。
@@ -114,7 +140,8 @@ class AppSelectionActivity : ComponentActivity() {
                         onModeChange = { newMode -> changeMode(newMode) },
                         onToggle = { pkg, checked -> toggle(pkg, checked) },
                         onToggleBlock = { pkg -> toggleBlock(pkg) },
-                        onBack = { finish() }
+                        onBack = { finish() },
+                        refreshTick = refreshTick
                     )
                 }
             }
@@ -155,6 +182,8 @@ class AppSelectionActivity : ComponentActivity() {
         AppPrefs.setGlobalMode(this, mode)
         AppPrefs.setSelectedApps(this, selected)
         AppPrefs.setBlockedApps(this, blocked)
+        // 注销包事件订阅(与 onCreate 的 register 对称;receiver 只在 Activity 存活期注册)。
+        runCatching { unregisterReceiver(pkgChangeReceiver) }
         super.onDestroy()
     }
 }
@@ -192,7 +221,8 @@ private fun AppSelectionScreen(
     onModeChange: (Boolean) -> Unit,
     onToggle: (String, Boolean) -> Unit,
     onToggleBlock: (String) -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    refreshTick: Int
 ) {
     val context = LocalContext.current
     var allApps by remember { mutableStateOf<List<AppEnumerator.AppInfo>>(emptyList()) }
@@ -202,17 +232,20 @@ private fun AppSelectionScreen(
     var tab by remember { mutableStateOf(1) }      // 0 全部 / 1 用户 / 2 系统
     var query by remember { mutableStateOf("") }
 
-    LaunchedEffect(Unit) {
-        // 预加载命中(进程启动已后台填好缓存):先用缓存渲染,秒开不转圈。图标也已由
-        // 预加载线程暖到缓存,首屏不再主线程逐个 decode。
-        val snapshot = AppEnumerator.cached()
-        if (snapshot != null) {
-            allApps = snapshot
-            loaded = true
+    LaunchedEffect(refreshTick) {
+        if (refreshTick == 0) {
+            // 首次进入:预加载命中(进程启动已后台填好缓存)直接秒开 —— 缓存由全局订阅维护,
+            // 基本就是最新。冷启动预加载未完成就点进页面时走 load() 现场拉取兜底。
+            val snapshot = AppEnumerator.cached()
+            if (snapshot != null) {
+                allApps = snapshot
+                loaded = true
+                return@LaunchedEffect
+            }
         }
-        // 权威源加载:预加载过则 load() 命中同一缓存、近零开销;冷启动预加载未完成就点进
-        // 页面时现场拉取兜底。列表渲染不 gate 在图标 decode 上(那笔成本已挪给预加载线程)。
-        val list = withContext(Dispatchers.IO) { AppEnumerator.load(context) }
+        // 无缓存兜底 / 装·卸广播(reLaunched via refreshTick):权威 refresh 重拉并替换列表,
+        // 新装的立刻出现、被卸的立刻消失。渲染不 gate 图标 decode(那笔成本在预加载线程)。
+        val list = withContext(Dispatchers.IO) { AppEnumerator.refresh(context) }
         allApps = list
         loaded = true
     }
