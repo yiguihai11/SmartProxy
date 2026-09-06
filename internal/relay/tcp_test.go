@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -276,8 +277,9 @@ func TestTCPRelay_FinishedLogCarriesFlow(t *testing.T) {
 	if !strings.Contains(out, "TCP relay finished") {
 		t.Fatalf("relay finished anchor log missing:\n%s", out)
 	}
-	if !strings.Contains(out, "flow=4242") {
-		t.Fatalf("finished log must carry the ctx flow id:\n%s", out)
+	// flow 展示格式为 flow=<进程随机8hex前缀>-<序号>;此处只要携带同一会话的序号 4242。
+	if !regexp.MustCompile(`flow=[0-9a-f]{8}-4242`).MatchString(out) {
+		t.Fatalf("finished log must carry the ctx flow id (want flow=xxxxxxxx-4242):\n%s", out)
 	}
 	// up = c2r 转发的 payload 字节;down = 0(远端无回包即关闭)
 	if !strings.Contains(out, "up="+strconv.Itoa(len(payload))) || !strings.Contains(out, "down=0") {

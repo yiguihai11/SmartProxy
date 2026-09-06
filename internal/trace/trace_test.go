@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -65,8 +66,10 @@ func TestLog_IncludesFlow(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	Log(WithFlow(context.Background(), 4242)).Info("marker")
-	if !strings.Contains(buf.String(), "flow=4242") || !strings.Contains(buf.String(), "marker") {
-		t.Fatalf("log output missing flow id: %q", buf.String())
+	// 展示格式:flow=<进程随机8hex前缀>-<序号>。跨启动前缀不同,同启动序号单调。
+	flowRe := regexp.MustCompile(`flow=[0-9a-f]{8}-4242`)
+	if !flowRe.MatchString(buf.String()) || !strings.Contains(buf.String(), "marker") {
+		t.Fatalf("log output missing flow id (want flow=xxxxxxxx-4242): %q", buf.String())
 	}
 
 	// 裸 ctx 不带 flow,日志照常输出但无 flow= 字段。
