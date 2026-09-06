@@ -15,6 +15,18 @@ import (
 	"smartproxy/internal/rules"
 )
 
+type flowIDContextKey struct{}
+
+// WithFlowID attaches a UDP/TUN flow correlation ID to upstream connection logs.
+func WithFlowID(ctx context.Context, id uint64) context.Context {
+	return context.WithValue(ctx, flowIDContextKey{}, id)
+}
+
+func flowID(ctx context.Context) (uint64, bool) {
+	id, ok := ctx.Value(flowIDContextKey{}).(uint64)
+	return id, ok
+}
+
 type Manager struct {
 	mu             sync.RWMutex
 	aliasMap       map[string]*Proxy
@@ -421,8 +433,11 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 // (skipping the duplicate SelectProxy match)
 func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port int, selected *Proxy) (net.Conn, error) {
 	if selected != nil {
-		slog.Debug("UDPAssociateSelected: using pre-selected proxy",
-			"proxy", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port))
+		args := []any{"proxy", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port)}
+		if id, ok := flowID(ctx); ok {
+			args = append(args, "flow", id)
+		}
+		slog.Debug("UDPAssociateSelected: using pre-selected proxy", args...)
 		conn, err := selected.UDPAssociate(ctx, host, port)
 		if err == nil && selected.needsCapabilityClassify() {
 			selected.classifyUDPCapability(conn)
@@ -457,7 +472,11 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 				if proxy.needsCapabilityClassify() {
 					proxy.classifyUDPCapability(conn)
 				}
-				slog.Debug("UDPAssociateSelected: proxy succeeded", "proxy", MaskProxyURL(proxy.URL))
+				args := []any{"proxy", MaskProxyURL(proxy.URL)}
+				if id, ok := flowID(ctx); ok {
+					args = append(args, "flow", id)
+				}
+				slog.Debug("UDPAssociateSelected: proxy succeeded", args...)
 				return conn, nil
 			}
 			slog.Warn("UDPAssociateSelected: proxy failed, trying next",

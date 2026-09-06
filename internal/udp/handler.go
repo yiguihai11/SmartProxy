@@ -92,8 +92,9 @@ type udpOutbound struct {
 }
 
 type udpSession struct {
-	snap atomic.Pointer[udpOutbound] // 当前出向;判死热切时原子替换(读写无锁取当前值)
-	wd   *quic.Watchdog              // B 路径(国外 QUIC 先直连判死观察)非 nil;其余会话恒 nil
+	flowID uint64
+	snap   atomic.Pointer[udpOutbound] // 当前出向;判死热切时原子替换(读写无锁取当前值)
+	wd     *quic.Watchdog              // B 路径(国外 QUIC 先直连判死观察)非 nil;其余会话恒 nil
 
 	lastActive atomic.Int64
 	timeout    time.Duration
@@ -132,6 +133,7 @@ type Handler struct {
 	createGroup  singleflight.Group // serializes session creation for the same target, avoiding duplicate dials on concurrent first packets
 	stopCh       chan struct{}
 	closed       atomic.Bool
+	nextFlowID   atomic.Uint64
 }
 
 var udpBufPool = sync.Pool{
@@ -314,6 +316,7 @@ func (h *Handler) handleGenericUDP(ctx context.Context, payload, fullData []byte
 // 也要命中(以前恒传 "" 使这类规则对 UDP 无效)。firstPayload 是触发建会话的那包原始
 // datagram(QUIC 智能仅在其"IP 型 + QUIC 端口 + fallback 国外"候选上做首包嗅探)。
 func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip string, port int, key udpSessionKey, domain string, firstPayload []byte) (*udpSession, error) {
+	flowID := h.nextFlowID.Add(1)
 	// B 路径的 watchdog 判死回调经它取会话;会话构造完才赋值。判死只会在 Begin 之后
 	// (超时)或客户端重传喂入时触发,必晚于赋值,回调拿到的 sess 恒非 nil。
 	var sessHolder *udpSession
@@ -352,7 +355,7 @@ func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip 
 			framed = true
 		} else {
 			// fallback + 国外:普通国外 UDP 走代理;QUIC 候选先进 routeForeignFallback 嗅探
-			remoteConn, framed, wd, err = h.routeForeignFallback(ctx, ip, port, domain, key, firstPayload, &sessHolder)
+			remoteConn, framed, wd, err = h.routeForeignFallback(ctx, ip, port, domain, key, firstPayload, flowID, &sessHolder)
 		}
 	}
 	if err != nil {
@@ -365,6 +368,7 @@ func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip 
 		parsedIP = net.IPv4(0, 0, 0, 0)
 	}
 	sess := &udpSession{
+		flowID:     flowID,
 		timeout:    timeout,
 		clientAddr: clientAddr,
 		key:        key,
@@ -418,7 +422,7 @@ func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip 
 //
 // 返回 (conn, framed, wd, err)。wd 非 nil 仅 B 路径。
 func (h *Handler) routeForeignFallback(ctx context.Context, ip string, port int, domain string,
-	key udpSessionKey, firstPayload []byte, sessRef **udpSession) (net.Conn, bool, *quic.Watchdog, error) {
+	key udpSessionKey, firstPayload []byte, flowID uint64, sessRef **udpSession) (net.Conn, bool, *quic.Watchdog, error) {
 
 	if !h.quicEnabled || !intInList(h.quicPorts, port) || domain != "" {
 		rc, err := h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, nil)
@@ -489,14 +493,14 @@ func (h *Handler) routeForeignFallback(ctx context.Context, ip string, port int,
 	}
 	snipedSNI := sni // 判死日志带 SNI;可能为空(未抠到 / ECH)
 	wd := quic.NewWatchdog(h.quicTimeout, func(reason string) {
-		args := []any{"target", net.JoinHostPort(ip, strconv.Itoa(port)), "reason", reason}
+		args := []any{"flow", flowID, "target", net.JoinHostPort(ip, strconv.Itoa(port)), "reason", reason}
 		if snipedSNI != "" {
 			args = append(args, "sni", snipedSNI)
 		}
 		slog.Info("UDP QUIC flow judged dead (GFW blackhole), switching to proxy", args...)
 		h.quicFlowDead(*sessRef, key, ip, port, snipedSNI, reason)
 	})
-	trialArgs := []any{"target", net.JoinHostPort(ip, strconv.Itoa(port)), "timeout_ms", int(h.quicTimeout / time.Millisecond)}
+	trialArgs := []any{"flow", flowID, "target", net.JoinHostPort(ip, strconv.Itoa(port)), "timeout_ms", int(h.quicTimeout / time.Millisecond)}
 	if sni != "" {
 		trialArgs = append(trialArgs, "sni", sni)
 	}
@@ -522,6 +526,9 @@ func (h *Handler) quicFlowDead(sess *udpSession, key udpSessionKey, ip string, p
 	if old == nil || old.framed {
 		return // 早已是代理或已关闭
 	}
+	flow := sess.flowID
+	target := net.JoinHostPort(ip, strconv.Itoa(port))
+	slog.Info("UDP QUIC flow: switching DIRECT -> PROXY", "flow", flow, "target", target, "reason", reason)
 	// 写动态黑名单:IP + (抠到的)SNI 域名。SNI 为空(未抠到 / 真 ECH)只写 IP。
 	if h.router != nil {
 		h.router.BlacklistIP(ip, port, "quic:"+reason)
@@ -529,15 +536,21 @@ func (h *Handler) quicFlowDead(sess *udpSession, key udpSessionKey, ip string, p
 			h.router.BlacklistDomain(sni, port, "quic:"+reason)
 		}
 	}
-	pconn, err := h.upstreamMgr.UDPAssociateSelected(context.Background(), ip, port, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	slog.Info("UDP QUIC flow: proxy UDP ASSOCIATE start", "flow", flow, "target", target)
+	pconn, err := h.upstreamMgr.UDPAssociateSelected(upstream.WithFlowID(ctx, flow), ip, port, nil)
 	if err != nil {
-		slog.Warn("QUIC flow dead but UDP proxy fallback dial failed, staying direct",
-			"target", net.JoinHostPort(ip, strconv.Itoa(port)), "error", err)
+		slog.Error("UDP QUIC flow: proxy UDP ASSOCIATE failed", "flow", flow, "target", target, "error", err)
+		// Do not leave a dead direct socket in the session. The dynamic blacklist makes the
+		// next client retransmission create a fresh session and try proxy directly.
+		h.dropSession(sess)
 		return
 	}
 	sess.snap.Store(&udpOutbound{conn: pconn, framed: true})
 	old.conn.Close() // 解除直连 reader 阻塞;reader 见出向已换 → 续读代理
-	slog.Info("UDP QUIC flow switched to proxy after blackhole", "target", net.JoinHostPort(ip, strconv.Itoa(port)))
+	slog.Info("UDP QUIC flow: proxy UDP ASSOCIATE success", "flow", flow, "target", target)
+	slog.Info("UDP QUIC flow switched to proxy after blackhole", "flow", flow, "target", target)
 }
 
 func (h *Handler) getSessionTimeout(port int) time.Duration {
@@ -655,6 +668,7 @@ func (h *Handler) forwardTo(sess *udpSession, payload, fullData []byte) bool {
 					return false
 				}
 				ProxyBytesUp.Add(int64(len(fullData)))
+				slog.Debug("UDP QUIC flow: first packet forwarded via proxy", "flow", sess.flowID, "target", net.JoinHostPort(sess.key.targetIP, strconv.Itoa(int(sess.key.targetPort))), "bytes", len(fullData))
 			}
 			return true
 		}
