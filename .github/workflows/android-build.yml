@@ -82,21 +82,15 @@ jobs:
           mkdir -p android/app/libs
           cp build/smartproxy.aar android/app/libs/smartproxy.aar
 
-      - name: Generate debug signing keystore
-        run: |
-          # Throwaway keystore for the temporary signed release build (debug
-          # signing convention, no secrets). Signature differs per build —
-          # uninstall before installing a newer one.
-          keytool -genkeypair -v -keystore debug.keystore -alias androiddebugkey \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass android -keypass android \
-            -dname "CN=SmartProxy, OU=Dev, O=SmartProxy, L=Beijing, ST=Beijing, C=CN"
-
+      # 固定签名 keystore 随仓库走(android/ci-release.keystore,openssl 产 PKCS12,
+      # 密码/别名都是公开的 debug 惯例值)。个人自分发、不上架,要的就是「所有构建同一把
+      # key」→ 新版直接覆盖安装,不用先卸载。私钥入库对侧载分发没有信任链可伤;若将来上架
+      # 商店,再换成 GitHub Secrets 里的私有 release key(本机 openssl 生成,别再用一次性 key)。
       - name: Build signed release APK
         working-directory: android
         run: ./gradlew assembleRelease --no-daemon
         env:
-          KEYSTORE_FILE: ${{ github.workspace }}/debug.keystore
+          KEYSTORE_FILE: ${{ github.workspace }}/android/ci-release.keystore
           KEYSTORE_PASSWORD: android
           KEY_ALIAS: androiddebugkey
           KEY_PASSWORD: android
@@ -110,7 +104,18 @@ jobs:
             test -f "app/build/outputs/apk/release/app-${abi}-release.apk" \
               || { echo "::error::missing per-ABI APK: ${abi}"; exit 1; }
           done
-          echo "All 4 per-ABI signed release APKs OK"
+          # 签名一致性检查:APK 实际签名证书的 SHA-256 必须等于固定 keystore 的指纹。
+          # 不一致 = 又退回一次性 key,覆盖安装必失败,直接判红。
+          APKSIGNER="$(ls "$ANDROID_HOME"/build-tools/*/apksigner | head -1)"
+          APK_CERT=$("$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-arm64-v8a-release.apk \
+            | grep -i "SHA-256 digest" | grep -oiE "[0-9a-f]{2}(:[0-9a-f]{2}){31}" | tr 'A-F' 'a-f')
+          KS_CERT=$(keytool -list -keystore ci-release.keystore -storepass android -alias androiddebugkey 2>/dev/null \
+            | grep -oiE "[0-9a-f]{2}(:[0-9a-f]{2}){31}" | tr 'A-F' 'a-f')
+          echo "APK signing cert:   $APK_CERT"
+          echo "Keystore cert:      $KS_CERT"
+          [ -n "$APK_CERT" ] && [ "$APK_CERT" = "$KS_CERT" ] \
+            || { echo "::error::APK 签名证书与固定 keystore 不一致,覆盖安装会失败!"; exit 1; }
+          echo "All 4 per-ABI signed release APKs OK, signing cert pinned"
 
       # 每个 ABI 一个独立 artifact:Artifacts 页 4 条,用户按设备只下对应那个
       # (~9MB),不用像打成一个 zip 那样为 arm64 也把全量 38MB 拖下来。

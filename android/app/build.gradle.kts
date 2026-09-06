@@ -40,12 +40,14 @@ android {
     }
 
     signingConfigs {
-        // CI 注入:KEYSTORE_FILE 存在才可用(临时 debug 签名,每次构建不同)。
-        // 本机无 env 时不配置 → release 构建为 unsigned,debug 构建用 debug 签名。
+        // 固定签名:KEYSTORE_FILE 指向仓库里的 android/ci-release.keystore(PKCS12,openssl
+        // 生成,所有构建同一把 key → 新版可直接覆盖安装,不用卸载)。本机无 env 时不配置 →
+        // release 为 unsigned,debug 用 debug 签名。私钥入库仅适用于不上架的自分发 app。
         create("release") {
             val ksFile = System.getenv("KEYSTORE_FILE")
             if (ksFile != null) {
                 storeFile = file(ksFile)
+                storeType = "PKCS12"
                 storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "android"
                 keyAlias = System.getenv("KEY_ALIAS") ?: "androiddebugkey"
                 keyPassword = System.getenv("KEY_PASSWORD") ?: "android"
