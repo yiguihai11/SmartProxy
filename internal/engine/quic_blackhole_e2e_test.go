@@ -24,7 +24,11 @@ import (
 	"crypto/hkdf"
 	"crypto/sha256"
 	"encoding/binary"
+	"log/slog"
 	"net"
+	"regexp"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -159,6 +163,13 @@ func qtestSealInitial(cryptoData, dcid []byte, version uint32, pn byte) []byte {
 // ── 端到端测试 ─────────────────────────────────────────
 
 func TestEngineQUICBlackhole_JudgedDeadThenProxyUDP(t *testing.T) {
+	// 把进程日志接管到 DEBUG(模拟真机「开 DEBUG 重抓」):判死会话热切后,代理隧道建立
+	// 行必须带同一个 flow —— 日志层证明出向真的换到了代理,而不只是黑名单/出向标志变了。
+	oldDefault := slog.Default()
+	sb := &syncBuf{}
+	slog.SetDefault(slog.New(slog.NewTextHandler(sb, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(oldDefault)
+
 	// 只回 "ping" 前缀、其余静默丢的假服务器:直连 trial 的 Initial 必无回包 → 判死;
 	// ping 经代理才能让回包回来。
 	ln, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -234,6 +245,22 @@ func TestEngineQUICBlackhole_JudgedDeadThenProxyUDP(t *testing.T) {
 	assertProxiedTraffic(t, beforeA, true) // 热切后走代理:A 侧 UDP proxy 计数增长
 	assertUpstreamDirect(t, beforeA, true) // 上游 B 真收到并直连目标:B 侧 UDP direct 计数增长
 
+	// 日志层证据(DEBUG 视角):先抓判死日志的 flow,再断言热切建的代理隧道行带同一 flow。
+	// 隧道建立类日志(proxy.go/ss.go)是 Debug,真机 INFO 看不到——这里恰好补上那份"后续"。
+	deadFlow := flowFromLog(sb, "QUIC flow judged dead")
+	if deadFlow == "" {
+		t.Fatalf("no judged-dead log with flow captured; tail:\n%s", sb.Tail(20))
+	}
+	relayMarkers := []string{
+		"raw UDP relay established",
+		"UDP ASSOCIATE established",
+		"UDP-in-TCP relay established",
+	}
+	if !awaitLogLineWithFlow(t, sb, deadFlow, relayMarkers) {
+		t.Fatalf("no proxy-relay established log carrying flow=%s (proxy tunnel not seen after hot-switch); tail:\n%s",
+			deadFlow, sb.Tail(25))
+	}
+
 	// 相位 2b:全新 ASSOCIATE(全新会话)发 ping → IP 已在动态黑名单,不再重试直连判死,
 	// 直接走代理往返成功。
 	beforeB := sampleCounters()
@@ -274,4 +301,69 @@ func readUDPReply(t *testing.T, u *net.UDPConn) []byte {
 		t.Fatalf("strip udp header: %v", err)
 	}
 	return got
+}
+
+// ── DEBUG 日志断言基建(开 DEBUG 重抓的自动化等价)────────────────────────
+
+// syncBuf:并发安全的日志缓冲。引擎多 goroutine 打日志,bytes.Buffer 非线程安全。
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// Tail 返回末尾 n 行(失败时打印用)。
+func (s *syncBuf) Tail(n int) string {
+	lines := strings.Split(strings.TrimRight(s.String(), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// 当前 flow 展示格式:flow=<进程随机8hex前缀>-<会话序号>。
+var qtestLogFlowRe = regexp.MustCompile(`flow=([0-9a-f]{8}-[0-9]+)`)
+
+// flowFromLog 返回第一条含 marker 的日志行的 flow(如判死行取会话号)。
+func flowFromLog(sb *syncBuf, marker string) string {
+	for _, line := range strings.Split(sb.String(), "\n") {
+		if strings.Contains(line, marker) {
+			if m := qtestLogFlowRe.FindStringSubmatch(line); m != nil {
+				return m[1]
+			}
+		}
+	}
+	return ""
+}
+
+// awaitLogLineWithFlow 轮询(最多 3s)等待任一 marker 的代理隧道建立行带上给定 flow。
+// 判死 → 热切 → 隧道建立是异步的(本地回环 ms 级),轮询避免时序抖动。
+func awaitLogLineWithFlow(t testing.TB, sb *syncBuf, flow string, markers []string) bool {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, line := range strings.Split(sb.String(), "\n") {
+			if !strings.Contains(line, "flow="+flow) {
+				continue
+			}
+			for _, m := range markers {
+				if strings.Contains(line, m) {
+					return true
+				}
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
 }
