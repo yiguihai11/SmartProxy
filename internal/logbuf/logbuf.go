@@ -25,9 +25,15 @@ type RingBuffer struct {
 	seq      uint64
 }
 
+// DefaultCapacity 是默认环形日志缓冲容量(条)。控制面板 GET /logs 与 Android「Go 日志」
+// tab 都读 Default;环形满了覆盖最旧。定 2000 与 App 日志页显示上限(LogcatActivity
+// MAX_LINES=2000)对齐——否则 App 列表想留 2000 行,引擎缓冲只囤 1000,Go tab 永远被
+// 1000 封顶、翻不到更深历史。每条仅几行文本,2000 条内存约 1MB 量级,可忽略。
+const DefaultCapacity = 2000
+
 func NewRingBuffer(capacity int) *RingBuffer {
 	if capacity <= 0 {
-		capacity = 1000
+		capacity = DefaultCapacity
 	}
 	return &RingBuffer{
 		entries:  make([]LogEntry, capacity),
@@ -35,7 +41,7 @@ func NewRingBuffer(capacity int) *RingBuffer {
 	}
 }
 
-var Default = NewRingBuffer(1000)
+var Default = NewRingBuffer(DefaultCapacity)
 
 func (r *RingBuffer) Add(entry LogEntry) {
 	r.mu.Lock()
