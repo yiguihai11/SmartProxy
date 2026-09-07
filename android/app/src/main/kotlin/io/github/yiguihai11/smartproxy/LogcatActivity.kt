@@ -139,13 +139,16 @@ class LogcatActivity : ComponentActivity() {
     private var currentTab by mutableStateOf(TAB_ANDROID)
 
     // ── Android tab 状态 ──
+    // 注意:这些字段的初值不能在声明处调 AppPrefs/ConfigProvider(this)——属性初始化器在
+    // Activity 构造期跑,此时 base context 尚未 attach(mBase==null),getSharedPreferences/
+    // filesDir 直接 NPE 闪退。context 相关初值统一在 onCreate 里读(那时 context 已 attach)。
     private var autoRefresh by mutableStateOf(true)
-    private var logLevel by mutableStateOf(AppPrefs.logcatLogLevel(this))
+    private var logLevel by mutableStateOf(AppPrefs.LOG_LEVEL_DEBUG)
     private var lines by mutableStateOf<List<String>>(emptyList())
 
     // ── Go tab 状态(等级真源是 config.json 的 log_level,不存 AppPrefs——那是 Go 引擎字段)──
     private var goAutoRefresh by mutableStateOf(true)
-    private var goLogLevel by mutableStateOf(ConfigProvider.goLogLevel(this))
+    private var goLogLevel by mutableStateOf(AppPrefs.LOG_LEVEL_INFO)
     private var goEntries by mutableStateOf<List<GoLogEntry>>(emptyList())
 
     private var error by mutableStateOf<String?>(null)
@@ -178,6 +181,10 @@ class LogcatActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // context 相关初值在 onCreate 读(此时 base context 已 attach,见字段声明处注释):
+        // Android tab 等级来自 AppPrefs,Go tab 等级来自 config.json 的 log_level。
+        logLevel = AppPrefs.logcatLogLevel(this)
+        goLogLevel = ConfigProvider.goLogLevel(this)
         // 标记日志:保证首次 dump 缓冲里至少有一条本 App 的日志,可验证查看管线。
         Log.i(TAG, "[Logcat] 查看器已打开")
         enableEdgeToEdge()
