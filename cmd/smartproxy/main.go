@@ -204,6 +204,7 @@ func main() {
 			preferMode != dns.PreferNone, preferMode, preferPorts,
 		)
 		eng.DNSHandler.SetStaticRecords(cfg.DNS.StaticRecordsMap())
+		eng.DNSHandler.SetCacheConfig(cfg.DNS.Cache.Size, time.Duration(cfg.DNS.Cache.TTL)*time.Second)
 		if eng.AdminServer() != nil {
 			eng.AdminServer().SetAdminAuth(cfg.Listen.AdminAuth)
 		}

@@ -103,6 +103,12 @@ func (h *Handler) UpdateConfig(
 		"queryTimeout", queryTimeout, "enabled", enabled)
 }
 
+// SetCacheConfig 热更 DNS 缓存容量与默认 TTL(dns.cache.size / dns.cache.ttl),
+// 配置 reload 时调用;此前这两个值只在 NewHandler 建缓存时读一次,改了不生效。
+func (h *Handler) SetCacheConfig(maxSize int, defaultTTL time.Duration) {
+	h.cache.UpdateConfig(maxSize, defaultTTL)
+}
+
 func (h *Handler) Enabled() bool {
 	return h.cfg.Load().enabled
 }

@@ -89,11 +89,7 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 	// 调试期想临时放开,把 config 的 log_level 改成 "DEBUG" 即可。
 	// 输出仍同时进 logbuf.Default 环形缓冲(纯 Go 面板 Logs 页 GET /logs 才读得到,
 	// 否则 logbuf 恒空显示 "No logs available"),并转发到 stdout(logcat GoLog tag)。
-	logLevel := slogLevelFromConfig(cfg.LogLevel)
-	slog.SetDefault(slog.New(logbuf.NewSlogHandlerLevel(
-		slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}),
-		logbuf.Default, logLevel,
-	)))
+	applyLogLevel(cfg.LogLevel)
 
 	// 服务模式(Android §8):tunEnabled=false = 仅代理(SOCKS5)——不建 TUN 隧道,只跑
 	// 引擎 SOCKS5。config.json 的 listen.port 写死 1080 作 SOCKS5 文档占位(host "::"
@@ -211,9 +207,13 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 			preferMode != dns.PreferNone, preferMode, preferPorts,
 		)
 		eng.DNSHandler.SetStaticRecords(cfg.DNS.StaticRecordsMap())
+		eng.DNSHandler.SetCacheConfig(cfg.DNS.Cache.Size, time.Duration(cfg.DNS.Cache.TTL)*time.Second)
 		if eng.AdminServer() != nil {
 			eng.AdminServer().SetAdminAuth(cfg.Listen.AdminAuth)
 		}
+		// log_level 热更:桌面 configReload 早有 setLogLevel,Android 此前漏了,
+		// 改日志级别只在引擎启动时读一次。这里与启动时同一套 logger 构造。
+		applyLogLevel(cfg.LogLevel)
 
 		// 隧道参数 / admin 端口证书不能热重载(establish 时固化),Android 侧不再自动
 		// 重启(自动重启循环删除:用户停止后可能被 delayed start 拉起,图标赖着不掉)。
@@ -380,6 +380,17 @@ func BlockConnection(host string) error {
 		return fmt.Errorf("engine not running")
 	}
 	return globalEngine.BlockConnection(host)
+}
+
+// applyLogLevel 重设全局 slog logger 的级别:输出同时进 logbuf.Default 环形缓冲(供纯 Go
+// 面板 Logs 页 GET /logs)并转发 stdout(logcat GoLog tag)。引擎启动与 configReload 热更
+// log_level 共用——对齐桌面 cmd/smartproxy 的 setLogLevel,改日志级别不再需要重启引擎。
+func applyLogLevel(level string) {
+	lvl := slogLevelFromConfig(level)
+	slog.SetDefault(slog.New(logbuf.NewSlogHandlerLevel(
+		slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: lvl}),
+		logbuf.Default, lvl,
+	)))
 }
 
 // slogLevelFromConfig 把 config.log_level 映射成 slog 级别,与桌面端

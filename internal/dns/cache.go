@@ -160,6 +160,28 @@ func (c *Cache) Clear() {
 	c.lru.Init()
 }
 
+// UpdateConfig 热更缓存容量与默认 TTL(配置 reload 时调)。maxSize<=0 保持不变;缩容时
+// 按 LRU 从最久未用淘汰到新容量。defaultTTL<=0 保持不变,且只影响之后写入/刷新的条目——
+// 旧条目按各自已算好的过期时间自然消亡(DNS 缓存条目本就短命,不回溯重算)。
+func (c *Cache) UpdateConfig(maxSize int, defaultTTL time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if maxSize > 0 {
+		c.maxSize = maxSize
+		for len(c.entries) > c.maxSize {
+			back := c.lru.Back()
+			if back == nil {
+				break
+			}
+			evict := back.Value.(*cacheEntry)
+			c.deleteEntry(evict.key, evict)
+		}
+	}
+	if defaultTTL > 0 {
+		c.defaultTTL = defaultTTL
+	}
+}
+
 func (c *Cache) Len() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
