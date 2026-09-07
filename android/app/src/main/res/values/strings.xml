@@ -143,6 +143,7 @@
     <string name="cd_copy_all">Copy all</string>
     <string name="cd_clear">Clear</string>
     <string name="logcat_auto_refresh">Auto refresh</string>
+    <string name="logcat_level">Log level</string>
     <string name="logcat_count">%1$d lines</string>
     <string name="logcat_count_filtered">%1$d/%2$d lines</string>
     <string name="logcat_empty">No logs yet — connect VPN and SmartProxyVpn logs appear here</string>

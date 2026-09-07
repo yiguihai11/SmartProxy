@@ -143,6 +143,7 @@
     <string name="cd_copy_all">复制全部</string>
     <string name="cd_clear">清空</string>
     <string name="logcat_auto_refresh">自动刷新</string>
+    <string name="logcat_level">日志等级</string>
     <string name="logcat_count">%1$d 行</string>
     <string name="logcat_count_filtered">%1$d/%2$d 行</string>
     <string name="logcat_empty">暂无日志 — 连接 VPN 后 SmartProxyVpn 日志会出现在这里</string>

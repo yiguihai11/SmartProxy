@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
@@ -30,11 +31,14 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,6 +47,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.darkColorScheme
@@ -51,6 +56,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -78,7 +84,10 @@ import java.util.Locale
  * (SmartProxyVpn tag),详细到 Debug 级,外加 AndroidRuntime/System.err 抓崩溃栈。
  * 参考 v2rayNG LogcatViewModel 的做法:同为 exec logcat -d 一次性 dump,非进程内缓冲。
  *
- * - 命令:logcat -d -v threadtime -s SmartProxyVpn:V AndroidRuntime:W System.err
+ * - 命令:logcat -d -v threadtime -s SmartProxyVpn:<优先级> AndroidRuntime:W System.err
+ *   <优先级>由日志等级设置决定(跟 Go slog 一致:DEBUG→V/INFO→I/WARN→W/ERROR→E,
+ *   阈值语义=选中档及以上才由 logd 输出;默认 DEBUG→V 全收)。这是抓取设置而非客户端
+ *   过滤,选择持久化在 AppPrefs。
  *   故意不带 --pid:logd 对无 READ_LOGS 的调用方只回本 UID 的条目,天然只有本 App
  *   的日志,且跨进程重启(pid 变化)的历史都在;--pid 只捞当前进程代,进程重启后
  *   会整页空白。-s 只留 Kotlin 层 tag + App 崩溃栈(AndroidRuntime/System.err),Go
@@ -98,9 +107,18 @@ class LogcatActivity : ComponentActivity() {
         private const val TAG = "SmartProxyVpn"
         private const val MAX_LINES = 2000
         private const val REFRESH_MS = 2000L
+
+        /** Go slog 级别 → logcat tag 优先级阈值:选中档及以上才由 logd 输出(抓取设置,非客户端过滤)。 */
+        private fun logcatPriority(level: String): String = when (level) {
+            AppPrefs.LOG_LEVEL_INFO -> "I"
+            AppPrefs.LOG_LEVEL_WARN -> "W"
+            AppPrefs.LOG_LEVEL_ERROR -> "E"
+            else -> "V" // DEBUG(默认):V 收全部
+        }
     }
 
     private var autoRefresh by mutableStateOf(true)
+    private var logLevel by mutableStateOf(AppPrefs.logcatLogLevel(this))
     private var lines by mutableStateOf<List<String>>(emptyList())
     private var error by mutableStateOf<String?>(null)
     private var showSearch by mutableStateOf(false)
@@ -145,11 +163,17 @@ class LogcatActivity : ComponentActivity() {
                         lines = visibleLines,
                         totalLines = lines.size,
                         autoRefresh = autoRefresh,
+                        logLevel = logLevel,
                         error = error,
                         listState = listState,
                         showSearch = showSearch,
                         searchQuery = searchQuery,
                         onToggleAutoRefresh = { autoRefresh = !autoRefresh },
+                        onLogLevelChange = { level ->
+                            logLevel = level
+                            AppPrefs.setLogcatLogLevel(this@LogcatActivity, level)
+                            scope.launch { refresh() } // 立即按新阈值抓一次,不等 2s 轮询
+                        },
                         onManualRefresh = { scope.launch { refresh() } },
                         onToggleSearch = {
                             showSearch = !showSearch
@@ -176,7 +200,7 @@ class LogcatActivity : ComponentActivity() {
                 val process = Runtime.getRuntime().exec(
                     arrayOf(
                         "logcat", "-d", "-v", "threadtime",
-                        "-s", "SmartProxyVpn:V", "AndroidRuntime:W", "System.err"
+                        "-s", "SmartProxyVpn:${logcatPriority(logLevel)}", "AndroidRuntime:W", "System.err"
                     )
                 )
                 try {
@@ -268,17 +292,27 @@ private val LogcatColors get() =
     if (ThemeState.isDark) darkColorScheme(primary = PurpleText)
     else lightColorScheme(primary = PurpleText)
 
+/** 日志查看页可选抓取级别(与 Go slog 一致:DEBUG/INFO/WARN/ERROR,无 VERBOSE)。 */
+private val LOG_LEVELS = listOf(
+    AppPrefs.LOG_LEVEL_DEBUG,
+    AppPrefs.LOG_LEVEL_INFO,
+    AppPrefs.LOG_LEVEL_WARN,
+    AppPrefs.LOG_LEVEL_ERROR
+)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LogcatScreen(
     lines: List<String>,
     totalLines: Int,
     autoRefresh: Boolean,
+    logLevel: String,
     error: String?,
     listState: LazyListState,
     showSearch: Boolean,
     searchQuery: String,
     onToggleAutoRefresh: () -> Unit,
+    onLogLevelChange: (String) -> Unit,
     onManualRefresh: () -> Unit,
     onToggleSearch: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
@@ -363,6 +397,42 @@ private fun LogcatScreen(
                         checkedThumbColor = Color.White
                     )
                 )
+                Spacer(Modifier.width(8.dp))
+                // 日志等级「设置」(不是显示过滤):改的是 logcat 抓取阈值,跟 Go slog 级别一致。
+                var levelMenuOpen by remember { mutableStateOf(false) }
+                Box {
+                    TextButton(
+                        onClick = { levelMenuOpen = true },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                    ) {
+                        Text(logLevel, fontSize = 12.sp, color = PurpleText, fontWeight = FontWeight.Medium)
+                        Icon(
+                            Icons.Filled.ArrowDropDown,
+                            contentDescription = stringResource(R.string.logcat_level),
+                            tint = PurpleText
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = levelMenuOpen,
+                        onDismissRequest = { levelMenuOpen = false }
+                    ) {
+                        LOG_LEVELS.forEach { level ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        level,
+                                        fontWeight = if (level == logLevel) FontWeight.Bold else FontWeight.Normal,
+                                        color = TextDark
+                                    )
+                                },
+                                onClick = {
+                                    levelMenuOpen = false
+                                    onLogLevelChange(level)
+                                }
+                            )
+                        }
+                    }
+                }
                 Spacer(Modifier.weight(1f))
                 Text(
                     if (searchQuery.isBlank())

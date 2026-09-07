@@ -43,6 +43,7 @@ object AppPrefs {
     private const val KEY_DNS_V6 = "custom_dns_v6"
     private const val KEY_EXCLUDED_ROUTES = "excluded_routes"
     private const val KEY_THEME_MODE = "theme_mode"
+    private const val KEY_LOGCAT_LEVEL = "logcat_level"
     private const val KEY_SERVICE_MODE = "service_mode"
     private const val KEY_BATTERY_OPT_ASK = "battery_opt_ask_count"
     private const val KEY_SOCKS_LISTEN = "socks_listen"
@@ -131,6 +132,20 @@ object AppPrefs {
 
     fun setThemeMode(context: Context, mode: String) {
         sp(context).edit().putString(KEY_THEME_MODE, mode).apply()
+    }
+
+    // 日志查看页的抓取级别(设置,非过滤):logcat 按 tag:priority 在 logd 侧设阈值,
+    // 与 Go slog 级别一致——DEBUG/INFO/WARN/ERROR(无 VERBOSE,Go 没这档)。默认 DEBUG。
+    const val LOG_LEVEL_DEBUG = "DEBUG"
+    const val LOG_LEVEL_INFO = "INFO"
+    const val LOG_LEVEL_WARN = "WARN"
+    const val LOG_LEVEL_ERROR = "ERROR"
+
+    fun logcatLogLevel(context: Context): String =
+        sp(context).getString(KEY_LOGCAT_LEVEL, LOG_LEVEL_DEBUG) ?: LOG_LEVEL_DEBUG
+
+    fun setLogcatLogLevel(context: Context, level: String) {
+        sp(context).edit().putString(KEY_LOGCAT_LEVEL, level).apply()
     }
 
     /** 服务模式(§8):vpn = VPN 隧道(默认);socks5 = 仅代理,不启动 VPN 模式,
