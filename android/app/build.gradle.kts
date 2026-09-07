@@ -4,17 +4,22 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-// 版本从 git tag 派生(M4,对齐 internal/version 的 Makefile 机制):CI 注入 VERSION =
-// `git describe --tags --match 'v[0-9]*' --always --dirty | sed 's/^v//'`,如
-// "1.0.0" / "1.0.0-105-g7c7ef53";本机无 env 时回退 1.0.0。
+// 版本号形态 <发版版本>-<短commit>(如 1.0-2d27600):CI 注入 VERSION,同时喂这里的
+// versionName 和 Go 引擎 /version 控制面板(经 Makefile LDFLAGS),两边同源。本机无 env 回退 1.0.0。
 val ciVersion: String = System.getenv("VERSION") ?: "1.0.0"
 
-/** versionCode 取 VERSION 的 semver 段(major*100000 + minor*1000 + patch),解析失败回退 1。 */
+/**
+ * versionCode:CI 注入 VERSION_CODE(100000 + git 提交数,随提交单调递增、绝不降级),
+ * 优先用它;本机无 env 时从版本串 semver 段派生(major*100000 + minor*1000 + patch),
+ * patch 可缺省(1.0 视同 1.0.0),解析失败回退 1。
+ */
 fun deriveVersionCode(version: String): Int {
-    val m = Regex("""(\d+)\.(\d+)\.(\d+)""").find(version) ?: return 1
-    val (major, minor, patch) = m.destructured
-    return major.toInt() * 100000 + minor.toInt() * 1000 + patch.toInt()
+    val m = Regex("""(\d+)\.(\d+)(?:\.(\d+))?""").find(version) ?: return 1
+    return m.groupValues[1].toInt() * 100000 +
+        m.groupValues[2].toInt() * 1000 +
+        (m.groupValues[3].toIntOrNull() ?: 0)
 }
+val ciVersionCode: Int = System.getenv("VERSION_CODE")?.toIntOrNull() ?: deriveVersionCode(ciVersion)
 
 // Shizuku 免 root 共享跑在一个独立的常驻用户服务进程(shell UID,daemon=true)。Shizuku 仅在
 // UserServiceArgs.version() 变化时才杀掉旧守护、用新 APK 重新拉起;版本号相同则复用旧进程。
@@ -33,7 +38,7 @@ android {
         applicationId = "io.github.yiguihai11.smartproxy"
         minSdk = 26
         targetSdk = 35
-        versionCode = deriveVersionCode(ciVersion)
+        versionCode = ciVersionCode
         versionName = ciVersion
         // 每次打包都变化的 Shizuku 用户服务版本号(见 shizukuServiceVersion 注释)。
         buildConfigField("int", "ShizukuServiceVersion", shizukuServiceVersion.toString())

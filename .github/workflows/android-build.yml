@@ -31,11 +31,21 @@ jobs:
           # 版本号会回退成短 commit hash。拉全历史后 VERSION 才能派生出 1.x.y(-N-gHASH)。
           fetch-depth: 0
 
-      # 版本从 git tag 派生(M4):只认 v[0-9]* 发布 tag,排除 backup-* 备份 tag;
-      # 无 tag 回退到提交哈希。gradle 用它当 versionName,并取 semver 段当 versionCode。
-      - name: Derive version from git tag
+      # 版本号形态:<发版版本>-<短commit>,如 1.0-2d27600。
+      #   - 发版版本:最近 v[0-9]* tag 的 major.minor(发版打新 tag 自动跟:v1.1→1.1-xxx),
+      #     无 tag 回退 1.0;只认 v[0-9]* 排除 backup-* 备份 tag。
+      #   - 短 commit:当前提交短 hash,一眼看出是哪次构建。
+      # VERSION 同时喂 gradle versionName 和 Go 引擎(/version 控制面板),两边同源。
+      # VERSION_CODE = 100000 + 提交数:Android 覆盖安装要求 versionCode 不降,提交数随
+      # 提交单调递增(基数 100000 压过历史 semver 派生值),彻底躲开降级/同号问题。
+      # 需要全历史(fetch-depth:0):describe 找 tag、rev-list --count 数提交都靠它。
+      - name: Derive version from git
         run: |
-          echo "VERSION=$(git describe --tags --match 'v[0-9]*' --always --dirty | sed 's/^v//')" >> "$GITHUB_ENV"
+          BASE=$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null \
+            | sed -E 's/^v//; s/^([0-9]+\.[0-9]+).*/\1/')
+          BASE=${BASE:-1.0}
+          echo "VERSION=${BASE}-$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=$((100000 + $(git rev-list --count HEAD)))" >> "$GITHUB_ENV"
 
       # JDK 21 (LTS):AGP 8.13 / Gradle 8.14 都支持,比 17 新的 LTS。
       - name: Set up JDK 21
