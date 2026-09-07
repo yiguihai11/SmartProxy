@@ -444,6 +444,22 @@ func (s *Server) SetRefreshInterval(sec int) {
 	s.refreshInt = sec
 }
 
+// refreshIntervalSec 返回当前 SSE 推送间隔(秒)。优先从活动配置读:configSrc 由引擎
+// 注入(func() *config.Config),热重载 Config.Store 新值后这里立即读到新间隔,改
+// admin_refresh_interval 保存后下一拍就生效,不必重启引擎、不必重连 SSE。configSrc
+// 不可用(未注入)时回退 SetRefreshInterval 在引擎启动时设的值,再回退默认 3。
+func (s *Server) refreshIntervalSec() int {
+	if s.configSrc != nil {
+		if c := s.configSrc(); c != nil && c.Listen.AdminRefreshInterval >= 1 {
+			return c.Listen.AdminRefreshInterval
+		}
+	}
+	if s.refreshInt >= 1 {
+		return s.refreshInt
+	}
+	return 3
+}
+
 func (s *Server) refreshStats() {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -1606,22 +1622,21 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("events: cannot clear write deadline", "error", err)
 	}
 
-	interval := s.refreshInt
-	if interval < 1 {
-		interval = 3
-	}
-	ticker := time.NewTicker(time.Duration(interval) * time.Second)
-	defer ticker.Stop()
-
+	// 每个推送周期开始都重新读间隔(不沿用连接建立时的值):改 admin_refresh_interval
+	// 保存 → watcher 热重载 → configSrc 立即反映新值,下一个周期就换新间隔。旧实现用
+	// NewTicker 在连接建立时把间隔钉死,且热重载路径不重调 SetRefreshInterval,导致改了
+	// 配置 SSE 仍按启动时的 3 秒推。用每轮新建的 Timer 即可,无需广播/重连。
 	for {
+		timer := time.NewTimer(time.Duration(s.refreshIntervalSec()) * time.Second)
 		select {
-		case <-ticker.C:
+		case <-timer.C:
 			data := s.gatherLiveData()
 			b, _ := json.Marshal(data)
 			fmt.Fprintf(w, "data: %s\n\n", b)
 
 			flusher.Flush()
 		case <-r.Context().Done():
+			timer.Stop()
 			return
 		}
 	}
