@@ -46,6 +46,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -74,32 +76,35 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * 日志查看页(侧边栏「日志查看」):调 logcat 命令读 App 自己的 Kotlin 层日志
- * (SmartProxyVpn tag),详细到 Debug 级,外加 AndroidRuntime/System.err 抓崩溃栈。
- * 参考 v2rayNG LogcatViewModel 的做法:同为 exec logcat -d 一次性 dump,非进程内缓冲。
+ * 日志查看页(侧边栏「日志查看」):两个 tab,各管各的日志源与等级设置。
  *
- * - 命令:logcat -d -v threadtime -s SmartProxyVpn:<优先级> AndroidRuntime:W System.err
- *   <优先级>由日志等级设置决定(跟 Go slog 一致:DEBUG→V/INFO→I/WARN→W/ERROR→E,
- *   阈值语义=选中档及以上才由 logd 输出;默认 DEBUG→V 全收)。这是抓取设置而非客户端
- *   过滤,选择持久化在 AppPrefs。
- *   故意不带 --pid:logd 对无 READ_LOGS 的调用方只回本 UID 的条目,天然只有本 App
- *   的日志,且跨进程重启(pid 变化)的历史都在;--pid 只捞当前进程代,进程重启后
- *   会整页空白。-s 只留 Kotlin 层 tag + App 崩溃栈(AndroidRuntime/System.err),Go
- *   引擎的 GoLog 不混入 —— 本页定位 = App 自己的日志;Go 核心日志走 logcat GoLog
- *   tag,需要时 adb logcat -s GoLog 查看。
- * - 打开时写一条 SmartProxyVpn 标记日志,保证首次 dump 至少有一行可验证管线。
- * - 自动刷新:默认开,2s 一次 dump(logcat -d 是一次性 dump,非流式,简单可靠);
- *   手动刷新为右下角 FAB。
- * - 搜索:顶栏放大镜展开输入框,内存关键字过滤(不重新读 logcat)。
- * - 复制/分享:复制全部(长按单行复制该行);分享导出为 txt 走 FileProvider。
- * - 清空:执行 logcat -c 清系统缓冲,并清空本页。
- * - 行数上限 2000,超出丢最旧;底部跟随(用户手动上翻时暂停跟随)。
+ *  - **Android tab**:App 自己的 Kotlin 层日志(SmartProxyVpn tag),exec logcat -d 一次性
+ *    dump(参考 v2rayNG LogcatViewModel)。等级是「抓取设置」——logcat -s SmartProxyVpn:<pri>
+ *    在 logd 侧设阈值(DEBUG→V/INFO→I/WARN→W/ERROR→E),选中档及以上才由 logd 输出,
+ *    非客户端过滤;选择持久化 AppPrefs。另固定带 AndroidRuntime:W/System.err 抓崩溃栈。
+ *    故意不带 --pid:logd 对无 READ_LOGS 的调用方只回本 UID 条目,天然只有本 App 日志,
+ *    且跨进程重启(pid 变)的历史都在。
+ *
+ *  - **Go engine tab**:Go 引擎 slog 日志,走 gomobile 桥 Mobile.getGoLogs() 直读 Go 进程内
+ *    logbuf 环形缓冲(与控制面板 GET /logs 同源同一块 buffer,含真实 level)。**不碰 logcat**:
+ *    gomobile 把 os.Stdout 全标成 logcat I 优先级(x/mobile mobileinit_android.go:
+ *    stdout→ANDROID_LOG_INFO),Go slog 各档日志在 logd 里全是 I,logcat tag 优先级过滤对它
+ *    完全失效。等级设置写 config.json 的 log_level → fsnotify 热重载 applyLogLevel(生产端
+ *    阈值,决定引擎是否产出该档日志);显示端再按选中档阈值过滤一遍——logbuf 里调高等级前
+ *    已缓存的低级日志不会被生产端回溯清掉,客户端过滤让「设 ERROR 就只看 ERROR」对历史立即
+ *    生效,与 Android tab 的设啥看啥体验对齐。
+ *
+ * 通用:自动刷新默认开(2s 一次,仅轮询当前 tab,切走不空转);手动刷新为右下角 FAB;
+ * 搜索为顶栏内存关键字过滤;复制全部(长按单行复制该行);分享导出 txt 走 FileProvider;
+ * 清空按 tab 分流(logcat -c / 清 Go logbuf)。行数上限 2000,超出丢最旧;底部跟随
+ * (用户上翻时暂停跟随)。
  */
 class LogcatActivity : ComponentActivity() {
 
@@ -107,27 +112,69 @@ class LogcatActivity : ComponentActivity() {
         private const val TAG = "SmartProxyVpn"
         private const val MAX_LINES = 2000
         private const val REFRESH_MS = 2000L
+        const val TAB_ANDROID = 0
+        const val TAB_GO = 1
 
-        /** Go slog 级别 → logcat tag 优先级阈值:选中档及以上才由 logd 输出(抓取设置,非客户端过滤)。 */
-        private fun logcatPriority(level: String): String = when (level) {
+        /** Android tab:Go slog 级别 → logcat tag 优先级阈值(选中档及以上才由 logd 输出)。 */
+        private fun androidLogcatPriority(level: String): String = when (level) {
             AppPrefs.LOG_LEVEL_INFO -> "I"
             AppPrefs.LOG_LEVEL_WARN -> "W"
             AppPrefs.LOG_LEVEL_ERROR -> "E"
             else -> "V" // DEBUG(默认):V 收全部
         }
+
+        /** Go tab:slog 级别序号(DEBUG<INFO<WARN<ERROR),用于按阈值过滤 logbuf 历史条目。 */
+        private fun levelRank(level: String): Int = when (level) {
+            AppPrefs.LOG_LEVEL_DEBUG -> 0
+            AppPrefs.LOG_LEVEL_INFO -> 1
+            AppPrefs.LOG_LEVEL_WARN -> 2
+            AppPrefs.LOG_LEVEL_ERROR -> 3
+            else -> 1 // 未知按 INFO
+        }
     }
 
+    /** Go logbuf 一条(对应 Go logbuf.LogEntry / 面板 /logs 的 JSON 元素)。 */
+    private data class GoLogEntry(val id: Long, val time: String, val level: String, val msg: String)
+
+    private var currentTab by mutableStateOf(TAB_ANDROID)
+
+    // ── Android tab 状态 ──
     private var autoRefresh by mutableStateOf(true)
     private var logLevel by mutableStateOf(AppPrefs.logcatLogLevel(this))
     private var lines by mutableStateOf<List<String>>(emptyList())
+
+    // ── Go tab 状态(等级真源是 config.json 的 log_level,不存 AppPrefs——那是 Go 引擎字段)──
+    private var goAutoRefresh by mutableStateOf(true)
+    private var goLogLevel by mutableStateOf(ConfigProvider.goLogLevel(this))
+    private var goEntries by mutableStateOf<List<GoLogEntry>>(emptyList())
+
     private var error by mutableStateOf<String?>(null)
     private var showSearch by mutableStateOf(false)
     private var searchQuery by mutableStateOf("")
 
-    /** 显示行 = 全部行经关键字过滤(内存过滤,不重新读 logcat)。 */
-    private val visibleLines: List<String>
-        get() = if (searchQuery.isBlank()) lines
-                else lines.filter { it.contains(searchQuery, ignoreCase = true) }
+    /** Android 显示行 = logcat dump 行经关键字过滤。 */
+    private val visibleAndroidLines: List<String>
+        get() = filterSearch(lines)
+
+    /** Go 显示行 = logbuf 条目先按等级阈值(>= 选中档)过滤历史,再格式化成行,再关键字过滤。 */
+    private val visibleGoLines: List<String>
+        get() = filterSearch(
+            goEntries
+                .filter { levelRank(it.level) >= levelRank(goLogLevel) }
+                .map { "${it.time}  ${it.level.padEnd(5)}  ${it.msg}" }
+        )
+
+    /** Go 等级过滤后、关键字过滤前的行数(计数 x/y 的 y)。 */
+    private val goLevelCount: Int
+        get() = goEntries.count { levelRank(it.level) >= levelRank(goLogLevel) }
+
+    /** 当前 tab 关键字过滤后的可见行(复制/分享/计数用)。 */
+    private val currentVisibleLines: List<String>
+        get() = if (currentTab == TAB_GO) visibleGoLines else visibleAndroidLines
+
+    private fun filterSearch(src: List<String>): List<String> =
+        if (searchQuery.isBlank()) src
+        else src.filter { it.contains(searchQuery, ignoreCase = true) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -138,51 +185,74 @@ class LogcatActivity : ComponentActivity() {
             AutoSystemBarStyle(AppPrefs.themeMode(this))
             SmartProxyTheme(mode = AppPrefs.themeMode(this)) {
                 MaterialTheme(colorScheme = LogcatColors) {
-                    val listState = rememberLazyListState()
+                    val listStateAndroid = rememberLazyListState()
+                    val listStateGo = rememberLazyListState()
                     val scope = rememberCoroutineScope()
 
-                    // 自动刷新循环:开时每 2s dump 一次;关时只靠 FAB 手动刷新。
-                    LaunchedEffect(autoRefresh) {
-                        while (autoRefresh) {
-                            refresh()
+                    // 轮询:进入某 tab 立即刷一次,随后该 tab 自动刷新开则每 2s 轮询、关则停;
+                    // 切 tab / 切开关都重启此 effect——后台 tab 不空转。
+                    LaunchedEffect(currentTab, autoRefresh, goAutoRefresh) {
+                        while (true) {
+                            if (currentTab == TAB_GO) {
+                                refreshGo()
+                                if (!goAutoRefresh) break
+                            } else {
+                                refreshAndroid()
+                                if (!autoRefresh) break
+                            }
                             delay(REFRESH_MS)
                         }
                     }
-                    // 底部跟随:刷新后若用户仍在底部附近(或手动刷新),滚到底;用户上翻则停。
-                    LaunchedEffect(lines.size) {
-                        val total = listState.layoutInfo.totalItemsCount
-                        if (total > 0) {
-                            val visibleLast = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-                            if (visibleLast >= total - 3) {
-                                listState.scrollToItem(total - 1)
-                            }
-                        }
-                    }
+                    // 底部跟随:刷新后若用户仍在底部附近则滚到底,上翻则停(两个列表各自)。
+                    LaunchedEffect(lines.size) { followBottom(listStateAndroid) }
+                    LaunchedEffect(goEntries.size) { followBottom(listStateGo) }
 
                     LogcatScreen(
-                        lines = visibleLines,
-                        totalLines = lines.size,
+                        currentTab = currentTab,
+                        onTabChange = { currentTab = it },
+                        // Android
+                        androidLines = visibleAndroidLines,
+                        androidTotal = lines.size,
+                        androidListState = listStateAndroid,
                         autoRefresh = autoRefresh,
                         logLevel = logLevel,
-                        error = error,
-                        listState = listState,
-                        showSearch = showSearch,
-                        searchQuery = searchQuery,
                         onToggleAutoRefresh = { autoRefresh = !autoRefresh },
                         onLogLevelChange = { level ->
                             logLevel = level
                             AppPrefs.setLogcatLogLevel(this@LogcatActivity, level)
-                            scope.launch { refresh() } // 立即按新阈值抓一次,不等 2s 轮询
+                            scope.launch { refreshAndroid() } // 抓取阈值变了,立即按新 logcat 命令抓
                         },
-                        onManualRefresh = { scope.launch { refresh() } },
+                        // Go
+                        goLines = visibleGoLines,
+                        goTotal = goLevelCount,
+                        goListState = listStateGo,
+                        goAutoRefresh = goAutoRefresh,
+                        goLogLevel = goLogLevel,
+                        onToggleGoAutoRefresh = { goAutoRefresh = !goAutoRefresh },
+                        onGoLogLevelChange = { level ->
+                            // 生产端设置:写 config.log_level → 引擎热重载 applyLogLevel;
+                            // 显示端阈值过滤随 goLogLevel state 立即生效(含历史缓冲),无需重新拉取。
+                            goLogLevel = level
+                            ConfigProvider.setGoLogLevel(this@LogcatActivity, level)
+                        },
+                        // 共用
+                        isSearching = searchQuery.isNotBlank(),
+                        error = error,
+                        showSearch = showSearch,
+                        searchQuery = searchQuery,
                         onToggleSearch = {
                             showSearch = !showSearch
                             if (!showSearch) searchQuery = ""
                         },
                         onSearchQueryChange = { searchQuery = it },
-                        onCopyAll = { copyText(visibleLines.joinToString("\n")) },
-                        onShare = { shareText(visibleLines.joinToString("\n")) },
-                        onClear = { scope.launch { clearLogcat() } },
+                        onCopyAll = { copyText(currentVisibleLines.joinToString("\n")) },
+                        onShare = { shareText(currentVisibleLines.joinToString("\n")) },
+                        onClear = {
+                            scope.launch { if (currentTab == TAB_GO) clearGoLogs() else clearLogcat() }
+                        },
+                        onManualRefresh = {
+                            scope.launch { if (currentTab == TAB_GO) refreshGo() else refreshAndroid() }
+                        },
                         onLongPressLine = { copyText(it) },
                         onBack = { finish() }
                     )
@@ -191,8 +261,17 @@ class LogcatActivity : ComponentActivity() {
         }
     }
 
-    /** dump logcat(IO 线程执行),结果并入 lines(上限裁剪)。 */
-    private suspend fun refresh() {
+    /** 刷新后若用户仍在列表底部附近则滚到底;上翻(可见末行离底 >3)则保持不动。 */
+    private suspend fun followBottom(ls: LazyListState) {
+        val total = ls.layoutInfo.totalItemsCount
+        if (total > 0) {
+            val visibleLast = ls.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            if (visibleLast >= total - 3) ls.scrollToItem(total - 1)
+        }
+    }
+
+    // ── Android tab:exec logcat -d dump(IO 线程),结果替换 lines(上限裁剪)。 ──
+    private suspend fun refreshAndroid() {
         val result = withContext(Dispatchers.IO) {
             runCatching {
                 // 不带 --pid、只留本 App 的 Kotlin tag + 崩溃栈:详见类注释。logd 对无
@@ -200,7 +279,7 @@ class LogcatActivity : ComponentActivity() {
                 val process = Runtime.getRuntime().exec(
                     arrayOf(
                         "logcat", "-d", "-v", "threadtime",
-                        "-s", "SmartProxyVpn:${logcatPriority(logLevel)}", "AndroidRuntime:W", "System.err"
+                        "-s", "SmartProxyVpn:${androidLogcatPriority(logLevel)}", "AndroidRuntime:W", "System.err"
                     )
                 )
                 try {
@@ -220,12 +299,34 @@ class LogcatActivity : ComponentActivity() {
                 lines = newLines.takeLast(MAX_LINES)
                 error = null
             }
-            .onFailure { e ->
-                error = e.message
-            }
+            .onFailure { e -> error = e.message }
     }
 
-    /** logcat -c 清系统缓冲,并清空本页。 */
+    // ── Go tab:gomobile 桥读 logbuf 环形缓冲快照(与面板 /logs 同源),IO 线程解析 JSON。 ──
+    private suspend fun refreshGo() {
+        val result = withContext(Dispatchers.IO) {
+            runCatching {
+                val arr = JSONArray(smartproxy.mobile.Mobile.getGoLogs())
+                (0 until arr.length()).map { i ->
+                    val o = arr.getJSONObject(i)
+                    GoLogEntry(
+                        id = o.getLong("id"),
+                        time = o.optString("time"),
+                        level = o.optString("level").ifBlank { "INFO" },
+                        msg = o.optString("message")
+                    )
+                }
+            }
+        }
+        result
+            .onSuccess { entries ->
+                goEntries = entries.takeLast(MAX_LINES)
+                error = null
+            }
+            .onFailure { e -> error = e.message }
+    }
+
+    /** Android tab 清空:logcat -c 清系统缓冲,并清空本页。 */
     private suspend fun clearLogcat() {
         withContext(Dispatchers.IO) {
             runCatching {
@@ -238,6 +339,13 @@ class LogcatActivity : ComponentActivity() {
             }
         }
         lines = emptyList()
+        error = null
+    }
+
+    /** Go tab 清空:清 Go logbuf 环形缓冲(对应面板 POST /logs/clear)。 */
+    private suspend fun clearGoLogs() {
+        withContext(Dispatchers.IO) { runCatching { smartproxy.mobile.Mobile.clearGoLogs() } }
+        goEntries = emptyList()
         error = null
     }
 
@@ -292,7 +400,7 @@ private val LogcatColors get() =
     if (ThemeState.isDark) darkColorScheme(primary = PurpleText)
     else lightColorScheme(primary = PurpleText)
 
-/** 日志查看页可选抓取级别(与 Go slog 一致:DEBUG/INFO/WARN/ERROR,无 VERBOSE)。 */
+/** 两个 tab 可选日志级别(与 Go slog 一致:DEBUG/INFO/WARN/ERROR,无 VERBOSE)。 */
 private val LOG_LEVELS = listOf(
     AppPrefs.LOG_LEVEL_DEBUG,
     AppPrefs.LOG_LEVEL_INFO,
@@ -303,22 +411,35 @@ private val LOG_LEVELS = listOf(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LogcatScreen(
-    lines: List<String>,
-    totalLines: Int,
+    currentTab: Int,
+    onTabChange: (Int) -> Unit,
+    // Android tab
+    androidLines: List<String>,
+    androidTotal: Int,
+    androidListState: LazyListState,
     autoRefresh: Boolean,
     logLevel: String,
-    error: String?,
-    listState: LazyListState,
-    showSearch: Boolean,
-    searchQuery: String,
     onToggleAutoRefresh: () -> Unit,
     onLogLevelChange: (String) -> Unit,
-    onManualRefresh: () -> Unit,
+    // Go tab
+    goLines: List<String>,
+    goTotal: Int,
+    goListState: LazyListState,
+    goAutoRefresh: Boolean,
+    goLogLevel: String,
+    onToggleGoAutoRefresh: () -> Unit,
+    onGoLogLevelChange: (String) -> Unit,
+    // 共用
+    isSearching: Boolean,
+    error: String?,
+    showSearch: Boolean,
+    searchQuery: String,
     onToggleSearch: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onCopyAll: () -> Unit,
     onShare: () -> Unit,
     onClear: () -> Unit,
+    onManualRefresh: () -> Unit,
     onLongPressLine: (String) -> Unit,
     onBack: () -> Unit
 ) {
@@ -380,120 +501,59 @@ private fun LogcatScreen(
                     actionIconContentColor = PurpleText
                 )
             )
+
+            // ── Tab:Android logcat / Go 引擎 slog ──
+            TabRow(
+                selectedTabIndex = currentTab,
+                containerColor = Color.Transparent,
+                contentColor = PurpleText,
+                divider = {}
+            ) {
+                Tab(
+                    selected = currentTab == LogcatActivity.TAB_ANDROID,
+                    onClick = { onTabChange(LogcatActivity.TAB_ANDROID) },
+                    text = { Text(stringResource(R.string.logcat_tab_android), fontSize = 13.sp) }
+                )
+                Tab(
+                    selected = currentTab == LogcatActivity.TAB_GO,
+                    onClick = { onTabChange(LogcatActivity.TAB_GO) },
+                    text = { Text(stringResource(R.string.logcat_tab_go), fontSize = 13.sp) }
+                )
+            }
             Spacer(Modifier.height(4.dp))
 
-            // ── 自动刷新开关 + 状态 ─────────────────────────────
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(stringResource(R.string.logcat_auto_refresh), fontSize = 13.sp, color = TextDark)
-                Spacer(Modifier.width(8.dp))
-                Switch(
-                    checked = autoRefresh,
-                    onCheckedChange = { onToggleAutoRefresh() },
-                    colors = SwitchDefaults.colors(
-                        checkedTrackColor = PurpleText,
-                        checkedThumbColor = Color.White
-                    )
+            if (currentTab == LogcatActivity.TAB_GO) {
+                LogPane(
+                    lines = goLines,
+                    totalLines = goTotal,
+                    isSearching = isSearching,
+                    emptyText = stringResource(R.string.logcat_empty_go),
+                    error = error,
+                    listState = goListState,
+                    autoRefresh = goAutoRefresh,
+                    logLevel = goLogLevel,
+                    onToggleAutoRefresh = onToggleGoAutoRefresh,
+                    onLevelChange = onGoLogLevelChange,
+                    onLongPressLine = onLongPressLine
                 )
-                Spacer(Modifier.width(8.dp))
-                // 日志等级「设置」(不是显示过滤):改的是 logcat 抓取阈值,跟 Go slog 级别一致。
-                var levelMenuOpen by remember { mutableStateOf(false) }
-                Box {
-                    TextButton(
-                        onClick = { levelMenuOpen = true },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-                    ) {
-                        Text(logLevel, fontSize = 12.sp, color = PurpleText, fontWeight = FontWeight.Medium)
-                        Icon(
-                            Icons.Filled.ArrowDropDown,
-                            contentDescription = stringResource(R.string.logcat_level),
-                            tint = PurpleText
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = levelMenuOpen,
-                        onDismissRequest = { levelMenuOpen = false }
-                    ) {
-                        LOG_LEVELS.forEach { level ->
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        level,
-                                        fontWeight = if (level == logLevel) FontWeight.Bold else FontWeight.Normal,
-                                        color = TextDark
-                                    )
-                                },
-                                onClick = {
-                                    levelMenuOpen = false
-                                    onLogLevelChange(level)
-                                }
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.weight(1f))
-                Text(
-                    if (searchQuery.isBlank())
-                        stringResource(R.string.logcat_count, totalLines)
-                    else
-                        stringResource(R.string.logcat_count_filtered, lines.size, totalLines),
-                    fontSize = 12.sp,
-                    color = GreyText,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+            } else {
+                LogPane(
+                    lines = androidLines,
+                    totalLines = androidTotal,
+                    isSearching = isSearching,
+                    emptyText = stringResource(R.string.logcat_empty),
+                    error = error,
+                    listState = androidListState,
+                    autoRefresh = autoRefresh,
+                    logLevel = logLevel,
+                    onToggleAutoRefresh = onToggleAutoRefresh,
+                    onLevelChange = onLogLevelChange,
+                    onLongPressLine = onLongPressLine
                 )
             }
-            Spacer(Modifier.height(6.dp))
-
-            // ── 日志正文:等宽字体,Debug 级;长按复制单行 ─────────
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .background(CardBg, RoundedCornerShape(14.dp))
-                    .padding(horizontal = 10.dp, vertical = 8.dp)
-            ) {
-                itemsIndexed(lines) { _, line ->
-                    Text(
-                        line,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = TextDark,
-                        maxLines = Int.MAX_VALUE,
-                        modifier = Modifier.combinedClickable(
-                            onClick = {},
-                            onLongClick = { onLongPressLine(line) }
-                        )
-                    )
-                }
-            }
-
-            if (lines.isEmpty() && error == null) {
-                Text(
-                    if (searchQuery.isBlank())
-                        stringResource(R.string.logcat_empty)
-                    else
-                        stringResource(R.string.logcat_empty_search),
-                    fontSize = 12.sp,
-                    color = GreyText,
-                    modifier = Modifier.padding(vertical = 6.dp)
-                )
-            }
-            if (error != null) {
-                Text(
-                    stringResource(R.string.logcat_read_fail, error),
-                    fontSize = 12.sp,
-                    color = Color(0xFFFF6B6B),
-                    modifier = Modifier.padding(vertical = 6.dp)
-                )
-            }
-            Spacer(Modifier.height(8.dp))
         }
 
-        // ── FAB:手动刷新(自动刷新关闭时使用) ──────────────────
+        // ── FAB:手动刷新(当前 tab;自动刷新关闭时使用) ──────────────────
         FloatingActionButton(
             onClick = onManualRefresh,
             containerColor = PurpleFill,
@@ -504,5 +564,132 @@ private fun LogcatScreen(
         ) {
             Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.cd_refresh))
         }
+    }
+}
+
+/**
+ * 单个日志 tab 的主体:自动刷新开关 + 日志等级「设置」下拉 + 行数,下面是等宽日志列表。
+ * 两个 tab 共用同一布局,差异全由入参注入(数据源、等级、回调、空态文案)。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun LogPane(
+    lines: List<String>,
+    totalLines: Int,
+    isSearching: Boolean,
+    emptyText: String,
+    error: String?,
+    listState: LazyListState,
+    autoRefresh: Boolean,
+    logLevel: String,
+    onToggleAutoRefresh: () -> Unit,
+    onLevelChange: (String) -> Unit,
+    onLongPressLine: (String) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        // ── 自动刷新开关 + 日志等级设置 + 行数 ─────────────────────────────
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(stringResource(R.string.logcat_auto_refresh), fontSize = 13.sp, color = TextDark)
+            Spacer(Modifier.width(8.dp))
+            Switch(
+                checked = autoRefresh,
+                onCheckedChange = { onToggleAutoRefresh() },
+                colors = SwitchDefaults.colors(
+                    checkedTrackColor = PurpleText,
+                    checkedThumbColor = Color.White
+                )
+            )
+            Spacer(Modifier.width(8.dp))
+            // 日志等级「设置」:Android tab 改 logcat 抓取阈值;Go tab 改引擎 config.log_level。
+            var levelMenuOpen by remember { mutableStateOf(false) }
+            Box {
+                TextButton(
+                    onClick = { levelMenuOpen = true },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                ) {
+                    Text(logLevel, fontSize = 12.sp, color = PurpleText, fontWeight = FontWeight.Medium)
+                    Icon(
+                        Icons.Filled.ArrowDropDown,
+                        contentDescription = stringResource(R.string.logcat_level),
+                        tint = PurpleText
+                    )
+                }
+                DropdownMenu(
+                    expanded = levelMenuOpen,
+                    onDismissRequest = { levelMenuOpen = false }
+                ) {
+                    LOG_LEVELS.forEach { level ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    level,
+                                    fontWeight = if (level == logLevel) FontWeight.Bold else FontWeight.Normal,
+                                    color = TextDark
+                                )
+                            },
+                            onClick = {
+                                levelMenuOpen = false
+                                onLevelChange(level)
+                            }
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (isSearching) stringResource(R.string.logcat_count_filtered, lines.size, totalLines)
+                else stringResource(R.string.logcat_count, totalLines),
+                fontSize = 12.sp,
+                color = GreyText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+
+        // ── 日志正文:等宽字体;长按复制单行 ─────────
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .background(CardBg, RoundedCornerShape(14.dp))
+                .padding(horizontal = 10.dp, vertical = 8.dp)
+        ) {
+            itemsIndexed(lines) { _, line ->
+                Text(
+                    line,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = TextDark,
+                    maxLines = Int.MAX_VALUE,
+                    modifier = Modifier.combinedClickable(
+                        onClick = {},
+                        onLongClick = { onLongPressLine(line) }
+                    )
+                )
+            }
+        }
+
+        if (lines.isEmpty() && error == null) {
+            Text(
+                if (isSearching) stringResource(R.string.logcat_empty_search) else emptyText,
+                fontSize = 12.sp,
+                color = GreyText,
+                modifier = Modifier.padding(vertical = 6.dp)
+            )
+        }
+        if (error != null) {
+            Text(
+                stringResource(R.string.logcat_read_fail, error),
+                fontSize = 12.sp,
+                color = Color(0xFFFF6B6B),
+                modifier = Modifier.padding(vertical = 6.dp)
+            )
+        }
+        Spacer(Modifier.height(8.dp))
     }
 }

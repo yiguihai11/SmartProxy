@@ -151,6 +151,21 @@ object ConfigProvider {
         writeConfig(context, json)
     }
 
+    /** Go 引擎日志等级(config.log_level:DEBUG/INFO/WARN/ERROR):只读快照,不触发写盘。
+     *  这是 Go slog 的生产端阈值——引擎按它决定哪档日志进 logbuf/打 stdout,缺失回退 INFO
+     *  (与 Go config.Load 补默认一致)。「Go 日志」tab 的等级设置读写这里;Android logcat
+     *  那档是 App 层查看阈值,存 AppPrefs,两边互不相干。 */
+    fun goLogLevel(context: Context): String =
+        readRaw(context)?.optString("log_level", "").orEmpty().ifBlank { "INFO" }
+
+    /** 写 config.log_level:原子落盘后引擎 fsnotify watcher 热重载 applyLogLevel(mobile
+     *  bridge.go),运行中即时生效;引擎没起则下次 StartRouter 读新值。 */
+    fun setGoLogLevel(context: Context, level: String) {
+        val json = readConfig(context)
+        json.put("log_level", level)
+        writeConfig(context, json)
+    }
+
     /** 面板是否 HTTPS:读 filesDir/config.json 的 listen.admin_https(默认 true),
      *  首页链接据此决定 http/https 前缀。只读,不触发写盘。 */
     fun adminHttps(context: Context): Boolean =

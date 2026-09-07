@@ -382,6 +382,30 @@ func BlockConnection(host string) error {
 	return globalEngine.BlockConnection(host)
 }
 
+// GetGoLogs 返回 Go 引擎环形日志缓冲(logbuf.Default)快照的 JSON,形如
+// [{"id":1,"time":"2026-09-08 12:00:00","level":"INFO","message":"..."}]。
+// 与控制面板 GET /logs 同源(同一块 logbuf,level 即 DEBUG/INFO/WARN/ERROR)。
+// Android「Go 日志」tab 走这里读、不走 logcat:gomobile 把 os.Stdout 全标成 logcat
+// I 优先级(见 x/mobile internal/mobileinit/mobileinit_android.go,stdout→ANDROID_LOG_INFO),
+// Go slog 日志在 logd 里没有级别区分,logcat 的 tag 优先级过滤对它完全失效。
+// logbuf 自带 RWMutex,无需 engineMu;引擎未运行时缓冲为空,返回 "[]"。
+func GetGoLogs() string {
+	entries := logbuf.Default.GetAll()
+	if entries == nil {
+		entries = []logbuf.LogEntry{}
+	}
+	data, err := json.Marshal(entries)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+// ClearGoLogs 清空 Go 日志环形缓冲(对应控制面板 POST /logs/clear)。
+func ClearGoLogs() {
+	logbuf.Default.Clear()
+}
+
 // applyLogLevel 重设全局 slog logger 的级别:输出同时进 logbuf.Default 环形缓冲(供纯 Go
 // 面板 Logs 页 GET /logs)并转发 stdout(logcat GoLog tag)。引擎启动与 configReload 热更
 // log_level 共用——对齐桌面 cmd/smartproxy 的 setLogLevel,改日志级别不再需要重启引擎。
