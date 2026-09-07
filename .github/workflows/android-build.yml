@@ -105,12 +105,16 @@ jobs:
               || { echo "::error::missing per-ABI APK: ${abi}"; exit 1; }
           done
           # 签名一致性检查:APK 实际签名证书的 SHA-256 必须等于固定 keystore 的指纹。
-          # 不一致 = 又退回一次性 key,覆盖安装必失败,直接判红。
+          # 坑:apksigner --print-certs 的指纹是无冒号连续 hex,keytool -list 的是冒号分隔,
+          # 两边都剥成 64 位小写 hex 再比。不一致或 APK 没签上 = 覆盖安装必失败,直接判红。
           APKSIGNER="$(ls "$ANDROID_HOME"/build-tools/*/apksigner | head -1)"
-          APK_CERT=$("$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-arm64-v8a-release.apk \
-            | grep -i "SHA-256 digest" | grep -oiE "[0-9a-f]{2}(:[0-9a-f]{2}){31}" | tr 'A-F' 'a-f')
+          APK=app/build/outputs/apk/release/app-arm64-v8a-release.apk
+          CERTS=$("$APKSIGNER" verify --print-certs "$APK" 2>&1) \
+            || { echo "$CERTS"; echo "::error::APK 签名验证失败(可能未签名)"; exit 1; }
+          echo "$CERTS"
+          APK_CERT=$(echo "$CERTS" | grep -i "SHA-256 digest" | grep -oiE "[0-9a-f]{64}" | head -1 | tr 'A-F' 'a-f')
           KS_CERT=$(keytool -list -keystore ci-release.keystore -storepass android -alias androiddebugkey 2>/dev/null \
-            | grep -oiE "[0-9a-f]{2}(:[0-9a-f]{2}){31}" | tr 'A-F' 'a-f')
+            | grep -oiE "([0-9a-f]{2}:){31}[0-9a-f]{2}" | head -1 | tr -d ':' | tr 'A-F' 'a-f')
           echo "APK signing cert:   $APK_CERT"
           echo "Keystore cert:      $KS_CERT"
           [ -n "$APK_CERT" ] && [ "$APK_CERT" = "$KS_CERT" ] \
