@@ -26,6 +26,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # 全历史 + tags:默认 fetch-depth 1 是浅克隆,git describe 够不着 v* 版本 tag,
+          # 版本号会回退成短 commit hash。拉全历史后 VERSION 才能派生出 1.x.y(-N-gHASH)。
+          fetch-depth: 0
 
       # 版本从 git tag 派生(M4):只认 v[0-9]* 发布 tag,排除 backup-* 备份 tag;
       # 无 tag 回退到提交哈希。gradle 用它当 versionName,并取 semver 段当 versionCode。

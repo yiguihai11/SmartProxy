@@ -130,10 +130,14 @@ android:
 	# 用 26 = app 的 minSdk:该值同时写进 AAR 的 minSdkVersion(manifestFmt),若用 35 会
 	# 和 app 的 minSdk 26 冲突导致 manifest 合并失败。AndroidAPIPath(26) 会选已装的
 	# platforms/android-36(>=26 的最高版)当编译用的 android.jar。
-	# -ldflags="-s -w" -trimpath:剥掉 Go .so 的 DWARF 调试信息与符号表,显著瘦身
-	# (gvisor 栈的 .so 是 APK 体积大头,配合 ABI 分包 + APK 内 .so 压缩)。
+	# -ldflags="$(LDFLAGS)":$(LDFLAGS) 已含 -s -w(剥 DWARF/符号表瘦身)+ 三个 -X 版本
+	# 注入(Version/GitCommit/BuildTime)。之前 android 只传 -s -w,版本没注入,导致 AAR 里
+	# Go 引擎 version.Version 恒为默认 1.0.0,web 控制面板 /version 永远显示 1.0.0 不跟随。
+	# gomobile 把 -ldflags 整个字符串透传给 go build,单引号(BuildTime 含空格)由 go 的
+	# quoted.Split 解析,跟桌面 go build -ldflags="$(LDFLAGS)" 完全等价。
+	# -trimpath:剥源码绝对路径。配合 ABI 分包 + APK 内 .so 压缩控体积。
 	gomobile bind -tags with_gvisor -target=android -androidapi=26 -javapkg=smartproxy \
-		-ldflags="-s -w" -trimpath -o $(OUTDIR)/smartproxy.aar ./mobile
+		-ldflags="$(LDFLAGS)" -trimpath -o $(OUTDIR)/smartproxy.aar ./mobile
 	@echo "=> $(OUTDIR)/smartproxy.aar"
 
 ## ios: build iOS Framework

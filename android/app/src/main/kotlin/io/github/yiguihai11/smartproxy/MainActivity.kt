@@ -604,20 +604,13 @@ private fun AppDrawerContent(
         ) {
             // 抽屉头部品牌区
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = PurpleFill,
+                // 品牌 logo:用 launcher 自适应图标的前景位图(黑底霓虹 S 贴纸,自带圆角与透明边距),
+                // 跟桌面图标同源;不再用旧的 icon-font 电源字符 + 紫底。
+                Image(
+                    painter = painterResource(R.mipmap.ic_launcher_foreground),
+                    contentDescription = null,
                     modifier = Modifier.size(46.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            text = "\ue640", // 电源/VPN 图形
-                            fontFamily = IconFont,
-                            fontSize = 24.sp,
-                            color = Color.White
-                        )
-                    }
-                }
+                )
                 Spacer(Modifier.width(14.dp))
                 Column {
                     Text(
