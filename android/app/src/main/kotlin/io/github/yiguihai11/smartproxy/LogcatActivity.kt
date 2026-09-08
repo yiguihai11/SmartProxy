@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -64,6 +65,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -131,6 +134,20 @@ class LogcatActivity : ComponentActivity() {
             AppPrefs.LOG_LEVEL_ERROR -> 3
             else -> 1 // 未知按 INFO
         }
+
+        /** 从 logcat threadtime 行解析优先级用于着色:格式
+         *  `MM-DD HH:MM:SS.UUU PID TID LEVEL TAG: MSG`,空白分段后 LEVEL 在下标 4
+         *  (date=0 time=1 pid=2 tid=3 level=4)。V/D→DEBUG、I→INFO、W→WARN、E/F→ERROR;
+         *  非标准行(如 "beginning of main")回退 INFO 正文色。 */
+        private fun androidLineLevel(line: String): String {
+            val p = line.split(Regex("\\s+")).filter { it.isNotEmpty() }
+            return when (p.getOrNull(4)) {
+                "V", "D" -> AppPrefs.LOG_LEVEL_DEBUG
+                "W" -> AppPrefs.LOG_LEVEL_WARN
+                "E", "F" -> AppPrefs.LOG_LEVEL_ERROR
+                else -> AppPrefs.LOG_LEVEL_INFO
+            }
+        }
     }
 
     /** Go logbuf 一条(对应 Go logbuf.LogEntry / 面板 /logs 的 JSON 元素)。 */
@@ -155,16 +172,16 @@ class LogcatActivity : ComponentActivity() {
     private var showSearch by mutableStateOf(false)
     private var searchQuery by mutableStateOf("")
 
-    /** Android 显示行 = logcat dump 行经关键字过滤。 */
-    private val visibleAndroidLines: List<String>
-        get() = filterSearch(lines)
+    /** Android 显示行 = logcat dump 行解析出等级后经关键字过滤。 */
+    private val visibleAndroidLines: List<DisplayedLine>
+        get() = filterSearch(lines.map { DisplayedLine(it, androidLineLevel(it)) })
 
-    /** Go 显示行 = logbuf 条目先按等级阈值(>= 选中档)过滤历史,再格式化成行,再关键字过滤。 */
-    private val visibleGoLines: List<String>
+    /** Go 显示行 = logbuf 条目先按等级阈值(>= 选中档)过滤历史,再格式化成行(带等级着色)。 */
+    private val visibleGoLines: List<DisplayedLine>
         get() = filterSearch(
             goEntries
                 .filter { levelRank(it.level) >= levelRank(goLogLevel) }
-                .map { "${it.time}  ${it.level.padEnd(5)}  ${it.msg}" }
+                .map { DisplayedLine("${it.time}  ${it.level.padEnd(5)}  ${it.msg}", it.level) }
         )
 
     /** Go 等级过滤后、关键字过滤前的行数(计数 x/y 的 y)。 */
@@ -172,12 +189,12 @@ class LogcatActivity : ComponentActivity() {
         get() = goEntries.count { levelRank(it.level) >= levelRank(goLogLevel) }
 
     /** 当前 tab 关键字过滤后的可见行(复制/分享/计数用)。 */
-    private val currentVisibleLines: List<String>
+    private val currentVisibleLines: List<DisplayedLine>
         get() = if (currentTab == TAB_GO) visibleGoLines else visibleAndroidLines
 
-    private fun filterSearch(src: List<String>): List<String> =
+    private fun filterSearch(src: List<DisplayedLine>): List<DisplayedLine> =
         if (searchQuery.isBlank()) src
-        else src.filter { it.contains(searchQuery, ignoreCase = true) }
+        else src.filter { it.text.contains(searchQuery, ignoreCase = true) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -252,8 +269,8 @@ class LogcatActivity : ComponentActivity() {
                             if (!showSearch) searchQuery = ""
                         },
                         onSearchQueryChange = { searchQuery = it },
-                        onCopyAll = { copyText(currentVisibleLines.joinToString("\n")) },
-                        onShare = { shareText(currentVisibleLines.joinToString("\n")) },
+                        onCopyAll = { copyText(currentVisibleLines.joinToString("\n") { it.text }) },
+                        onShare = { shareText(currentVisibleLines.joinToString("\n") { it.text }) },
                         onClear = {
                             scope.launch { if (currentTab == TAB_GO) clearGoLogs() else clearLogcat() }
                         },
@@ -415,13 +432,67 @@ private val LOG_LEVELS = listOf(
     AppPrefs.LOG_LEVEL_ERROR
 )
 
+/** 一行待显示日志:text=整行(渲染/搜索/复制/分享),level=DEBUG/INFO/WARN/ERROR 用于着色。 */
+private data class DisplayedLine(val text: String, val level: String)
+
+/**
+ * 日志等级 → 行颜色,随昼夜主题(读 ThemeState.isDark,与 SoftBg/CardBg/TextDark 同一套响应式
+ * 机制):ERROR 红、WARN 琥珀/橙、DEBUG 暗淡灰、INFO 跟随正文色。ERROR/WARN 在浅色模式用
+ * 更深的色(深红/深橙)——亮红 #FF6B6B、亮琥珀 #FFB300 打在白卡片上对比不足发糊,深底才用亮的。
+ */
+private fun levelColor(level: String): Color = when (level) {
+    AppPrefs.LOG_LEVEL_ERROR -> if (ThemeState.isDark) Color(0xFFFF6B6B) else Color(0xFFD32F2F)
+    AppPrefs.LOG_LEVEL_WARN -> if (ThemeState.isDark) Color(0xFFFFB300) else Color(0xFFF57C00)
+    AppPrefs.LOG_LEVEL_DEBUG -> GreyText
+    else -> TextDark
+}
+
+/**
+ * 手画 LazyColumn 滚动条(Compose 无内置)。右侧 6dp 半透明圆角滑块:高度按可见项占比、
+ * 纵向位置按滚动进度;内容一屏放得下(total<=visible)时不绘制。日志行高度不一(换行),
+ * 滑块比例/位置用可见项高度估算,近似但够用。只显示并跟随滚动,不做拖动(看位置足矣)。
+ */
+@Composable
+private fun LogScrollbar(listState: LazyListState, modifier: Modifier = Modifier) {
+    val info = listState.layoutInfo
+    val visibleItems = info.visibleItemsInfo
+    val total = info.totalItemsCount
+    val visibleCount = visibleItems.size
+    if (total == 0 || visibleCount == 0 || total <= visibleCount) return
+
+    val viewport = (info.viewportEndOffset - info.viewportStartOffset).coerceAtLeast(1).toFloat()
+    val first = visibleItems.first()
+    val itemH = first.size.coerceAtLeast(1).toFloat() // 单条高度按首个可见项估算(等宽日志行)
+    // 已滚过像素 = 首项之前整项高度 + 它滚出视口顶部的部分(vertical 列表首项 offset 为负)。
+    val scrolledPx = listState.firstVisibleItemIndex * itemH - first.offset
+    val maxScroll = (total * itemH - viewport).coerceAtLeast(1f)
+    val progress = (scrolledPx / maxScroll).coerceIn(0f, 1f)
+    val thumbFraction = (visibleCount.toFloat() / total).coerceIn(0.06f, 1f)
+    val thumbHpx = viewport * thumbFraction
+    val transY = progress * (viewport - thumbHpx)
+
+    Box(
+        modifier
+            .width(6.dp)
+            .fillMaxHeight()
+            .graphicsLayer { translationY = transY }
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(with(LocalDensity.current) { thumbHpx.toDp() })
+                .background(PurpleText.copy(alpha = 0.45f), RoundedCornerShape(3.dp))
+        )
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LogcatScreen(
     currentTab: Int,
     onTabChange: (Int) -> Unit,
     // Android tab
-    androidLines: List<String>,
+    androidLines: List<DisplayedLine>,
     androidTotal: Int,
     androidListState: LazyListState,
     autoRefresh: Boolean,
@@ -429,7 +500,7 @@ private fun LogcatScreen(
     onToggleAutoRefresh: () -> Unit,
     onLogLevelChange: (String) -> Unit,
     // Go tab
-    goLines: List<String>,
+    goLines: List<DisplayedLine>,
     goTotal: Int,
     goListState: LazyListState,
     goAutoRefresh: Boolean,
@@ -581,7 +652,7 @@ private fun LogcatScreen(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun LogPane(
-    lines: List<String>,
+    lines: List<DisplayedLine>,
     totalLines: Int,
     isSearching: Boolean,
     emptyText: String,
@@ -657,28 +728,36 @@ private fun LogPane(
         }
         Spacer(Modifier.height(6.dp))
 
-        // ── 日志正文:等宽字体;长按复制单行 ─────────
-        LazyColumn(
-            state = listState,
+        // ── 日志正文:等宽字体、按等级着色、长按复制单行;右侧手画滚动条 ─────────
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f)
                 .background(CardBg, RoundedCornerShape(14.dp))
-                .padding(horizontal = 10.dp, vertical = 8.dp)
         ) {
-            itemsIndexed(lines) { _, line ->
-                Text(
-                    line,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = TextDark,
-                    maxLines = Int.MAX_VALUE,
-                    modifier = Modifier.combinedClickable(
-                        onClick = {},
-                        onLongClick = { onLongPressLine(line) }
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                itemsIndexed(lines) { _, line ->
+                    Text(
+                        line.text,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = levelColor(line.level),
+                        maxLines = Int.MAX_VALUE,
+                        modifier = Modifier.combinedClickable(
+                            onClick = {},
+                            onLongClick = { onLongPressLine(line.text) }
+                        )
                     )
-                )
+                }
             }
+            // Compose 的 LazyColumn 不自带滚动条,日志动辄上千行看不到位置,手画一条:
+            // 内容不溢出(一屏放得下)时不显示。
+            LogScrollbar(listState, Modifier.align(Alignment.CenterEnd).padding(end = 3.dp))
         }
 
         if (lines.isEmpty() && error == null) {
