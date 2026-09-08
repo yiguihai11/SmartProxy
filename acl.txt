@@ -48,6 +48,14 @@ block domain ai-search-partner-prd.vivo.com.cn
 block domain copilot-api-auth-prd.vivo.com.cn
 # 第三方(字节)URL 安全扫描
 block domain scc.bytedance.com
+# 错误页/新标签页「精彩推荐」信息流:h5 是 feeds 模块页面,数据走 browsercrp/loadAll.do(已堵),
+# 其余为内容分发/热榜/素材 CDN,堵死后推荐栏整栏空白
+block domain h5.vivo.com.cn
+block domain browserfeeds.vivo.com.cn
+block domain fdcontentdispatch.vivo.com.cn
+block domain feedscontent-hot-dst.vivo.com.cn
+block domain fc-news-detail.vivo.com.cn
+block domain contentstatic.vivo.com.cn
 
 #allow domain internal.corp             # 公司内部域名放行（不拦截、不代理）
 
