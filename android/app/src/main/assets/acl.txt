@@ -40,6 +40,7 @@ block domain gaia-mix-prd.vivo.com.cn
 block domain browsersubscribe.vivo.com.cn
 block domain browserconf.vivo.com.cn
 block domain kernelapi.vivo.com.cn        # 名单下发 multiget.do(拦后名单停更)
+block domain kernelstatic.vivo.com.cn     # 名单 zip 实际下载源(multiget 返回的 URL 主机)
 block domain fuli.vivo.com.cn
 # AI 搜索/助手(上传搜索词与 URL,拦后 AI 功能失效)
 block domain gptkit-proxy.vivo.com.cn
