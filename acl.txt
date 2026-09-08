@@ -20,10 +20,33 @@
 #block domain *.adnetwork.com           # 拦截广告域名（含所有子域名）
 #block domain tracker.example.com       # 拦截精确域名
 
-block domain browserconf.vivo.com.cn
+# ── vivo 浏览器隐私上报/云查拦截(逆向 v30.7.0.0 实测) ──
+# 注意: 以下两个是 .com 不是 .com.cn, *.vivo.com.cn 规则盖不住!
+block domain browsercloud.vivo.com        # Speedy 云加速网关,全流量经此转发(proxy.do/check.do),日志实证
+block domain kernelapi.vivo.com           # 配置/名单下发容灾域名(.com 版,别只拦 .com.cn)
+# 云查: 每打开一个页面 POST 完整 URL+搜索词(isLegitimate.do)
+block domain browsercrp.vivo.com.cn
+# 行为埋点 / 广告 / 风控上报
+block domain browserreport.vivo.com.cn
+block domain stvideoreport.vivo.com.cn
+block domain videobacklog.vivo.com.cn
 block domain adreq.vivo.com.cn
 block domain adlog.vivo.com.cn
+block domain sentinelapi.vivo.com.cn
+block domain st-browser.vivo.com.cn
+block domain usrsys.vivo.com.cn
+block domain usrsysjoint.vivo.com.cn
+block domain gaia-mix-prd.vivo.com.cn
 block domain browsersubscribe.vivo.com.cn
+block domain browserconf.vivo.com.cn
+block domain kernelapi.vivo.com.cn        # 名单下发 multiget.do(拦后名单停更)
+block domain fuli.vivo.com.cn
+# AI 搜索/助手(上传搜索词与 URL,拦后 AI 功能失效)
+block domain gptkit-proxy.vivo.com.cn
+block domain ai-search-partner-prd.vivo.com.cn
+block domain copilot-api-auth-prd.vivo.com.cn
+# 第三方(字节)URL 安全扫描
+block domain scc.bytedance.com
 
 #allow domain internal.corp             # 公司内部域名放行（不拦截、不代理）
 
@@ -39,10 +62,7 @@ block domain browsersubscribe.vivo.com.cn
 
 
 proxy domain api.tripdata.app ss-local
-block domain kernelapi.vivo.com.cn
 
 block domain cdn.wwads.cn
 
 block domain ads.mozilla.org
-
-block domain fuli.vivo.com.cn
