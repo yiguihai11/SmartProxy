@@ -4,8 +4,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-// 版本号形态 <发版版本>-<短commit>(如 1.0-2d27600):CI 注入 VERSION,同时喂这里的
-// versionName 和 Go 引擎 /version 控制面板(经 Makefile LDFLAGS),两边同源。本机无 env 回退 1.0.0。
+// 版本号:HEAD 顶在 tag 上为干净号(如 1.0.1),tag 后提交为 1.0.1-3-g2d27600。
+// CI 注入 VERSION,同时喂这里的 versionName 和 Go 引擎 /version 控制面板(经 Makefile
+// LDFLAGS),两边同源。本机无 env 回退 1.0.0。
 val ciVersion: String = System.getenv("VERSION") ?: "1.0.0"
 
 /**
