@@ -122,7 +122,17 @@ proxy port 22 direct                   # SSH 强制直连（"direct" 为特殊�
 
 ## 📱 Android 客户端
 
-全功能独立 App（Kotlin + Jetpack Compose，`android/`）。引擎经 `gomobile bind` 编译为 AAR 集成；APK 由 GitHub Actions 构建，四 ABI（arm64-v8a / armeabi-v7a / x86_64 / x86），版本号取自 git tag。
+全功能独立 App（Kotlin + Jetpack Compose，`android/`）。引擎经 `gomobile bind` 编译为 AAR 集成；APK 由 GitHub Actions 构建，四 ABI（arm64-v8a / armeabi-v7a / x86_64 / x86），版本号取自 git tag（两位 `x.y`，tag 后开发版形如 `1.0-3-g2d27600`）。
+
+**下载**：[GitHub Releases](https://github.com/yiguihai11/SmartProxy/releases/latest) 取分 ABI 签名包，按设备架构选：
+
+| APK | 适用 |
+|---|---|
+| `arm64-v8a` | 2017 年后绝大多数真机（默认下这个） |
+| `armeabi-v7a` | 老 32 位 ARM 机 |
+| `x86_64` / `x86` | 安卓模拟器（64 / 32 位） |
+
+固定 keystore 签名，可直接覆盖安装升级。
 
 **两种服务模式**（抽屉 → 服务模式）：
 - **VPN 隧道**（默认）：`VpnService` 建 TUN，引擎以 **fd 模式**接管全部流量，全局透明代理。
@@ -132,7 +142,7 @@ proxy port 22 direct                   # SSH 强制直连（"direct" 为特殊�
 - 首页：连接状态、IPv4/IPv6 开关、开机自启、管理面板入口（URL / 二维码 / 复制）。开关语义随服务模式切换：VPN 隧道 = 拦截（tun 接管该族流量）；仅代理 = SOCKS5 监听（双开/只 v6 = `::`、只 v4 = `0.0.0.0`）。
 - 抽屉：代理应用（per-app 分流与「禁止联网」，仅 VPN 隧道模式显示）、DNS 服务器注入（仅 VPN）、排除路由（仅 VPN + API 33+）、服务模式、联网状态、日志查看。
 - 联网状态：按应用的实时连接与网速，页面打开才采集；单条连接可封禁（掐断现存连接 + 写 ACL）。
-- 日志：应用内查看 `SmartProxyVpn` 标签；Go 引擎日志在 logcat 的 `GoLog` 标签（应用内有意排除）。
+- 日志：应用内查看页分 **Android / Go 双 tab**——Android 日志看 logcat（`SmartProxyVpn` 标签），Go 引擎日志经 logbuf 桥按 slog 等级读取与实时过滤，阈值可在页内直接设置。
 - 国际化：界面中英双语 —— 默认英文，系统语言为中文时自动切换中文。
 
 **构建**：
