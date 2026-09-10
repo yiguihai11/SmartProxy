@@ -140,6 +140,13 @@ class NetworkStatusActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 数据全靠 VPN 引擎的连接采集,服务没跑时这页就是空壳。桌面长按快捷方式可能直跳进来,
+        // 统一在入口拦(抽屉/悬浮胶囊走的也是这个 Activity),提示一句直接关掉。
+        if (!SmartProxyVpnService.isRunning.value) {
+            Toast.makeText(this, R.string.toast_service_not_running, Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
         enableEdgeToEdge()
         setContent {
             val scope = rememberCoroutineScope()

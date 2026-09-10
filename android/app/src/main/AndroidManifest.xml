@@ -49,6 +49,10 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- 桌面图标长按菜单:联网状态 / 日志查看 / 管理面板 -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
 
         <!-- 应用选择页(§5):App 内启动,不导出。 -->

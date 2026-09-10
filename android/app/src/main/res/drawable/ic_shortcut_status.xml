@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 长按快捷方式:联网状态(信号柱)。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FF2EBD85"
+        android:pathData="M4.8,6h14.4v3H4.8zM4.8,15h2.4v3H4.8zM8.8,12h2.4v6H8.8zM12.8,8h2.4v10h-2.4zM16.8,10h2.4v8h-2.4z" />
+</vector>

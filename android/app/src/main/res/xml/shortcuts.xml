@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 桌面图标长按静态快捷方式。目标 Activity 虽 exported=false,但快捷方式以本应用
+     身份发 PendingIntent,照常可跳。面板地址是动态的(VPN 跑起来才有 smartproxy.lan),
+     走 MainActivity + extra 兜底,不在这里写死 URL。 -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="network_status"
+        android:icon="@drawable/ic_shortcut_status"
+        android:shortcutShortLabel="@string/shortcut_status"
+        android:shortcutLongLabel="@string/shortcut_status">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="io.github.yiguihai11.smartproxy"
+            android:targetClass="io.github.yiguihai11.smartproxy.NetworkStatusActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="logs"
+        android:icon="@drawable/ic_shortcut_logs"
+        android:shortcutShortLabel="@string/shortcut_logs"
+        android:shortcutLongLabel="@string/shortcut_logs">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="io.github.yiguihai11.smartproxy"
+            android:targetClass="io.github.yiguihai11.smartproxy.LogcatActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="admin_panel"
+        android:icon="@drawable/ic_shortcut_panel"
+        android:shortcutShortLabel="@string/shortcut_panel"
+        android:shortcutLongLabel="@string/shortcut_panel">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="io.github.yiguihai11.smartproxy"
+            android:targetClass="io.github.yiguihai11.smartproxy.MainActivity">
+            <extra android:name="shortcut_open_panel" android:value="true" />
+        </intent>
+    </shortcut>
+</shortcuts>

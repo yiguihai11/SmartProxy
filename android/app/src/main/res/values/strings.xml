@@ -104,6 +104,12 @@
     <!-- Quick Settings tile subtitle -->
     <string name="tile_connected">Connected</string>
     <string name="tile_disconnected">Disconnected</string>
+    <!-- Launcher long-press shortcuts -->
+    <string name="shortcut_status">Network status</string>
+    <string name="shortcut_logs">Logs</string>
+    <string name="shortcut_panel">Admin panel</string>
+    <string name="toast_service_not_running">Service is not running</string>
+    <string name="toast_panel_unavailable">Start the service first</string>
     <string name="battery_title">Allow background running</string>
     <string name="battery_message">Proxy-only mode provides SOCKS5 &amp; the panel from the background. System power policies (smart freeze) may cut this app\'s network in the background, breaking the proxy.\n\nGo to: Settings → Apps → SmartProxy → Battery management → Allow background running, and disable \"smart freeze\".</string>
     <string name="battery_settings">Go to settings</string>

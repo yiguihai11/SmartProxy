@@ -192,6 +192,15 @@ class MainActivity : ComponentActivity() {
         if (intent?.getBooleanExtra(QuickToggleService.EXTRA_START_VPN, false) == true) {
             android.os.Handler(android.os.Looper.getMainLooper()).post { onToggleClicked() }
         }
+        // 桌面长按快捷方式「管理面板」:面板地址随服务状态变(VPN 模式要等 smartproxy.lan),
+        // 静态 shortcut 写不死 URL,在这里现取;取不到说明服务没跑,弹 toast 不做傻事。
+        if (intent?.getBooleanExtra(EXTRA_OPEN_PANEL, false) == true) {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                val url = PanelUrl.url(this)
+                if (url != null) openPanel(this, url)
+                else Toast.makeText(this, R.string.toast_panel_unavailable, Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     override fun onResume() {
@@ -339,6 +348,9 @@ class MainActivity : ComponentActivity() {
 }
 
 private const val MAX_BATTERY_OPT_ASKS = 3
+
+/** 桌面长按快捷方式「管理面板」跳进 MainActivity 时带的 extra(见 res/xml/shortcuts.xml)。 */
+private const val EXTRA_OPEN_PANEL = "shortcut_open_panel"
 
 private fun copyPanelUrl(context: Context, url: String) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
