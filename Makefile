@@ -4,12 +4,12 @@ MAIN   := ./cmd/smartproxy/
 OUTDIR := build
 
 # Version follows git: nearest "v*" version tag (leading "v" stripped), plus
-# commit-count suffix (e.g. "1.1.0-3-gabc1234") and "-dirty" when the tree is
+# commit-count suffix (e.g. "1.2-3-gabc1234") and "-dirty" when the tree is
 # modified. --match 'v*' ignores non-version tags (e.g. ad-hoc backup tags).
 # Outside a git repo it falls back to the last release; override explicitly
-# with: make build VERSION=x.y.z
+# with: make build VERSION=x.y
 GIT_TAG    := $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null)
-VERSION    ?= $(if $(GIT_TAG),$(patsubst v%,%,$(GIT_TAG)),1.0.0)
+VERSION    ?= $(if $(GIT_TAG),$(patsubst v%,%,$(GIT_TAG)),1.0)
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 # Local "YYYY-MM-DD HH:MM:SS". The -X value is wrapped in single quotes because
 # go build splits -ldflags with quoted.Split (quotes group a span; backslashes
@@ -132,7 +132,7 @@ android:
 	# platforms/android-36(>=26 的最高版)当编译用的 android.jar。
 	# -ldflags="$(LDFLAGS)":$(LDFLAGS) 已含 -s -w(剥 DWARF/符号表瘦身)+ 三个 -X 版本
 	# 注入(Version/GitCommit/BuildTime)。之前 android 只传 -s -w,版本没注入,导致 AAR 里
-	# Go 引擎 version.Version 恒为默认 1.0.0,web 控制面板 /version 永远显示 1.0.0 不跟随。
+	# Go 引擎 version.Version 恒为默认 1.0,web 控制面板 /version 永远显示 1.0 不跟随。
 	# gomobile 把 -ldflags 整个字符串透传给 go build,单引号(BuildTime 含空格)由 go 的
 	# quoted.Split 解析,跟桌面 go build -ldflags="$(LDFLAGS)" 完全等价。
 	# -trimpath:剥源码绝对路径。配合 ABI 分包 + APK 内 .so 压缩控体积。

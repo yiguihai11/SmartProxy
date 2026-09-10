@@ -6,13 +6,13 @@ plugins {
 
 // 版本号:HEAD 顶在 tag 上为干净号(如 1.1),tag 后提交为 1.1-3-g2d27600。
 // CI 注入 VERSION,同时喂这里的 versionName 和 Go 引擎 /version 控制面板(经 Makefile
-// LDFLAGS),两边同源。本机无 env 回退 1.0.0。
-val ciVersion: String = System.getenv("VERSION") ?: "1.0.0"
+// LDFLAGS),两边同源。本机无 env 回退 1.0。
+val ciVersion: String = System.getenv("VERSION") ?: "1.0"
 
 /**
  * versionCode:CI 注入 VERSION_CODE(100000 + git 提交数,随提交单调递增、绝不降级),
- * 优先用它;本机无 env 时从版本串 semver 段派生(major*100000 + minor*1000 + patch),
- * patch 可缺省(1.0 视同 1.0.0),解析失败回退 1。
+ * 优先用它;本机无 env 时从版本串派生(major*100000 + minor*1000 + patch),
+ * patch 段可缺省(两位 x.y 是标准发版格式,patch 缺省即 0),解析失败回退 1。
  */
 fun deriveVersionCode(version: String): Int {
     val m = Regex("""(\d+)\.(\d+)(?:\.(\d+))?""").find(version) ?: return 1
