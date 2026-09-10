@@ -101,6 +101,9 @@
 
     <!-- Toasts / platform dialogs -->
     <string name="toast_no_upstream">No upstream proxy configured. Traffic cannot be forwarded — configure one in the admin panel.</string>
+    <!-- Quick Settings tile subtitle -->
+    <string name="tile_connected">Connected</string>
+    <string name="tile_disconnected">Disconnected</string>
     <string name="battery_title">Allow background running</string>
     <string name="battery_message">Proxy-only mode provides SOCKS5 &amp; the panel from the background. System power policies (smart freeze) may cut this app\'s network in the background, breaking the proxy.\n\nGo to: Settings → Apps → SmartProxy → Battery management → Allow background running, and disable \"smart freeze\".</string>
     <string name="battery_settings">Go to settings</string>

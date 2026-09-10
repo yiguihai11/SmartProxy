@@ -187,6 +187,11 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+        // 控制中心磁贴:VPN 授权缺失时收面板跳过来,落到这里接着弹系统授权框,
+        // 用户同意后 vpnConsent 回调自动起服务。post 到本轮之后,等界面与 launcher 就绪。
+        if (intent?.getBooleanExtra(QuickToggleService.EXTRA_START_VPN, false) == true) {
+            android.os.Handler(android.os.Looper.getMainLooper()).post { onToggleClicked() }
+        }
     }
 
     override fun onResume() {

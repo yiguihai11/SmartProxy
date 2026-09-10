@@ -101,6 +101,9 @@
 
     <!-- Toasts / platform dialogs -->
     <string name="toast_no_upstream">未配置上游代理节点,流量无法转发,请到管理面板配置</string>
+    <!-- 控制中心磁贴副标题 -->
+    <string name="tile_connected">已连接</string>
+    <string name="tile_disconnected">已断开</string>
     <string name="battery_title">允许后台运行</string>
     <string name="battery_message">仅代理模式由本应用在后台提供 SOCKS5 与面板服务。系统的省电策略(智能冻结)会在后台掐掉本应用的网络,导致代理后台断连。\n\n请到:设置 → 应用 → SmartProxy → 耗电管理 → 允许后台运行,并关闭「智能冻结」。</string>
     <string name="battery_settings">去设置</string>
