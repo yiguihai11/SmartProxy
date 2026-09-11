@@ -7,7 +7,6 @@ import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import android.util.LruCache
-import java.net.InetAddress
 import java.net.InetSocketAddress
 
 /**
@@ -71,8 +70,16 @@ class UIDResolver(context: Context) : smartproxy.mobile.UIDResolver {
         // 2. 缓存未命中,发起系统 IPC 调用
         return try {
             val manager = cm ?: return UNKNOWN
-            val localAddr = InetAddresses.parseNumericAddress(localIP)
-            val remoteAddr = InetAddresses.parseNumericAddress(remoteIP)
+            val localAddr = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                InetAddresses.parseNumericAddress(localIP)
+            } else {
+                java.net.InetAddress.getByName(localIP)
+            }
+            val remoteAddr = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                InetAddresses.parseNumericAddress(remoteIP)
+            } else {
+                java.net.InetAddress.getByName(remoteIP)
+            }
             val local = InetSocketAddress(localAddr, localPort)
             val remote = InetSocketAddress(remoteAddr, remotePort)
 

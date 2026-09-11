@@ -80,29 +80,21 @@ func (c *Cache) Close() {
 func (c *Cache) Get(qname string, qtype uint16) []byte {
 	key := cacheKey{qname: qname, qtype: qtype}
 
-	c.mu.RLock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	entry, ok := c.entries[key]
-	if ok && !time.Now().After(entry.expire) {
-		c.mu.RUnlock()
-
-		c.mu.Lock()
-		if entry.link != nil {
-			c.lru.MoveToFront(entry.link)
-		}
-		c.mu.Unlock()
-		return entry.wire
+	if !ok {
+		return nil
 	}
-	c.mu.RUnlock()
-
-	if ok {
-
-		c.mu.Lock()
-		if entry, ok := c.entries[key]; ok && time.Now().After(entry.expire) {
-			c.deleteEntry(key, entry)
-		}
-		c.mu.Unlock()
+	if time.Now().After(entry.expire) {
+		c.deleteEntry(key, entry)
+		return nil
 	}
-	return nil
+	if entry.link != nil {
+		c.lru.MoveToFront(entry.link)
+	}
+	return entry.wire
 }
 
 func (c *Cache) Set(qname string, qtype uint16, wire []byte, ttl time.Duration) {

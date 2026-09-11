@@ -48,7 +48,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
+import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -581,7 +581,7 @@ private fun LogcatScreen(
             )
 
             // ── Tab:Android logcat / Go 引擎 slog ──
-            TabRow(
+            PrimaryTabRow(
                 selectedTabIndex = currentTab,
                 containerColor = Color.Transparent,
                 contentColor = PurpleText,
