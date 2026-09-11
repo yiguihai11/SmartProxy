@@ -498,6 +498,7 @@ type ProxyInfo struct {
 	UDPCapability string              `json:"udp_capability"`
 	Health        ProxyHealthSnapshot `json:"health"`
 	UDPHealth     ProxyHealthSnapshot `json:"udp_health"`
+	PingLatency   time.Duration       `json:"ping_latency,omitempty"`
 }
 
 func (m *Manager) Proxies() []ProxyInfo {
@@ -526,6 +527,7 @@ func (m *Manager) Proxies() []ProxyInfo {
 			UDPCapability: string(proxy.UDPCapability()),
 			Health:        proxy.health.Snapshot(),
 			UDPHealth:     proxy.udpHealth.Snapshot(),
+			PingLatency:   proxy.PingLatency(),
 		})
 	}
 	return infos
@@ -592,7 +594,7 @@ func (m *Manager) Strategy() string {
 	return m.strategy
 }
 
-// TestProxy runs an on-demand, real network test for the given proxy alias and protocol ("tcp" or "udp").
+// TestProxy runs an on-demand, real network test for the given proxy alias and protocol ("ping", "tcp" or "udp").
 // Returns the round-trip latency and any error encountered during the probe.
 func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.Duration, error) {
 	m.mu.RLock()
@@ -607,6 +609,16 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 	var err error
 
 	switch protocol {
+	case "ping":
+		start := time.Now()
+		conn, dialErr := proxy.dial(ctx)
+		if dialErr != nil {
+			proxy.SetPingLatency(0)
+			return 0, dialErr
+		}
+		latency = time.Since(start)
+		_ = conn.Close()
+		proxy.SetPingLatency(latency)
 	case "tcp":
 		if m.healthChecker != nil {
 			latency, err = m.healthChecker.ProbeTCP(ctx, proxy)
@@ -636,7 +648,7 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 			}
 		}
 	default:
-		return 0, fmt.Errorf("invalid protocol %q, must be tcp or udp", protocol)
+		return 0, fmt.Errorf("invalid protocol %q, must be ping, tcp or udp", protocol)
 	}
 
 	return latency, err

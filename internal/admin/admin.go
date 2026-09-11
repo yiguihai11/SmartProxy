@@ -861,10 +861,10 @@ func (s *Server) handleHealthResetAuto(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "reset": n})
 }
 
-// handleProxyTest handles on-demand testing of a proxy node's TCP or UDP availability.
+// handleProxyTest handles on-demand testing of a proxy node's Ping, TCP or UDP availability.
 // Query parameters:
 //   - alias: proxy alias to test (required)
-//   - protocol: "tcp" or "udp" (required)
+//   - protocol: "ping", "tcp" or "udp" (required)
 //   - timeout: optional timeout in seconds (default 5, 1..30)
 func (s *Server) handleProxyTest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodGet {
@@ -880,8 +880,8 @@ func (s *Server) handleProxyTest(w http.ResponseWriter, r *http.Request) {
 	if protocol == "" {
 		protocol = r.URL.Query().Get("proto")
 	}
-	if protocol != "tcp" && protocol != "udp" {
-		http.Error(w, "need ?protocol=tcp|udp", http.StatusBadRequest)
+	if protocol != "ping" && protocol != "tcp" && protocol != "udp" {
+		http.Error(w, "need ?protocol=ping|tcp|udp", http.StatusBadRequest)
 		return
 	}
 

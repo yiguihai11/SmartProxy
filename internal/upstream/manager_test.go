@@ -3,6 +3,7 @@ package upstream
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -1224,5 +1225,46 @@ func TestManager_TestProxy(t *testing.T) {
 	// 4. Offline node returns error
 	if _, err := m.TestProxy(ctx, "p-socks", "tcp"); err == nil {
 		t.Error("expected error for offline proxy")
+	}
+
+	// 5. Ping offline node returns error
+	if _, err := m.TestProxy(ctx, "p-socks", "ping"); err == nil {
+		t.Error("expected error for ping to offline proxy")
+	}
+
+	// 6. Ping online node succeeds and sets PingLatency
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+
+	mLive, err := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{
+			{Alias: "live-node", URL: "socks5://" + ln.Addr().String()},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lat, err := mLive.TestProxy(ctx, "live-node", "ping")
+	if err != nil {
+		t.Fatalf("expected ping to succeed, got %v", err)
+	}
+	if lat <= 0 {
+		t.Errorf("expected positive latency, got %v", lat)
+	}
+	proxies := mLive.Proxies()
+	if len(proxies) != 1 || proxies[0].PingLatency <= 0 {
+		t.Errorf("expected ProxyInfo to reflect positive PingLatency, got %+v", proxies)
 	}
 }

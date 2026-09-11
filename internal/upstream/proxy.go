@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-shadowsocks"
@@ -107,9 +108,20 @@ type Proxy struct {
 	// relay (the udp_only use case) and a dead UDP path does not disable TCP routing.
 	udpHealth ProxyHealth
 
+	// pingLatency records the last measured direct TCP connect RTT (nanoseconds), stored atomically.
+	pingLatency atomic.Int64
+
 	// ssMethod is the encryption implementation for the ss:// scheme (classic AEAD or
 	// none/plain), built once by NewProxy when parsing method:password; Method is immutable and safe for concurrent use.
 	ssMethod shadowsocks.Method
+}
+
+func (p *Proxy) PingLatency() time.Duration {
+	return time.Duration(p.pingLatency.Load())
+}
+
+func (p *Proxy) SetPingLatency(d time.Duration) {
+	p.pingLatency.Store(int64(d))
 }
 
 // SchemeSupportsUDP reports whether the upstream's protocol can carry UDP at all. This is a

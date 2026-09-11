@@ -1633,4 +1633,21 @@ func TestAdmin_ProxyTest(t *testing.T) {
 	if res["error"] == nil || res["error"] == "" {
 		t.Error("expected error message in result")
 	}
+
+	// 6. Offline node ping test returns 200 with available=false
+	respPing, err := httpPost(s.sockPath, "/proxy/test?alias=ss-local&protocol=ping&timeout=1")
+	if err != nil {
+		t.Fatalf("POST /proxy/test?protocol=ping failed: %v", err)
+	}
+	defer respPing.Body.Close()
+	if respPing.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 for ping test result, got %d", respPing.StatusCode)
+	}
+	var resPing map[string]interface{}
+	if err := json.NewDecoder(respPing.Body).Decode(&resPing); err != nil {
+		t.Fatalf("decode json failed: %v", err)
+	}
+	if resPing["available"] != false {
+		t.Errorf("expected available=false for offline ping, got %v", resPing["available"])
+	}
 }
