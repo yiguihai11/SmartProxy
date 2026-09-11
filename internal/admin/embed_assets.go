@@ -1,7 +1,8 @@
 package admin
 
 import (
-	_ "embed"
+	"embed"
+	"io/fs"
 	"net/http"
 )
 
@@ -68,3 +69,24 @@ func (s *Server) handleQRCodeJS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 	w.Write(qrcodeJS)
 }
+
+//go:embed static/flags/flag-icons.min.css
+var flagIconsCSS []byte
+
+//go:embed static/flags/4x3/*.svg
+var flags4x3FS embed.FS
+
+var subFlagsFS, _ = fs.Sub(flags4x3FS, "static/flags/4x3")
+var flagsFileServer = http.StripPrefix("/flags/4x3/", http.FileServer(http.FS(subFlagsFS)))
+
+func (s *Server) handleFlagIconsCSS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Write(flagIconsCSS)
+}
+
+func (s *Server) handleFlags(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	flagsFileServer.ServeHTTP(w, r)
+}
+

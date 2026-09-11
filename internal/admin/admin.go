@@ -297,6 +297,8 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/chart.js", s.handleChartJS)
 	mux.HandleFunc("/jsqr.js", s.handleJsqrJS)
 	mux.HandleFunc("/qrcode.js", s.handleQRCodeJS)
+	mux.HandleFunc("/flag-icons.css", s.handleFlagIconsCSS)
+	mux.HandleFunc("/flags/4x3/", s.handleFlags)
 	mux.HandleFunc("/logs", s.handleLogs)
 	mux.HandleFunc("/logs/clear", s.handleLogsClear)
 	mux.HandleFunc("/terminal/clear", s.handleTerminalClear)
@@ -921,13 +923,22 @@ func (s *Server) handleProxyTest(w http.ResponseWriter, r *http.Request) {
 
 	latencyMs := float64(latency.Microseconds()) / 1000.0
 	slog.Info("admin: proxy test succeeded", "alias", alias, "protocol", protocol, "latency_ms", latencyMs)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	respData := map[string]interface{}{
 		"status":     "ok",
 		"alias":      alias,
 		"protocol":   protocol,
 		"available":  true,
 		"latency_ms": latencyMs,
-	})
+	}
+	if info, ok := s.mgr.ProxyInfo(alias); ok {
+		if info.CountryCode != "" {
+			respData["country_code"] = info.CountryCode
+		}
+		if info.ExitIP != "" {
+			respData["exit_ip"] = info.ExitIP
+		}
+	}
+	json.NewEncoder(w).Encode(respData)
 }
 
 // handleExport returns a node's full shareable URL (real ss:// link, credentials intact)

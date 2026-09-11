@@ -111,6 +111,10 @@ type Proxy struct {
 	// pingLatency records the last measured direct TCP connect RTT (nanoseconds), stored atomically.
 	pingLatency atomic.Int64
 
+	// countryCode (e.g. "HK", "US") and exitIP are detected via Cloudflare trace through the node.
+	countryCode atomic.Pointer[string]
+	exitIP      atomic.Pointer[string]
+
 	// ssMethod is the encryption implementation for the ss:// scheme (classic AEAD or
 	// none/plain), built once by NewProxy when parsing method:password; Method is immutable and safe for concurrent use.
 	ssMethod shadowsocks.Method
@@ -123,6 +127,31 @@ func (p *Proxy) PingLatency() time.Duration {
 func (p *Proxy) SetPingLatency(d time.Duration) {
 	p.pingLatency.Store(int64(d))
 }
+
+func (p *Proxy) CountryCode() string {
+	if ptr := p.countryCode.Load(); ptr != nil {
+		return *ptr
+	}
+	return ""
+}
+
+func (p *Proxy) ExitIP() string {
+	if ptr := p.exitIP.Load(); ptr != nil {
+		return *ptr
+	}
+	return ""
+}
+
+func (p *Proxy) SetGeoInfo(countryCode, exitIP string) {
+	if countryCode != "" {
+		cc := strings.ToUpper(countryCode)
+		p.countryCode.Store(&cc)
+	}
+	if exitIP != "" {
+		p.exitIP.Store(&exitIP)
+	}
+}
+
 
 // SchemeSupportsUDP reports whether the upstream's protocol can carry UDP at all. This is a
 // static property of the scheme and never changes: only SOCKS5 / SOCKS5h / SS have a UDP

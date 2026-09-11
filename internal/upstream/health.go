@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -322,13 +323,35 @@ func probeTCP(ctx context.Context, p *Proxy, targetURL string) (time.Duration, e
 		return 0, err
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
 		return 0, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
+	if len(body) > 0 {
+		parseAndSaveGeo(p, body)
+	}
+
 	return time.Since(start), nil
+}
+
+func parseAndSaveGeo(p *Proxy, body []byte) {
+	if p == nil || len(body) == 0 {
+		return
+	}
+	var exitIP, loc string
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "ip=") {
+			exitIP = strings.TrimPrefix(line, "ip=")
+		} else if strings.HasPrefix(line, "loc=") {
+			loc = strings.ToUpper(strings.TrimPrefix(line, "loc="))
+		}
+	}
+	if loc != "" || exitIP != "" {
+		p.SetGeoInfo(loc, exitIP)
+	}
 }
 
 // ProbeTCP actively probes a proxy over TCP by executing an HTTP GET to the configured
@@ -339,6 +362,9 @@ func (hc *HealthChecker) ProbeTCP(ctx context.Context, p *Proxy) (time.Duration,
 		if cfg := hc.cfg.Load(); cfg != nil && cfg.URL != "" {
 			probeURL = cfg.URL
 		}
+	}
+	if p != nil && (p.CountryCode() == "" || p.ExitIP() == "") && probeURL == "http://cp.cloudflare.com/generate_204" {
+		probeURL = "http://cp.cloudflare.com/cdn-cgi/trace"
 	}
 	return probeTCP(ctx, p, probeURL)
 }

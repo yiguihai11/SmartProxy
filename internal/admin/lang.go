@@ -296,6 +296,7 @@ var zhPrefixes = []struct{ Pre, Zh string }{
 	{"Auto-scroll: ", "自动滚动："},
 	{"latency: ", "延迟："},
 	{"ping: ", "Ping："},
+	{"exit: ", "出口："},
 	{"Error: ", "错误："},
 	{"Type: ", "类型："},
 	{"Level: ", "级别："},

@@ -9,6 +9,7 @@
 <title>SmartProxy</title>
 <link rel="stylesheet" href="/cm.css">
 <link rel="stylesheet" href="/dracula.css">
+<link rel="stylesheet" href="/flag-icons.css">
 <script src="/chart.js"></script>
 <script src="/cm.js"></script>
 <script src="/json.js"></script>
@@ -90,13 +91,19 @@ tr:last-child td{border-bottom:none}
 .btn.danger:hover{background:var(--red-bg)}
 .btn-sm{padding:3px 10px;font-size:.78rem}
 .btn.active-auto{background:var(--green-bg);border-color:var(--green);color:var(--green)}
-.proxy-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
-.proxy-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;transition:border-color .15s}
-.proxy-card .top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}
-.proxy-card .alias{font-weight:600;font-size:.95rem}
-.proxy-card .url{font-size:.8rem;color:var(--text2);word-break:break-all}
-.proxy-card .stats{display:flex;gap:20px;font-size:.82rem;color:var(--text2);margin-top:10px}
-.proxy-card .circs{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.proxy-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(330px,1fr))}
+.proxy-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;transition:border-color .15s,box-shadow .15s;display:flex;flex-direction:column;gap:10px}
+.proxy-card:hover{border-color:var(--border2);box-shadow:0 4px 16px rgba(0,0,0,.08)}
+.proxy-card .top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.proxy-card .node-info{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
+.proxy-card .alias-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.proxy-card .alias{font-weight:600;font-size:.95rem;color:var(--text);letter-spacing:.2px}
+.node-flag{width:1.4em!important;height:1.05em!important;border-radius:3px;box-shadow:0 1px 3px rgba(0,0,0,.25);flex-shrink:0;vertical-align:-1px}
+.node-badge{display:inline-flex;align-items:center;font-size:.68rem;font-weight:600;padding:1px 6px;border-radius:4px;background:var(--surface2);color:var(--text2);border:1px solid var(--border);line-height:1.3;letter-spacing:.3px}
+.proxy-card .url{font-size:.78rem;color:var(--text2);word-break:break-all;line-height:1.35}
+.proxy-card .stats{display:flex;flex-wrap:wrap;gap:8px 16px;font-size:.8rem;color:var(--text2);padding-top:10px;border-top:1px solid var(--border)}
+.proxy-card .stats span{display:inline-flex;align-items:center}
+.proxy-card .circs{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;flex-shrink:0}
 .proxy-card .circ{display:inline-flex;align-items:center;gap:4px;font-size:.72rem;font-weight:600;color:var(--text2);padding:2px 8px;border:1px solid var(--border);border-radius:10px;line-height:1.3;white-space:nowrap;cursor:pointer;user-select:none;transition:filter .15s}
 .proxy-card .circ:hover{filter:brightness(1.15)}
 .proxy-card .circ .dot{width:7px;height:7px;border-radius:50%;background:var(--text3);flex-shrink:0}
@@ -111,7 +118,7 @@ tr:last-child td{border-bottom:none}
 .proxy-card .circ.unknown{color:var(--text3)}
 .proxy-card .circ.unknown .dot{background:var(--text3)}
 .proxy-card .circ.manual{border-style:dashed}
-.proxy-card .actions{margin-top:12px;display:flex;gap:8px}
+.proxy-card .actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:2px}
 .toggle-group{display:flex;gap:4px;margin-bottom:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px;width:fit-content}
 .toggle-btn{padding:5px 14px;border-radius:5px;font-size:.82rem;cursor:pointer;border:none;background:transparent;color:var(--text2);transition:all .15s;font-family:var(--font)}
 .toggle-btn.active{background:var(--accent);color:#fff}
@@ -599,6 +606,8 @@ async function testProxy(i,proto){
       throw new Error(errTxt||('HTTP '+resp.status));
     }
     var res=await resp.json();
+    if(res.country_code)p.country_code=res.country_code;
+    if(res.exit_ip)p.exit_ip=res.exit_ip;
     proxyTestState[key]={
       testing:false,
       available:!!res.available,
@@ -669,6 +678,11 @@ async function testAllProxies(proto){
       var resp=await fetch('/proxy/test?alias='+encodeURIComponent(task.alias)+'&protocol='+encodeURIComponent(task.proto),{method:'POST'});
       if(!resp.ok)throw new Error('HTTP '+resp.status);
       var res=await resp.json();
+      var node=proxies.find(function(px){return px.alias===task.alias;});
+      if(node){
+        if(res.country_code)node.country_code=res.country_code;
+        if(res.exit_ip)node.exit_ip=res.exit_ip;
+      }
       proxyTestState[task.alias+':'+task.proto]={
         testing:false,
         available:!!res.available,
@@ -702,6 +716,17 @@ async function testAllProxies(proto){
   }
   try{await loadHealth()}catch(_){lhealth(healthD)}
 }
+var countryNamesZh={
+  HK:'香港',MO:'澳门',TW:'台湾',CN:'中国',
+  JP:'日本',SG:'新加坡',US:'美国',KR:'韩国',
+  GB:'英国',UK:'英国',DE:'德国',FR:'法国',CA:'加拿大',
+  AU:'澳大利亚',RU:'俄罗斯',NL:'荷兰',IN:'印度',
+  MY:'马来西亚',TH:'泰国',VN:'越南',PH:'菲律宾',
+  ID:'印尼',TR:'土耳其',BR:'巴西',AR:'阿根廷',
+  IT:'意大利',ES:'西班牙',CH:'瑞士',SE:'瑞典',
+  NO:'挪威',FI:'芬兰',DK:'丹麦',PL:'波兰',UA:'乌克兰',
+  AE:'阿联酋',ZA:'南非',NZ:'新西兰',IE:'爱尔兰',IL:'以色列'
+};
 function lhealth(d){
   healthD=d;
   updateHealthBanner(d);
@@ -730,6 +755,16 @@ function lhealth(d){
       else if(!stPing.testing&&!stPing.available)pingVal=0;
     }
     var pingLat=pingVal>0?pingVal.toFixed(1)+'ms':'--';
+
+    var cc=(p.country_code||'').toLowerCase();
+    var ccUpper=cc.toUpperCase();
+    var regName='';
+    if(ccUpper){
+      regName=(window.SP_LANG==='zh'&&countryNamesZh[ccUpper])?countryNamesZh[ccUpper]:ccUpper;
+    }
+    var flagHtml=cc?'<span class="fi fi-'+cc+' node-flag" title="'+escAttr(regName)+'"></span>':'';
+    var regBadgeHtml=regName?'<span class="node-badge">'+escAttr(regName)+'</span>':'';
+    var exitHtml=p.exit_ip?'<span>exit: '+p.exit_ip+'</span>':'';
 
     var tc=circuitStat(p.health,true),uc=circuitStat(p.udp_health,udpScheme);
     var tcClk=tc.c==='na'?'':' onclick="toggleCircuit('+i+',\'tcp\')"';
@@ -792,9 +827,13 @@ function lhealth(d){
       }
     }
 
-    return '<div class="proxy-card"><div class="top"><div><div class="alias">'+dispName+'</div><div class="url">'+p.url+aliasTxt+' · '+dispMode+capTxt+'</div></div>'+
+    return '<div class="proxy-card"><div class="top">'+
+      '<div class="node-info">'+
+      '<div class="alias-row">'+flagHtml+'<span class="alias">'+dispName+'</span>'+regBadgeHtml+'</div>'+
+      '<div class="url">'+p.url+aliasTxt+' · '+dispMode+capTxt+'</div>'+
+      '</div>'+
       '<div class="circs"><span class="circ '+(tc.c+(tc.m?' manual':''))+'" title="'+(tc.m?(p.health.available?'TCP manually up — click to restore auto':'TCP manually down — click to force up'):'Click to toggle TCP')+'"'+tcClk+'><i class="dot"></i>TCP '+t(tc.t)+'</span><span class="circ '+(uc.c+(uc.m?' manual':''))+'" title="'+(uc.m?(p.udp_health&&p.udp_health.available?'UDP manually up — click to restore auto':'UDP manually down — click to force up'):'Click to toggle UDP')+'"'+ucClk+'><i class="dot"></i>UDP '+t(uc.t)+'</span></div></div>'+
-      '<div class="stats"><span>ping: '+pingLat+'</span><span>latency: '+lat+'</span><span>tcp failures: '+(p.health.manual?t('manual'):p.health.consecutive_failures)+'</span><span>udp failures: '+(p.udp_health?(p.udp_health.manual?t('manual'):p.udp_health.consecutive_failures):t('n/a'))+'</span></div>'+
+      '<div class="stats">'+exitHtml+'<span>ping: '+pingLat+'</span><span>latency: '+lat+'</span><span>tcp failures: '+(p.health.manual?t('manual'):p.health.consecutive_failures)+'</span><span>udp failures: '+(p.udp_health?(p.udp_health.manual?t('manual'):p.udp_health.consecutive_failures):t('n/a'))+'</span></div>'+
       '<div class="actions">'+
       '<button class="btn btn-sm primary" onclick="openProxyDialog('+i+')">Edit</button>'+
       '<button class="btn btn-sm danger" onclick="deleteProxy('+i+')">Delete</button>'+

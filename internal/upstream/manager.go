@@ -499,6 +499,8 @@ type ProxyInfo struct {
 	Health        ProxyHealthSnapshot `json:"health"`
 	UDPHealth     ProxyHealthSnapshot `json:"udp_health"`
 	PingLatency   time.Duration       `json:"ping_latency,omitempty"`
+	CountryCode   string              `json:"country_code,omitempty"`
+	ExitIP        string              `json:"exit_ip,omitempty"`
 }
 
 func (m *Manager) Proxies() []ProxyInfo {
@@ -528,10 +530,39 @@ func (m *Manager) Proxies() []ProxyInfo {
 			Health:        proxy.health.Snapshot(),
 			UDPHealth:     proxy.udpHealth.Snapshot(),
 			PingLatency:   proxy.PingLatency(),
+			CountryCode:   proxy.CountryCode(),
+			ExitIP:        proxy.ExitIP(),
 		})
 	}
 	return infos
 }
+
+// ProxyInfo returns the snapshot info for a specific proxy alias.
+func (m *Manager) ProxyInfo(alias string) (ProxyInfo, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	proxy, ok := m.aliasMap[alias]
+	if !ok || proxy == nil {
+		return ProxyInfo{}, false
+	}
+	return ProxyInfo{
+		Alias:         alias,
+		URL:           proxy.URL,
+		Name:          proxy.Name,
+		Host:          proxy.Host,
+		Port:          proxy.Port,
+		Scheme:        string(proxy.Scheme),
+		UDPInTCP:      proxy.UDPInTCP,
+		Mode:          proxy.EffectiveMode(),
+		UDPCapability: string(proxy.UDPCapability()),
+		Health:        proxy.health.Snapshot(),
+		UDPHealth:     proxy.udpHealth.Snapshot(),
+		PingLatency:   proxy.PingLatency(),
+		CountryCode:   proxy.CountryCode(),
+		ExitIP:        proxy.ExitIP(),
+	}, true
+}
+
 
 // SetCircuitHealth pins or releases one (or both) of a proxy's circuits. circuit is
 // "tcp", "udp" or "both"; action is "enable" (force up), "disable" (force down) or
@@ -623,7 +654,7 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 		if m.healthChecker != nil {
 			latency, err = m.healthChecker.ProbeTCP(ctx, proxy)
 		} else {
-			latency, err = probeTCP(ctx, proxy, "http://cp.cloudflare.com/generate_204")
+			latency, err = probeTCP(ctx, proxy, "http://cp.cloudflare.com/cdn-cgi/trace")
 		}
 		if err == nil {
 			proxy.health.UpdateLatency(latency)

@@ -1651,3 +1651,36 @@ func TestAdmin_ProxyTest(t *testing.T) {
 		t.Errorf("expected available=false for offline ping, got %v", resPing["available"])
 	}
 }
+
+func TestAdmin_FlagIcons(t *testing.T) {
+	s := newTestServer(t)
+	startServer(t, s)
+
+	// 1. Fetch flag-icons.css
+	resp, err := httpGet(s.sockPath, "/flag-icons.css")
+	if err != nil {
+		t.Fatalf("GET /flag-icons.css failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 for /flag-icons.css, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), ".fi-hk") {
+		t.Errorf("flag-icons.css missing .fi-hk")
+	}
+
+	// 2. Fetch an SVG flag
+	respSvg, err := httpGet(s.sockPath, "/flags/4x3/hk.svg")
+	if err != nil {
+		t.Fatalf("GET /flags/4x3/hk.svg failed: %v", err)
+	}
+	defer respSvg.Body.Close()
+	if respSvg.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 for /flags/4x3/hk.svg, got %d", respSvg.StatusCode)
+	}
+	svgBody, _ := io.ReadAll(respSvg.Body)
+	if !strings.Contains(string(svgBody), "<svg") {
+		t.Errorf("expected svg content for hk.svg")
+	}
+}

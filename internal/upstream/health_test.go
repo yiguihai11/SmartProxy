@@ -294,3 +294,16 @@ func TestIsManuallyDisabled(t *testing.T) {
 		t.Fatal("auto-open circuit must still be unavailable")
 	}
 }
+
+func TestParseAndSaveGeo(t *testing.T) {
+	p := &Proxy{}
+	body := []byte("fl=123\nip=103.24.56.78\nts=123456\nloc=hk\ncolo=HKG\n")
+	parseAndSaveGeo(p, body)
+	if p.CountryCode() != "HK" {
+		t.Errorf("want HK, got %q", p.CountryCode())
+	}
+	if p.ExitIP() != "103.24.56.78" {
+		t.Errorf("want 103.24.56.78, got %q", p.ExitIP())
+	}
+}
+
