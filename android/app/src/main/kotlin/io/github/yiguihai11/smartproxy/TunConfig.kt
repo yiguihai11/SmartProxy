@@ -21,11 +21,14 @@ data class TunParams(
 
 object TunConfig {
 
+    /** 移动端推荐 TUN MTU 设为 1400(预留 80~100 字节代理头与蜂窝链路冗余,防 IP 分片与跳 ping)。 */
+    const val DEFAULT_TUN_MTU = 1400
+
     /** 解析 tun 段。缺字段时回退到引擎默认值,与 internal/config 的 DefaultConfig 对齐。 */
     fun parse(json: JSONObject): TunParams {
         val tun = json.optJSONObject("tun") ?: JSONObject()
         return TunParams(
-            mtu = tun.optInt("mtu", 1500),
+            mtu = tun.optInt("mtu", DEFAULT_TUN_MTU),
             // 空数组([])与缺失等价 = 该族未启用:关掉开关时 ConfigProvider 写 [] 而非删 key
             // (自文档化),这里必须跳过空数组,否则 getString(0) 抛 JSONException,establishVpn
             // 兜住返回 false,VPN 静默起不来。

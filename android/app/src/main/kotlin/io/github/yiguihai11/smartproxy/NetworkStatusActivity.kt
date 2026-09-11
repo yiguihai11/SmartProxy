@@ -119,9 +119,9 @@ class NetworkStatusActivity : ComponentActivity() {
      *  停采集 + 停轮询;回到前台恢复。后台零 CPU/零引擎开销。 */
     private var active by mutableStateOf(false)
 
-    /** 上次轮询的 app 累计基准(算 δ 网速);uid 表 + 图标缓存在轮询线程访问。 */
-    private val prevTotals = HashMap<Int, Pair<Long, Long>>()
-    private val metaCache = HashMap<Int, AppMeta>()
+    /** 上次轮询的 app 累计基准(算 δ 网速);uid 表 + 图标缓存在轮询线程访问(使用并发 Map 防御跨调度器迭代冲突)。 */
+    private val prevTotals = java.util.concurrent.ConcurrentHashMap<Int, Pair<Long, Long>>()
+    private val metaCache = java.util.concurrent.ConcurrentHashMap<Int, AppMeta>()
 
     /** 待确认封禁的连接(点连接行的封禁图标后置位,确认框消失时清空)。 */
     private var pendingBlock by mutableStateOf<ConnStatsRec?>(null)

@@ -43,9 +43,9 @@ func setupQUICFlowDeadTest(t *testing.T, mgr *upstream.Manager) (*Handler, *udpS
 	h := &Handler{
 		router:      router,
 		upstreamMgr: mgr,
-		sessions:    make(map[udpSessionKey]*udpSession),
 		stopCh:      make(chan struct{}),
 	}
+	h.initShards()
 	pipeA, pipeB := net.Pipe()
 	t.Cleanup(func() { pipeA.Close(); pipeB.Close() })
 	old := &closeTracker{Conn: pipeA}
@@ -58,7 +58,7 @@ func setupQUICFlowDeadTest(t *testing.T, mgr *upstream.Manager) (*Handler, *udpS
 		clientAddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999},
 	}
 	sess.snap.Store(&udpOutbound{conn: old, framed: false})
-	h.sessions[key] = sess
+	h.setSession(key, sess)
 	return h, sess, old, key
 }
 
@@ -113,10 +113,7 @@ func TestQUICFlowDead_ProxyDialFails_DropsSessionAndBlacklists(t *testing.T) {
 	if !h.router.IsIPBlacklisted(ip, port) {
 		t.Error("IP must be blacklisted before dial, so it stays blacklisted even when proxy dial fails")
 	}
-	h.sessionsMu.RLock()
-	_, present := h.sessions[key]
-	h.sessionsMu.RUnlock()
-	if present {
+	if h.hasSession(key) {
 		t.Error("dead session should be dropped when proxy dial fails so retransmission opens a fresh proxy session")
 	}
 	if !old.closed {

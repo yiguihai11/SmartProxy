@@ -31,8 +31,8 @@ object AppEnumerator {
         val system: Boolean
     )
 
-    /** pkg → ImageBitmap 图标。上限 64 个,超出逐出最久未用。 */
-    private val iconCache = object : LruCache<String, ImageBitmap>(64) {}
+    /** pkg → ImageBitmap 图标。上限 256 个(覆盖绝大多数已装应用,避免快速滚动抖动淘汰重解)。 */
+    private val iconCache = object : LruCache<String, ImageBitmap>(256) {}
 
     // 进程级应用列表缓存(§5 预加载):进入 App 时后台 load() 填一次,点进应用选择页
     // cached() 直接命中、零等待。权威源永远是 PackageManager——广播收到装/卸事件后

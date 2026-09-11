@@ -20,7 +20,7 @@
   },
   "tun": {
     "enabled": false,
-    "mtu": 1500,
+    "mtu": 1400,
     "inet4_address": [
       "172.19.0.1/30"
     ],

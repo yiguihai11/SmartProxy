@@ -547,9 +547,13 @@ func getInterfaceIPv6() net.IP {
 // Bounded worker pool parameters for UDP packet handling: replaces the "one goroutine per
 // packet" approach, eliminating goroutine creation overhead while limiting concurrency and
 // memory usage (drops packets when the queue is full, which UDP permits).
+// QoS dual-priority queuing: small latency-sensitive packets (gaming inputs, DNS, ACK frames)
+// bypass large throughput packets (QUIC video streams, downloads) to eliminate bufferbloat and lag spikes.
 const (
-	udpWorkerCount  = 8   // number of workers: determines how many blocking operations (DNS/session setup) can be tolerated at once
-	udpJobQueueSize = 128 // job queue length; drops packets when full
+	udpWorkerCount        = 8   // number of workers: determines how many blocking operations (DNS/session setup) can be tolerated at once
+	udpHighPrioThreshold = 256 // packets <= 256 bytes (MOBA gaming, DNS, ACK) use the high-priority queue
+	udpHighPrioQueueSize = 128 // dedicated queue for latency-sensitive small packets (gaming / DNS)
+	udpLowPrioQueueSize  = 256 // queue for throughput-heavy large packets (streaming / download)
 )
 
 // udpJob carries a pending UDP packet and its owning pool buffer (returned to the pool after processing).
@@ -635,23 +639,62 @@ func (e *Engine) handleUDPAssociate(ctx context.Context, conn net.Conn, clientIP
 	var lastActive atomic.Int64
 	lastActive.Store(time.Now().Unix())
 
-	jobs := make(chan udpJob, udpJobQueueSize)
+	highJobs := make(chan udpJob, udpHighPrioQueueSize)
+	lowJobs := make(chan udpJob, udpLowPrioQueueSize)
 	var workerWg sync.WaitGroup
 	for i := 0; i < udpWorkerCount; i++ {
 		workerWg.Add(1)
 		safego.Go("engine.udpWorker", func() {
 			defer workerWg.Done()
-			for job := range jobs {
-				udpHandler.HandlePacket(ctx, job.data, job.addr)
-				relay.UDPBufPool.Put(job.buf)
+			hJobs := highJobs
+			lJobs := lowJobs
+			for {
+				if hJobs == nil && lJobs == nil {
+					return
+				}
+				// Prioritize latency-sensitive small packets (gaming inputs, DNS, ACK frames)
+				// by checking the high-priority queue first before blocking.
+				if hJobs != nil {
+					select {
+					case job, ok := <-hJobs:
+						if !ok {
+							hJobs = nil
+							continue
+						}
+						udpHandler.HandlePacket(ctx, job.data, job.addr)
+						relay.UDPBufPool.Put(job.buf)
+						continue
+					default:
+					}
+				}
+				// Wait for packets from either queue
+				select {
+				case job, ok := <-hJobs:
+					if !ok {
+						hJobs = nil
+						continue
+					}
+					udpHandler.HandlePacket(ctx, job.data, job.addr)
+					relay.UDPBufPool.Put(job.buf)
+				case job, ok := <-lJobs:
+					if !ok {
+						lJobs = nil
+						continue
+					}
+					udpHandler.HandlePacket(ctx, job.data, job.addr)
+					relay.UDPBufPool.Put(job.buf)
+				}
 			}
 		})
 	}
-	// On exit, wait for workers to drain the queue (udpConn.Close has already unblocked the read loop and closed jobs)
+	// On exit, wait for workers to drain both queues (udpConn.Close has already unblocked the read loop and closed queues)
 	defer workerWg.Wait()
 
 	safego.Go("engine.udpRead", func() {
-		defer close(jobs)
+		defer func() {
+			close(highJobs)
+			close(lowJobs)
+		}()
 		for {
 			// Each packet is read directly into a buffer fetched from the pool; buffer ownership is
 			// transferred to the worker along with the packet, avoiding one copy. The buffer must be
@@ -669,11 +712,29 @@ func (e *Engine) handleUDPAssociate(ctx context.Context, conn net.Conn, clientIP
 			}
 			lastActive.Store(time.Now().Unix())
 			ll.Debug("received UDP packet from client", "addr", addr, "len", n)
-			select {
-			case jobs <- udpJob{data: buf[:n], buf: bufPtr, addr: addr}:
-			default:
-				// Queue full: UDP permits dropping packets, so return the buffer to the pool directly
-				relay.UDPBufPool.Put(bufPtr)
+
+			// QoS dual-priority queue dispatch:
+			// Small packets (<= 256 bytes, like MOBA gaming, DNS, ACK frames) bypass bulk data
+			// to eliminate bufferbloat and latency spikes.
+			// Large packets (> 256 bytes, like QUIC video streams or file downloads) go to the bulk queue.
+			job := udpJob{data: buf[:n], buf: bufPtr, addr: addr}
+			if n <= udpHighPrioThreshold {
+				select {
+				case highJobs <- job:
+				default:
+					// High-priority queue full (rare burst): fall back to lowJobs rather than dropping directly
+					select {
+					case lowJobs <- job:
+					default:
+						relay.UDPBufPool.Put(bufPtr)
+					}
+				}
+			} else {
+				select {
+				case lowJobs <- job:
+				default:
+					relay.UDPBufPool.Put(bufPtr)
+				}
 			}
 		}
 	})

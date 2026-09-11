@@ -57,10 +57,11 @@ type TUNHandler struct {
 	// 与 connStats 共享同一 ConnStats,掐断时可即时移除统计记录。
 	liveTCP *liveTCP
 
-	udpSessions   sync.Map
-	cleanerOnce   sync.Once
-	cleanerStopCh chan struct{}
-	closeOnce     sync.Once
+	udpSessions     sync.Map
+	udpSessionCount atomic.Int64
+	cleanerOnce     sync.Once
+	cleanerStopCh   chan struct{}
+	closeOnce       sync.Once
 
 	// Cleanup functions for the "selective source routing" installed when auto_route=false (executed when the TUN closes)
 	selectiveCleanupMu sync.Mutex
@@ -106,7 +107,7 @@ func (h *TUNHandler) startUDPCleaner() {
 						sess := value.(*tunUdpSession)
 						if now-sess.lastActive.Load() > int64(sess.timeout.Seconds()) {
 							sess.signalClose()
-							h.udpSessions.Delete(key)
+							h.deleteUDPSession(key.(string))
 						}
 						return true
 					})
@@ -114,7 +115,7 @@ func (h *TUNHandler) startUDPCleaner() {
 					h.udpSessions.Range(func(key, value any) bool {
 						sess := value.(*tunUdpSession)
 						sess.signalClose()
-						h.udpSessions.Delete(key)
+						h.deleteUDPSession(key.(string))
 						return true
 					})
 					return
@@ -457,13 +458,25 @@ func (h *TUNHandler) storeUDPSession(key string, sess *tunUdpSession) {
 	if h.countUDPSessions() >= maxUDPSessions {
 		h.evictLeastRecentUDPSession()
 	}
-	h.udpSessions.Store(key, sess)
+	if _, loaded := h.udpSessions.Swap(key, sess); !loaded {
+		h.udpSessionCount.Add(1)
+	}
+}
+
+func (h *TUNHandler) deleteUDPSession(key string) (*tunUdpSession, bool) {
+	if v, loaded := h.udpSessions.LoadAndDelete(key); loaded {
+		h.udpSessionCount.Add(-1)
+		return v.(*tunUdpSession), true
+	}
+	return nil, false
 }
 
 func (h *TUNHandler) countUDPSessions() int {
-	n := 0
-	h.udpSessions.Range(func(_, _ any) bool { n++; return true })
-	return n
+	c := h.udpSessionCount.Load()
+	if c < 0 {
+		return 0
+	}
+	return int(c)
 }
 
 // evictLeastRecentUDPSession closes and removes the session that was active longest ago.
@@ -479,8 +492,8 @@ func (h *TUNHandler) evictLeastRecentUDPSession() {
 		return true
 	})
 	if victimKey != nil {
-		if v, ok := h.udpSessions.LoadAndDelete(victimKey); ok {
-			v.(*tunUdpSession).signalClose()
+		if v, ok := h.deleteUDPSession(victimKey.(string)); ok {
+			v.signalClose()
 		}
 	}
 }
@@ -530,7 +543,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 	sessKey := source.String() + "->" + destination.String()
 	h.storeUDPSession(sessKey, sess)
 	h.startUDPCleaner()
-	defer h.udpSessions.Delete(sessKey)
+	defer h.deleteUDPSession(sessKey)
 	defer sess.signalClose()
 
 	var (

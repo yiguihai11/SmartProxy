@@ -84,6 +84,35 @@ func sessionKeyFor(clientAddr net.Addr, ip string, port int) udpSessionKey {
 	return k
 }
 
+const sessionShardsCount = 32
+
+// sessionShard is a single shard of the UDP session map protected by its own RWMutex.
+// Padding to 64 bytes eliminates false sharing (cache line bouncing) between adjacent shards on multi-core CPUs.
+type sessionShard struct {
+	mu       sync.RWMutex
+	sessions map[udpSessionKey]*udpSession
+	_        [32]byte
+}
+
+// shardIndex computes a fast FNV-1a hash of the session key to distribute sessions across shards.
+func (k udpSessionKey) shardIndex() int {
+	var h uint32 = 2166136261
+	b := k.clientIP.As16()
+	for i := 0; i < 16; i++ {
+		h ^= uint32(b[i])
+		h *= 16777619
+	}
+	h ^= uint32(k.clientPort)
+	h *= 16777619
+	for i := 0; i < len(k.targetIP); i++ {
+		h ^= uint32(k.targetIP[i])
+		h *= 16777619
+	}
+	h ^= uint32(k.targetPort)
+	h *= 16777619
+	return int(h & (sessionShardsCount - 1))
+}
+
 // udpOutbound 是会话当前出向。framed=false 表示直连 socket(读写都是纯 payload,回包由
 // pipeDownstream 套 respHeader);framed=true 表示 UDP-capable 上游(读写都带 SOCKS5 UDP
 // header,整帧透传)。直连被 QUIC 判死热切代理时整体换一份(framed=true)。
@@ -129,12 +158,13 @@ type Handler struct {
 	quicDummy       bool
 	quicTimeout     time.Duration
 
-	sessionsMu   sync.RWMutex
-	sessions     map[udpSessionKey]*udpSession
-	sessionCount atomic.Int32
-	createGroup  singleflight.Group // serializes session creation for the same target, avoiding duplicate dials on concurrent first packets
-	stopCh       chan struct{}
-	closed       atomic.Bool
+	// sessionShards replaces the single global sessions map + RWMutex with 32 independent shards,
+	// eliminating lock contention and cache-line bouncing under high-throughput concurrent UDP traffic.
+	sessionShards [sessionShardsCount]sessionShard
+	sessionCount  atomic.Int32
+	createGroup   singleflight.Group // serializes session creation for the same target, avoiding duplicate dials on concurrent first packets
+	stopCh        chan struct{}
+	closed        atomic.Bool
 }
 
 var udpBufPool = sync.Pool{
@@ -144,13 +174,62 @@ var udpBufPool = sync.Pool{
 	},
 }
 
+func (h *Handler) initShards() {
+	for i := range h.sessionShards {
+		h.sessionShards[i].sessions = make(map[udpSessionKey]*udpSession)
+	}
+}
+
+func (h *Handler) getShard(key udpSessionKey) *sessionShard {
+	idx := key.shardIndex()
+	shard := &h.sessionShards[idx]
+	if shard.sessions == nil {
+		shard.mu.Lock()
+		if shard.sessions == nil {
+			shard.sessions = make(map[udpSessionKey]*udpSession)
+		}
+		shard.mu.Unlock()
+	}
+	return shard
+}
+
+func (h *Handler) getSession(key udpSessionKey) (*udpSession, bool) {
+	shard := h.getShard(key)
+	shard.mu.RLock()
+	sess, ok := shard.sessions[key]
+	shard.mu.RUnlock()
+	return sess, ok
+}
+
+func (h *Handler) setSession(key udpSessionKey, sess *udpSession) {
+	shard := h.getShard(key)
+	shard.mu.Lock()
+	shard.sessions[key] = sess
+	shard.mu.Unlock()
+}
+
+func (h *Handler) deleteSession(key udpSessionKey) {
+	shard := h.getShard(key)
+	shard.mu.Lock()
+	delete(shard.sessions, key)
+	shard.mu.Unlock()
+}
+
+func (h *Handler) hasSession(key udpSessionKey) bool {
+	shard := h.getShard(key)
+	shard.mu.RLock()
+	_, ok := shard.sessions[key]
+	shard.mu.RUnlock()
+	return ok
+}
+
 func NewHandler(cn *chnroute.Trie, router *route.Router, re *rules.Engine,
 	mgr *upstream.Manager, dh *dns.Handler,
 	clientIP string, conn net.PacketConn,
 	relaxedUDPOrigin bool, idleTimeout time.Duration,
 	q config.SmartProxyQuicConf) *Handler {
 
-	return &Handler{
+	h := &Handler{
 		chnroute:         cn,
 		router:           router,
 		ruleEngine:       re,
@@ -167,9 +246,10 @@ func NewHandler(cn *chnroute.Trie, router *route.Router, re *rules.Engine,
 		quicMaxBuffered:  q.MaxBuffered,
 		quicDummy:        q.Dummy,
 		quicTimeout:      time.Duration(q.TimeoutMs) * time.Millisecond,
-		sessions:         make(map[udpSessionKey]*udpSession),
 		stopCh:           make(chan struct{}),
 	}
+	h.initShards()
+	return h
 }
 
 func (h *Handler) HandlePacket(ctx context.Context, data []byte, clientAddr net.Addr) {
@@ -245,9 +325,7 @@ func (h *Handler) HandlePacket(ctx context.Context, data []byte, clientAddr net.
 	targetAddr := net.JoinHostPort(ip, strconv.Itoa(port))
 
 	key := sessionKeyFor(clientAddr, ip, port)
-	h.sessionsMu.RLock()
-	sess, ok := h.sessions[key]
-	h.sessionsMu.RUnlock()
+	sess, ok := h.getSession(key)
 	if ok {
 		sess.lastActive.Store(time.Now().Unix())
 		// forwardTo 按会话当前出向取帧:直连写纯 payload(顺带喂 QUIC 判死观察),代理写整
@@ -398,29 +476,38 @@ func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip 
 	if h.sessionCount.Load() >= maxUDPSessions {
 		sess.log.Warn("too many UDP sessions to upstream, dropping oldest",
 			"count", h.sessionCount.Load(), "max", maxUDPSessions)
-		// Recycle the most idle session (rather than an arbitrary one) to avoid evicting active sessions
-		h.sessionsMu.Lock()
+		// Recycle the most idle session across shards without holding a global lock
 		var evictKey udpSessionKey
 		var evict *udpSession
-		for k, s := range h.sessions {
-			if evict == nil || s.lastActive.Load() < evict.lastActive.Load() {
-				evict = s
-				evictKey = k
+		var evictShard *sessionShard
+		for i := 0; i < sessionShardsCount; i++ {
+			shard := &h.sessionShards[i]
+			shard.mu.RLock()
+			for k, s := range shard.sessions {
+				if evict == nil || s.lastActive.Load() < evict.lastActive.Load() {
+					evict = s
+					evictKey = k
+					evictShard = shard
+				}
 			}
+			shard.mu.RUnlock()
 		}
-		if evict != nil {
-			delete(h.sessions, evictKey)
-		}
-		h.sessionsMu.Unlock()
-		if evict != nil {
-			h.closeSession(evict)
+		if evict != nil && evictShard != nil {
+			evictShard.mu.Lock()
+			if cur, ok := evictShard.sessions[evictKey]; ok && cur == evict {
+				delete(evictShard.sessions, evictKey)
+			} else {
+				evict = nil
+			}
+			evictShard.mu.Unlock()
+			if evict != nil {
+				h.closeSession(evict)
+			}
 		}
 	}
 	h.sessionCount.Add(1)
 	ActiveSessions.Add(1)
-	h.sessionsMu.Lock()
-	h.sessions[key] = sess
-	h.sessionsMu.Unlock()
+	h.setSession(key, sess)
 	route := "proxy"
 	switch {
 	case wd != nil:
@@ -536,10 +623,7 @@ func (h *Handler) quicFlowDead(sess *udpSession, key udpSessionKey, ip string, p
 	if sess == nil {
 		return
 	}
-	h.sessionsMu.RLock()
-	_, present := h.sessions[key]
-	h.sessionsMu.RUnlock()
-	if !present {
+	if !h.hasSession(key) {
 		return // 会话已清理(cleaner/reader 退出),不复活它
 	}
 	old := sess.snap.Load()
@@ -585,9 +669,7 @@ func (h *Handler) pipeDownstream(sess *udpSession) {
 	defer func() {
 		sess.log.Debug("UDP session closed", "key", sess.key.String())
 		h.closeSession(sess)
-		h.sessionsMu.Lock()
-		delete(h.sessions, sess.key)
-		h.sessionsMu.Unlock()
+		h.deleteSession(sess.key)
 	}()
 	bufPtr := udpBufPool.Get().(*[]byte)
 	buf := *bufPtr
@@ -724,11 +806,7 @@ func (h *Handler) writeRetry(sess *udpSession, out *udpOutbound, payload, fullDa
 // dropSession 关闭会话并把它从 sessions 表移除(写失败等会话级错误用)。
 func (h *Handler) dropSession(sess *udpSession) {
 	h.closeSession(sess)
-	h.sessionsMu.Lock()
-	if _, ok := h.sessions[sess.key]; ok {
-		delete(h.sessions, sess.key)
-	}
-	h.sessionsMu.Unlock()
+	h.deleteSession(sess.key)
 }
 
 // intInList 报告 v 是否在 list 内(QUIC 端口白名单,量小线性扫)。
@@ -753,30 +831,40 @@ func (h *Handler) StartCleaner() {
 			select {
 			case <-ticker.C:
 				now := time.Now().Unix()
-				// Collect sessions to be recycled to avoid network closes while holding the lock
-				h.sessionsMu.Lock()
-				var toClose []*udpSession
-				for k, sess := range h.sessions {
-					if now-sess.lastActive.Load() > int64(sess.timeout.Seconds()) {
-						sess.log.Debug("UDP session recycled (idle timeout)", "timeout", sess.timeout)
-						delete(h.sessions, k)
-						toClose = append(toClose, sess)
+				// Collect sessions to be recycled per-shard to avoid long locks and global stalls
+				for i := 0; i < sessionShardsCount; i++ {
+					shard := &h.sessionShards[i]
+					shard.mu.Lock()
+					var toClose []*udpSession
+					for k, sess := range shard.sessions {
+						if now-sess.lastActive.Load() > int64(sess.timeout.Seconds()) {
+							sess.log.Debug("UDP session recycled (idle timeout)", "timeout", sess.timeout)
+							delete(shard.sessions, k)
+							toClose = append(toClose, sess)
+						}
 					}
-				}
-				h.sessionsMu.Unlock()
-				for _, sess := range toClose {
-					h.closeSession(sess)
+					shard.mu.Unlock()
+					for _, sess := range toClose {
+						h.closeSession(sess)
+					}
 				}
 				if cnt := h.sessionCount.Load(); cnt > 200 {
 					slog.Info("UDP session count high", "count", cnt, "max", maxUDPSessions)
 				}
 			case <-h.stopCh:
-				h.sessionsMu.Lock()
-				for k, sess := range h.sessions {
-					delete(h.sessions, k)
-					h.closeSession(sess)
+				for i := 0; i < sessionShardsCount; i++ {
+					shard := &h.sessionShards[i]
+					shard.mu.Lock()
+					var toClose []*udpSession
+					for k, sess := range shard.sessions {
+						delete(shard.sessions, k)
+						toClose = append(toClose, sess)
+					}
+					shard.mu.Unlock()
+					for _, sess := range toClose {
+						h.closeSession(sess)
+					}
 				}
-				h.sessionsMu.Unlock()
 				return
 			}
 		}

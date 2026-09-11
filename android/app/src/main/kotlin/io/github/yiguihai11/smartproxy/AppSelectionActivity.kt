@@ -256,26 +256,30 @@ private fun AppSelectionScreen(
     val initialSelected = remember { selected }
     val initialBlocked = remember { blocked }
     val collator = remember { Collator.getInstance(Locale.CHINA) }
-    val visible = remember(allApps, tab, query, initialSelected, initialBlocked) {
+    // 性能优化:仅在应用全量列表加载 / 初始勾选状态改变时排一次。拼音 Collator 计算昂贵,
+    // 绝不能在用户输入搜索关键字的每一帧执行全量 sortedWith,防主线程掉帧卡顿。
+    val sortedApps = remember(allApps, initialSelected, initialBlocked) {
+        allApps.sortedWith { a, b ->
+            val ra = blockSortRank(initialSelected, initialBlocked, a.pkg)
+            val rb = blockSortRank(initialSelected, initialBlocked, b.pkg)
+            when {
+                ra != rb -> ra.compareTo(rb)
+                else -> collator.compare(a.label, b.label)
+            }
+        }
+    }
+    // 搜索过滤:仅对已排好序的列表做 O(N) 包含判断。过滤天然保序,无需再次排序。
+    val visible = remember(sortedApps, tab, query) {
         val q = query.trim()
-        allApps
-            .filter { a ->
-                val tabOk = when (tab) {
-                    0 -> true
-                    1 -> !a.system
-                    else -> a.system
-                }
-                // ignoreCase 显式忽略大小写:不依赖 locale lowercasing,搜 "youtube"/"YouTube" 都中。
-                tabOk && (q.isEmpty() || a.label.contains(q, ignoreCase = true) || a.pkg.contains(q, ignoreCase = true))
+        sortedApps.filter { a ->
+            val tabOk = when (tab) {
+                0 -> true
+                1 -> !a.system
+                else -> a.system
             }
-            .sortedWith { a, b ->
-                val ra = blockSortRank(initialSelected, initialBlocked, a.pkg)
-                val rb = blockSortRank(initialSelected, initialBlocked, b.pkg)
-                when {
-                    ra != rb -> ra.compareTo(rb)
-                    else -> collator.compare(a.label, b.label)
-                }
-            }
+            // ignoreCase 显式忽略大小写:不依赖 locale lowercasing,搜 "youtube"/"YouTube" 都中。
+            tabOk && (q.isEmpty() || a.label.contains(q, ignoreCase = true) || a.pkg.contains(q, ignoreCase = true))
+        }
     }
 
     // 角标语义随模式翻转:仅代理=绿"仅代理",仅绕过=红"已排除"(sockstun 同款)。

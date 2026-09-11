@@ -375,12 +375,24 @@ class SmartProxyVpnService : VpnService() {
                 val dupPfd = pfd.dup()
                 val goFd = dupPfd.detachFd()
                 // 注册 UID 反查回调(per-app「禁止联网」):Go TUN 路径按连接回问 Android
-                // 连接所属 UID,命中 tun.blocked_uids 即丢弃。必须在 startRouter 前注册,
-                // 引擎启动时注入 TUN handler。
-                smartproxy.mobile.Mobile.setUIDResolver(UIDResolver(this))
+                // 连接所属 UID,命中 tun.blocked_uids 即丢弃。传 applicationContext 防 Service 泄漏。
+                // 必须在 startRouter 前注册,引擎启动时注入 TUN handler。
+                smartproxy.mobile.Mobile.setUIDResolver(UIDResolver(applicationContext))
                 smartproxy.mobile.Mobile.startRouter(configPath, goFd.toLong(), true)
                 Log.i(TAG, "[establishVpn] Mobile.startRouter() returned successfully in ${System.currentTimeMillis() - t0} ms. (goFd=$goFd, kotlinPfd=${pfd.fd}, tunFds=${tunFdCount()})")
                 tunPfd = pfd
+                // 绑定 Underlying Networks:通知系统底层网络状态,API 29+ 传 null 自动跟踪默认物理网络(Wi-Fi/移动数据漫游不断流);
+                // API 28 及以下显式传入当前活跃网络。
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        setUnderlyingNetworks(null)
+                    } else {
+                        val cm = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                        cm?.activeNetwork?.let { setUnderlyingNetworks(arrayOf(it)) }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "[establishVpn] Failed to setUnderlyingNetworks: ${e.message}")
+                }
                 Log.i(TAG, "[establishVpn] Step 4: VPN established. tunPfd retained for shutdown close.")
             } catch (e: Exception) {
                 Log.e(TAG, "[establishVpn] Mobile.startRouter threw exception! Closing PFD...", e)
