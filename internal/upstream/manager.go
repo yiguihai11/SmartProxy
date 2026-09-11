@@ -14,6 +14,7 @@ import (
 
 	"smartproxy/internal/config"
 	"smartproxy/internal/rules"
+	"smartproxy/internal/safego"
 	"smartproxy/internal/trace"
 )
 
@@ -34,6 +35,7 @@ func NewManager(cfg UpstreamConfig) (*Manager, error) {
 	m.rebuildFromConfig(cfg)
 	m.healthChecker = NewHealthChecker(cfg.HealthCheck, m.defaultProxies)
 	m.healthChecker.Start()
+	m.probeInitialGeo()
 	slog.Info("upstream manager initialized", "aliases", len(m.aliasMap), "strategy", m.strategy)
 	return m, nil
 }
@@ -67,6 +69,7 @@ func (m *Manager) Reload(cfg UpstreamConfig) {
 	if m.healthChecker != nil {
 		m.healthChecker.Reload(cfg.HealthCheck, newProxies)
 	}
+	m.probeInitialGeo()
 	slog.Info("upstream manager reloaded", "aliases", len(m.aliasMap), "strategy", m.strategy)
 }
 
@@ -95,43 +98,45 @@ type circuitPin struct {
 	defaultDriven bool
 }
 
-// captureManualPins records each proxy's manual circuit pins keyed by alias. Caller must
-// hold m.mu (any level).
-func (m *Manager) captureManualPins() map[string][2]circuitPin {
-	pins := make(map[string][2]circuitPin, len(m.aliasMap))
+type savedNodeState struct {
+	pins        [2]circuitPin
+	countryCode string
+	exitIP      string
+}
+
+// captureManualPins records each proxy's manual circuit pins and resolved geo info keyed by alias.
+// Caller must hold m.mu (any level).
+func (m *Manager) captureManualPins() map[string]savedNodeState {
+	states := make(map[string]savedNodeState, len(m.aliasMap))
 	for alias, p := range m.aliasMap {
 		if p == nil {
 			continue // "direct" has no health circuit
 		}
 		tpinned, tup := p.health.ManualPin()
 		upinned, uup := p.udpHealth.ManualPin()
-		pins[alias] = [2]circuitPin{
-			{pinned: tpinned, up: tup, defaultDriven: p.tcpDefaultDriven()},
-			{pinned: upinned, up: uup, defaultDriven: p.udpDefaultDriven()},
+		states[alias] = savedNodeState{
+			pins: [2]circuitPin{
+				{pinned: tpinned, up: tup, defaultDriven: p.tcpDefaultDriven()},
+				{pinned: upinned, up: uup, defaultDriven: p.udpDefaultDriven()},
+			},
+			countryCode: p.CountryCode(),
+			exitIP:      p.ExitIP(),
 		}
 	}
-	return pins
+	return states
 }
 
-// restoreManualPins re-applies saved manual pins to proxies that still exist after a reload.
-// An alias that disappeared from the config drops its pin (the node no longer exists); an
-// alias that kept its name keeps its pin even if its URL changed, since the user disabled
-// the alias, not the server. The saved state is applied in full — pinned circuits are
-// re-pinned and released circuits are cleared — so the exact pre-reload manual state wins
-// over any construction default (e.g. a plugin node released to automatic stays released,
-// instead of reverting to its default UDP-down). The one exception: when a circuit's
-// default force-down flag is flipped ON by the reload itself (a normal socks node edited to
-// enable udp_in_tcp, or an ss node that gains a plugin), the pre-toggle pin is stale — the
-// fresh construction default is left in place rather than re-applying the old auto/up pin,
-// otherwise the newly-enabled hev/plugin node would silently skip its safety default.
-// Caller must not hold m.mu.
-func (m *Manager) restoreManualPins(pins map[string][2]circuitPin) {
+// restoreManualPins re-applies saved manual pins and known geo info to proxies that still exist after a reload.
+func (m *Manager) restoreManualPins(states map[string]savedNodeState) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	for alias, pin := range pins {
+	for alias, state := range states {
 		p, ok := m.aliasMap[alias]
 		if !ok || p == nil {
 			continue
+		}
+		if state.countryCode != "" || state.exitIP != "" {
+			p.SetGeoInfo(state.countryCode, state.exitIP)
 		}
 		restore := func(ph *ProxyHealth, cp circuitPin, nowDefaultDriven bool) {
 			// Flag just toggled on (was not default-driven, now is): keep the construction
@@ -145,8 +150,8 @@ func (m *Manager) restoreManualPins(pins map[string][2]circuitPin) {
 				ph.ClearManualState()
 			}
 		}
-		restore(&p.health, pin[0], p.tcpDefaultDriven())
-		restore(&p.udpHealth, pin[1], p.udpDefaultDriven())
+		restore(&p.health, state.pins[0], p.tcpDefaultDriven())
+		restore(&p.udpHealth, state.pins[1], p.udpDefaultDriven())
 	}
 }
 
@@ -175,6 +180,11 @@ func (m *Manager) rebuildFromConfig(cfg UpstreamConfig) {
 		if err != nil {
 			slog.Warn("failed to create proxy", "url", MaskProxyURL(entry.URL), "error", err)
 			continue
+		}
+		if proxy.CountryCode() == "" {
+			if cc := inferCountryCode(alias, proxy.Name, proxy.Host); cc != "" {
+				proxy.SetGeoInfo(cc, "")
+			}
 		}
 		// The config entry's udp_in_tcp field (the panel switch) is the primary source;
 		// an imported link may also carry ?udp_in_tcp=1, which NewProxy already parsed.
@@ -651,10 +661,11 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 		_ = conn.Close()
 		proxy.SetPingLatency(latency)
 	case "tcp":
-		if m.healthChecker != nil {
+		// Probe cdn-cgi/trace directly to resolve real latency, exit IP, and country code
+		latency, err = probeTCP(ctx, proxy, "http://cp.cloudflare.com/cdn-cgi/trace")
+		if err != nil && m.healthChecker != nil {
+			// Fallback to configured health check probe URL if cdn-cgi/trace fails
 			latency, err = m.healthChecker.ProbeTCP(ctx, proxy)
-		} else {
-			latency, err = probeTCP(ctx, proxy, "http://cp.cloudflare.com/cdn-cgi/trace")
 		}
 		if err == nil {
 			proxy.health.UpdateLatency(latency)
@@ -684,3 +695,37 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 
 	return latency, err
 }
+
+// probeInitialGeo asynchronously discovers country codes and exit IPs for all proxies in the background.
+func (m *Manager) probeInitialGeo() {
+	m.mu.RLock()
+	proxies := make([]*Proxy, len(m.defaultProxies))
+	copy(proxies, m.defaultProxies)
+	m.mu.RUnlock()
+
+	if len(proxies) == 0 {
+		return
+	}
+
+	safego.Go("upstream.initialGeo", func() {
+		var wg sync.WaitGroup
+		for _, p := range proxies {
+			if p == nil || (p.ExitIP() != "" && p.CountryCode() != "") {
+				continue
+			}
+			wg.Add(1)
+			proxy := p
+			safego.Go("upstream.initialGeo.node", func() {
+				defer wg.Done()
+				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+				defer cancel()
+				lat, err := probeTCP(ctx, proxy, "http://cp.cloudflare.com/cdn-cgi/trace")
+				if err == nil {
+					proxy.health.UpdateLatency(lat)
+				}
+			})
+		}
+		wg.Wait()
+	})
+}
+

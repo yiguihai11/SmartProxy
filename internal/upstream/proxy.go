@@ -152,6 +152,142 @@ func (p *Proxy) SetGeoInfo(countryCode, exitIP string) {
 	}
 }
 
+// inferCountryCode extracts a 2-letter ISO country code (e.g. "HK", "US", "JP")
+// by inspecting flag emojis, standard country keywords, and host patterns in alias/name.
+func inferCountryCode(sources ...string) string {
+	for _, s := range sources {
+		if s == "" {
+			continue
+		}
+		// 1. Check for Unicode flag emoji (Regional Indicator Symbol pairs: U+1F1E6 to U+1F1FF)
+		runes := []rune(s)
+		for i := 0; i < len(runes)-1; i++ {
+			r1, r2 := runes[i], runes[i+1]
+			if r1 >= 0x1F1E6 && r1 <= 0x1F1FF && r2 >= 0x1F1E6 && r2 <= 0x1F1FF {
+				c1 := byte('A' + (r1 - 0x1F1E6))
+				c2 := byte('A' + (r2 - 0x1F1E6))
+				return string([]byte{c1, c2})
+			}
+		}
+
+		upper := strings.ToUpper(s)
+
+		// 2. Direct Chinese country / region names
+		zhKeywords := []struct {
+			kw string
+			cc string
+		}{
+			{"香港", "HK"}, {"澳门", "MO"}, {"台湾", "TW"}, {"臺灣", "TW"},
+			{"日本", "JP"}, {"东京", "JP"}, {"大阪", "JP"},
+			{"新加坡", "SG"}, {"狮城", "SG"},
+			{"美国", "US"}, {"洛杉矶", "US"}, {"硅谷", "US"}, {"西雅图", "US"},
+			{"韩国", "KR"}, {"首尔", "KR"},
+			{"英国", "GB"}, {"伦敦", "GB"},
+			{"德国", "DE"}, {"法兰克福", "DE"},
+			{"法国", "FR"}, {"巴黎", "FR"},
+			{"加拿大", "CA"},
+			{"澳大利亚", "AU"}, {"澳洲", "AU"}, {"悉尼", "AU"},
+			{"俄罗斯", "RU"}, {"莫斯科", "RU"},
+			{"印度", "IN"},
+			{"泰国", "TH"},
+			{"越南", "VN"},
+			{"菲律宾", "PH"},
+			{"马来西亚", "MY"},
+			{"荷兰", "NL"},
+			{"土耳其", "TR"},
+			{"巴西", "BR"},
+			{"阿根廷", "AR"},
+			{"意大利", "IT"},
+			{"西班牙", "ES"},
+			{"瑞士", "CH"},
+			{"瑞典", "SE"},
+			{"挪威", "NO"},
+			{"芬兰", "FI"},
+			{"丹麦", "DK"},
+			{"波兰", "PL"},
+			{"乌克兰", "UA"},
+			{"阿联酋", "AE"},
+			{"新西兰", "NZ"},
+			{"爱尔兰", "IE"},
+			{"以色列", "IL"},
+			{"中国", "CN"},
+		}
+		for _, item := range zhKeywords {
+			if strings.Contains(s, item.kw) {
+				return item.cc
+			}
+		}
+
+		// 3. English full names & major cities
+		enNames := []struct {
+			name string
+			cc   string
+		}{
+			{"HONG KONG", "HK"}, {"HONGKONG", "HK"},
+			{"TAIWAN", "TW"},
+			{"JAPAN", "JP"}, {"TOKYO", "JP"}, {"OSAKA", "JP"},
+			{"SINGAPORE", "SG"},
+			{"UNITED STATES", "US"}, {"USA", "US"},
+			{"SOUTH KOREA", "KR"}, {"KOREA", "KR"},
+			{"UNITED KINGDOM", "GB"},
+			{"GERMANY", "DE"}, {"FRANCE", "FR"}, {"CANADA", "CA"},
+			{"AUSTRALIA", "AU"}, {"RUSSIA", "RU"}, {"INDIA", "IN"},
+			{"THAILAND", "TH"}, {"VIETNAM", "VN"}, {"PHILIPPINES", "PH"},
+			{"MALAYSIA", "MY"}, {"NETHERLANDS", "NL"}, {"TURKEY", "TR"},
+			{"BRAZIL", "BR"}, {"ARGENTINA", "AR"}, {"ITALY", "IT"},
+			{"SPAIN", "ES"}, {"SWITZERLAND", "CH"}, {"SWEDEN", "SE"},
+			{"NORWAY", "NO"}, {"FINLAND", "FI"}, {"DENMARK", "DK"},
+			{"POLAND", "PL"}, {"UKRAINE", "UA"}, {"NEW ZEALAND", "NZ"},
+			{"IRELAND", "IE"}, {"ISRAEL", "IL"}, {"CHINA", "CN"},
+		}
+		for _, item := range enNames {
+			if strings.Contains(upper, item.name) {
+				return item.cc
+			}
+		}
+
+		// 4. Standalone 2-letter codes (word-bounded: e.g. "HK-01", "[US] node", "node_JP")
+		shortCodes := []string{
+			"HK", "MO", "TW", "JP", "SG", "US", "KR", "UK", "GB",
+			"DE", "FR", "CA", "AU", "RU", "IN", "TH", "VN", "PH",
+			"MY", "NL", "TR", "BR", "AR", "IT", "ES", "CH", "SE",
+			"NO", "FI", "DK", "PL", "UA", "AE", "NZ", "IE", "IL", "CN",
+		}
+		for _, code := range shortCodes {
+			if matchWord(upper, code) {
+				if code == "UK" {
+					return "GB"
+				}
+				return code
+			}
+		}
+	}
+	return ""
+}
+
+func matchWord(s, word string) bool {
+	idx := 0
+	for {
+		pos := strings.Index(s[idx:], word)
+		if pos == -1 {
+			return false
+		}
+		start := idx + pos
+		end := start + len(word)
+		beforeOk := start == 0 || !isAlphaNum(s[start-1])
+		afterOk := end == len(s) || !isAlphaNum(s[end])
+		if beforeOk && afterOk {
+			return true
+		}
+		idx = start + 1
+	}
+}
+
+func isAlphaNum(b byte) bool {
+	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
+}
+
+
 
 // SchemeSupportsUDP reports whether the upstream's protocol can carry UDP at all. This is a
 // static property of the scheme and never changes: only SOCKS5 / SOCKS5h / SS have a UDP
@@ -461,6 +597,9 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 	// field as profile.name). url.Parse already percent-decodes Fragment, so use it
 	// as-is; a missing fragment leaves the name empty.
 	p.Name = strings.TrimSpace(u.Fragment)
+	if cc := inferCountryCode(p.Name, p.Host); cc != "" {
+		p.SetGeoInfo(cc, "")
+	}
 	// udp_in_tcp selects the hev UDP-in-TCP relay for a socks5/socks5h node. Parsed
 	// from the URL query so an imported link can carry it; the config entry's udp_in_tcp
 	// field (the panel switch) is OR-ed in later by the manager (see rebuildFromConfig).

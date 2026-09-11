@@ -356,6 +356,8 @@ func parseAndSaveGeo(p *Proxy, body []byte) {
 
 // ProbeTCP actively probes a proxy over TCP by executing an HTTP GET to the configured
 // probe URL (or default http://cp.cloudflare.com/generate_204), returning the round-trip latency.
+// If the node's country code or exit IP has not been discovered yet, it attempts cdn-cgi/trace
+// first so that both health status and real geo location are resolved.
 func (hc *HealthChecker) ProbeTCP(ctx context.Context, p *Proxy) (time.Duration, error) {
 	probeURL := "http://cp.cloudflare.com/generate_204"
 	if hc != nil {
@@ -363,8 +365,11 @@ func (hc *HealthChecker) ProbeTCP(ctx context.Context, p *Proxy) (time.Duration,
 			probeURL = cfg.URL
 		}
 	}
-	if p != nil && (p.CountryCode() == "" || p.ExitIP() == "") && probeURL == "http://cp.cloudflare.com/generate_204" {
-		probeURL = "http://cp.cloudflare.com/cdn-cgi/trace"
+	if p != nil && (p.CountryCode() == "" || p.ExitIP() == "") {
+		traceLatency, traceErr := probeTCP(ctx, p, "http://cp.cloudflare.com/cdn-cgi/trace")
+		if traceErr == nil {
+			return traceLatency, nil
+		}
 	}
 	return probeTCP(ctx, p, probeURL)
 }
