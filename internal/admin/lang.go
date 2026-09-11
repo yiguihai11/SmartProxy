@@ -98,6 +98,17 @@ var zhStrings = map[string]string{
 	"UDP manually up — click to restore auto":       "UDP 手动开启 — 点击恢复自动",
 	"UDP manually down — click to force up":         "UDP 手动关闭 — 点击强制开启",
 	"Copy the ss:// share link or show its QR code": "复制 ss:// 分享链接或查看二维码",
+	"Test TCP":                                      "测TCP",
+	"Test UDP":                                      "测UDP",
+	"Testing...":                                    "测试中…",
+	"Failed":                                        "失败",
+	"UDP not supported":                             "不支持 UDP",
+	"Test TCP latency and availability":             "测试 TCP 延迟及连通性",
+	"Test UDP latency and availability":             "测试 UDP 延迟及连通性",
+	"{0} {1} test OK ({2}ms)":                      "{0} {1} 测试成功（{2}ms）",
+	"{0} {1} test failed: {2}":                     "{0} {1} 测试失败：{2}",
+	"{0} test OK: {1}ms (click to re-test)":         "{0} 测试成功：{1}ms（点击重新测试）",
+	"{0} test failed: {1} (click to re-test)":       "{0} 测试失败：{1}（点击重新测试）",
 
 	// theme
 	"Light": "浅色", "Dark": "深色",
@@ -248,9 +259,14 @@ var zhStrings = map[string]string{
 // dashboard.html. They are exempt from the source-reachability test (a dynamic
 // model token like tcp_only has no static English text to match).
 var zhDynamicKeys = map[string]bool{
-	"tcp_only":         true, // p.mode token fed to t()
-	"Auto-scroll: ON":  true, // updateLogsScrollBtn composes 'Auto-scroll: '+…
-	"Auto-scroll: OFF": true,
+	"tcp_only":                          true, // p.mode token fed to t()
+	"Auto-scroll: ON":                   true, // updateLogsScrollBtn composes 'Auto-scroll: '+…
+	"Auto-scroll: OFF":                  true,
+	"Testing...":                         true,
+	"Failed":                             true,
+	"UDP not supported":                 true,
+	"Test TCP latency and availability": true,
+	"Test UDP latency and availability": true,
 }
 
 // zhPrefixes — applied to a text node that starts with the prefix (longest

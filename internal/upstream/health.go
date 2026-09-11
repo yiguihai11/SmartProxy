@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -45,6 +46,17 @@ func (ph *ProxyHealth) Latency() time.Duration {
 	ph.mu.RLock()
 	defer ph.mu.RUnlock()
 	return ph.latency
+}
+
+// UpdateLatency explicitly records a latency sample and lastAttempt timestamp on this
+// circuit, e.g. from an on-demand manual test.
+func (ph *ProxyHealth) UpdateLatency(latency time.Duration) {
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+	ph.lastAttempt = time.Now()
+	if latency > 0 {
+		ph.latency = latency
+	}
 }
 
 // SetManualState pins a circuit to a fixed availability and keeps it pinned (sticky):
@@ -268,6 +280,85 @@ func (hc *HealthChecker) checkProxy(p *Proxy) {
 	hc.checkProxyTCP(p)
 }
 
+// probeTCP executes an HTTP GET probe through proxy p to targetURL and returns the round-trip latency.
+func probeTCP(ctx context.Context, p *Proxy, targetURL string) (time.Duration, error) {
+	if targetURL == "" {
+		targetURL = "http://cp.cloudflare.com/generate_204"
+	}
+	start := time.Now()
+
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, portStr, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			port := 80
+			if pt := parsePort(portStr); pt > 0 {
+				port = pt
+			}
+			return p.Connect(ctx, host, port)
+		},
+		ResponseHeaderTimeout: 10 * time.Second,
+	}
+	defer transport.CloseIdleConnections()
+
+	client := &http.Client{
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Connection", "close")
+	req.Header.Set("User-Agent", "SmartProxy-Probe/1.0")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return 0, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	return time.Since(start), nil
+}
+
+// ProbeTCP actively probes a proxy over TCP by executing an HTTP GET to the configured
+// probe URL (or default http://cp.cloudflare.com/generate_204), returning the round-trip latency.
+func (hc *HealthChecker) ProbeTCP(ctx context.Context, p *Proxy) (time.Duration, error) {
+	probeURL := "http://cp.cloudflare.com/generate_204"
+	if hc != nil {
+		if cfg := hc.cfg.Load(); cfg != nil && cfg.URL != "" {
+			probeURL = cfg.URL
+		}
+	}
+	return probeTCP(ctx, p, probeURL)
+}
+
+// ProbeUDP actively probes a node's UDP relay with an end-to-end DNS query, returning
+// the round-trip latency and classifying its capability on success.
+func (hc *HealthChecker) ProbeUDP(ctx context.Context, p *Proxy) (time.Duration, error) {
+	if !p.SchemeSupportsUDP() {
+		return 0, fmt.Errorf("proxy scheme %s does not support UDP", p.Scheme)
+	}
+	latency, conn, err := hc.probeUDP(p, ctx)
+	if err != nil {
+		p.noteUDPCapabilityFailure()
+		return 0, err
+	}
+	defer conn.Close()
+	p.classifyUDPCapability(conn)
+	return latency, nil
+}
+
 func (hc *HealthChecker) checkProxyTCP(p *Proxy) {
 	// A manually-disabled TCP circuit is not probed, mirroring the UDP gate: the user (or
 	// the udp_in_tcp node default) pinned it down, so probing is wasted and, for udp_in_tcp
@@ -290,60 +381,18 @@ func (hc *HealthChecker) checkProxyTCP(p *Proxy) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(hc.ctx, time.Duration(cfg.Timeout)*time.Second)
+	timeout := time.Duration(cfg.Timeout) * time.Second
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(hc.ctx, timeout)
 	defer cancel()
 
-	start := time.Now()
-
-	transport := &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, portStr, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, err
-			}
-			port := 80
-			if p := parsePort(portStr); p > 0 {
-				port = p
-			}
-			return p.Connect(ctx, host, port)
-		},
-	}
-
-	client := &http.Client{
-		Transport: transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	// This transport is per-probe (DialContext closes over this proxy p) and never
-	// reused: close its pooled keep-alive conn when done, otherwise each probe leaks an
-	// idle connection that only drains when the transport is eventually GC'd.
-	defer transport.CloseIdleConnections()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", cfg.URL, nil)
-	var success bool
-	var doErr error
+	latency, err := hc.ProbeTCP(ctx, p)
 	if err == nil {
-		resp, err := client.Do(req)
-		doErr = err
-		if err == nil {
-			defer resp.Body.Close()
-			if resp.StatusCode >= 200 && resp.StatusCode < 400 {
-				success = true
-			} else {
-				doErr = fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-			}
-		}
-	} else {
-		doErr = err
-	}
-
-	latency := time.Since(start)
-
-	if success {
 		hc.RecordSuccess(p, latency)
 	} else {
-		hc.RecordFailure(p, doErr)
+		hc.RecordFailure(p, err)
 	}
 }
 
@@ -371,21 +420,18 @@ func (hc *HealthChecker) checkProxyUDP(p *Proxy) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(hc.ctx, time.Duration(cfg.Timeout)*time.Second)
+	timeout := time.Duration(cfg.Timeout) * time.Second
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(hc.ctx, timeout)
 	defer cancel()
 
-	latency, conn, err := hc.probeUDP(p, ctx)
+	latency, err := hc.ProbeUDP(ctx, p)
 	if err != nil {
-		// End-to-end UDP failure. On a still-unknown node this marks it none; a node that
-		// already established standard/raw keeps its last-known-good marker (the circuit
-		// breaker below reports the outage instead).
-		p.noteUDPCapabilityFailure()
 		hc.RecordUDPFailure(p, err)
 		return
 	}
-	defer conn.Close()
-	// The relay path worked end to end — record how it works (standard ASSOCIATE vs raw).
-	p.classifyUDPCapability(conn)
 	hc.RecordUDPSuccess(p, latency)
 }
 
@@ -398,12 +444,17 @@ func (hc *HealthChecker) checkProxyUDP(p *Proxy) {
 // On success the established conn is returned (not closed) so the caller can classify the
 // relay type (standard vs raw) before closing it; on any failure the conn is closed here.
 func (hc *HealthChecker) probeUDP(p *Proxy, ctx context.Context) (time.Duration, net.Conn, error) {
-	cfg := hc.cfg.Load()
-	dnsServer := cfg.UDPProbeDNS
+	dnsServer := ""
+	domain := ""
+	if hc != nil {
+		if cfg := hc.cfg.Load(); cfg != nil {
+			dnsServer = cfg.UDPProbeDNS
+			domain = cfg.UDPProbeDomain
+		}
+	}
 	if dnsServer == "" {
 		dnsServer = "1.1.1.1:53"
 	}
-	domain := cfg.UDPProbeDomain
 	if domain == "" {
 		domain = "dns.google"
 	}

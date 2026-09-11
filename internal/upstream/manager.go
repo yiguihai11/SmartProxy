@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -589,4 +590,54 @@ func (m *Manager) Strategy() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.strategy
+}
+
+// TestProxy runs an on-demand, real network test for the given proxy alias and protocol ("tcp" or "udp").
+// Returns the round-trip latency and any error encountered during the probe.
+func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.Duration, error) {
+	m.mu.RLock()
+	proxy, ok := m.aliasMap[alias]
+	m.mu.RUnlock()
+	if !ok || proxy == nil {
+		return 0, fmt.Errorf("proxy alias %q not found", alias)
+	}
+
+	protocol = strings.ToLower(protocol)
+	var latency time.Duration
+	var err error
+
+	switch protocol {
+	case "tcp":
+		if m.healthChecker != nil {
+			latency, err = m.healthChecker.ProbeTCP(ctx, proxy)
+		} else {
+			latency, err = probeTCP(ctx, proxy, "http://cp.cloudflare.com/generate_204")
+		}
+		if err == nil {
+			proxy.health.UpdateLatency(latency)
+			if m.healthChecker != nil {
+				m.healthChecker.RecordSuccess(proxy, latency)
+			}
+		}
+	case "udp":
+		if !proxy.SchemeSupportsUDP() {
+			return 0, fmt.Errorf("proxy scheme %s does not support UDP", proxy.Scheme)
+		}
+		if m.healthChecker != nil {
+			latency, err = m.healthChecker.ProbeUDP(ctx, proxy)
+		} else {
+			dummyHC := NewHealthChecker(config.HealthCheckConf{}, nil)
+			latency, err = dummyHC.ProbeUDP(ctx, proxy)
+		}
+		if err == nil {
+			proxy.udpHealth.UpdateLatency(latency)
+			if m.healthChecker != nil {
+				m.healthChecker.RecordUDPSuccess(proxy, latency)
+			}
+		}
+	default:
+		return 0, fmt.Errorf("invalid protocol %q, must be tcp or udp", protocol)
+	}
+
+	return latency, err
 }

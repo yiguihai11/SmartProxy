@@ -1191,3 +1191,38 @@ func TestUDPAssociate_RuleRespectsManualDisable(t *testing.T) {
 		t.Error("manually-disabled UDP under a rule must fail")
 	}
 }
+
+func TestManager_TestProxy(t *testing.T) {
+	m, err := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{
+			{Alias: "p-socks", URL: "socks5://127.0.0.1:1080"},
+			{Alias: "p-http", URL: "http://127.0.0.1:8080"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	// 1. Bad alias
+	if _, err := m.TestProxy(ctx, "nonexistent", "tcp"); err == nil {
+		t.Error("expected error for non-existent alias")
+	}
+
+	// 2. Bad protocol
+	if _, err := m.TestProxy(ctx, "p-socks", "invalid"); err == nil {
+		t.Error("expected error for invalid protocol")
+	}
+
+	// 3. UDP on non-UDP scheme
+	if _, err := m.TestProxy(ctx, "p-http", "udp"); err == nil {
+		t.Error("expected error for UDP on http scheme")
+	}
+
+	// 4. Offline node returns error
+	if _, err := m.TestProxy(ctx, "p-socks", "tcp"); err == nil {
+		t.Error("expected error for offline proxy")
+	}
+}

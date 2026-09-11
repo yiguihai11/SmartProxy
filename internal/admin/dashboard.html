@@ -581,6 +581,46 @@ async function toggleCircuit(i,c){
   await fetch('/health/proxy?alias='+encodeURIComponent(p.alias)+'&circuit='+c+'&action='+action,{method:'POST'});
   loadHealth()
 }
+var proxyTestState={};
+async function testProxy(i,proto){
+  var p=(healthD&&healthD.health&&healthD.health.proxies&&healthD.health.proxies[i]);
+  if(!p)return;
+  var key=p.alias+':'+proto;
+  proxyTestState[key]={testing:true};
+  lhealth(healthD);
+  try{
+    var resp=await fetch('/proxy/test?alias='+encodeURIComponent(p.alias)+'&protocol='+encodeURIComponent(proto),{method:'POST'});
+    if(!resp.ok){
+      var errTxt=await resp.text();
+      throw new Error(errTxt||('HTTP '+resp.status));
+    }
+    var res=await resp.json();
+    proxyTestState[key]={
+      testing:false,
+      available:!!res.available,
+      latency_ms:res.latency_ms||0,
+      error:res.error||''
+    };
+    var toast=document.getElementById('copy-toast');
+    if(res.available){
+      var okMsg=tf('{0} {1} test OK ({2}ms)',[p.alias,proto.toUpperCase(),(res.latency_ms).toFixed(1)]);
+      if(toast)showCopyToast(toast,okMsg);
+    }else{
+      var failMsg=tf('{0} {1} test failed: {2}',[p.alias,proto.toUpperCase(),res.error||t('Failed')]);
+      if(toast)showCopyToast(toast,failMsg);
+    }
+  }catch(e){
+    proxyTestState[key]={
+      testing:false,
+      available:false,
+      error:e.message
+    };
+    var toast=document.getElementById('copy-toast');
+    var failMsg=tf('{0} {1} test failed: {2}',[p.alias,proto.toUpperCase(),e.message]);
+    if(toast)showCopyToast(toast,failMsg);
+  }
+  try{await loadHealth()}catch(_){lhealth(healthD)}
+}
 function lhealth(d){
   healthD=d;
   updateHealthBanner(d);
@@ -604,10 +644,53 @@ function lhealth(d){
     var tc=circuitStat(p.health,true),uc=circuitStat(p.udp_health,udpScheme);
     var tcClk=tc.c==='na'?'':' onclick="toggleCircuit('+i+',\'tcp\')"';
     var ucClk=uc.c==='na'?'':' onclick="toggleCircuit('+i+',\'udp\')"';
+
+    var stTCP=proxyTestState[p.alias+':tcp'];
+    var tcpBtnText=t('Test TCP'),tcpBtnStyle='',tcpBtnTitle=t('Test TCP latency and availability'),tcpBtnDis='';
+    if(stTCP){
+      if(stTCP.testing){
+        tcpBtnText=t('Testing...');
+        tcpBtnStyle='opacity:0.7;cursor:wait;';
+        tcpBtnDis=' disabled';
+      }else if(stTCP.available){
+        tcpBtnText='TCP '+stTCP.latency_ms.toFixed(1)+'ms';
+        tcpBtnStyle='color:var(--green);border-color:var(--green);font-weight:600;';
+        tcpBtnTitle=tf('{0} test OK: {1}ms (click to re-test)',['TCP',stTCP.latency_ms.toFixed(1)]);
+      }else{
+        tcpBtnText='TCP '+t('Failed');
+        tcpBtnStyle='color:var(--red);border-color:var(--red);font-weight:600;';
+        tcpBtnTitle=tf('{0} test failed: {1} (click to re-test)',['TCP',stTCP.error||'']);
+      }
+    }
+
+    var stUDP=proxyTestState[p.alias+':udp'];
+    var udpBtnText=t('Test UDP'),udpBtnStyle='',udpBtnTitle=t('Test UDP latency and availability'),udpBtnDis='';
+    if(!udpScheme){
+      udpBtnText=t('Test UDP');
+      udpBtnTitle=t('UDP not supported');
+      udpBtnDis=' disabled';
+    }else if(stUDP){
+      if(stUDP.testing){
+        udpBtnText=t('Testing...');
+        udpBtnStyle='opacity:0.7;cursor:wait;';
+        udpBtnDis=' disabled';
+      }else if(stUDP.available){
+        udpBtnText='UDP '+stUDP.latency_ms.toFixed(1)+'ms';
+        udpBtnStyle='color:var(--green);border-color:var(--green);font-weight:600;';
+        udpBtnTitle=tf('{0} test OK: {1}ms (click to re-test)',['UDP',stUDP.latency_ms.toFixed(1)]);
+      }else{
+        udpBtnText='UDP '+t('Failed');
+        udpBtnStyle='color:var(--red);border-color:var(--red);font-weight:600;';
+        udpBtnTitle=tf('{0} test failed: {1} (click to re-test)',['UDP',stUDP.error||'']);
+      }
+    }
+
     return '<div class="proxy-card"><div class="top"><div><div class="alias">'+dispName+'</div><div class="url">'+p.url+aliasTxt+' · '+dispMode+capTxt+'</div></div>'+
       '<div class="circs"><span class="circ '+(tc.c+(tc.m?' manual':''))+'" title="'+(tc.m?(p.health.available?'TCP manually up — click to restore auto':'TCP manually down — click to force up'):'Click to toggle TCP')+'"'+tcClk+'><i class="dot"></i>TCP '+t(tc.t)+'</span><span class="circ '+(uc.c+(uc.m?' manual':''))+'" title="'+(uc.m?(p.udp_health&&p.udp_health.available?'UDP manually up — click to restore auto':'UDP manually down — click to force up'):'Click to toggle UDP')+'"'+ucClk+'><i class="dot"></i>UDP '+t(uc.t)+'</span></div></div>'+
       '<div class="stats"><span>latency: '+lat+'</span><span>tcp failures: '+(p.health.manual?t('manual'):p.health.consecutive_failures)+'</span><span>udp failures: '+(p.udp_health?(p.udp_health.manual?t('manual'):p.udp_health.consecutive_failures):t('n/a'))+'</span></div>'+
       '<div class="actions">'+
+      '<button class="btn btn-sm" id="test-tcp-'+i+'" onclick="testProxy('+i+',\'tcp\')" style="'+tcpBtnStyle+'" title="'+escAttr(tcpBtnTitle)+'"'+tcpBtnDis+'>'+tcpBtnText+'</button>'+
+      '<button class="btn btn-sm" id="test-udp-'+i+'" onclick="testProxy('+i+',\'udp\')" style="'+udpBtnStyle+'" title="'+escAttr(udpBtnTitle)+'"'+udpBtnDis+'>'+udpBtnText+'</button>'+
       '<button class="btn btn-sm primary" onclick="openProxyDialog('+i+')">Edit</button>'+
       '<button class="btn btn-sm danger" onclick="deleteProxy('+i+')">Delete</button>'+
       (p.scheme==='ss'?'<button class="btn btn-sm" onclick="exportSSLink('+i+')" title="Copy the ss:// share link or show its QR code">Export</button>':'')+

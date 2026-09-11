@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -280,6 +281,7 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/chnroute", s.handleChnroute)
 	mux.HandleFunc("/health/proxy", s.handleHealthProxy)
 	mux.HandleFunc("/health/reset-auto", s.handleHealthResetAuto)
+	mux.HandleFunc("/proxy/test", s.handleProxyTest)
 	mux.HandleFunc("/export", s.handleExport)
 	mux.HandleFunc("/config", s.handleConfig)
 	mux.HandleFunc("/version", s.handleVersion)
@@ -857,6 +859,75 @@ func (s *Server) handleHealthResetAuto(w http.ResponseWriter, r *http.Request) {
 	slog.Info("admin: reset auto-opened circuits", "count", n)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "reset": n})
+}
+
+// handleProxyTest handles on-demand testing of a proxy node's TCP or UDP availability.
+// Query parameters:
+//   - alias: proxy alias to test (required)
+//   - protocol: "tcp" or "udp" (required)
+//   - timeout: optional timeout in seconds (default 5, 1..30)
+func (s *Server) handleProxyTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	alias := r.URL.Query().Get("alias")
+	if alias == "" {
+		http.Error(w, "need ?alias=xx", http.StatusBadRequest)
+		return
+	}
+	protocol := r.URL.Query().Get("protocol")
+	if protocol == "" {
+		protocol = r.URL.Query().Get("proto")
+	}
+	if protocol != "tcp" && protocol != "udp" {
+		http.Error(w, "need ?protocol=tcp|udp", http.StatusBadRequest)
+		return
+	}
+
+	timeoutSec := 5
+	if ts := r.URL.Query().Get("timeout"); ts != "" {
+		if sec, err := strconv.Atoi(ts); err == nil && sec >= 1 && sec <= 30 {
+			timeoutSec = sec
+		}
+	}
+
+	if s.mgr == nil {
+		http.Error(w, "upstream manager not configured", http.StatusInternalServerError)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(timeoutSec)*time.Second)
+	defer cancel()
+
+	latency, err := s.mgr.TestProxy(ctx, alias, protocol)
+
+	w.Header().Set("Content-Type", "application/json")
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		slog.Warn("admin: proxy test failed", "alias", alias, "protocol", protocol, "error", err)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":    "ok",
+			"alias":     alias,
+			"protocol":  protocol,
+			"available": false,
+			"error":     err.Error(),
+		})
+		return
+	}
+
+	latencyMs := float64(latency.Microseconds()) / 1000.0
+	slog.Info("admin: proxy test succeeded", "alias", alias, "protocol", protocol, "latency_ms", latencyMs)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":     "ok",
+		"alias":      alias,
+		"protocol":   protocol,
+		"available":  true,
+		"latency_ms": latencyMs,
+	})
 }
 
 // handleExport returns a node's full shareable URL (real ss:// link, credentials intact)

@@ -1569,3 +1569,68 @@ func TestAdmin_SameAuthority(t *testing.T) {
 		}
 	}
 }
+
+func TestAdmin_ProxyTest(t *testing.T) {
+	s := newTestServer(t)
+	startServer(t, s)
+
+	// 1. Missing alias
+	resp, err := httpPost(s.sockPath, "/proxy/test?protocol=tcp")
+	if err != nil {
+		t.Fatalf("POST /proxy/test failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing alias, got %d", resp.StatusCode)
+	}
+
+	// 2. Missing protocol
+	resp, err = httpPost(s.sockPath, "/proxy/test?alias=ss-local")
+	if err != nil {
+		t.Fatalf("POST /proxy/test failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for missing protocol, got %d", resp.StatusCode)
+	}
+
+	// 3. Bad protocol
+	resp, err = httpPost(s.sockPath, "/proxy/test?alias=ss-local&protocol=xyz")
+	if err != nil {
+		t.Fatalf("POST /proxy/test failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for bad protocol, got %d", resp.StatusCode)
+	}
+
+	// 4. Bad alias (404)
+	resp, err = httpPost(s.sockPath, "/proxy/test?alias=nonexistent&protocol=tcp")
+	if err != nil {
+		t.Fatalf("POST /proxy/test failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 for bad alias, got %d", resp.StatusCode)
+	}
+
+	// 5. Offline node test (timeout 1s) returns 200 with available=false
+	resp, err = httpPost(s.sockPath, "/proxy/test?alias=ss-local&protocol=tcp&timeout=1")
+	if err != nil {
+		t.Fatalf("POST /proxy/test failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 for test result, got %d", resp.StatusCode)
+	}
+	var res map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatalf("decode json failed: %v", err)
+	}
+	if res["available"] != false {
+		t.Errorf("expected available=false for offline node, got %v", res["available"])
+	}
+	if res["error"] == nil || res["error"] == "" {
+		t.Error("expected error message in result")
+	}
+}
