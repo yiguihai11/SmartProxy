@@ -262,6 +262,9 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
   <div class="view-meta"><span class="dot"></span><span id="health-time"></span></div>
   <div class="toolbar">
     <button class="btn primary btn-sm" onclick="openProxyDialog(-1)">+ Add Proxy</button>
+    <button class="btn btn-sm" id="test-all-tcp-btn" onclick="testAllProxies('tcp')">Test All TCP</button>
+    <button class="btn btn-sm" id="test-all-udp-btn" onclick="testAllProxies('udp')">Test All UDP</button>
+    <button class="btn btn-sm" id="test-all-btn" onclick="testAllProxies('both')">Test All</button>
     <span class="page-info" id="health-info">Edits upstream.proxies in config</span>
   </div>
   <div class="proxy-grid" id="proxy-cards"></div>
@@ -621,6 +624,77 @@ async function testProxy(i,proto){
   }
   try{await loadHealth()}catch(_){lhealth(healthD)}
 }
+var _batchTesting=false;
+async function testAllProxies(proto){
+  if(_batchTesting)return;
+  var proxies=(healthD&&healthD.health&&healthD.health.proxies)||[];
+  var tasks=[];
+  for(var i=0;i<proxies.length;i++){
+    var p=proxies[i];
+    var udpScheme=/^(socks5|socks5h|ss)$/.test(p.scheme);
+    if(proto==='tcp'||proto==='both'){
+      tasks.push({alias:p.alias,proto:'tcp'});
+    }
+    if((proto==='udp'||proto==='both')&&udpScheme){
+      tasks.push({alias:p.alias,proto:'udp'});
+    }
+  }
+  var toast=document.getElementById('copy-toast');
+  if(tasks.length===0){
+    if(toast)showCopyToast(toast,t('No proxy nodes to test'));
+    return;
+  }
+  _batchTesting=true;
+  var btnTCP=document.getElementById('test-all-tcp-btn');
+  var btnUDP=document.getElementById('test-all-udp-btn');
+  var btnAll=document.getElementById('test-all-btn');
+  if(btnTCP)btnTCP.disabled=true;
+  if(btnUDP)btnUDP.disabled=true;
+  if(btnAll)btnAll.disabled=true;
+
+  for(var j=0;j<tasks.length;j++){
+    proxyTestState[tasks[j].alias+':'+tasks[j].proto]={testing:true};
+  }
+  lhealth(healthD);
+
+  var okCount=0,failCount=0;
+  var promises=tasks.map(async function(task){
+    try{
+      var resp=await fetch('/proxy/test?alias='+encodeURIComponent(task.alias)+'&protocol='+encodeURIComponent(task.proto),{method:'POST'});
+      if(!resp.ok)throw new Error('HTTP '+resp.status);
+      var res=await resp.json();
+      proxyTestState[task.alias+':'+task.proto]={
+        testing:false,
+        available:!!res.available,
+        latency_ms:res.latency_ms||0,
+        error:res.error||''
+      };
+      if(res.available)okCount++;else failCount++;
+    }catch(e){
+      proxyTestState[task.alias+':'+task.proto]={
+        testing:false,
+        available:false,
+        error:e.message
+      };
+      failCount++;
+    }
+    lhealth(healthD);
+  });
+
+  try{
+    await Promise.all(promises);
+  }finally{
+    _batchTesting=false;
+    if(btnTCP)btnTCP.disabled=false;
+    if(btnUDP)btnUDP.disabled=false;
+    if(btnAll)btnAll.disabled=false;
+  }
+
+  if(toast){
+    showCopyToast(toast,tf('Batch test complete: {0} available, {1} failed',[String(okCount),String(failCount)]));
+  }
+  try{await loadHealth()}catch(_){lhealth(healthD)}
+}
 function lhealth(d){
   healthD=d;
   updateHealthBanner(d);
@@ -689,12 +763,12 @@ function lhealth(d){
       '<div class="circs"><span class="circ '+(tc.c+(tc.m?' manual':''))+'" title="'+(tc.m?(p.health.available?'TCP manually up — click to restore auto':'TCP manually down — click to force up'):'Click to toggle TCP')+'"'+tcClk+'><i class="dot"></i>TCP '+t(tc.t)+'</span><span class="circ '+(uc.c+(uc.m?' manual':''))+'" title="'+(uc.m?(p.udp_health&&p.udp_health.available?'UDP manually up — click to restore auto':'UDP manually down — click to force up'):'Click to toggle UDP')+'"'+ucClk+'><i class="dot"></i>UDP '+t(uc.t)+'</span></div></div>'+
       '<div class="stats"><span>latency: '+lat+'</span><span>tcp failures: '+(p.health.manual?t('manual'):p.health.consecutive_failures)+'</span><span>udp failures: '+(p.udp_health?(p.udp_health.manual?t('manual'):p.udp_health.consecutive_failures):t('n/a'))+'</span></div>'+
       '<div class="actions">'+
-      '<button class="btn btn-sm" id="test-tcp-'+i+'" onclick="testProxy('+i+',\'tcp\')" style="'+tcpBtnStyle+'" title="'+escAttr(tcpBtnTitle)+'"'+tcpBtnDis+'>'+tcpBtnText+'</button>'+
-      '<button class="btn btn-sm" id="test-udp-'+i+'" onclick="testProxy('+i+',\'udp\')" style="'+udpBtnStyle+'" title="'+escAttr(udpBtnTitle)+'"'+udpBtnDis+'>'+udpBtnText+'</button>'+
       '<button class="btn btn-sm primary" onclick="openProxyDialog('+i+')">Edit</button>'+
       '<button class="btn btn-sm danger" onclick="deleteProxy('+i+')">Delete</button>'+
       (p.scheme==='ss'?'<button class="btn btn-sm" onclick="exportSSLink('+i+')" title="Copy the ss:// share link or show its QR code">Export</button>':'')+
       '<button class="btn btn-sm '+(anyUp?'danger':'primary')+'" onclick="tp('+i+')">'+(anyUp?'Disable':'Enable')+'</button>'+
+      '<button class="btn btn-sm" id="test-tcp-'+i+'" onclick="testProxy('+i+',\'tcp\')" style="'+tcpBtnStyle+'" title="'+escAttr(tcpBtnTitle)+'"'+tcpBtnDis+'>'+tcpBtnText+'</button>'+
+      '<button class="btn btn-sm" id="test-udp-'+i+'" onclick="testProxy('+i+',\'udp\')" style="'+udpBtnStyle+'" title="'+escAttr(udpBtnTitle)+'"'+udpBtnDis+'>'+udpBtnText+'</button>'+
       '</div></div>';
   }).join('');
   st('health-time');

@@ -109,6 +109,11 @@ var zhStrings = map[string]string{
 	"{0} {1} test failed: {2}":                     "{0} {1} 测试失败：{2}",
 	"{0} test OK: {1}ms (click to re-test)":         "{0} 测试成功：{1}ms（点击重新测试）",
 	"{0} test failed: {1} (click to re-test)":       "{0} 测试失败：{1}（点击重新测试）",
+	"Test All TCP":                                  "一键测TCP",
+	"Test All UDP":                                  "一键测UDP",
+	"Test All":                                      "一键测全部",
+	"No proxy nodes to test":                        "暂无节点可测试",
+	"Batch test complete: {0} available, {1} failed": "批量测试完成：{0} 个连通，{1} 个失败",
 
 	// theme
 	"Light": "浅色", "Dark": "深色",
@@ -267,6 +272,7 @@ var zhDynamicKeys = map[string]bool{
 	"UDP not supported":                 true,
 	"Test TCP latency and availability": true,
 	"Test UDP latency and availability": true,
+	"No proxy nodes to test":            true,
 }
 
 // zhPrefixes — applied to a text node that starts with the prefix (longest
