@@ -61,8 +61,16 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);display:flex
 .cards-6{grid-template-columns:repeat(auto-fit,minmax(min(100%,125px),1fr))}
 .cards-4{grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr))}
 .cards-3{grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;min-width:0;overflow:hidden;transition:border-color .15s}
+.cards-ov{display:grid;gap:14px;margin-bottom:20px;grid-template-columns:repeat(4,1fr)}
+@media(min-width:1400px){.cards-ov{grid-template-columns:repeat(6,1fr)}}
+@media(max-width:1100px){.cards-ov{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:768px){.cards-ov{grid-template-columns:repeat(2,1fr);gap:10px}}
+@media(max-width:480px){.cards-ov{grid-template-columns:repeat(2,1fr);gap:8px}.cards-ov .card-wide{grid-column:span 2}}
+@media(max-width:340px){.cards-ov{grid-template-columns:1fr}.cards-ov .card-wide{grid-column:span 1}}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;min-width:0;overflow:hidden;transition:border-color .18s,box-shadow .18s;display:flex;flex-direction:column;justify-content:space-between}
+.card:hover{border-color:var(--border2);box-shadow:0 4px 16px rgba(0,0,0,.06)}
 .card-link{cursor:pointer}
+.card-link:hover{border-color:var(--accent);box-shadow:0 4px 18px var(--accent-glow)}
 .card-label{font-size:.72rem;color:var(--text3);text-transform:uppercase;letter-spacing:.6px;font-weight:600;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card-value{font-size:1.35rem;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.3px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card-value.green{color:var(--green)}
@@ -269,8 +277,8 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
 <div class="view active" id="view-dashboard">
   <div class="view-title">Overview</div>
   <div class="view-meta"><span class="dot"></span>Live <span id="dash-time"></span></div>
-  <div class="cards cards-6" id="dash-cards"></div>
-  <div class="cards cards-3" id="dash-cards2"></div>
+  <div class="cards-ov" id="dash-cards"></div>
+  <div id="dash-cards2" style="display:none"></div>
 </div>
 <div class="view" id="view-traffic">
   <div class="view-title">Traffic</div>
@@ -504,6 +512,11 @@ function ldash(d){
   var s=d.stats,r=d.route;
   var pxCount=(d.health&&d.health.proxies)?d.health.proxies.length:0;
   var blCount=d.bl_total||0;
+  var tt=(s.tcp_proxy_up||0)+(s.tcp_proxy_down||0)+(s.tcp_direct_up||0)+(s.tcp_direct_down||0)+(s.udp_proxy_up||0)+(s.udp_proxy_down||0)+(s.udp_direct_up||0)+(s.udp_direct_down||0);
+  var pp=(s.tcp_proxy_up||0)+(s.tcp_proxy_down||0)+(s.udp_proxy_up||0)+(s.udp_proxy_down||0);
+  var ca=(d.cache&&d.cache.entries!=null)?d.cache.entries:(document.getElementById('cache-ov')?document.getElementById('cache-ov').textContent:'0');
+  var gcPause=s.gc_pause||'0s',gcCount=s.gc_count!=null?s.gc_count:0;
+  var rEntries=r&&r.entries!=null?r.entries:0,rV4=r&&r.v4!=null?r.v4:0,rV6=r&&r.v6!=null?r.v6:0;
   document.getElementById('dash-cards').innerHTML=
     '<div class="card"><div class="card-label">Uptime</div><div class="card-value accent">'+s.uptime+'</div></div>'+
     '<div class="card"><div class="card-label">Goroutines</div><div class="card-value">'+s.goroutines+'</div></div>'+
@@ -512,20 +525,13 @@ function ldash(d){
     '<div class="card"><div class="card-label">TCP</div><div class="card-value accent">'+(s.tcp_conns||0)+'</div></div>'+
     '<div class="card"><div class="card-label">UDP</div><div class="card-value accent">'+(s.udp_sessions||0)+'</div></div>'+
     '<div class="card card-link" onclick="navTo(\'health\')"><div class="card-label">Proxies</div><div class="card-value">'+pxCount+'</div></div>'+
-    '<div class="card card-link" onclick="navTo(\'blacklist\')"><div class="card-label">Blacklist</div><div class="card-value">'+blCount+'</div></div>';
-  var tt=(s.tcp_proxy_up||0)+(s.tcp_proxy_down||0)+(s.tcp_direct_up||0)+(s.tcp_direct_down||0)+(s.udp_proxy_up||0)+(s.udp_proxy_down||0)+(s.udp_direct_up||0)+(s.udp_direct_down||0);
-  var pp=(s.tcp_proxy_up||0)+(s.tcp_proxy_down||0)+(s.udp_proxy_up||0)+(s.udp_proxy_down||0);
-  var ca=(d.cache&&d.cache.entries!=null)?d.cache.entries:(document.getElementById('cache-ov')?document.getElementById('cache-ov').textContent:'0');
-  var gcPause=s.gc_pause||'0s',gcCount=s.gc_count!=null?s.gc_count:0;
-  var rEntries=r&&r.entries!=null?r.entries:0,rV4=r&&r.v4!=null?r.v4:0,rV6=r&&r.v6!=null?r.v6:0;
+    '<div class="card card-link" onclick="navTo(\'blacklist\')"><div class="card-label">Blacklist</div><div class="card-value">'+blCount+'</div></div>'+
+    '<div class="card card-link" onclick="navTo(\'cache\')"><div class="card-label">DNS Cache</div><div class="card-value accent" id="cache-ov">'+ca+'</div></div>'+
+    '<div class="card"><div class="card-label">GC</div><div class="card-sub"><span><span style="color:var(--text2)">Pause</span> '+gcPause+'</span><span><span style="color:var(--text2)">Count</span> '+gcCount+'</span></div></div>'+
+    '<div class="card card-link card-wide" onclick="navTo(\'traffic\')"><div class="card-label">Total Traffic</div><div class="card-value green">'+fmtNum(tt)+'</div><div class="card-bar" style="margin-top:8px"><div class="card-bar-bg" style="height:3px;background:var(--border);border-radius:2px;overflow:hidden"><div class="card-bar-fill" style="height:100%;width:'+Math.min(100,tt>0?pp/tt*100:0)+'%;background:linear-gradient(90deg,var(--accent),#8b5cf6);transition:width .6s"></div></div></div><div class="card-sub" style="color:var(--text2)"><span>Proxy: '+fmtNum(pp)+'</span><span>Direct: '+fmtNum(tt-pp)+'</span></div></div>'+
+    '<div class="card card-link card-wide" onclick="navTo(\'config\');setTimeout(function(){showCfg(2)},100)"><div class="card-label">Route Table</div><div class="card-value accent">'+rEntries+'</div><div class="card-sub"><span style="color:var(--green)">IPv4: '+rV4+'</span><span style="color:var(--yellow)">IPv6: '+rV6+'</span></div></div>';
   var dc2=document.getElementById('dash-cards2');
-  if(dc2){
-    dc2.innerHTML=
-      '<div class="card card-link" onclick="navTo(\'cache\')"><div class="card-label">DNS Cache</div><div class="card-value accent" id="cache-ov">'+ca+'</div></div>'+
-      '<div class="card"><div class="card-label">GC</div><div class="card-sub"><span><span style="color:var(--text2)">Pause</span> '+gcPause+'</span><span><span style="color:var(--text2)">Count</span> '+gcCount+'</span></div></div>'+
-      '<div class="card card-link" onclick="navTo(\'traffic\')"><div class="card-label">Total Traffic</div><div class="card-value green">'+fmtNum(tt)+'</div><div class="card-bar" style="margin-top:8px"><div class="card-bar-bg" style="height:3px;background:var(--border);border-radius:2px;overflow:hidden"><div class="card-bar-fill" style="height:100%;width:'+Math.min(100,tt>0?pp/tt*100:0)+'%;background:linear-gradient(90deg,var(--accent),#8b5cf6);transition:width .6s"></div></div></div><div class="card-sub" style="color:var(--text2)"><span>Proxy: '+fmtNum(pp)+'</span><span>Direct: '+fmtNum(tt-pp)+'</span></div></div>'+
-      '<div class="card card-link" onclick="navTo(\'config\');setTimeout(function(){showCfg(2)},100)"><div class="card-label">Route Table</div><div class="card-value accent">'+rEntries+'</div><div class="card-sub"><span style="color:var(--green)">IPv4: '+rV4+'</span><span style="color:var(--yellow)">IPv6: '+rV6+'</span></div></div>';
-  }
+  if(dc2){dc2.innerHTML='';dc2.style.display='none';}
   st('dash-time');
   drawCPUGauge(s.cpu_percent||0);
 }
