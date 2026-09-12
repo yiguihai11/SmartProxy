@@ -1227,9 +1227,12 @@ func TestManager_TestProxy(t *testing.T) {
 		t.Error("expected error for offline proxy")
 	}
 
-	// 5. Ping offline node returns error
+	// 5. Ping/TCPing offline node returns error
 	if _, err := m.TestProxy(ctx, "p-socks", "ping"); err == nil {
 		t.Error("expected error for ping to offline proxy")
+	}
+	if _, err := m.TestProxy(ctx, "p-socks", "tcping"); err == nil {
+		t.Error("expected error for tcping to offline proxy")
 	}
 
 	// 6. Ping online node succeeds and sets PingLatency
@@ -1256,9 +1259,9 @@ func TestManager_TestProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lat, err := mLive.TestProxy(ctx, "live-node", "ping")
+	lat, err := mLive.TestProxy(ctx, "live-node", "tcping")
 	if err != nil {
-		t.Fatalf("expected ping to succeed, got %v", err)
+		t.Fatalf("expected tcping to succeed, got %v", err)
 	}
 	if lat <= 0 {
 		t.Errorf("expected positive latency, got %v", lat)

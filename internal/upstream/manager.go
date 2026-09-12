@@ -650,7 +650,7 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 	var err error
 
 	switch protocol {
-	case "ping":
+	case "tcping", "ping":
 		start := time.Now()
 		conn, dialErr := proxy.dial(ctx)
 		if dialErr != nil {

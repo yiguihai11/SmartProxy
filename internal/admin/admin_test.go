@@ -1650,6 +1650,23 @@ func TestAdmin_ProxyTest(t *testing.T) {
 	if resPing["available"] != false {
 		t.Errorf("expected available=false for offline ping, got %v", resPing["available"])
 	}
+
+	// 7. Offline node tcping test returns 200 with available=false
+	respTCPing, err := httpPost(s.sockPath, "/proxy/test?alias=ss-local&protocol=tcping&timeout=1")
+	if err != nil {
+		t.Fatalf("POST /proxy/test?protocol=tcping failed: %v", err)
+	}
+	defer respTCPing.Body.Close()
+	if respTCPing.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 for tcping test result, got %d", respTCPing.StatusCode)
+	}
+	var resTCPing map[string]interface{}
+	if err := json.NewDecoder(respTCPing.Body).Decode(&resTCPing); err != nil {
+		t.Fatalf("decode json failed: %v", err)
+	}
+	if resTCPing["available"] != false {
+		t.Errorf("expected available=false for offline tcping, got %v", resTCPing["available"])
+	}
 }
 
 func TestAdmin_FlagIcons(t *testing.T) {
