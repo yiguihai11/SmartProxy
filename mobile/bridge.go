@@ -9,16 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"golang.org/x/sys/unix"
-	"smartproxy/internal/chnroute"
 	"smartproxy/internal/config"
-	"smartproxy/internal/dns"
 	"smartproxy/internal/engine"
 	"smartproxy/internal/logbuf"
 	"smartproxy/internal/route"
-	"smartproxy/internal/upstream"
 )
 
 var (

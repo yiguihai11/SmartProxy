@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 

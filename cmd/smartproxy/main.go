@@ -12,12 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"smartproxy/internal/chnroute"
 	"smartproxy/internal/config"
-	"smartproxy/internal/dns"
 	"smartproxy/internal/engine"
 	"smartproxy/internal/logbuf"
-	"smartproxy/internal/upstream"
 	"smartproxy/internal/version"
 )
 
