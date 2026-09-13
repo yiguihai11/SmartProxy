@@ -264,3 +264,159 @@ func TestRouter_QuicBlacklistDomain(t *testing.T) {
 		t.Error("different domain must not match")
 	}
 }
+
+func TestIsTLSClientHello(t *testing.T) {
+	// 1. Valid TLS 1.2 ClientHello (50 bytes)
+	validClientHello := []byte{
+		0x16,       // ContentType: Handshake (22)
+		0x03, 0x01, // Version: TLS 1.0 (Record layer outer version)
+		0x00, 0x2d, // Record Length: 45 bytes payload
+		0x01,             // HandshakeType: ClientHello (1)
+		0x00, 0x00, 0x29, // HandshakeLength: 41 bytes
+		0x03, 0x03, // ClientVersion: TLS 1.2
+		// 32 bytes Random
+		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+		0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+		0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+		0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+		0x00,                   // SessionID length: 0
+		0x00, 0x02, 0x13, 0x01, // Cipher suites (len 2 + 1 suite)
+		0x01, 0x00, // Compression methods (len 1 + null)
+	}
+	if !isTLSClientHello(validClientHello) {
+		t.Error("validClientHello should be recognized as TLS ClientHello")
+	}
+
+	// 2. Truncated packet (< 44 bytes)
+	if isTLSClientHello(validClientHello[:43]) {
+		t.Error("truncated packet (< 44 bytes) must be rejected")
+	}
+
+	// 3. Malformed length attack (user review case: recordLen and hsLen exceed buffer)
+	malformed := []byte{0x16, 0x03, 0x03, 0xff, 0xff, 0x01, 0xff, 0xff, 0xff}
+	if isTLSClientHello(malformed) {
+		t.Error("malformed overflow record must be rejected")
+	}
+
+	// 4. recordLen claiming more bytes than packet carries
+	exceedRecord := make([]byte, len(validClientHello))
+	copy(exceedRecord, validClientHello)
+	exceedRecord[3] = 0x01 // recordLen = 256 > 45
+	if isTLSClientHello(exceedRecord) {
+		t.Error("recordLen exceeding buffer length must be rejected")
+	}
+
+	// 5. hsLen claiming more bytes than record payload
+	exceedHS := make([]byte, len(validClientHello))
+	copy(exceedHS, validClientHello)
+	exceedHS[8] = 0x30 // hsLen = 48 > recordLen-4 (41)
+	if isTLSClientHello(exceedHS) {
+		t.Error("hsLen exceeding record payload must be rejected")
+	}
+
+	// 6. Invalid SessionID length (> 32 bytes)
+	badSessID := make([]byte, len(validClientHello))
+	copy(badSessID, validClientHello)
+	badSessID[43] = 33 // SessionID len 33 (RFC max is 32)
+	if isTLSClientHello(badSessID) {
+		t.Error("SessionID len > 32 must be rejected")
+	}
+
+	// 7. HTTP GET request
+	httpGet := []byte("GET /index.html HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	if isTLSClientHello(httpGet) {
+		t.Error("HTTP GET must not be recognized as TLS ClientHello")
+	}
+
+	// 8. HTTP POST request
+	httpPost := []byte("POST /api/pay HTTP/1.1\r\nHost: example.com\r\nContent-Length: 10\r\n\r\n{\"amt\":100}")
+	if isTLSClientHello(httpPost) {
+		t.Error("HTTP POST must not be recognized as TLS ClientHello")
+	}
+
+	// 9. TLS Application Data (0x17) instead of Handshake (0x16)
+	tlsAppData := make([]byte, len(validClientHello))
+	copy(tlsAppData, validClientHello)
+	tlsAppData[0] = 0x17 // Application Data
+	if isTLSClientHello(tlsAppData) {
+		t.Error("TLS Application Data must not be recognized as ClientHello")
+	}
+
+	// 10. TLS Handshake but ServerHello (0x02) instead of ClientHello (0x01)
+	tlsServerHello := make([]byte, len(validClientHello))
+	copy(tlsServerHello, validClientHello)
+	tlsServerHello[5] = 0x02 // ServerHello
+	if isTLSClientHello(tlsServerHello) {
+		t.Error("TLS ServerHello must not be recognized as ClientHello")
+	}
+
+	// 11. Case A: Pipelined TLS Application Data following ClientHello (e.g. [ClientHello][AppData])
+	pipelinedAppData := append(append([]byte(nil), validClientHello...), 0x17, 0x03, 0x03, 0x00, 0x05, 'H', 'E', 'L', 'L', 'O')
+	if isTLSClientHello(pipelinedAppData) {
+		t.Error("pipelined TLS Application Data must be rejected to prevent replay attacks")
+	}
+
+	// 12. Case B: Two pipelined ClientHello records ([ClientHello][ClientHello])
+	pipelinedTwoRecords := append(append([]byte(nil), validClientHello...), validClientHello...)
+	if isTLSClientHello(pipelinedTwoRecords) {
+		t.Error("multiple pipelined TLS records must be rejected")
+	}
+
+	// 13. Case C: Single trailing junk byte after complete ClientHello record
+	trailingByte := append(append([]byte(nil), validClientHello...), 0x00)
+	if isTLSClientHello(trailingByte) {
+		t.Error("packet with trailing byte after complete TLS record must be rejected")
+	}
+
+	// 14. Case D: Structurally valid TLS Extension framing (opaque experimental extension type 0xff00)
+	// The extension payload itself is intentionally opaque because isTLSClientHello only validates record/handshake framing.
+	// Extension framing: type=0xff00, len=0x0002, data=[0xaa, 0xbb]
+	withExt := append([]byte(nil), validClientHello...)
+	// Append 2-byte extensions vector length (6) + 2-byte type (0xff, 0x00) + 2-byte len (2) + 2-byte data
+	withExt = append(withExt, 0x00, 0x06, 0xff, 0x00, 0x00, 0x02, 0xaa, 0xbb)
+	// Update recordLen (was 45 -> 53 = 0x35)
+	withExt[3] = 0x00
+	withExt[4] = 0x35
+	// Update hsLen (was 41 -> 49 = 0x31)
+	withExt[6] = 0x00
+	withExt[7] = 0x00
+	withExt[8] = 0x31
+	if !isTLSClientHello(withExt) {
+		t.Error("valid ClientHello with structurally valid TLS extension framing should be accepted")
+	}
+
+	// 15. Case E: Extensions vector length claims more bytes than packet carries
+	badVectorOverflow := append([]byte(nil), withExt...)
+	badVectorOverflow[51] = 0x07 // extLen = 7 > 6 bytes remaining
+	if isTLSClientHello(badVectorOverflow) {
+		t.Error("extensions vector length overflow must be rejected")
+	}
+
+	// 16. Case F: Extensions vector length claims fewer bytes than packet carries (trailing bytes in record)
+	badVectorUnderflow := append([]byte(nil), withExt...)
+	badVectorUnderflow[51] = 0x05 // extLen = 5 < 6 bytes remaining
+	if isTLSClientHello(badVectorUnderflow) {
+		t.Error("extensions vector length underflow with trailing bytes must be rejected")
+	}
+
+	// 17. Case G: Individual extension data length claims more bytes than extension vector carries
+	badExtDataLen := append([]byte(nil), withExt...)
+	badExtDataLen[55] = 0x03 // extDataLen = 3 > 2 bytes remaining in vector
+	if isTLSClientHello(badExtDataLen) {
+		t.Error("individual extension data length overflow must be rejected")
+	}
+
+	// 18. Case H: Arbitrary opaque payload without valid extension structure (e.g. 0xaabbccdd)
+	pseudoExt := append([]byte(nil), validClientHello...)
+	pseudoExt = append(pseudoExt, 0x00, 0x04, 0xaa, 0xbb, 0xcc, 0xdd)
+	pseudoExt[3] = 0x00
+	pseudoExt[4] = 0x33 // 51 bytes payload
+	pseudoExt[6] = 0x00
+	pseudoExt[7] = 0x00
+	pseudoExt[8] = 0x2f // 47 bytes handshake
+	if isTLSClientHello(pseudoExt) {
+		t.Error("arbitrary payload without structurally valid extension headers must be rejected")
+	}
+}
+
+

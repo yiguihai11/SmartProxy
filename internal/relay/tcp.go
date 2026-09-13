@@ -160,11 +160,25 @@ done:
 		}
 	}
 
-	if tcpDst, ok := dst.(*net.TCPConn); ok {
-		tcpDst.CloseWrite()
+	if cw, ok := dst.(closeWriter); ok {
+		_ = cw.CloseWrite()
 	}
-	if tcpSrc, ok := src.(*net.TCPConn); ok {
-		tcpSrc.CloseRead()
+	if cr, ok := src.(closeReader); ok {
+		_ = cr.CloseRead()
 	}
 	return total
+}
+
+// closeWriter is an interface implemented by connections that support half-closing
+// their write stream (e.g. *net.TCPConn or custom connection wrappers).
+// Note: Go standard library's *tls.Conn does NOT implement this interface; TLS
+// requires a full bidirectional close_notify exchange rather than a plain TCP half-close.
+type closeWriter interface {
+	CloseWrite() error
+}
+
+// closeReader is an interface implemented by connections that support half-closing
+// their read stream (e.g. *net.TCPConn or custom connection wrappers).
+type closeReader interface {
+	CloseRead() error
 }

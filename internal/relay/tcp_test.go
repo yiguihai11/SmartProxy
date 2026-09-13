@@ -386,3 +386,57 @@ func TestTCPRelay_PrefixReplayed(t *testing.T) {
 	remoteW.Close()
 	cancel()
 }
+
+type halfCloseWrapper struct {
+	net.Conn
+	closeWriteCalled bool
+	closeReadCalled  bool
+}
+
+func (w *halfCloseWrapper) CloseWrite() error {
+	w.closeWriteCalled = true
+	if cw, ok := w.Conn.(closeWriter); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
+func (w *halfCloseWrapper) CloseRead() error {
+	w.closeReadCalled = true
+	if cr, ok := w.Conn.(closeReader); ok {
+		return cr.CloseRead()
+	}
+	return nil
+}
+
+func TestTCPRelay_CloseWriterReaderInterface(t *testing.T) {
+	cA, cB := net.Pipe()
+	rA, rB := net.Pipe()
+	defer cB.Close()
+	defer rB.Close()
+
+	clientWrap := &halfCloseWrapper{Conn: cA}
+	remoteWrap := &halfCloseWrapper{Conn: rA}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		TCPRelay(ctx, clientWrap, remoteWrap, false, nil)
+	}()
+
+	// Closing client writer ends c2r relay
+	cA.Close()
+	rA.Close()
+	wg.Wait()
+
+	if !clientWrap.closeWriteCalled && !clientWrap.closeReadCalled {
+		t.Error("expected CloseWrite or CloseRead to be invoked on client wrapper")
+	}
+	if !remoteWrap.closeWriteCalled && !remoteWrap.closeReadCalled {
+		t.Error("expected CloseWrite or CloseRead to be invoked on remote wrapper")
+	}
+}

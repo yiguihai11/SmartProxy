@@ -120,3 +120,92 @@ func TestQUICFlowDead_ProxyDialFails_DropsSessionAndBlacklists(t *testing.T) {
 		t.Error("old direct socket should be closed when session is dropped")
 	}
 }
+
+// 验证会话在 quicFlowDead 执行期间已被标记 closed 时，异步拨出的代理连接被安全关闭，不会被存入已关闭会话，且无死锁与句柄泄漏。
+func TestQUICFlowDead_SessionClosedConcurrently_ClosesPconnWithoutLeak(t *testing.T) {
+	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
+		Proxies: []upstream.ProxyEntry{
+			{Alias: "raw", URL: "socks5://127.0.0.1:" + strconv.Itoa(deadTCPPort(t))},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Stop()
+
+	h, sess, _, key := setupQUICFlowDeadTest(t, mgr)
+	const ip, port, sni = "203.0.113.9", 443, "example.net"
+
+	// 先关闭会话
+	h.closeSession(sess)
+	if !sess.closed.Load() {
+		t.Fatal("session should be marked closed")
+	}
+
+	// 触发 quicFlowDead: 应该安全退出，不覆盖 snap
+	h.quicFlowDead(sess, key, ip, port, sni, "timeout")
+
+	// 确认未被复活
+	cur := sess.snap.Load()
+	if cur.framed {
+		t.Error("closed session must not be resurrected with framed proxy")
+	}
+}
+
+// 验证会话在 quicFlowDead 执行期间已被从 shard 移除（stale session）时，拨号结果被放弃并关闭，不会覆写新状态。
+func TestQUICFlowDead_StaleSession_AbortsSafely(t *testing.T) {
+	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
+		Proxies: []upstream.ProxyEntry{
+			{Alias: "raw", URL: "socks5://127.0.0.1:" + strconv.Itoa(deadTCPPort(t))},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Stop()
+
+	h, sess, _, key := setupQUICFlowDeadTest(t, mgr)
+	const ip, port, sni = "203.0.113.10", 443, "stale.com"
+
+	// 从 session 表移除
+	h.deleteSession(key)
+
+	h.quicFlowDead(sess, key, ip, port, sni, "timeout")
+
+	if h.hasSession(key) {
+		t.Error("stale session must not be re-added to session map")
+	}
+}
+
+// 验证 closeSession 在多协程并发调用下的幂等性与无死锁。
+func TestCloseSession_ConcurrentCalls_Idempotent(t *testing.T) {
+	pipeA, pipeB := net.Pipe()
+	defer pipeB.Close()
+	sess := &udpSession{
+		flowID: 100,
+		log:    slog.With("flow", 100),
+	}
+	sess.snap.Store(&udpOutbound{conn: pipeA, framed: false})
+
+	h := &Handler{}
+	h.sessionCount.Store(1)
+	ActiveSessions.Store(1)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			h.closeSession(sess)
+		}()
+	}
+	wg.Wait()
+
+	if !sess.closed.Load() {
+		t.Error("session.closed should be true")
+	}
+	if h.sessionCount.Load() != 0 {
+		t.Errorf("sessionCount should be 0, got %d", h.sessionCount.Load())
+	}
+}
+

@@ -739,3 +739,139 @@ func TestQuicValidate_IgnoredWhenDisabled(t *testing.T) {
 		t.Fatalf("default config with quic disabled must validate, got %v", err)
 	}
 }
+
+func TestConfig_Clone_FullDeepCopy(t *testing.T) {
+	orig := &Config{
+		LogLevel: "INFO",
+		Listen: ListenConfig{
+			Auth:          &AuthConf{Username: "user1", Password: "pwd"},
+			AdminAuth:     &AdminAuthConf{Enabled: true, Username: "admin", Password: "apw"},
+			AdminCertSANs: []string{"192.168.1.1", "proxy.local"},
+		},
+		TUN: TUNConfig{
+			Inet4Address:      []string{"172.19.0.1/30"},
+			Inet6Address:      []string{"fdfe::1/64"},
+			RouteExcludePorts: []int{22, 53},
+			BlockedUIDs:       []int32{1001, 1002},
+		},
+		Upstream: UpstreamConf{
+			Proxies: []ProxyEntry{
+				{Alias: "p1", URL: "socks5://1.2.3.4:1080", UDPInTCP: true},
+			},
+		},
+		DNS: DNSConf{
+			StaticRecords: []StaticRecord{
+				{Host: "example.com", IP: IPList{"1.2.3.4", "::1"}},
+			},
+		},
+		SmartProxy: SmartProxyConf{
+			Ports: []int{80, 443},
+			Quic: SmartProxyQuicConf{
+				Ports: []int{443, 8443},
+			},
+		},
+	}
+
+	cloned := orig.Clone()
+
+	// 1. Mutate pointers in cloned
+	cloned.Listen.Auth.Username = "mutated_user"
+	cloned.Listen.AdminAuth.Username = "mutated_admin"
+
+	// 2. Mutate slices in cloned
+	cloned.Listen.AdminCertSANs[0] = "mutated_san"
+	cloned.TUN.Inet4Address[0] = "mutated_ip4"
+	cloned.TUN.Inet6Address[0] = "mutated_ip6"
+	cloned.TUN.RouteExcludePorts[0] = 9999
+	cloned.TUN.BlockedUIDs[0] = 9999
+	cloned.Upstream.Proxies[0].Alias = "mutated_alias"
+	cloned.DNS.StaticRecords[0].Host = "mutated.com"
+	cloned.DNS.StaticRecords[0].IP[0] = "9.9.9.9"
+	cloned.SmartProxy.Ports[0] = 8080
+	cloned.SmartProxy.Quic.Ports[0] = 8888
+
+	// Appends to cloned slices
+	cloned.Upstream.Proxies = append(cloned.Upstream.Proxies, ProxyEntry{Alias: "p2"})
+	cloned.DNS.StaticRecords = append(cloned.DNS.StaticRecords, StaticRecord{Host: "new.com"})
+
+	// Verify original is COMPLETELY UNTOUCHED
+	if orig.Listen.Auth.Username != "user1" {
+		t.Errorf("original Listen.Auth mutated: %s", orig.Listen.Auth.Username)
+	}
+	if orig.Listen.AdminAuth.Username != "admin" {
+		t.Errorf("original Listen.AdminAuth mutated: %s", orig.Listen.AdminAuth.Username)
+	}
+	if orig.Listen.AdminCertSANs[0] != "192.168.1.1" {
+		t.Errorf("original AdminCertSANs mutated: %s", orig.Listen.AdminCertSANs[0])
+	}
+	if orig.TUN.Inet4Address[0] != "172.19.0.1/30" {
+		t.Errorf("original TUN.Inet4Address mutated: %s", orig.TUN.Inet4Address[0])
+	}
+	if orig.TUN.Inet6Address[0] != "fdfe::1/64" {
+		t.Errorf("original TUN.Inet6Address mutated: %s", orig.TUN.Inet6Address[0])
+	}
+	if orig.TUN.RouteExcludePorts[0] != 22 {
+		t.Errorf("original RouteExcludePorts mutated: %d", orig.TUN.RouteExcludePorts[0])
+	}
+	if orig.TUN.BlockedUIDs[0] != 1001 {
+		t.Errorf("original BlockedUIDs mutated: %d", orig.TUN.BlockedUIDs[0])
+	}
+	if len(orig.Upstream.Proxies) != 1 || orig.Upstream.Proxies[0].Alias != "p1" {
+		t.Errorf("original Upstream.Proxies mutated: %+v", orig.Upstream.Proxies)
+	}
+	if len(orig.DNS.StaticRecords) != 1 || orig.DNS.StaticRecords[0].Host != "example.com" {
+		t.Errorf("original DNS.StaticRecords mutated: %+v", orig.DNS.StaticRecords)
+	}
+	if orig.DNS.StaticRecords[0].IP[0] != "1.2.3.4" {
+		t.Errorf("original StaticRecord.IP mutated: %+v", orig.DNS.StaticRecords[0].IP)
+	}
+	if orig.SmartProxy.Ports[0] != 80 {
+		t.Errorf("original SmartProxy.Ports mutated: %d", orig.SmartProxy.Ports[0])
+	}
+	if orig.SmartProxy.Quic.Ports[0] != 443 {
+		t.Errorf("original SmartProxy.Quic.Ports mutated: %d", orig.SmartProxy.Quic.Ports[0])
+	}
+}
+
+func TestConfig_Clone_NilVsEmptySliceFidelity(t *testing.T) {
+	orig := &Config{
+		Listen: ListenConfig{
+			AdminCertSANs: nil, // nil slice
+		},
+		TUN: TUNConfig{
+			Inet6Address: []string{}, // non-nil empty slice
+		},
+	}
+
+	cloned := orig.Clone()
+
+	if cloned.Listen.AdminCertSANs != nil {
+		t.Errorf("expected nil slice to remain nil, got %v", cloned.Listen.AdminCertSANs)
+	}
+	if cloned.TUN.Inet6Address == nil {
+		t.Errorf("expected empty non-nil slice to remain non-nil, got nil")
+	}
+}
+
+func TestSetStaticRecordIP_NoSpareCapacityMutation(t *testing.T) {
+	// Pre-allocate backing array with spare capacity (cap 5, len 1)
+	records := make([]StaticRecord, 1, 5)
+	records[0] = StaticRecord{Host: "host1", IP: IPList{"1.1.1.1"}}
+
+	// Calling SetStaticRecordIP to add host2
+	updated := SetStaticRecordIP(records, "host2", net.ParseIP("2.2.2.2"))
+
+	if len(records) != 1 {
+		t.Fatalf("original records length should stay 1, got %d", len(records))
+	}
+	if len(updated) != 2 {
+		t.Fatalf("updated records length should be 2, got %d", len(updated))
+	}
+
+	// Verify that the spare capacity slot records[:2][1] in the original slice was NOT modified
+	spareSlot := records[:2][1]
+	if spareSlot.Host != "" || len(spareSlot.IP) != 0 {
+		t.Errorf("original slice spare capacity was overwritten! got %+v", spareSlot)
+	}
+}
+

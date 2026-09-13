@@ -131,6 +131,7 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 	// 路径本就绝对化(ConfigProvider.ensureConfig),resolveFile 直接透传。
 	aclPath := cfg.Routing.ACLFile
 	watcher := config.NewWatcher()
+	cfgDir := filepath.Dir(configPath)
 	watcher.AddFile("config", configPath)
 	watcher.AddFile("acl", aclPath)
 	watcher.AddFile("chnroute", cfg.Routing.ChnrouteFile)
@@ -141,83 +142,20 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 			slog.Error("failed to reload config", "path", configPath, "error", err)
 			return
 		}
-		if err := newCfg.Validate(); err != nil {
-			slog.Error("reloaded config validation failed, keeping old config", "error", err)
+		oldCfg := eng.Config.Load()
+		if err := eng.ReloadConfig(newCfg, cfgDir); err != nil {
+			slog.Error("failed to apply config reload", "error", err)
 			return
 		}
-
-		upstreamCfg := upstream.UpstreamConfig{
-			Default:     newCfg.Upstream.Default,
-			HealthCheck: newCfg.Upstream.HealthCheck,
-		}
-		for _, p := range newCfg.Upstream.Proxies {
-			upstreamCfg.Proxies = append(upstreamCfg.Proxies, upstream.ProxyEntry{
-				Alias:    p.Alias,
-				URL:      p.URL,
-				UDPInTCP: p.UDPInTCP,
-			})
-		}
-
-		oldChnFile, oldACLFile := cfg.Routing.ChnrouteFile, cfg.Routing.ACLFile
-		cfg = newCfg
-		eng.Config.Store(cfg)
-		// TUN 模式必须同步热更:tunHandler 从自己的 config 指针读 SmartProxy 开关/端口,
-		// 只 Store eng.Config 会让这些改动在 TUN 路径永不生效(仅 SOCKS5 生效)。
-		eng.TUNHandler.ReloadConfig(cfg)
-		eng.UpstreamMgr.Reload(upstreamCfg)
-
-		// Hot-reload chnroute / ACL when their paths change, so that choosing a
-		// file and saving takes effect immediately.
-		resolveFile := func(p string) string {
-			if filepath.IsAbs(p) {
-				return p
+		applyLogLevel(newCfg.LogLevel)
+		if oldCfg != nil {
+			if newCfg.Routing.ACLFile != oldCfg.Routing.ACLFile {
+				watcher.ReplaceFile("acl", newCfg.Routing.ACLFile)
 			}
-			return filepath.Join("", p)
-		}
-		if cfg.Routing.ChnrouteFile != oldChnFile {
-			if trie, err := chnroute.Load(resolveFile(cfg.Routing.ChnrouteFile)); err != nil {
-				slog.Error("failed to reload chnroute from new path", "path", cfg.Routing.ChnrouteFile, "error", err)
-			} else {
-				eng.Chnroute.Pull(trie)
-				// 把 fsnotify 重指向新路径并注册其目录,后续编辑新文件才触发热重载
-				// (loop() 只在 Start 时建过内核 watch,不 ReplaceFile 新目录永远不报事件)。
-				watcher.ReplaceFile("chnroute", cfg.Routing.ChnrouteFile)
-				slog.Info("chnroute reloaded from new path", "path", cfg.Routing.ChnrouteFile)
+			if newCfg.Routing.ChnrouteFile != oldCfg.Routing.ChnrouteFile {
+				watcher.ReplaceFile("chnroute", newCfg.Routing.ChnrouteFile)
 			}
 		}
-		if cfg.Routing.ACLFile != oldACLFile {
-			if err := eng.RuleEng.Reload(resolveFile(cfg.Routing.ACLFile)); err != nil {
-				slog.Error("failed to reload ACL from new path", "path", cfg.Routing.ACLFile, "error", err)
-			} else {
-				aclPath = cfg.Routing.ACLFile // 闭包(SetACLReloader)按引用捕获,必须更新
-				watcher.ReplaceFile("acl", cfg.Routing.ACLFile)
-				slog.Info("ACL reloaded from new path", "path", cfg.Routing.ACLFile)
-			}
-		}
-
-		smartTimeout := time.Duration(cfg.SmartProxy.Timeout) * time.Second
-		blacklistTTL := time.Duration(cfg.SmartProxy.BlacklistTTL) * time.Second
-		eng.Router.UpdateConfig(smartTimeout, blacklistTTL)
-
-		preferMode, preferPorts := dns.ParseSpeedCheckMode(cfg.DNS.SpeedCheckMode)
-		eng.DNSHandler.UpdateConfig(
-			cfg.DNS.Foreign.IPv4, cfg.DNS.Foreign.IPv6,
-			cfg.DNS.QueryTimeout, dns.BlockedIPv4, dns.BlockedIPv6,
-			cfg.DNS.Enabled,
-			preferMode != dns.PreferNone, preferMode, preferPorts,
-		)
-		eng.DNSHandler.SetStaticRecords(cfg.DNS.StaticRecordsMap())
-		eng.DNSHandler.SetCacheConfig(cfg.DNS.Cache.Size, time.Duration(cfg.DNS.Cache.TTL)*time.Second)
-		if eng.AdminServer() != nil {
-			eng.AdminServer().SetAdminAuth(cfg.Listen.AdminAuth)
-		}
-		// log_level 热更:桌面 configReload 早有 setLogLevel,Android 此前漏了,
-		// 改日志级别只在引擎启动时读一次。这里与启动时同一套 logger 构造。
-		applyLogLevel(cfg.LogLevel)
-
-		// 隧道参数 / admin 端口证书不能热重载(establish 时固化),Android 侧不再自动
-		// 重启(自动重启循环删除:用户停止后可能被 delayed start 拉起,图标赖着不掉)。
-		// 这类变更经 App 首页 IPv4/IPv6 开关显式重建,或下次手动连接生效。
 		slog.Info("config reloaded")
 	}
 	watcher.SetConfigReloader(configReload)
@@ -225,23 +163,18 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 	eng.SetConfigPath(configPath)
 
 	watcher.SetACLReloader(func() {
-		if err := eng.RuleEng.Reload(aclPath); err != nil {
+		if err := eng.ReloadACL(); err != nil {
 			slog.Error("failed to reload ACL", "error", err)
 		} else {
 			slog.Info("ACL rules reloaded")
-			// 规则变更对现存连接即时生效:掐断所有命中新封锁目标(域名/IP)的活跃连接。
-			// 幂等 —— 只掐命中项,reload 撤销某封锁不会误伤。
-			eng.TUNHandler.KillBlockedConnections()
 		}
 	})
 	watcher.SetChnRouteReloader(func() {
-		newTrie, err := chnroute.Load(cfg.Routing.ChnrouteFile)
-		if err != nil {
+		if err := eng.ReloadChnroute(); err != nil {
 			slog.Error("failed to reload chnroute", "error", err)
-			return
+		} else {
+			slog.Info("chnroute reloaded")
 		}
-		eng.Chnroute.Pull(newTrie)
-		slog.Info("chnroute reloaded")
 	})
 	watcher.Start()
 	routerWatcher = watcher

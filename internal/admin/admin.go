@@ -1070,8 +1070,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 // reloadConfig call happens here. Returns the updated copy plus two errors:
 // validationErr (client-facing, 400) and writeErr (server-facing, 500).
 func (s *Server) saveConfig(mutate func(c *config.Config)) (*config.Config, error, error) {
-	next := *s.configSrc()
-	mutate(&next)
+	next := s.configSrc().Clone()
+	mutate(next)
 	if err := next.Validate(); err != nil {
 		return nil, err, nil
 	}
@@ -1084,7 +1084,7 @@ func (s *Server) saveConfig(mutate func(c *config.Config)) (*config.Config, erro
 		return nil, nil, err
 	}
 	slog.Info("admin: config saved to disk", "path", s.configPath)
-	return &next, nil, nil
+	return next, nil, nil
 }
 
 // ---- static DNS records ----

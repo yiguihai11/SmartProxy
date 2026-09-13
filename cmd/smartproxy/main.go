@@ -135,10 +135,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	aclPath := cfg.Routing.ACLFile
 	watcher := config.NewWatcher()
 	watcher.AddFile("config", cfgPath)
-	watcher.AddFile("acl", aclPath)
+	watcher.AddFile("acl", cfg.Routing.ACLFile)
 	watcher.AddFile("chnroute", cfg.Routing.ChnrouteFile)
 	configReload := func() {
 		newCfg, err := config.Load(cfgPath)
@@ -146,69 +145,20 @@ func main() {
 			slog.Error("failed to reload config", "path", cfgPath, "error", err)
 			return
 		}
-		if err := newCfg.Validate(); err != nil {
-			slog.Error("reloaded config validation failed, keeping old config", "error", err)
+		oldCfg := eng.Config.Load()
+		if err := eng.ReloadConfig(newCfg, cfgDir); err != nil {
+			slog.Error("failed to apply config reload", "error", err)
 			return
 		}
-
-		upstreamCfg := upstream.UpstreamConfig{
-			Default:     newCfg.Upstream.Default,
-			HealthCheck: newCfg.Upstream.HealthCheck,
-		}
-		for _, p := range newCfg.Upstream.Proxies {
-			upstreamCfg.Proxies = append(upstreamCfg.Proxies, upstream.ProxyEntry{
-				Alias: p.Alias,
-				URL:   p.URL,
-			})
-		}
-
-		oldChnFile, oldACLFile := cfg.Routing.ChnrouteFile, cfg.Routing.ACLFile
-		cfg = newCfg
-		eng.Config.Store(cfg)
-		setLogLevel(cfg.LogLevel)
-		eng.UpstreamMgr.Reload(upstreamCfg)
-
-		// Hot-reload chnroute / ACL when their paths change, so that choosing a
-		// file and saving takes effect immediately.
-		resolveFile := func(p string) string {
-			if filepath.IsAbs(p) {
-				return p
+		setLogLevel(newCfg.LogLevel)
+		if oldCfg != nil {
+			if newCfg.Routing.ACLFile != oldCfg.Routing.ACLFile {
+				watcher.ReplaceFile("acl", newCfg.Routing.ACLFile)
 			}
-			return filepath.Join(cfgDir, p)
-		}
-		if cfg.Routing.ChnrouteFile != oldChnFile {
-			if trie, err := chnroute.Load(resolveFile(cfg.Routing.ChnrouteFile)); err != nil {
-				slog.Error("failed to reload chnroute from new path", "path", cfg.Routing.ChnrouteFile, "error", err)
-			} else {
-				eng.Chnroute.Pull(trie)
-				slog.Info("chnroute reloaded from new path", "path", cfg.Routing.ChnrouteFile)
+			if newCfg.Routing.ChnrouteFile != oldCfg.Routing.ChnrouteFile {
+				watcher.ReplaceFile("chnroute", newCfg.Routing.ChnrouteFile)
 			}
 		}
-		if cfg.Routing.ACLFile != oldACLFile {
-			if err := eng.RuleEng.Reload(resolveFile(cfg.Routing.ACLFile)); err != nil {
-				slog.Error("failed to reload ACL from new path", "path", cfg.Routing.ACLFile, "error", err)
-			} else {
-				slog.Info("ACL reloaded from new path", "path", cfg.Routing.ACLFile)
-			}
-		}
-
-		smartTimeout := time.Duration(cfg.SmartProxy.Timeout) * time.Second
-		blacklistTTL := time.Duration(cfg.SmartProxy.BlacklistTTL) * time.Second
-		eng.Router.UpdateConfig(smartTimeout, blacklistTTL)
-
-		preferMode, preferPorts := dns.ParseSpeedCheckMode(cfg.DNS.SpeedCheckMode)
-		eng.DNSHandler.UpdateConfig(
-			cfg.DNS.Foreign.IPv4, cfg.DNS.Foreign.IPv6,
-			cfg.DNS.QueryTimeout, dns.BlockedIPv4, dns.BlockedIPv6,
-			cfg.DNS.Enabled,
-			preferMode != dns.PreferNone, preferMode, preferPorts,
-		)
-		eng.DNSHandler.SetStaticRecords(cfg.DNS.StaticRecordsMap())
-		eng.DNSHandler.SetCacheConfig(cfg.DNS.Cache.Size, time.Duration(cfg.DNS.Cache.TTL)*time.Second)
-		if eng.AdminServer() != nil {
-			eng.AdminServer().SetAdminAuth(cfg.Listen.AdminAuth)
-		}
-
 		slog.Info("config reloaded")
 	}
 	watcher.SetConfigReloader(configReload)
@@ -216,20 +166,18 @@ func main() {
 	eng.SetConfigPath(cfgPath)
 
 	watcher.SetACLReloader(func() {
-		if err := eng.RuleEng.Reload(aclPath); err != nil {
+		if err := eng.ReloadACL(); err != nil {
 			slog.Error("failed to reload ACL", "error", err)
 		} else {
 			slog.Info("ACL rules reloaded")
 		}
 	})
 	watcher.SetChnRouteReloader(func() {
-		newTrie, err := chnroute.Load(cfg.Routing.ChnrouteFile)
-		if err != nil {
+		if err := eng.ReloadChnroute(); err != nil {
 			slog.Error("failed to reload chnroute", "error", err)
-			return
+		} else {
+			slog.Info("chnroute reloaded")
 		}
-		eng.Chnroute.Pull(newTrie)
-		slog.Info("chnroute reloaded")
 	})
 	watcher.Start()
 

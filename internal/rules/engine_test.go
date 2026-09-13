@@ -838,3 +838,130 @@ proxy domain *.example.com specific
 		t.Errorf("expected general for non-example.com, got %q (matched=%v)", alias, matched)
 	}
 }
+
+func TestEngine_ProxyRuleFirstMatch_DomainBeforePort(t *testing.T) {
+	path := writeTempRuleFile(t, strings.TrimSpace(`
+proxy domain example.com proxy_domain
+proxy port 443 proxy_port
+	`))
+	e, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	alias, matched := e.MatchProxyRule("93.184.216.34", 443, "example.com")
+	if !matched || alias != "proxy_domain" {
+		t.Errorf("expected proxy_domain (first rule wins), got %q (matched=%v)", alias, matched)
+	}
+}
+
+func TestEngine_ProxyRuleFirstMatch_PortBeforeDomain(t *testing.T) {
+	path := writeTempRuleFile(t, strings.TrimSpace(`
+proxy port 443 proxy_port
+proxy domain example.com proxy_domain
+	`))
+	e, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	alias, matched := e.MatchProxyRule("93.184.216.34", 443, "example.com")
+	if !matched || alias != "proxy_port" {
+		t.Errorf("expected proxy_port (first rule wins), got %q (matched=%v)", alias, matched)
+	}
+}
+
+func TestEngine_ProxyRuleFirstMatch_DomainBeforeCIDR(t *testing.T) {
+	path := writeTempRuleFile(t, strings.TrimSpace(`
+proxy domain example.com proxy_domain
+proxy cidr 1.2.3.0/24 proxy_cidr
+	`))
+	e, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	alias, matched := e.MatchProxyRule("1.2.3.4", 80, "example.com")
+	if !matched || alias != "proxy_domain" {
+		t.Errorf("expected proxy_domain (first rule wins), got %q (matched=%v)", alias, matched)
+	}
+}
+
+func TestEngine_ProxyRuleFirstMatch_OverlappingCIDR(t *testing.T) {
+	// /16 before /24: 1.2.3.4 must match /16 because it appears first in the file
+	path := writeTempRuleFile(t, strings.TrimSpace(`
+proxy cidr 1.2.0.0/16 proxy_16
+proxy cidr 1.2.3.0/24 proxy_24
+	`))
+	e, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	alias, matched := e.MatchProxyRule("1.2.3.4", 80, "")
+	if !matched || alias != "proxy_16" {
+		t.Errorf("expected proxy_16 (file order wins over longest prefix), got %q (matched=%v)", alias, matched)
+	}
+
+	// Reversed order: /24 before /16: 1.2.3.4 must match /24
+	pathRev := writeTempRuleFile(t, strings.TrimSpace(`
+proxy cidr 1.2.3.0/24 proxy_24
+proxy cidr 1.2.0.0/16 proxy_16
+	`))
+	eRev, err := New(pathRev)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	aliasRev, matchedRev := eRev.MatchProxyRule("1.2.3.4", 80, "")
+	if !matchedRev || aliasRev != "proxy_24" {
+		t.Errorf("expected proxy_24 (file order wins), got %q (matched=%v)", aliasRev, matchedRev)
+	}
+}
+
+func TestEngine_ProxyRuleParser_IPWithSlashAsCIDR(t *testing.T) {
+	path := writeTempRuleFile(t, strings.TrimSpace(`
+proxy ip 10.50.0.0/16 proxy_cidr_via_ip
+proxy ip 192.168.1.100 proxy_exact_ip
+	`))
+	e, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	alias, matched := e.MatchProxyRule("10.50.1.2", 0, "")
+	if !matched || alias != "proxy_cidr_via_ip" {
+		t.Errorf("ip with / must be parsed as CIDR, got %q (matched=%v)", alias, matched)
+	}
+
+	alias, matched = e.MatchProxyRule("192.168.1.100", 0, "")
+	if !matched || alias != "proxy_exact_ip" {
+		t.Errorf("ip without / must match exact IP, got %q (matched=%v)", alias, matched)
+	}
+
+	_, matched = e.MatchProxyRule("192.168.1.101", 0, "")
+	if matched {
+		t.Errorf("exact IP rule should not match different IP")
+	}
+}
+
+func TestEngine_ProxyRule_DomainNormalization(t *testing.T) {
+	path := writeTempRuleFile(t, strings.TrimSpace(`
+proxy domain EXAMPLE.COM. proxy_norm
+proxy domain *.SUB.EXAMPLE.COM. proxy_sub
+	`))
+	e, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	alias, matched := e.MatchProxyRule("", 0, "example.com")
+	if !matched || alias != "proxy_norm" {
+		t.Errorf("expected normalized match proxy_norm, got %q (matched=%v)", alias, matched)
+	}
+
+	alias, matched = e.MatchProxyRule("", 0, "test.sub.example.com.")
+	if !matched || alias != "proxy_sub" {
+		t.Errorf("expected normalized wildcard match proxy_sub, got %q (matched=%v)", alias, matched)
+	}
+}

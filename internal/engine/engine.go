@@ -832,6 +832,136 @@ func (e *Engine) relayTCP(ctx context.Context, client, remote net.Conn, isProxy 
 	relay.TCPRelay(ctx, client, remote, isProxy, prefix)
 }
 
+// ReloadConfig validates newCfg and applies all hot-reloadable runtime components.
+//
+// Architecture: Fail-Fast Preload + Best-Effort In-Memory Publication
+//
+// Phase 1 (Fail-Fast Preload): Validates newCfg and pre-parses external files
+// (chnroute trie, ACL rule engine) into isolated in-memory instances without
+// modifying any running engine state. If any validation or parsing step fails,
+// it returns an error immediately with zero side-effects.
+//
+// Phase 2 (Best-Effort In-Memory Publication): Publishes the pre-built instances
+// to active components via sequential atomic pointer swaps (Chnroute.Pull,
+// RuleEng.Pull, UpstreamMgr.Reload, TUNHandler.ReloadConfig, DNSHandler, and
+// finally Config.Store). Note: this provides clean in-memory publication without
+// disk I/O or TOCTOU races, but is sequential rather than a single monolithic
+// multi-component atomic transaction; no rollback is claimed across components.
+func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
+	if err := newCfg.Validate(); err != nil {
+		return fmt.Errorf("config validation failed: %w", err)
+	}
+
+	resolveFile := func(p string) string {
+		if filepath.IsAbs(p) {
+			return p
+		}
+		return filepath.Join(cfgDir, p)
+	}
+
+	oldCfg := e.Config.Load()
+	var newChnTrie *chnroute.Trie
+	if oldCfg == nil || newCfg.Routing.ChnrouteFile != oldCfg.Routing.ChnrouteFile {
+		trie, err := chnroute.Load(resolveFile(newCfg.Routing.ChnrouteFile))
+		if err != nil {
+			return fmt.Errorf("failed to pre-load chnroute: %w", err)
+		}
+		newChnTrie = trie
+	}
+
+	var newRuleEng *rules.Engine
+	if oldCfg == nil || newCfg.Routing.ACLFile != oldCfg.Routing.ACLFile {
+		eng, err := rules.New(resolveFile(newCfg.Routing.ACLFile))
+		if err != nil {
+			return fmt.Errorf("failed to pre-load ACL rules: %w", err)
+		}
+		newRuleEng = eng
+	}
+
+	// All pre-checks and parsing passed (Phase 1: Fail-Fast Preload).
+	// Phase 2: Best-Effort In-Memory Publication (sequential atomic pointer updates, zero disk I/O, zero TOCTOU).
+	if newChnTrie != nil {
+		e.Chnroute.Pull(newChnTrie)
+	}
+	if newRuleEng != nil {
+		e.RuleEng.Pull(newRuleEng)
+		if e.TUNHandler != nil {
+			e.TUNHandler.KillBlockedConnections()
+		}
+	}
+
+	upstreamCfg := upstream.UpstreamConfig{
+		Default:     newCfg.Upstream.Default,
+		HealthCheck: newCfg.Upstream.HealthCheck,
+	}
+	for _, p := range newCfg.Upstream.Proxies {
+		upstreamCfg.Proxies = append(upstreamCfg.Proxies, upstream.ProxyEntry{
+			Alias:    p.Alias,
+			URL:      p.URL,
+			UDPInTCP: p.UDPInTCP,
+		})
+	}
+	e.UpstreamMgr.Reload(upstreamCfg)
+
+	if e.TUNHandler != nil {
+		e.TUNHandler.ReloadConfig(newCfg)
+	}
+
+	smartTimeout := time.Duration(newCfg.SmartProxy.Timeout) * time.Second
+	blacklistTTL := time.Duration(newCfg.SmartProxy.BlacklistTTL) * time.Second
+	e.Router.UpdateConfig(smartTimeout, blacklistTTL)
+
+	preferMode, preferPorts := dns.ParseSpeedCheckMode(newCfg.DNS.SpeedCheckMode)
+	e.DNSHandler.UpdateConfig(
+		newCfg.DNS.Foreign.IPv4, newCfg.DNS.Foreign.IPv6,
+		newCfg.DNS.QueryTimeout, dns.BlockedIPv4, dns.BlockedIPv6,
+		newCfg.DNS.Enabled,
+		preferMode != dns.PreferNone, preferMode, preferPorts,
+	)
+	e.DNSHandler.SetStaticRecords(newCfg.DNS.StaticRecordsMap())
+	e.DNSHandler.SetCacheConfig(newCfg.DNS.Cache.Size, time.Duration(newCfg.DNS.Cache.TTL)*time.Second)
+
+	if e.adminServer != nil {
+		e.adminServer.SetAdminAuth(newCfg.Listen.AdminAuth)
+	}
+
+	// Publish the new configuration snapshot after runtime components have
+	// been updated. This Store is atomic for the Config pointer itself, but
+	// ReloadConfig as a whole is intentionally not a cross-component transaction.
+	e.Config.Store(newCfg)
+	return nil
+}
+
+// ReloadACL reloads the ACL file currently configured in e.Config and terminates any
+// active connections matching newly added block rules.
+func (e *Engine) ReloadACL() error {
+	cfg := e.Config.Load()
+	if cfg == nil || cfg.Routing.ACLFile == "" {
+		return errors.New("acl_file not configured")
+	}
+	if err := e.RuleEng.Reload(cfg.Routing.ACLFile); err != nil {
+		return err
+	}
+	if e.TUNHandler != nil {
+		e.TUNHandler.KillBlockedConnections()
+	}
+	return nil
+}
+
+// ReloadChnroute reloads the chnroute CIDR file currently configured in e.Config.
+func (e *Engine) ReloadChnroute() error {
+	cfg := e.Config.Load()
+	if cfg == nil || cfg.Routing.ChnrouteFile == "" {
+		return errors.New("chnroute_file not configured")
+	}
+	newTrie, err := chnroute.Load(cfg.Routing.ChnrouteFile)
+	if err != nil {
+		return err
+	}
+	e.Chnroute.Pull(newTrie)
+	return nil
+}
+
 func (e *Engine) SetReloadFn(fn func()) {
 	e.reloadFn = fn
 }

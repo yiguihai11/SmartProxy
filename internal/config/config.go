@@ -223,6 +223,110 @@ type SmartProxyQuicConf struct {
 	TimeoutMs   int   `json:"timeout_ms"`
 }
 
+// Clone returns a complete deep copy of Config. All nested slices, pointers, and
+// complex sub-structures are thoroughly duplicated so that subsequent mutations
+// cannot affect the original snapshot. Nil slices and empty non-nil slices are
+// strictly distinguished to prevent JSON serialization drift between null and [].
+//
+// MAINTAINER NOTICE: Whenever adding new fields with mutable references
+// (pointer, slice, map, interface) to Config or its sub-structs, Clone() MUST
+// be updated simultaneously to preserve copy-on-write snapshot isolation.
+func (c *Config) Clone() *Config {
+	if c == nil {
+		return nil
+	}
+	cp := *c
+
+	// Listen
+	if c.Listen.Auth != nil {
+		auth := *c.Listen.Auth
+		cp.Listen.Auth = &auth
+	}
+	if c.Listen.AdminAuth != nil {
+		adminAuth := *c.Listen.AdminAuth
+		cp.Listen.AdminAuth = &adminAuth
+	}
+	cp.Listen.AdminCertSANs = cloneStringSlice(c.Listen.AdminCertSANs)
+
+	// TUN
+	cp.TUN.Inet4Address = cloneStringSlice(c.TUN.Inet4Address)
+	cp.TUN.Inet6Address = cloneStringSlice(c.TUN.Inet6Address)
+	cp.TUN.RouteExcludePorts = cloneIntSlice(c.TUN.RouteExcludePorts)
+	cp.TUN.BlockedUIDs = cloneInt32Slice(c.TUN.BlockedUIDs)
+
+	// Upstream
+	if c.Upstream.Proxies != nil {
+		if len(c.Upstream.Proxies) == 0 {
+			cp.Upstream.Proxies = []ProxyEntry{}
+		} else {
+			cp.Upstream.Proxies = make([]ProxyEntry, len(c.Upstream.Proxies))
+			copy(cp.Upstream.Proxies, c.Upstream.Proxies)
+		}
+	}
+
+	// DNS
+	if c.DNS.StaticRecords != nil {
+		if len(c.DNS.StaticRecords) == 0 {
+			cp.DNS.StaticRecords = []StaticRecord{}
+		} else {
+			cp.DNS.StaticRecords = make([]StaticRecord, len(c.DNS.StaticRecords))
+			for i, r := range c.DNS.StaticRecords {
+				cp.DNS.StaticRecords[i].Host = r.Host
+				if r.IP != nil {
+					if len(r.IP) == 0 {
+						cp.DNS.StaticRecords[i].IP = IPList{}
+					} else {
+						cp.DNS.StaticRecords[i].IP = make(IPList, len(r.IP))
+						copy(cp.DNS.StaticRecords[i].IP, r.IP)
+					}
+				}
+			}
+		}
+	}
+
+	// SmartProxy
+	cp.SmartProxy.Ports = cloneIntSlice(c.SmartProxy.Ports)
+	cp.SmartProxy.Quic.Ports = cloneIntSlice(c.SmartProxy.Quic.Ports)
+
+	return &cp
+}
+
+func cloneStringSlice(s []string) []string {
+	if s == nil {
+		return nil
+	}
+	if len(s) == 0 {
+		return []string{}
+	}
+	res := make([]string, len(s))
+	copy(res, s)
+	return res
+}
+
+func cloneIntSlice(s []int) []int {
+	if s == nil {
+		return nil
+	}
+	if len(s) == 0 {
+		return []int{}
+	}
+	res := make([]int, len(s))
+	copy(res, s)
+	return res
+}
+
+func cloneInt32Slice(s []int32) []int32 {
+	if s == nil {
+		return nil
+	}
+	if len(s) == 0 {
+		return []int32{}
+	}
+	res := make([]int32, len(s))
+	copy(res, s)
+	return res
+}
+
 func (c *Config) Validate() error {
 	var errs []string
 
@@ -342,7 +446,10 @@ func SetStaticRecordIP(records []StaticRecord, host string, ip net.IP) []StaticR
 		next[i].IP = kept
 		return next
 	}
-	return append(records, StaticRecord{Host: host, IP: IPList{newAddr}})
+	next := make([]StaticRecord, len(records)+1)
+	copy(next, records)
+	next[len(records)] = StaticRecord{Host: host, IP: IPList{newAddr}}
+	return next
 }
 
 // SetStaticRecordIPs is the batch form of SetStaticRecordIP: it replaces host's
@@ -383,7 +490,10 @@ func SetStaticRecordIPs(records []StaticRecord, host string, ips []net.IP) []Sta
 		next[i].IP = kept
 		return next
 	}
-	return append(records, StaticRecord{Host: host, IP: addrs})
+	next := make([]StaticRecord, len(records)+1)
+	copy(next, records)
+	next[len(records)] = StaticRecord{Host: host, IP: addrs}
+	return next
 }
 
 // RemoveStaticRecordIP removes ip from host's static record; when the record's IP

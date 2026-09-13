@@ -20,6 +20,11 @@ type ProxyRule struct {
 	parsedPrefix *netip.Prefix
 }
 
+type proxyTarget struct {
+	alias string
+	index int
+}
+
 // ruleSet is an immutable snapshot of the effective ACL data. Readers load the
 // current snapshot through Engine.rules and never mutate it; writers build a
 // fresh snapshot and atomically swap the pointer, so hot paths take no locks.
@@ -36,10 +41,10 @@ type ruleSet struct {
 	blockedDomains  map[string]bool
 	blockedSuffixes *suffixTrie
 
-	proxyPorts    map[int]string
-	proxyIPs      map[string]string
+	proxyPorts    map[int]proxyTarget
+	proxyIPs      map[string]proxyTarget
 	proxyCIDRTrie *proxyCidrTrie
-	proxyDomains  map[string]string
+	proxyDomains  map[string]proxyTarget
 	proxySuffixes *proxySuffixTrie
 
 	proxyRules []ProxyRule
@@ -71,6 +76,14 @@ func (e *Engine) Reload(path string) error {
 	return e.Load(path)
 }
 
+// Pull atomically replaces the effective rule snapshot with other's snapshot,
+// eliminating duplicate disk parsing and TOCTOU races during engine reloads.
+func (e *Engine) Pull(other *Engine) {
+	if other != nil {
+		e.rules.Store(other.rules.Load())
+	}
+}
+
 func newRuleSet() *ruleSet {
 	rs := &ruleSet{}
 	rs.reset()
@@ -90,10 +103,10 @@ func (rs *ruleSet) reset() {
 	rs.blockedDomains = make(map[string]bool)
 	rs.blockedSuffixes = newSuffixTrie()
 
-	rs.proxyPorts = make(map[int]string)
-	rs.proxyIPs = make(map[string]string)
+	rs.proxyPorts = make(map[int]proxyTarget)
+	rs.proxyIPs = make(map[string]proxyTarget)
 	rs.proxyCIDRTrie = newProxyCidrTrie()
-	rs.proxyDomains = make(map[string]string)
+	rs.proxyDomains = make(map[string]proxyTarget)
 	rs.proxySuffixes = newProxySuffixTrie()
 	rs.proxyRules = nil
 }
@@ -126,6 +139,8 @@ func (rs *ruleSet) load(path string) error {
 		case "proxy":
 			if len(parts) >= 4 {
 				rule := ProxyRule{Type: parts[1], Value: parts[2], Alias: parts[3]}
+				ruleIndex := len(rs.proxyRules)
+				target := proxyTarget{alias: rule.Alias, index: ruleIndex}
 				switch rule.Type {
 				case "port":
 					port, err := strconv.Atoi(rule.Value)
@@ -134,11 +149,25 @@ func (rs *ruleSet) load(path string) error {
 						continue
 					}
 					if _, exists := rs.proxyPorts[port]; !exists {
-						rs.proxyPorts[port] = rule.Alias
+						rs.proxyPorts[port] = target
 					}
 				case "ip":
-					if _, exists := rs.proxyIPs[rule.Value]; !exists {
-						rs.proxyIPs[rule.Value] = rule.Alias
+					if strings.Contains(rule.Value, "/") {
+						prefix, err := netip.ParsePrefix(rule.Value)
+						if err != nil {
+							addr, err2 := netip.ParseAddr(rule.Value)
+							if err2 != nil {
+								slog.Warn("invalid CIDR in proxy rule", "value", rule.Value)
+								continue
+							}
+							prefix = netip.PrefixFrom(addr, addr.BitLen())
+						}
+						rule.parsedPrefix = &prefix
+						rs.proxyCIDRTrie.insert(prefix, target)
+					} else {
+						if _, exists := rs.proxyIPs[rule.Value]; !exists {
+							rs.proxyIPs[rule.Value] = target
+						}
 					}
 				case "cidr":
 					prefix, err := netip.ParsePrefix(rule.Value)
@@ -151,13 +180,14 @@ func (rs *ruleSet) load(path string) error {
 						prefix = netip.PrefixFrom(addr, addr.BitLen())
 					}
 					rule.parsedPrefix = &prefix
-					rs.proxyCIDRTrie.insert(prefix, rule.Alias)
+					rs.proxyCIDRTrie.insert(prefix, target)
 				case "domain":
-					if strings.HasPrefix(rule.Value, "*.") {
-						rs.proxySuffixes.insert("."+rule.Value[2:], rule.Alias)
+					d := normalizeDomain(rule.Value)
+					if strings.HasPrefix(d, "*.") {
+						rs.proxySuffixes.insert(d[1:], target)
 					} else {
-						if _, exists := rs.proxyDomains[rule.Value]; !exists {
-							rs.proxyDomains[rule.Value] = rule.Alias
+						if _, exists := rs.proxyDomains[d]; !exists {
+							rs.proxyDomains[d] = target
 						}
 					}
 				}
@@ -336,23 +366,45 @@ func (e *Engine) MatchProxyRule(targetIP string, targetPort int, domain string) 
 		}
 	}
 
-	if alias, ok := rs.proxyPorts[targetPort]; ok {
-		return alias, true
+	bestIndex := -1
+	bestAlias := ""
+
+	if t, ok := rs.proxyPorts[targetPort]; ok {
+		if bestIndex == -1 || t.index < bestIndex {
+			bestIndex = t.index
+			bestAlias = t.alias
+		}
 	}
-	if alias, ok := rs.proxyIPs[targetIP]; ok {
-		return alias, true
+	if t, ok := rs.proxyIPs[targetIP]; ok {
+		if bestIndex == -1 || t.index < bestIndex {
+			bestIndex = t.index
+			bestAlias = t.alias
+		}
 	}
 	if domain != "" {
 		d := normalizeDomain(domain)
-		if alias, ok := rs.proxyDomains[d]; ok {
-			return alias, true
+		if t, ok := rs.proxyDomains[d]; ok {
+			if bestIndex == -1 || t.index < bestIndex {
+				bestIndex = t.index
+				bestAlias = t.alias
+			}
 		}
-		if alias := rs.proxySuffixes.match(d); alias != "" {
-			return alias, true
+		if t, ok := rs.proxySuffixes.match(d); ok {
+			if bestIndex == -1 || t.index < bestIndex {
+				bestIndex = t.index
+				bestAlias = t.alias
+			}
 		}
 	}
-	if alias := rs.proxyCIDRTrie.lookup(targetIP); alias != "" {
-		return alias, true
+	if t, ok := rs.proxyCIDRTrie.lookup(targetIP); ok {
+		if bestIndex == -1 || t.index < bestIndex {
+			bestIndex = t.index
+			bestAlias = t.alias
+		}
+	}
+
+	if bestIndex != -1 {
+		return bestAlias, true
 	}
 	return "", false
 }
@@ -362,15 +414,16 @@ type proxySuffixTrie struct {
 }
 
 type proxySuffixNode struct {
-	alias    string
-	children map[string]*proxySuffixNode
+	target    proxyTarget
+	hasTarget bool
+	children  map[string]*proxySuffixNode
 }
 
 func newProxySuffixTrie() *proxySuffixTrie {
 	return &proxySuffixTrie{root: make(map[string]*proxySuffixNode)}
 }
 
-func (t *proxySuffixTrie) insert(suffix, alias string) {
+func (t *proxySuffixTrie) insert(suffix string, target proxyTarget) {
 	labels := strings.Split(strings.TrimPrefix(suffix, "."), ".")
 	if len(labels) == 0 {
 		return
@@ -385,34 +438,37 @@ func (t *proxySuffixTrie) insert(suffix, alias string) {
 			node = &proxySuffixNode{children: make(map[string]*proxySuffixNode)}
 			current[label] = node
 		}
-		if i == len(labels)-1 && node.alias == "" {
-			node.alias = alias
+		if i == len(labels)-1 && !node.hasTarget {
+			node.target = target
+			node.hasTarget = true
 		}
 		current = node.children
 	}
 }
 
-func (t *proxySuffixTrie) match(domain string) string {
+func (t *proxySuffixTrie) match(domain string) (proxyTarget, bool) {
 	labels := strings.Split(domain, ".")
 	if len(labels) == 0 {
-		return ""
+		return proxyTarget{}, false
 	}
 	for i, j := 0, len(labels)-1; i < j; i, j = i+1, j-1 {
 		labels[i], labels[j] = labels[j], labels[i]
 	}
 	current := t.root
-	var bestAlias string
+	var bestTarget proxyTarget
+	var matched bool
 	for i, label := range labels {
 		node, ok := current[label]
 		if !ok {
-			return bestAlias
+			break
 		}
-		if node.alias != "" && i < len(labels)-1 {
-			bestAlias = node.alias
+		if node.hasTarget && i < len(labels)-1 {
+			bestTarget = node.target
+			matched = true
 		}
 		current = node.children
 	}
-	return bestAlias
+	return bestTarget, matched
 }
 
 type proxyCidrTrie struct {
@@ -421,8 +477,9 @@ type proxyCidrTrie struct {
 }
 
 type proxyCidrNode struct {
-	children [2]*proxyCidrNode
-	alias    string
+	children  [2]*proxyCidrNode
+	target    proxyTarget
+	hasTarget bool
 }
 
 func newProxyCidrTrie() *proxyCidrTrie {
@@ -431,7 +488,7 @@ func newProxyCidrTrie() *proxyCidrTrie {
 
 func (t *proxyCidrTrie) size() int { return t.count }
 
-func (t *proxyCidrTrie) insert(prefix netip.Prefix, alias string) {
+func (t *proxyCidrTrie) insert(prefix netip.Prefix, target proxyTarget) {
 	bits := prefix.Bits()
 	addr := prefix.Addr()
 	raw := addr.As16()
@@ -449,16 +506,17 @@ func (t *proxyCidrTrie) insert(prefix netip.Prefix, alias string) {
 		}
 		node = node.children[bit]
 	}
-	if node.alias == "" {
-		node.alias = alias
+	if !node.hasTarget {
+		node.target = target
+		node.hasTarget = true
 		t.count++
 	}
 }
 
-func (t *proxyCidrTrie) lookup(ipStr string) string {
+func (t *proxyCidrTrie) lookup(ipStr string) (proxyTarget, bool) {
 	addr, err := netip.ParseAddr(ipStr)
 	if err != nil {
-		return ""
+		return proxyTarget{}, false
 	}
 	raw := addr.As16()
 	bitOffset := 0
@@ -466,21 +524,31 @@ func (t *proxyCidrTrie) lookup(ipStr string) string {
 		bitOffset = 96
 	}
 	node := t.root
-	var lastAlias string
+	bestIndex := -1
+	var bestTarget proxyTarget
 	for i := bitOffset; i < 128; i++ {
-		if node.alias != "" {
-			lastAlias = node.alias
+		if node.hasTarget {
+			if bestIndex == -1 || node.target.index < bestIndex {
+				bestIndex = node.target.index
+				bestTarget = node.target
+			}
 		}
 		byteIdx := i / 8
 		bitIdx := 7 - (i % 8)
 		bit := (raw[byteIdx] >> bitIdx) & 1
 		if node.children[bit] == nil {
-			return lastAlias
+			break
 		}
 		node = node.children[bit]
 	}
-	if node.alias != "" {
-		lastAlias = node.alias
+	if node != nil && node.hasTarget {
+		if bestIndex == -1 || node.target.index < bestIndex {
+			bestIndex = node.target.index
+			bestTarget = node.target
+		}
 	}
-	return lastAlias
+	if bestIndex != -1 {
+		return bestTarget, true
+	}
+	return proxyTarget{}, false
 }

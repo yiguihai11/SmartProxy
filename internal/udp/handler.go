@@ -132,6 +132,8 @@ type udpSession struct {
 	clientAddr net.Addr
 	key        udpSessionKey
 	closeOnce  sync.Once
+	closed     atomic.Bool
+	closeMu    sync.Mutex
 
 	respHeader []byte // pre-built SOCKS5 UDP response header (used while direct)
 }
@@ -623,12 +625,16 @@ func (h *Handler) quicFlowDead(sess *udpSession, key udpSessionKey, ip string, p
 	if sess == nil {
 		return
 	}
-	if !h.hasSession(key) {
-		return // 会话已清理(cleaner/reader 退出),不复活它
+	if sess.closed.Load() {
+		return
+	}
+	cur, ok := h.getSession(key)
+	if !ok || cur != sess {
+		return // session is already cleaned up or replaced
 	}
 	old := sess.snap.Load()
 	if old == nil || old.framed {
-		return // 早已是代理或已关闭
+		return // already proxy or closed
 	}
 	target := net.JoinHostPort(ip, strconv.Itoa(port))
 	sess.log.Info("UDP QUIC flow: switching DIRECT -> PROXY", "target", target, "reason", reason)
@@ -641,19 +647,44 @@ func (h *Handler) quicFlowDead(sess *udpSession, key udpSessionKey, ip string, p
 	}
 	// 判死回调在 watchdog 自己的 goroutine、且会话 ctx 可能已取消,用 Background 派生;
 	// 只把 flow 值贴回去,让热切拨号的上游日志带同一 flow 号。
+	// Dial outside all locks.
 	ctx, cancel := context.WithTimeout(trace.WithFlow(context.Background(), sess.flowID), 10*time.Second)
 	defer cancel()
 	sess.log.Info("UDP QUIC flow: proxy UDP ASSOCIATE start", "target", target)
 	pconn, err := h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, nil)
 	if err != nil {
 		sess.log.Error("UDP QUIC flow: proxy UDP ASSOCIATE failed", "target", target, "error", err)
-		// Do not leave a dead direct socket in the session. The dynamic blacklist makes the
-		// next client retransmission create a fresh session and try proxy directly.
-		h.dropSession(sess)
+		if !sess.closed.Load() {
+			h.dropSession(sess)
+		}
+		return
+	}
+
+	// Verify identity outside closeMu to strictly avoid lock inversion (closeMu -> shard.mu)
+	cur2, ok2 := h.getSession(key)
+	if !ok2 || cur2 != sess {
+		// Session was replaced or removed while dialing; close pconn to prevent leak
+		pconn.Close()
+		return
+	}
+
+	// Acquire per-session lock without holding shard.mu
+	sess.closeMu.Lock()
+	if sess.closed.Load() {
+		sess.closeMu.Unlock()
+		pconn.Close()
+		return
+	}
+	currentOut := sess.snap.Load()
+	if currentOut == nil || currentOut.framed {
+		sess.closeMu.Unlock()
+		pconn.Close()
 		return
 	}
 	sess.snap.Store(&udpOutbound{conn: pconn, framed: true})
-	old.conn.Close() // 解除直连 reader 阻塞;reader 见出向已换 → 续读代理
+	sess.closeMu.Unlock()
+
+	currentOut.conn.Close() // 解除直连 reader 阻塞;reader 见出向已换 → 续读代理
 	sess.log.Info("UDP QUIC flow: proxy UDP ASSOCIATE success", "target", target)
 	sess.log.Info("UDP QUIC flow switched to proxy after blackhole", "target", target)
 }
@@ -730,6 +761,9 @@ func (h *Handler) pipeDownstream(sess *udpSession) {
 }
 
 func (h *Handler) closeSession(sess *udpSession) {
+	sess.closeMu.Lock()
+	defer sess.closeMu.Unlock()
+	sess.closed.Store(true)
 	sess.closeOnce.Do(func() {
 		h.sessionCount.Add(-1)
 		ActiveSessions.Add(-1)
