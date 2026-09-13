@@ -18,8 +18,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"smartproxy/internal/chnroute"
 	"smartproxy/internal/config"
 	"smartproxy/internal/dns"
+	"smartproxy/internal/netutil"
+	"smartproxy/internal/route"
 	"smartproxy/internal/rules"
 	"smartproxy/internal/upstream"
 )

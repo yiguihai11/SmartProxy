@@ -91,13 +91,18 @@ func IsLANIP(ip net.IP) bool {
 // IsLAN reports whether host (IP or host:port) is a LAN IP address.
 // If host is a hostname or cannot be parsed as an IP, it returns false.
 func IsLAN(host string) bool {
-	h, _ := ParseHostPort(host, 0)
-	if h == "" {
-		h = host
-	}
-	ip := net.ParseIP(strings.Trim(h, "[]"))
-	if ip == nil {
+	host = strings.TrimSpace(host)
+	if host == "" {
 		return false
 	}
-	return IsLANIP(ip)
+	trimmed := strings.Trim(host, "[]")
+	if ip := net.ParseIP(trimmed); ip != nil {
+		return IsLANIP(ip)
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		if ip := net.ParseIP(strings.Trim(h, "[]")); ip != nil {
+			return IsLANIP(ip)
+		}
+	}
+	return false
 }
