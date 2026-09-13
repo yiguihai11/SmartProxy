@@ -108,6 +108,9 @@ class SmartProxyVpnService : VpnService() {
     @Volatile
     private var tornDown = false
 
+    /** RESTART 请求折叠计数器:快速连续触发时折叠中间多余的重复重建,只在当前重建完成后再按最新配置重建一次。 */
+    private val restartNeeded = java.util.concurrent.atomic.AtomicInteger(0)
+
     /** 引擎阻塞活(startRouter/stopRouter/Builder.establish/100ms 留白)专用单线程串行器。
      *  onStartCommand/onRevoke/onDestroy 都在主线程,这些 JNI/系统调用能阻塞数秒,直接跑
      *  主线程就是 ANR。单线程 FIFO 原样复刻了"主线程串行处理 intent"的顺序保证——RESTART
@@ -150,22 +153,39 @@ class SmartProxyVpnService : VpnService() {
             // stopSelf() 在 shutdown(fullTeardown=true) 内部先于关 fd 调用(v2rayNG 顺序)。
             // 阻塞拆机丢引擎线程,主线程立即返回。
             userInitiatedStop = true
+            restartNeeded.set(0)
             Log.i(TAG, "[onStartCommand] ACTION_STOP is user stop; enqueue full shutdown.")
             enqueueEngineWork("ACTION_STOP") { shutdown() }
             return START_NOT_STICKY
         }
 
         // 设置变更重建(§6 / 首页 IPv4 / IPv6 开关):停旧会话 → 立即按新配置重建。
-        // shutdown + startInternal 作为【同一个排队单元】丢给单线程引擎,顺序执行、原子
-        // 完成,不会被其它 intent 插断——保持了旧版"主线程回调内原子重建"的保证,也不会
-        // 再像已删除的异步重启循环那样在用户停止后靠 delayed start 把隧道拉起。
+        // 支持连续触发请求折叠:如果已有 restart 任务在排队或执行中,原子累加请求,
+        // 当前 restart 跑完后只需按最新配置再跑一次,避免无意义地连续多次拆建 TUN。
         if (action == ACTION_RESTART) {
-            // 重建(§6 设置变更 / 首页 IPv4 / IPv6 开关):服务需存活,不能 stopSelf。
-            // fullTeardown=false → 跳过"stopSelf + 留白",停引擎 + 关 fd 后立即重建。
-            Log.i(TAG, "[onStartCommand] ACTION_RESTART: enqueue shutdown(false)+rebuild.")
-            enqueueEngineWork("ACTION_RESTART") {
-                shutdown(fullTeardown = false)
-                startInternal()
+            if (userInitiatedStop) {
+                Log.i(TAG, "[onStartCommand] userInitiatedStop=true, ignoring ACTION_RESTART.")
+                return START_NOT_STICKY
+            }
+            val pending = restartNeeded.getAndIncrement()
+            if (pending == 0) {
+                Log.i(TAG, "[onStartCommand] ACTION_RESTART: enqueue coalesced shutdown(false)+rebuild.")
+                enqueueEngineWork("ACTION_RESTART") {
+                    do {
+                        if (userInitiatedStop || tornDown) {
+                            Log.i(TAG, "[ACTION_RESTART] Service stopped or torn down, aborting coalesced restart.")
+                            break
+                        }
+                        restartNeeded.set(1)
+                        shutdown(fullTeardown = false)
+                        if (userInitiatedStop || tornDown) {
+                            break
+                        }
+                        startInternal()
+                    } while (restartNeeded.decrementAndGet() > 0 && !userInitiatedStop && !tornDown)
+                }
+            } else {
+                Log.i(TAG, "[onStartCommand] ACTION_RESTART coalesced (pending=$pending); will restart once current run finishes.")
             }
             return START_STICKY
         }
@@ -601,6 +621,7 @@ class SmartProxyVpnService : VpnService() {
      *  shutdown(fullTeardown=true) 内部已含 stopSelf(),不再单独调。 */
     override fun onRevoke() {
         super.onRevoke()
+        restartNeeded.set(0)
         val passive = !userInitiatedStop
         Log.w(TAG, "[onRevoke] Triggered by system! userInitiatedStop=$userInitiatedStop, passive=$passive")
         enqueueEngineWork("onRevoke") { shutdown() }
@@ -615,6 +636,7 @@ class SmartProxyVpnService : VpnService() {
 
     override fun onDestroy() {
         Log.i(TAG, "[onDestroy] Service onDestroy() entered.")
+        restartNeeded.set(0)
         // 最终拆机排队跑完后再关执行器(shutdown 不中断已排队/在跑任务);daemon 线程,
         // 不会拖住进程退出。
         enqueueEngineWork("onDestroy") { shutdown() }

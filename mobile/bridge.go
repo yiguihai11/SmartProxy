@@ -63,6 +63,7 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 		if tunFd > 0 {
 			unix.Close(tunFd)
 		}
+		uidResolver = nil
 		return err
 	}
 
@@ -229,6 +230,7 @@ func StopRouter() {
 	} else {
 		slog.Info("[Go-Bridge] globalEngine is nil, skipping")
 	}
+	uidResolver = nil
 	slog.Info("[Go-Bridge] StopRouter completed")
 }
 
