@@ -23,6 +23,7 @@ import (
 	"smartproxy/internal/config"
 	"smartproxy/internal/dns"
 	"smartproxy/internal/dpi"
+	"smartproxy/internal/netutil"
 	"smartproxy/internal/quic"
 	"smartproxy/internal/route"
 	"smartproxy/internal/rules"
@@ -420,8 +421,9 @@ func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip 
 	framed := false
 	var wd *quic.Watchdog
 
+	isLAN := h.router != nil && h.router.BypassLAN() && netutil.IsLAN(ip) && port != 53
 	switch {
-	case result == "direct" || (result == "fallback" && h.isDomestic(ip)):
+	case result == "direct" || (result == "fallback" && (isLAN || h.isDomestic(ip))):
 		// 直连 UDP socket 选项(fwmark/缓冲/禁分片)与 TUN 路径共用 DirectUDPControl,
 		// 保证两端直连行为一致。
 		d := net.Dialer{Timeout: 5 * time.Second, Control: DirectUDPControl}

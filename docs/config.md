@@ -87,6 +87,7 @@
 | --- | --- | --- | --- |
 | `ChnrouteFile` | `chnroute_file` | `"chnroute.txt"` | 国内 IP 段列表文件 |
 | `ACLFile` | `acl_file` | `"acl.txt"` | ACL 规则文件 |
+| `BypassLAN` | `bypass_lan` | `true` | 是否直连绕过局域网地址（私有 IPv4/IPv6、回环、链路本地等），但 UDP 53 端口（DNS）绝不放行绕过，仍经由 SmartProxy DNS 拦截处理 |
 
 ### `dns`
 

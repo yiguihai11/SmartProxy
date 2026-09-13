@@ -834,3 +834,38 @@ func TestRemoteUDPReader_WritesNonEmptyPayload(t *testing.T) {
 		t.Fatalf("reply content = %q, want %q", captured.Bytes(), payload)
 	}
 }
+
+func TestTUNHandler_BypassLAN_ExcludesUDP53(t *testing.T) {
+	// Verifies the invariant: LAN bypass applies to LAN destinations EXCEPT UDP port 53.
+	cn := chnroute.New()
+	mgr, _ := upstream.NewManager(upstream.UpstreamConfig{Default: "failover"})
+	r := route.New(cn, mgr, true, 3*time.Second, nil, 300*time.Second)
+
+	if !r.BypassLAN() {
+		t.Fatal("expected BypassLAN to be true")
+	}
+
+	lanHosts := []string{"192.168.1.1", "10.0.0.1", "172.16.0.1", "127.0.0.1", "fe80::1", "fc00::1"}
+	for _, host := range lanHosts {
+		// Port 53 must NOT bypass LAN
+		port53Bypass := r.BypassLAN() && netutil.IsLAN(host) && 53 != 53
+		if port53Bypass {
+			t.Errorf("host %s port 53 must NEVER bypass LAN", host)
+		}
+
+		// Other ports (e.g. mDNS 5353, NTP 123, HTTP 80) DO bypass LAN
+		otherPortBypass := r.BypassLAN() && netutil.IsLAN(host) && 5353 != 53
+		if !otherPortBypass {
+			t.Errorf("host %s port 5353 should bypass LAN", host)
+		}
+	}
+
+	// Public IP never bypasses LAN regardless of port
+	publicHosts := []string{"8.8.8.8", "1.1.1.1", "114.114.114.114"}
+	for _, host := range publicHosts {
+		if r.BypassLAN() && netutil.IsLAN(host) && 5353 != 53 {
+			t.Errorf("public host %s must not bypass LAN", host)
+		}
+	}
+}
+

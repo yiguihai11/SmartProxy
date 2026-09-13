@@ -38,7 +38,8 @@
   },
   "routing": {
     "chnroute_file": "chnroute.txt",
-    "acl_file": "acl.txt"
+    "acl_file": "acl.txt",
+    "bypass_lan": true
   },
   "dns": {
     "enabled": true,

@@ -90,3 +90,12 @@ func (s *Server) handleFlags(w http.ResponseWriter, r *http.Request) {
 	flagsFileServer.ServeHTTP(w, r)
 }
 
+//go:embed static/logo.png
+var logoPNG []byte
+
+func (s *Server) handleLogo(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Write(logoPNG)
+}
+

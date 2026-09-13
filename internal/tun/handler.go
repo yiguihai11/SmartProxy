@@ -331,7 +331,8 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 		}
 	}
 
-	isDomestic := h.router.IsDomesticByIP(host)
+	isLAN := h.router.BypassLAN() && netutil.IsLAN(host)
+	isDomestic := isLAN || h.router.IsDomesticByIP(host)
 	if isDomestic {
 		remote, isProxy, err := h.router.EstablishConnection(ctx, host, port, domain, h.ruleEng)
 		if err != nil {
@@ -652,6 +653,11 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 			return startDirectRemote(dst, host, port, nil) // ACL 强制直连
 		case result != "fallback":
 			return newProxyRemote(dst, host, port, selected) // ACL 指定代理
+		}
+
+		// bypass_lan: 局域网地址直连,但绝对不能放行 UDP 53 端口!
+		if h.router.BypassLAN() && netutil.IsLAN(host) && port != 53 {
+			return startDirectRemote(dst, host, port, nil)
 		}
 
 		// fallback:chnroute 国内直连;判死过/国外再按 QUIC 智能决策

@@ -419,4 +419,39 @@ func TestIsTLSClientHello(t *testing.T) {
 	}
 }
 
+func TestRouter_BypassLAN(t *testing.T) {
+	cn := chnroute.New()
+	mgr, _ := upstream.NewManager(upstream.UpstreamConfig{Default: "failover"})
+
+	// Initially false
+	r1 := New(cn, mgr, false, 3*time.Second, nil, 300*time.Second)
+	if r1.BypassLAN() {
+		t.Error("expected BypassLAN to be false")
+	}
+
+	// Initially true
+	r2 := New(cn, mgr, true, 3*time.Second, nil, 300*time.Second)
+	if !r2.BypassLAN() {
+		t.Error("expected BypassLAN to be true")
+	}
+
+	// Update to false
+	r2.UpdateConfig(3*time.Second, 300*time.Second, false)
+	if r2.BypassLAN() {
+		t.Error("expected BypassLAN to be false after update")
+	}
+
+	// Update to true
+	r2.UpdateConfig(3*time.Second, 300*time.Second, true)
+	if !r2.BypassLAN() {
+		t.Error("expected BypassLAN to be true after update")
+	}
+
+	// Update without 3rd param preserves value
+	r2.UpdateConfig(5*time.Second, 600*time.Second)
+	if !r2.BypassLAN() {
+		t.Error("expected BypassLAN to be preserved as true when omitted")
+	}
+}
+
 

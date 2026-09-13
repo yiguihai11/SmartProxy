@@ -26,6 +26,7 @@ import (
 type routerConfig struct {
 	smartTimeout time.Duration
 	blacklistTTL time.Duration
+	bypassLAN    bool
 }
 
 type Router struct {
@@ -41,7 +42,7 @@ type Router struct {
 }
 
 func New(cn *chnroute.Trie, mgr *upstream.Manager,
-	_ bool, smartTimeout time.Duration,
+	bypassLAN bool, smartTimeout time.Duration,
 	_ []int, blacklistTTL time.Duration) *Router {
 
 	r := &Router{
@@ -53,16 +54,31 @@ func New(cn *chnroute.Trie, mgr *upstream.Manager,
 	r.cfg.Store(&routerConfig{
 		smartTimeout: smartTimeout,
 		blacklistTTL: blacklistTTL,
+		bypassLAN:    bypassLAN,
 	})
 	return r
 }
 
-func (r *Router) UpdateConfig(smartTimeout, blacklistTTL time.Duration) {
+func (r *Router) UpdateConfig(smartTimeout, blacklistTTL time.Duration, bypassLAN ...bool) {
+	bLAN := false
+	if len(bypassLAN) > 0 {
+		bLAN = bypassLAN[0]
+	} else if cur := r.cfg.Load(); cur != nil {
+		bLAN = cur.bypassLAN
+	}
 	r.cfg.Store(&routerConfig{
 		smartTimeout: smartTimeout,
 		blacklistTTL: blacklistTTL,
+		bypassLAN:    bLAN,
 	})
-	slog.Info("router config updated", "smartTimeout", smartTimeout, "blacklistTTL", blacklistTTL)
+	slog.Info("router config updated", "smartTimeout", smartTimeout, "blacklistTTL", blacklistTTL, "bypassLAN", bLAN)
+}
+
+func (r *Router) BypassLAN() bool {
+	if cfg := r.cfg.Load(); cfg != nil {
+		return cfg.bypassLAN
+	}
+	return false
 }
 
 func (r *Router) IsDomestic(ip string) bool {
@@ -107,6 +123,13 @@ func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 		ll.Info("using proxy alias from rule", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port, "domain", domain)
 		conn, err := selected.Connect(ctx, host, port)
 		return conn, true, err
+	}
+
+	cfg := r.cfg.Load()
+	if cfg != nil && cfg.bypassLAN && netutil.IsLAN(host) {
+		ll.Info("using direct connection (LAN bypass)", "host", host, "port", port, "domain", domain)
+		conn, err := dialTCP(ctx, host, port, 10*time.Second)
+		return conn, false, err
 	}
 
 	if r.isDomesticHost(host) {
@@ -199,6 +222,19 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 			return nil, nil, false, err
 		}
 		return conn, nil, true, nil
+	}
+
+	if cfg != nil && cfg.bypassLAN && netutil.IsLAN(host) {
+		ll.Info("using direct connection (LAN bypass)", "host", host, "port", port, "domain", domain)
+		conn, err := dialTCP(ctx, host, port, cfg.smartTimeout)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		if _, err := conn.Write(firstPkt); err != nil {
+			conn.Close()
+			return nil, nil, false, err
+		}
+		return conn, nil, false, nil
 	}
 
 	if (domain != "" && r.domainBlacklist.IsBlacklisted(domain, port)) || r.ipBlacklist.IsBlacklisted(host, port) {

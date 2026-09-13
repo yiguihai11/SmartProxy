@@ -303,6 +303,8 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/logs/clear", s.handleLogsClear)
 	mux.HandleFunc("/terminal/clear", s.handleTerminalClear)
 	mux.HandleFunc("/admin.crt", s.handleAdminCert)
+	mux.HandleFunc("/logo.png", s.handleLogo)
+	mux.HandleFunc("/favicon.ico", s.handleLogo)
 	mux.HandleFunc("/", s.handleRoot)
 	mux.HandleFunc("/events", s.handleEvents)
 
@@ -331,7 +333,9 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// does not share the browser's cached Basic-Auth credentials — behind auth the
 		// download silently 401s. Desktop browsers cache credentials for same-origin
 		// navigations, but exempting it is harmless and consistent everywhere.
-		if r.Method == http.MethodGet && r.URL.Path == "/admin.crt" {
+		// Similarly, /logo.png and /favicon.ico are public branding assets needed by browsers
+		// before authentication (e.g. basic auth login prompts and tab favicons).
+		if r.Method == http.MethodGet && (r.URL.Path == "/admin.crt" || r.URL.Path == "/logo.png" || r.URL.Path == "/favicon.ico") {
 			next.ServeHTTP(w, r)
 			return
 		}

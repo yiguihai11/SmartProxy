@@ -7,6 +7,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>SmartProxy</title>
+<link rel="icon" type="image/png" href="/logo.png">
+<link rel="apple-touch-icon" href="/logo.png">
 <link rel="stylesheet" href="/cm.css">
 <link rel="stylesheet" href="/dracula.css">
 <link rel="stylesheet" href="/flag-icons.css">
@@ -39,7 +41,8 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);display:flex
 .hamburger:hover{background:var(--surface2);color:var(--text)}
 .scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:20;opacity:0;visibility:hidden;transition:opacity .25s ease;pointer-events:none}
 .scrim.show{opacity:1;visibility:visible;pointer-events:auto}
-.sidebar-logo{width:40px;height:40px;background:linear-gradient(135deg,var(--accent),#8b5cf6);border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1rem;color:#fff;flex-shrink:0}
+.sidebar-logo{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden}
+.sidebar-logo img{width:100%;height:100%;object-fit:contain;display:block}
 .sidebar-title{font-size:1rem;font-weight:600;letter-spacing:.2px}
 .sidebar-title span{color:var(--text2);font-weight:400}
 .sidebar-nav{flex:1;padding:12px 10px;overflow-y:auto}
@@ -247,7 +250,7 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
 <button class="hamburger" id="hamburger" onclick="toggleDrawer()" aria-label="Toggle menu">☰</button>
 <div class="scrim" id="scrim" onclick="closeDrawer()"></div>
 <div class="sidebar">
-  <div class="sidebar-header"><div class="sidebar-logo">SP</div><div class="sidebar-title">SmartProxy <span id="app-version"></span></div><button class="sidebar-close" id="sidebar-close" onclick="closeDrawer()" aria-label="Close menu">✕</button></div>
+  <div class="sidebar-header"><div class="sidebar-logo"><img src="/logo.png" alt="SmartProxy"></div><div class="sidebar-title">SmartProxy <span id="app-version"></span></div><button class="sidebar-close" id="sidebar-close" onclick="closeDrawer()" aria-label="Close menu">✕</button></div>
   <div class="sidebar-nav">
     <div class="nav-item section">Monitoring</div>
     <div class="nav-item active" data-view="dashboard"><span class="nav-icon">~</span><span>Overview</span></div>

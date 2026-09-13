@@ -79,3 +79,25 @@ func getTCPConn(conn net.Conn) (*net.TCPConn, bool) {
 	}
 	return nil, false
 }
+
+// IsLANIP reports whether ip is a private, loopback, link-local, or unspecified IP address.
+func IsLANIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
+
+// IsLAN reports whether host (IP or host:port) is a LAN IP address.
+// If host is a hostname or cannot be parsed as an IP, it returns false.
+func IsLAN(host string) bool {
+	h, _ := ParseHostPort(host, 0)
+	if h == "" {
+		h = host
+	}
+	ip := net.ParseIP(strings.Trim(h, "[]"))
+	if ip == nil {
+		return false
+	}
+	return IsLANIP(ip)
+}

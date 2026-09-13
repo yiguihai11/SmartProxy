@@ -138,6 +138,7 @@ type ProxyEntry struct {
 type RoutingConf struct {
 	ChnrouteFile string `json:"chnroute_file"`
 	ACLFile      string `json:"acl_file"`
+	BypassLAN    bool   `json:"bypass_lan"`
 }
 
 type DNSConf struct {
@@ -627,6 +628,7 @@ func DefaultConfig() *Config {
 		},
 		Routing: RoutingConf{
 			ChnrouteFile: "chnroute.txt",
+			BypassLAN:    true,
 		},
 		DNS: DNSConf{
 			Enabled:      true,

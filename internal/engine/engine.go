@@ -92,7 +92,7 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 
 	smartTimeout := time.Duration(cfg.SmartProxy.Timeout) * time.Second
 	blacklistTTL := time.Duration(cfg.SmartProxy.BlacklistTTL) * time.Second
-	router := route.New(cn, upstreamMgr, cfg.SmartProxy.Enabled, smartTimeout, cfg.SmartProxy.Ports, blacklistTTL)
+	router := route.New(cn, upstreamMgr, cfg.Routing.BypassLAN, smartTimeout, cfg.SmartProxy.Ports, blacklistTTL)
 	router.StartCleanup(60 * time.Second)
 
 	preferMode, preferPorts := dns.ParseSpeedCheckMode(cfg.DNS.SpeedCheckMode)
@@ -407,8 +407,9 @@ func (e *Engine) handleConnect(ctx context.Context, conn net.Conn, req *socks5.R
 	}
 
 	ip := net.ParseIP(host)
-	isDomestic := false
-	if ip != nil {
+	isLAN := e.Router.BypassLAN() && netutil.IsLAN(host)
+	isDomestic := isLAN
+	if !isDomestic && ip != nil {
 		isDomestic = e.Chnroute.Contains(ip)
 	}
 	smartEnabled := e.Config.Load().SmartProxy.Enabled && netutil.ContainsInt(e.Config.Load().SmartProxy.Ports, port)
@@ -909,7 +910,7 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 
 	smartTimeout := time.Duration(newCfg.SmartProxy.Timeout) * time.Second
 	blacklistTTL := time.Duration(newCfg.SmartProxy.BlacklistTTL) * time.Second
-	e.Router.UpdateConfig(smartTimeout, blacklistTTL)
+	e.Router.UpdateConfig(smartTimeout, blacklistTTL, newCfg.Routing.BypassLAN)
 
 	preferMode, preferPorts := dns.ParseSpeedCheckMode(newCfg.DNS.SpeedCheckMode)
 	e.DNSHandler.UpdateConfig(
