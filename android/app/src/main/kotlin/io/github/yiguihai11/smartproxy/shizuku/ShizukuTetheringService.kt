@@ -255,9 +255,10 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
     }
 
     override fun getStatus(includeIpv6: Boolean): TetheringStatusSnapshot {
-        val interfaces = runCatching { getTetheredInterfaces() }
-            .onFailure { Log.e(TAG, "Unable to read tethering status", it) }
-            .getOrNull()
+        val interfaces = upstreamMonitor?.currentInterfaces
+            ?: runCatching { getTetheredInterfaces() }
+                .onFailure { Log.e(TAG, "Unable to read tethering status", it) }
+                .getOrNull()
         val activeTypes = interfaces?.let(::tetheringTypeMask) ?: TETHERING_TYPES_UNKNOWN
         val ipv6Types = if (includeIpv6 && interfaces != null) {
             runCatching { ipv6TetheringTypeMask(interfaces) }
@@ -1161,6 +1162,17 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
 
         runCatching { setPreferTestNetworks(false) }
             .onFailure { Log.w(TAG, "Unable to restore tethering upstream preference", it) }
+        cleanupStagedAssets()
+    }
+
+    private fun cleanupStagedAssets() {
+        stagedAssetFingerprint = ""
+        val directory = File(SHELL_RUNTIME_DIR, ASSET_DIRECTORY_NAME)
+        if (!directory.exists()) return
+        runCatching {
+            directory.listFiles()?.forEach { it.delete() }
+            directory.delete()
+        }.onFailure { Log.w(TAG, "Unable to clean up staged tethering assets", it) }
     }
 
     private fun createLinkAddress(cidr: String): LinkAddress {

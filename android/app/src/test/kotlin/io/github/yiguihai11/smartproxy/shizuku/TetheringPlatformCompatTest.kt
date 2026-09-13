@@ -24,9 +24,14 @@ class TetheringPlatformCompatTest {
     @Test
     fun acceptsOnlyTheOwnedUpstreamInterface() {
         assertEquals(true, TetheringPlatformCompat.isProtectedUpstream("testtun17", "testtun17"))
+        assertEquals(true, TetheringPlatformCompat.isProtectedUpstream(" testtun17 ", "testtun17"))
         assertEquals(
             false,
             TetheringPlatformCompat.isProtectedUpstream("testtun17, testtun17", "testtun17"),
+        )
+        assertEquals(
+            false,
+            TetheringPlatformCompat.isProtectedUpstream("testtun17, testtun17, testtun17", "testtun17"),
         )
         assertEquals(false, TetheringPlatformCompat.isProtectedUpstream("", "testtun17"))
         assertEquals(false, TetheringPlatformCompat.isProtectedUpstream("eth0", "testtun17"))

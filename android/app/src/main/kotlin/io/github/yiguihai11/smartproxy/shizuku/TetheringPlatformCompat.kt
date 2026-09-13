@@ -97,7 +97,7 @@ internal object TetheringPlatformCompat {
     internal fun isProtectedUpstream(actual: String, expected: String): Boolean {
         if (expected.isBlank()) return false
         return actual.split(',').map(String::trim).filter(String::isNotEmpty)
-            .let { it.isNotEmpty() && it.all { name -> name == expected } }
+            .let { it.size == 1 && it.first() == expected }
     }
 
     @SuppressLint("NewApi")

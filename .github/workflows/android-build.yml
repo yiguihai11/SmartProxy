@@ -120,6 +120,10 @@ jobs:
       # 密码/别名都是公开的 debug 惯例值)。个人自分发、不上架,要的就是「所有构建同一把
       # key」→ 新版直接覆盖安装,不用先卸载。私钥入库对侧载分发没有信任链可伤;若将来上架
       # 商店,再换成 GitHub Secrets 里的私有 release key(本机 openssl 生成,别再用一次性 key)。
+      - name: Run Android unit tests
+        working-directory: android
+        run: ./gradlew test --no-daemon
+
       - name: Build signed release APK
         working-directory: android
         run: ./gradlew assembleRelease --no-daemon

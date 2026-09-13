@@ -46,6 +46,7 @@ class SmartProxyVpnService : VpnService() {
          *  stopAllService 的 Thread.sleep(100),防止"先关 fd 网络还挂着 → 图标赖着不掉"。
          *  留白太小或 vivo 拆网更慢时调大。 */
         private const val TEARDOWN_SETTLE_MS = 100L
+        private const val SHELL_PACKAGE_NAME = "com.android.shell"
 
         private const val ACTION_START = "io.github.yiguihai11.smartproxy.START_VPN"
 
@@ -337,6 +338,10 @@ class SmartProxyVpnService : VpnService() {
                 // 自身 uid 无条件排除,防回环:引擎的出站直连/上游连接出自本进程 uid,
                 // 不排除就会灌回 TUN → gvisor 处理自己的出站包 → 死循环。
                 applyDisallowedApp(builder, packageName, isSelf = true)
+                // 排除 Shizuku 特权网络共享进程(com.android.shell, UID 2000):
+                // 开启热点/USB共享时 Shizuku 进程内运行独立的 Go 引擎实例处理下挂客户端流量。
+                // 若不排除,其 UID 2000 出站 socket 会被主 VPN tun0 再次捕获,引发二次代理与嵌套延迟。
+                applyDisallowedApp(builder, SHELL_PACKAGE_NAME, isSelf = false)
             } else {
                 Log.i(TAG, "[establishVpn] Mode: Bypass (Proxy selected apps only)")
                 // 仅代理(白名单):只放行选中。自身 uid 天然不在白名单里(面板枚举已滤掉
