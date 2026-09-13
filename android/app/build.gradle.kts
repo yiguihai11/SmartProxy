@@ -141,5 +141,8 @@ dependencies {
     // 面板入口二维码(M2):直接用 QRCodeWriter 编码,无反射路径,R8 安全。
     implementation("com.google.zxing:core:3.5.4")
 
+    // 单元测试(JUnit 4):测试 TetheringUiState / TetheringPlatformCompat / TetheringCoreSync。
+    testImplementation("junit:junit:4.13.2")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
