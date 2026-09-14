@@ -125,8 +125,8 @@ dependencies {
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
 
-    // 2026-09 最新稳定 BOM;Kotlin 2.4 的 compose 编译器要求 runtime 匹配,必须连带升。
-    implementation(platform("androidx.compose:compose-bom:2026.09.00"))
+    // Compose BOM 停在 2026.05.01(Compose 1.11 系列):2026.09+ 强制要求 AGP 9.1+ 与 compileSdk 37。
+    implementation(platform("androidx.compose:compose-bom:2026.05.01"))
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
