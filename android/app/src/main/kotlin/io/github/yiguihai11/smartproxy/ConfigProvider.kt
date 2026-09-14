@@ -193,15 +193,16 @@ object ConfigProvider {
         tun.put("enabled", AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN)
         tun.put("auto_route", false)
 
-        // 统一字段平滑迁移:若缺少 address 但存在旧 inet4_address / inet6_address,归一化写入 address 并清理旧键
+        // 统一字段平滑迁移:若缺少 address 但存在旧 inet4_address / inet6_address,归一化写入 address
         if (!tun.has("address") && (tun.has("inet4_address") || tun.has("inet6_address"))) {
             val addrArr = JSONArray()
             tun.optJSONArray("inet4_address")?.takeIf { it.length() > 0 }?.let { addrArr.put(it.getString(0)) }
             tun.optJSONArray("inet6_address")?.takeIf { it.length() > 0 }?.let { addrArr.put(it.getString(0)) }
             tun.put("address", addrArr)
-            tun.remove("inet4_address")
-            tun.remove("inet6_address")
         }
+        // 彻底移除已被 address 替代的旧废弃字段,保持 config.json 干净
+        tun.remove("inet4_address")
+        tun.remove("inet6_address")
         base.put("tun", tun)
 
         // 仅代理(SOCKS5)模式:listen.host 由 AppPrefs.socksListen 派生(首页 v4/v6

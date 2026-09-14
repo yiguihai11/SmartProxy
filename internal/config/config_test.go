@@ -657,22 +657,25 @@ func TestStaticRecords_JSONForms(t *testing.T) {
 }
 
 func TestMarshal_NilSlicesRenderEmptyArray(t *testing.T) {
-	// A config with the IPv6/address slices left nil (e.g. the key removed from
-	// the file) must serialize as [] — never JSON null — so the panel /config
-	// view and raw config.json stay self-documenting for hand-editing.
+	// A config with address/slice fields left nil must serialize as []
+	// — never JSON null — so the panel /config view and raw config.json
+	// stay self-documenting. Deprecated inet4_address and inet6_address
+	// must be omitted when empty so they don't pollute the config file.
 	var cfg Config
 	b, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"inet4_address", "inet6_address", "route_exclude_ports"} {
+	for _, key := range []string{"address", "route_exclude_ports"} {
 		want := `"` + key + `":[]`
 		if !bytes.Contains(b, []byte(want)) {
 			t.Errorf("%s rendered as null, want %s; full json: %s", key, want, b)
 		}
 	}
-	if bytes.Contains(b, []byte(`"inet6_address":null`)) {
-		t.Errorf("inet6_address serialized as null, want []")
+	for _, key := range []string{"inet4_address", "inet6_address"} {
+		if bytes.Contains(b, []byte(`"`+key+`"`)) {
+			t.Errorf("%s should be omitted when empty, but was found in json: %s", key, b)
+		}
 	}
 }
 

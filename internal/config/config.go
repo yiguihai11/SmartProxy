@@ -23,8 +23,8 @@ type TUNConfig struct {
 	Name           string   `json:"name"`
 	MTU            int      `json:"mtu"`
 	Address        []string `json:"address"`
-	Inet4Address   []string `json:"inet4_address"`
-	Inet6Address   []string `json:"inet6_address"`
+	Inet4Address   []string `json:"inet4_address,omitempty"`
+	Inet6Address   []string `json:"inet6_address,omitempty"`
 	AutoRoute      bool     `json:"auto_route"`
 	AutoRedirect   bool     `json:"auto_redirect"`
 	FileDescriptor int      `json:"-"`
@@ -55,11 +55,11 @@ func (t TUNConfig) MarshalJSON() ([]byte, error) {
 	if t.Address == nil {
 		t.Address = []string{}
 	}
-	if t.Inet4Address == nil {
-		t.Inet4Address = []string{}
+	if len(t.Inet4Address) == 0 {
+		t.Inet4Address = nil
 	}
-	if t.Inet6Address == nil {
-		t.Inet6Address = []string{}
+	if len(t.Inet6Address) == 0 {
+		t.Inet6Address = nil
 	}
 	if t.RouteExcludePorts == nil {
 		t.RouteExcludePorts = []int{}
@@ -613,8 +613,6 @@ func DefaultConfig() *Config {
 			Name:              "tun0",
 			MTU:               1500,
 			Address:           []string{"172.19.0.1/30"},
-			Inet4Address:      []string{},
-			Inet6Address:      []string{},
 			AutoRoute:         false,
 			AutoRedirect:      false,
 			Stack:             "",
