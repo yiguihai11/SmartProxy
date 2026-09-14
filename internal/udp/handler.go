@@ -428,6 +428,11 @@ func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip 
 		// 保证两端直连行为一致。
 		d := net.Dialer{Timeout: 5 * time.Second, Control: DirectUDPControl}
 		remoteConn, err = d.DialContext(ctx, "udp", net.JoinHostPort(ip, strconv.Itoa(port)))
+	case result == "proxy_default":
+		trace.Log(ctx).Warn("UDP proxy rule matched but alias not found, forcing default proxy",
+			"target", net.JoinHostPort(ip, strconv.Itoa(port)), "domain", domain)
+		remoteConn, err = h.upstreamMgr.UDPAssociate(ctx, ip, port, domain, nil)
+		framed = true
 	case result != "fallback":
 		if selected != nil {
 			remoteConn, err = selected.UDPAssociate(ctx, ip, port)
@@ -577,6 +582,11 @@ func (h *Handler) routeForeignFallback(ctx context.Context, ip string, port int,
 			d := net.Dialer{Timeout: 5 * time.Second, Control: DirectUDPControl}
 			rc, err := d.DialContext(ctx, "udp", net.JoinHostPort(ip, strconv.Itoa(port)))
 			return rc, false, nil, err
+		case "proxy_default":
+			ll.Warn("UDP QUIC flow: domain rule proxy but alias not found, forcing default proxy",
+				"target", net.JoinHostPort(ip, strconv.Itoa(port)), "sni", sni)
+			rc, err := h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, nil)
+			return rc, true, nil, err
 		case "fallback":
 			// 域名 ACL 未命中 → 国外 QUIC 目标,落 B 直连判死观察
 		default:

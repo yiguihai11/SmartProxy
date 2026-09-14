@@ -180,8 +180,8 @@ StateClosed ──失败 ≥ FailuresThreshold──► StateOpen
 `Manager.SelectProxy(targetIP, port, domain, engine)` 先让规则引擎 `MatchProxyRule`：
 
 - `("direct", nil)`：规则强制直连。
-- `("", proxy)`：命中指定 alias；alias 缺失时返回 `("fallback", nil)`。
-- `("fallback", nil)`：无规则命中，走默认代理列表。
+- `("", proxy)`：命中指定 alias；alias 缺失时返回 `("proxy_default", nil)` 强制走默认上游代理，防止意外泄露为直连。
+- `("fallback", nil)`：无规则命中，走默认代理列表或智能直连。
 
 `orderedProxies()` 按 `strategy` 重排默认代理：`failover`（默认，顺序）、`round_robin`（`atomic.Uint64` 轮询起点）、`random`（shuffle）、`latency`（可用优先 + 按 EMA 延迟升序，无延迟按 1h 计）。
 

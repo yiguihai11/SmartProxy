@@ -115,6 +115,13 @@ func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 		ll.Info("proxy rule forces direct connection", "host", host, "port", port, "domain", domain)
 		conn, err := dialTCP(ctx, host, port, 10*time.Second)
 		return conn, false, err
+	case result == "proxy_default":
+		ll.Warn("proxy rule matched but alias not found, forcing default proxy", "host", host, "port", port, "domain", domain)
+		conn, err := r.upstreamMgr.ConnectDefault(ctx, host, port)
+		if err != nil {
+			return nil, false, errors.New("failed to connect via default upstream proxy")
+		}
+		return conn, true, nil
 	case result != "fallback":
 		if selected.IsUDPOnly() {
 			ll.Warn("rule selected a udp_only proxy for TCP", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port)
@@ -207,6 +214,17 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 			return nil, nil, false, err
 		}
 		return conn, nil, false, nil
+	case result == "proxy_default":
+		ll.Warn("proxy rule matched but alias not found, forcing default proxy", "host", host, "port", port, "domain", domain)
+		conn, err := r.upstreamMgr.ConnectDefault(ctx, host, port)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		if _, err := conn.Write(firstPkt); err != nil {
+			conn.Close()
+			return nil, nil, false, err
+		}
+		return conn, nil, true, nil
 	case result != "fallback":
 		if selected.IsUDPOnly() {
 			ll.Warn("rule selected a udp_only proxy for TCP", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port)

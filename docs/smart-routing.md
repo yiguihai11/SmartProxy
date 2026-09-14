@@ -66,7 +66,7 @@ SelectProxy(host, port, domain, engine)
 
 `upstream.Manager`（`internal/upstream/manager.go`）持有策略与所有代理：
 
-- `SelectProxy(targetIP, port, domain, engine)`：先让规则引擎 `MatchProxyRule`，返回 `("direct", nil)`、`("", proxy)`（指定 alias）或 `("fallback", nil)`；alias 不存在时降级为 fallback。
+- `SelectProxy(targetIP, port, domain, engine)`：先让规则引擎 `MatchProxyRule`，返回 `("direct", nil)`、`("", proxy)`（指定 alias）、`("proxy_default", nil)`（命中规则但 alias 缺失，强制走默认上游代理）或 `("fallback", nil)`（未命中规则，按智能路由处理）。
 - `orderedProxies()` 按策略 `strategy` 重排默认代理：`failover`（默认，顺序尝试）、`round_robin`（原子计数器轮询起点）、`random`（shuffle）、`latency`（可用优先 + 按健康检查 EMA 延迟升序，无延迟按 1h 计）。
 - `ConnectDefault` 逐个尝试 `IsAvailable()` 的代理，失败 `RecordFailure` 后继续下一个，全部失败返回错误。
 

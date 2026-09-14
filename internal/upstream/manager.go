@@ -99,6 +99,7 @@ type circuitPin struct {
 }
 
 type savedNodeState struct {
+	url         string
 	pins        [2]circuitPin
 	countryCode string
 	exitIP      string
@@ -115,6 +116,7 @@ func (m *Manager) captureManualPins() map[string]savedNodeState {
 		tpinned, tup := p.health.ManualPin()
 		upinned, uup := p.udpHealth.ManualPin()
 		states[alias] = savedNodeState{
+			url: p.URL,
 			pins: [2]circuitPin{
 				{pinned: tpinned, up: tup, defaultDriven: p.tcpDefaultDriven()},
 				{pinned: upinned, up: uup, defaultDriven: p.udpDefaultDriven()},
@@ -135,7 +137,9 @@ func (m *Manager) restoreManualPins(states map[string]savedNodeState) {
 		if !ok || p == nil {
 			continue
 		}
-		if state.countryCode != "" || state.exitIP != "" {
+		// If the node's URL changed, discard stale geo info so the freshly inferred
+		// country code and a subsequent probe trace take effect.
+		if p.URL == state.url && (state.countryCode != "" || state.exitIP != "") {
 			p.SetGeoInfo(state.countryCode, state.exitIP)
 		}
 		restore := func(ph *ProxyHealth, cp circuitPin, nowDefaultDriven bool) {
@@ -234,8 +238,8 @@ func (m *Manager) SelectProxy(ctx context.Context, targetIP string, targetPort i
 			if ok && proxy != nil {
 				return "", proxy
 			}
-			ll.Warn("alias not found, falling back to default", "alias", alias)
-			return "fallback", nil
+			ll.Warn("alias not found, falling back to default proxy", "alias", alias)
+			return "proxy_default", nil
 		}
 	}
 	return "fallback", nil
@@ -323,7 +327,7 @@ func (m *Manager) Connect(ctx context.Context, host string, port int, domain str
 	if result == "direct" {
 		return nil, "direct"
 	}
-	if result == "fallback" {
+	if result == "fallback" || result == "proxy_default" {
 		conn, err := m.ConnectDefault(ctx, host, port)
 		if err != nil {
 			return nil, "failed"

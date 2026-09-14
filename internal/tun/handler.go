@@ -654,6 +654,9 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 		switch {
 		case result == "direct":
 			return startDirectRemote(dst, host, port, nil) // ACL 强制直连
+		case result == "proxy_default":
+			ll.Warn("proxy rule matched but alias not found, forcing default proxy", "dst", dst)
+			return newProxyRemote(dst, host, port, nil) // ACL 指定代理但节点缺失，兜底走默认代理
 		case result != "fallback":
 			return newProxyRemote(dst, host, port, selected) // ACL 指定代理
 		}
@@ -706,6 +709,10 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 				ll.Info("UDP QUIC flow: domain rule direct, no blackhole watch",
 					"dst", dst, "sni", sni)
 				return startDirectRemote(dst, host, port, nil) // 域名规则强制直连
+			case "proxy_default":
+				ll.Warn("UDP QUIC flow: domain rule proxy but alias not found, forcing default proxy",
+					"dst", dst, "sni", sni)
+				return newProxyRemote(dst, host, port, nil) // 域名规则指定代理但节点缺失，兜底走默认代理
 			case "fallback":
 				// 域名 ACL 未命中 → 国外 QUIC 目标,落到下方 B 直连判死观察
 			default:

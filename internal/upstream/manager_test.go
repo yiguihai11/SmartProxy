@@ -389,11 +389,53 @@ func TestSelectProxy_AliasNotFound(t *testing.T) {
 	})
 	eng := newEngineWithRules("proxy domain example.com nonexistent\n")
 	result, proxy := m.SelectProxy(context.Background(), "", 0, "example.com", eng)
-	if result != "fallback" {
-		t.Errorf("expected fallback for unknown alias, got %s", result)
+	if result != "proxy_default" {
+		t.Errorf("expected proxy_default for unknown alias, got %s", result)
 	}
 	if proxy != nil {
 		t.Error("proxy should be nil for unknown alias")
+	}
+}
+
+func TestReload_RefreshGeoOnURLEdit(t *testing.T) {
+	m, err := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{
+			{Alias: "node1", URL: "socks5://us-server.com:1080"},
+			{Alias: "node2", URL: "socks5://hk-server.com:1080"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Manually inject geo info (as if trace probe completed)
+	node1 := m.aliasMap["node1"]
+	node1.SetGeoInfo("US", "198.51.100.1")
+
+	node2 := m.aliasMap["node2"]
+	node2.SetGeoInfo("HK", "203.0.113.1")
+
+	// Reload with node1 URL changed to JP, and node2 unchanged
+	m.Reload(UpstreamConfig{
+		Proxies: []ProxyEntry{
+			{Alias: "node1", URL: "socks5://jp-server.com:1080"},
+			{Alias: "node2", URL: "socks5://hk-server.com:1080"},
+		},
+	})
+
+	reloadedNode1 := m.aliasMap["node1"]
+	// node1 URL changed: stale exitIP must be cleared, countryCode updated from new URL (JP)
+	if reloadedNode1.ExitIP() != "" {
+		t.Errorf("expected exitIP to be cleared for edited URL, got %q", reloadedNode1.ExitIP())
+	}
+	if reloadedNode1.CountryCode() != "JP" {
+		t.Errorf("expected CountryCode to be inferred as JP, got %q", reloadedNode1.CountryCode())
+	}
+
+	reloadedNode2 := m.aliasMap["node2"]
+	// node2 URL unchanged: geo info preserved
+	if reloadedNode2.ExitIP() != "203.0.113.1" || reloadedNode2.CountryCode() != "HK" {
+		t.Errorf("expected node2 geo info preserved, got %s / %s", reloadedNode2.CountryCode(), reloadedNode2.ExitIP())
 	}
 }
 

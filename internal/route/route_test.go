@@ -1,12 +1,18 @@
 package route
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net"
+	"net/netip"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"smartproxy/internal/chnroute"
+	"smartproxy/internal/rules"
 	"smartproxy/internal/upstream"
 )
 
@@ -453,5 +459,144 @@ func TestRouter_BypassLAN(t *testing.T) {
 		t.Error("expected BypassLAN to be preserved as true when omitted")
 	}
 }
+
+func TestEstablishConnection_ProxyDefault(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	proxyHit := make(chan struct{}, 1)
+	go func() {
+		conn, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		buf := make([]byte, 256)
+		n, _ := conn.Read(buf)
+		if n > 0 {
+			conn.Write([]byte{0x05, 0x00})
+		}
+		n, _ = conn.Read(buf)
+		if n > 0 {
+			conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 80})
+			select {
+			case proxyHit <- struct{}{}:
+			default:
+			}
+		}
+	}()
+
+	cn := chnroute.New()
+	cn.Insert(netip.MustParsePrefix("114.114.114.114/32"))
+
+	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
+		Default: "failover",
+		Proxies: []upstream.ProxyEntry{
+			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s", l.Addr().String())},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := New(cn, mgr, true, 3*time.Second, nil, 300*time.Second)
+
+	dir := t.TempDir()
+	rulesFile := filepath.Join(dir, "rules.txt")
+	os.WriteFile(rulesFile, []byte("proxy ip 114.114.114.114 nonexistent_alias\n"), 0644)
+	eng, err := rules.New(rulesFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, isProxy, err := r.EstablishConnection(context.Background(), "114.114.114.114", 80, "", eng)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if conn != nil {
+		defer conn.Close()
+	}
+	if !isProxy {
+		t.Errorf("expected isProxy=true for proxy_default, got false (leaked to direct!)")
+	}
+	select {
+	case <-proxyHit:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for default proxy connection")
+	}
+}
+
+func TestSmartConnectWithFallback_ProxyDefault(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	proxyHit := make(chan struct{}, 1)
+	go func() {
+		conn, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		buf := make([]byte, 256)
+		n, _ := conn.Read(buf)
+		if n > 0 {
+			conn.Write([]byte{0x05, 0x00})
+		}
+		n, _ = conn.Read(buf)
+		if n > 0 {
+			conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 80})
+			select {
+			case proxyHit <- struct{}{}:
+			default:
+			}
+		}
+	}()
+
+	cn := chnroute.New()
+	cn.Insert(netip.MustParsePrefix("114.114.114.114/32"))
+
+	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
+		Default: "failover",
+		Proxies: []upstream.ProxyEntry{
+			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s", l.Addr().String())},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := New(cn, mgr, true, 3*time.Second, nil, 300*time.Second)
+
+	dir := t.TempDir()
+	rulesFile := filepath.Join(dir, "rules.txt")
+	os.WriteFile(rulesFile, []byte("proxy ip 114.114.114.114 nonexistent_alias\n"), 0644)
+	eng, err := rules.New(rulesFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, _, isProxy, err := r.SmartConnectWithFallback(context.Background(), "114.114.114.114", 80, "", []byte("GET / HTTP/1.1\r\n\r\n"), eng)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if conn != nil {
+		defer conn.Close()
+	}
+	if !isProxy {
+		t.Errorf("expected isProxy=true for proxy_default, got false (leaked to direct!)")
+	}
+	select {
+	case <-proxyHit:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for default proxy connection")
+	}
+}
+
 
 
