@@ -69,7 +69,7 @@ type TUNHandler struct {
 }
 
 // Compile-time assertion: TUNHandler must implement the singtun.Handler interface.
-// If the signatures of the three callback methods (PrepareConnection / NewConnectionEx / NewPacketConnectionEx)
+// If the signatures of the callback methods (JudgeFlow / NewDNSPacket / NewConnectionEx / NewPacketConnectionEx)
 // do not match sing-tun, this will fail to compile.
 var _ singtun.Handler = (*TUNHandler)(nil)
 
@@ -194,8 +194,11 @@ func (h *TUNHandler) KillBlockedConnections() {
 	})
 }
 
-func (h *TUNHandler) PrepareConnection(network string, source M.Socksaddr, destination M.Socksaddr, routeContext singtun.DirectRouteContext, timeout time.Duration) (singtun.DirectRouteDestination, error) {
-	return nil, nil
+func (h *TUNHandler) JudgeFlow(network uint8, source netip.AddrPort, destination netip.AddrPort, firstPacket []byte) singtun.FlowVerdict {
+	return singtun.FlowVerdict{Action: singtun.ActionAccept}
+}
+
+func (h *TUNHandler) NewDNSPacket(payload []byte, source M.Socksaddr, destination M.Socksaddr, writer N.PacketWriter) {
 }
 
 func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {

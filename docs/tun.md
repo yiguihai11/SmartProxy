@@ -63,15 +63,16 @@ s, err := NewTUNStack(stackType, stackOpts)  // singtun.NewStack
 
 ## §3 gvisor 栈与回调
 
-`singtun.Handler` 接口由三个方法组成（`tun.go:21`）：
+`singtun.Handler` 接口由以下方法组成（`tun.go`）：
 
 ```go
-PrepareConnection(network, source, destination, routeContext, timeout) (DirectRouteDestination, error)
+JudgeFlow(network uint8, source netip.AddrPort, destination netip.AddrPort, firstPacket []byte) FlowVerdict
+NewDNSPacket(payload []byte, source M.Socksaddr, destination M.Socksaddr, writer N.PacketWriter)
 NewConnectionEx(ctx, conn, source, destination, onClose)      // N.TCPConnectionHandlerEx
 NewPacketConnectionEx(ctx, conn, source, destination, onClose) // N.UDPConnectionHandlerEx
 ```
 
-本项目 `PrepareConnection` 直接返回 `(nil, nil)`（不使用 direct route 机制）。
+本项目 `JudgeFlow` 默认返回 `FlowVerdict{Action: ActionAccept}`（不提前拦截），连接统一交给 `NewConnectionEx` 与 `NewPacketConnectionEx` 进行 ACL、DNS 和规则分流。
 
 **回调已被库调度到独立 goroutine**，项目里的 `safego.Go` 并不是为了"异步"，其真正作用是 panic 恢复 + goroutine 命名：
 
@@ -245,7 +246,7 @@ nftables（inet smartproxy，type route output 链，只改 mark 不丢包）
 | `Options.FileDescriptor` | 非 0 时 `os.NewFile(uintptr(options.FileDescriptor), "tun")`（`tun_linux.go:64,74`） | fd 模式依据；fd 模式下 `Start()`/`unsetRoute` 等跳过 OS 配置 |
 | `Options.InterfaceMonitor` | `NativeTun.Start()` 调用 `InterfaceMonitor.RegisterMyInterface`（`tun_linux.go`） | 必须非 nil，否则 panic（见 §6） |
 | `sagernet/netlink` | `github.com/sagernet/netlink@v0.0.0-20240612041022-b9a21c07ac6a` | 源选择性路由安装/清理（仅 Linux，见 §6.1） |
-| `Handler` 三方法 | `PrepareConnection(...)` + `N.TCPConnectionHandlerEx`（`NewConnectionEx(ctx, conn, source, destination, onClose)`）+ `N.UDPConnectionHandlerEx`（`NewPacketConnectionEx(...)`） | `tun.go:21` 与 `sing/common/network/conn.go:105,138` |
+| `Handler` 接口 | `JudgeFlow(...)` + `NewDNSPacket(...)` + `N.TCPConnectionHandlerEx`（`NewConnectionEx(...)`）+ `N.UDPConnectionHandlerEx`（`NewPacketConnectionEx(...)`） | `sing-tun/tun.go` 与 `sing/common/network/conn.go` |
 | UDP 转发 | gvisor UDP 经 `udpnat.New(handler, ...)`（`stack_gvisor_udp.go`），nat 创建会话时 `go ...NewPacketConnectionEx(...)`（`udpnat/service.go:116`） | 每 UDP 会话一个 goroutine |
 | `s.Start()` / `s.Close()` | `Stack.Start() error` / `Stack.Close() error`（`stack.go`） | `Engine.Stop` 顺序关闭 stack → tun → handler |
 | `t.Name()` | `Tun.Name() (string, error)`（`tun.go:40`） | 记录接口名，失败仅告警 |

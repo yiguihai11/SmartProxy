@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -207,6 +208,10 @@ func (m *MockStack) Start() error {
 	return args.Error(0)
 }
 
+func (m *MockStack) ResetNetwork() {
+	m.Called()
+}
+
 func (m *MockStack) Close() error {
 	args := m.Called()
 	return args.Error(0)
@@ -306,6 +311,9 @@ func (m *MockCloseHandlerFunc) Execute(err error) {
 }
 
 func TestTUNHandler_Start(t *testing.T) {
+	if runtime.GOOS == "android" {
+		t.Skip("skipping non-fd TUN start test on Android (netlink banned in untrusted_app)")
+	}
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 
@@ -356,11 +364,13 @@ func TestNewHandler(t *testing.T) {
 	assert.Nil(t, h.dnsHandler)
 }
 
-func TestPrepareConnection(t *testing.T) {
+func TestJudgeFlow(t *testing.T) {
 	handler := NewHandler(&config.Config{}, nil, nil, nil, nil)
-	dest, err := handler.PrepareConnection("tcp", M.Socksaddr{}, M.Socksaddr{}, nil, 0)
-	assert.NoError(t, err)
-	assert.Nil(t, dest)
+	verdict := handler.JudgeFlow(6, netip.AddrPort{}, netip.AddrPort{}, nil)
+	assert.Equal(t, singtun.ActionAccept, verdict.Action)
+
+	// NewDNSPacket should not panic
+	handler.NewDNSPacket(nil, M.Socksaddr{}, M.Socksaddr{}, nil)
 }
 
 func TestTUNHandler_Start_Disabled(t *testing.T) {
@@ -456,6 +466,10 @@ func TestTUNHandler_Start_InvalidIPv6Prefix(t *testing.T) {
 }
 
 func TestTUNHandler_Start_DefaultStack(t *testing.T) {
+	if runtime.GOOS == "android" {
+		t.Skip("skipping non-fd TUN start test on Android (netlink banned in untrusted_app)")
+	}
+
 	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	mockTun := new(MockTun)
