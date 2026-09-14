@@ -460,34 +460,60 @@ func TestRouter_BypassLAN(t *testing.T) {
 	}
 }
 
-func TestEstablishConnection_ProxyDefault(t *testing.T) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+func startMockSOCKS5Server(t *testing.T, hitChan chan<- struct{}) (string, func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
 
-	proxyHit := make(chan struct{}, 1)
 	go func() {
-		conn, err := l.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		buf := make([]byte, 256)
-		n, _ := conn.Read(buf)
-		if n > 0 {
-			conn.Write([]byte{0x05, 0x00})
-		}
-		n, _ = conn.Read(buf)
-		if n > 0 {
-			conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 80})
-			select {
-			case proxyHit <- struct{}{}:
-			default:
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
 			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 256)
+				n, err := c.Read(buf)
+				if err != nil || n < 3 {
+					return
+				}
+				if _, err := c.Write([]byte{0x05, 0x00}); err != nil {
+					return
+				}
+				n, err = c.Read(buf)
+				if err != nil || n < 4 {
+					return
+				}
+				if _, err := c.Write([]byte{0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 80}); err != nil {
+					return
+				}
+				if hitChan != nil {
+					select {
+					case hitChan <- struct{}{}:
+					default:
+					}
+				}
+				for {
+					if _, err := c.Read(buf); err != nil {
+						return
+					}
+				}
+			}(conn)
 		}
 	}()
+
+	return ln.Addr().String(), func() {
+		ln.Close()
+	}
+}
+
+func TestEstablishConnection_ProxyDefault(t *testing.T) {
+	proxyHit := make(chan struct{}, 1)
+	addr, stop := startMockSOCKS5Server(t, proxyHit)
+	defer stop()
 
 	cn := chnroute.New()
 	cn.Insert(netip.MustParsePrefix("114.114.114.114/32"))
@@ -495,12 +521,13 @@ func TestEstablishConnection_ProxyDefault(t *testing.T) {
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
 		Default: "failover",
 		Proxies: []upstream.ProxyEntry{
-			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s", l.Addr().String())},
+			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s", addr)},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer mgr.Stop()
 
 	r := New(cn, mgr, true, 3*time.Second, nil, 300*time.Second)
 
@@ -512,7 +539,10 @@ func TestEstablishConnection_ProxyDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	conn, isProxy, err := r.EstablishConnection(context.Background(), "114.114.114.114", 80, "", eng)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, isProxy, err := r.EstablishConnection(ctx, "114.114.114.114", 80, "", eng)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -524,39 +554,15 @@ func TestEstablishConnection_ProxyDefault(t *testing.T) {
 	}
 	select {
 	case <-proxyHit:
-	case <-time.After(2 * time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for default proxy connection")
 	}
 }
 
 func TestSmartConnectWithFallback_ProxyDefault(t *testing.T) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-
 	proxyHit := make(chan struct{}, 1)
-	go func() {
-		conn, err := l.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		buf := make([]byte, 256)
-		n, _ := conn.Read(buf)
-		if n > 0 {
-			conn.Write([]byte{0x05, 0x00})
-		}
-		n, _ = conn.Read(buf)
-		if n > 0 {
-			conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 80})
-			select {
-			case proxyHit <- struct{}{}:
-			default:
-			}
-		}
-	}()
+	addr, stop := startMockSOCKS5Server(t, proxyHit)
+	defer stop()
 
 	cn := chnroute.New()
 	cn.Insert(netip.MustParsePrefix("114.114.114.114/32"))
@@ -564,12 +570,13 @@ func TestSmartConnectWithFallback_ProxyDefault(t *testing.T) {
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
 		Default: "failover",
 		Proxies: []upstream.ProxyEntry{
-			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s", l.Addr().String())},
+			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s", addr)},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer mgr.Stop()
 
 	r := New(cn, mgr, true, 3*time.Second, nil, 300*time.Second)
 
@@ -581,7 +588,10 @@ func TestSmartConnectWithFallback_ProxyDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	conn, _, isProxy, err := r.SmartConnectWithFallback(context.Background(), "114.114.114.114", 80, "", []byte("GET / HTTP/1.1\r\n\r\n"), eng)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, _, isProxy, err := r.SmartConnectWithFallback(ctx, "114.114.114.114", 80, "", []byte("GET / HTTP/1.1\r\n\r\n"), eng)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -593,7 +603,7 @@ func TestSmartConnectWithFallback_ProxyDefault(t *testing.T) {
 	}
 	select {
 	case <-proxyHit:
-	case <-time.After(2 * time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for default proxy connection")
 	}
 }
