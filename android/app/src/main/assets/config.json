@@ -25,8 +25,7 @@
       "172.19.0.1/30"
     ],
     "inet6_address": [],
-    "auto_route": false,
-    "stack": "gvisor"
+    "auto_route": false
   },
   "upstream": {
     "default": "failover",

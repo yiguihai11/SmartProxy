@@ -47,7 +47,7 @@
 | `OutputMark` | `output_mark` | `0` | 自身出站打标值（SO_MARK），`0`=关闭（默认）。**`>0` 且 `auto_route: true`、非 fd 模式时生效**：自动加 `ip rule fwmark <值> lookup main`（自身绕过 TUN 劫持）+ nftables 输出链给 `route_exclude_ports` 打标（SSH 等绕过），实现"全量捕获但不卡自身/SSH"。需 root / CAP_NET_ADMIN（见 `tun.md` §6.2） |
 | `RouteExcludePorts` | `route_exclude_ports` | `[22]` | 打 `OutputMark` 排除的本地端口（默认 SSH 22），仅 `auto_route=true` + `output_mark>0` 时生效 |
 | `BlockedUIDs` | `blocked_uids` | `[]` | 按 UID 丢弃流量的应用列表（per-app「禁止联网」），空 = 不启用。**仅移动端生效**：依赖 gomobile 反向回调 `SetUIDResolver`（mobile 包在 `StartRouter` 后注入，Android 侧由 AppPrefs.blockedApps 解析成 UID 写进 config.json）；桌面/服务器（`cmd/smartproxy`）无此回调，`resolveUID` 恒返回 -1，字段空转并打一次性告警，保持留空即可 |
-| `Stack` | `stack` | `"gvisor"` | 协议栈实现（默认 gvisor） |
+| `Stack` | `stack` | `""` | 协议栈实现（可选/已废弃，默认留空自动使用 sing-tun 0.9.4+ 自研原生高性能 `go` 协议栈；向后兼容支持 `"gvisor"`、`"system"`、`"mixed"`） |
 | `FileDescriptor` | （`json:"-"`） | `0` | 外部 TUN fd 模式，非 JSON 字段，由程序注入 |
 
 ### `upstream`

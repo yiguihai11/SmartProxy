@@ -608,7 +608,8 @@ func DefaultConfig() *Config {
 			MTU:               1500,
 			Inet4Address:      []string{"172.19.0.1/30"},
 			AutoRoute:         false,
-			Stack:             "gvisor",
+			Stack:             "",
+			OutputMark:        0,
 			RouteExcludePorts: []int{22},
 		},
 		Upstream: UpstreamConf{

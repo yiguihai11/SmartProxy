@@ -57,8 +57,8 @@ s, err := NewTUNStack(stackType, stackOpts)  // singtun.NewStack
 要点：
 
 - `NewTUN` / `NewTUNStack` 是 `singtun.New` / `singtun.NewStack` 的别名（`handler.go` 底部 `var NewTUN = singtun.New; var NewTUNStack = singtun.NewStack`）。
-- **空串强制 "gvisor"**：sing-tun 的 `NewStack` 对空串默认走 `mixed`/`system`（见 §8），本工程在 `Start()` 中把空串统一替换为 `"gvisor"`，保证默认栈就是 gvisor。
-- **UDPTimeout/ICMPTimeout 必须非零**：sing-tun 的 gvisor UDP forwarder 在 `timeout == 0` 时内部 `udpnat.New` 会直接 panic（源码注释记录：此前漏设导致 TUN 无法启动）。本项目显式设为 `5min / 30s`。
+- **协议栈选择与默认栈**：sing-tun 自 0.9.4+ / sing-box 1.15+ 起引入原生自研高性能 `go` 协议栈。当 `cfg.Stack` 留空（默认推荐）时直接传空串给 `NewTUNStack`，由 sing-tun 自动使用原生自研轻量级协议栈；同时向前兼容旧配置显式指定的 `"gvisor"`、`"system"` 或 `"mixed"`。
+- **UDPTimeout/ICMPTimeout 必须非零**：sing-tun 的 UDP forwarder 在 `timeout == 0` 时内部 `udpnat.New` 会直接 panic（源码注释记录：此前漏设导致 TUN 无法启动）。本项目显式设为 `5min / 30s`。
 - `AutoRoute` 在 fd 模式下由 `Engine.Start` 强制置为 `false`（不接管系统路由）。
 
 ## §3 gvisor 栈与回调
@@ -162,8 +162,8 @@ if isFdMode {
 创建 InterfaceMonitor（NativeTun.Start 内部依赖 RegisterMyInterface，非 nil 否则 panic）
   → 创建 TUN（singtun.New，普通模式只配置 MTU + 地址，此时接口还是 DOWN）
   → t.Start()（关键：netlink.LinkSetUp 把接口置 UP；auto_route=true 时安装源策略路由/规则）
-  → 创建 stack（singtun.NewStack，空串强制 "gvisor"）
-  → s.Start()（gvisor 栈开始接收包，仅初始化 IP 栈，不碰 tun 接口状态）
+  → 创建 stack（singtun.NewStack，空串默认使用原生自研高性能 go 栈）
+  → s.Start()（协议栈开始接收包，仅初始化 IP 栈，不碰 tun 接口状态）
   → t.Name() 记录接口名
 ```
 
@@ -240,7 +240,7 @@ nftables（inet smartproxy，type route output 链，只改 mark 不丢包）
 
 | 项目用法 | 库定义 | 备注 |
 | --- | --- | --- |
-| `NewTUNStack = singtun.NewStack` | `NewStack(stack string, options StackOptions) (Stack, error)`（`stack.go`） | `"gvisor"` → `NewGVisor`；库对空串默认非 gvisor（`mixed`/`system`），本项目在 `Start()` 强制空串 → `"gvisor"` |
+| `NewTUNStack = singtun.NewStack` | `NewStack(stack string, options StackOptions) (Stack, error)`（`stack.go`） | 空串/`""` → 默认自研原生 `NewGo` 栈；显式 `"gvisor"` → `NewGVisor` |
 | `StackOptions{Context, Tun, TunOptions, Handler}` | `Handler Handler`（`stack.go`） | `TUNHandler` 实现它（编译期断言 `var _ singtun.Handler`） |
 | `singtun.New(tunOpts)` | `New(options Options) (Tun, error)`，平台分文件（`tun_linux.go` / `tun_darwin.go` / `tun_windows.go` / `tun_other.go`） | Linux 打开 `/dev/net/tun`（`open()` + `TUNSETIFF`），需 root / CAP_NET_ADMIN |
 | `Options.FileDescriptor` | 非 0 时 `os.NewFile(uintptr(options.FileDescriptor), "tun")`（`tun_linux.go:64,74`） | fd 模式依据；fd 模式下 `Start()`/`unsetRoute` 等跳过 OS 配置 |

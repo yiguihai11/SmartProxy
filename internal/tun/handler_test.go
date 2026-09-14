@@ -479,7 +479,7 @@ func TestTUNHandler_Start_DefaultStack(t *testing.T) {
 		return mockTun, nil
 	}
 	NewTUNStack = func(stackType string, opts singtun.StackOptions) (singtun.Stack, error) {
-		assert.Equal(t, "gvisor", stackType)
+		assert.Equal(t, "", stackType)
 		return mockStack, nil
 	}
 

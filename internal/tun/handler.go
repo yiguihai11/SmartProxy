@@ -1108,11 +1108,8 @@ func (h *TUNHandler) Start(ctx context.Context, cfg config.TUNConfig) (singtun.T
 	}
 
 	stackType := cfg.Stack
-	if stackType == "" {
-		stackType = "gvisor"
-	}
 
-	// UDPTimeout/ICMPTimeout must be non-zero: sing-tun's gvisor UDP forwarder panics
+	// UDPTimeout/ICMPTimeout must be non-zero: sing-tun's UDP forwarder panics
 	// directly in udpnat2.New when timeout==0 (previously omitted, causing the TUN to fail to start).
 	stackOpts := singtun.StackOptions{
 		Context:     ctx,
@@ -1140,7 +1137,11 @@ func (h *TUNHandler) Start(ctx context.Context, cfg config.TUNConfig) (singtun.T
 		slog.Warn("TUN interface started but failed to get name", "error", err)
 		name = "(unknown)"
 	}
-	slog.Info("TUN interface started", "name", name, "stack", stackType)
+	displayStack := stackType
+	if displayStack == "" {
+		displayStack = "default (go)"
+	}
+	slog.Info("TUN interface started", "name", name, "stack", displayStack)
 	return t, s, nil
 }
 

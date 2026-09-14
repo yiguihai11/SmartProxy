@@ -31,7 +31,6 @@
     ],
     "inet6_address": [],
     "auto_route": false,
-    "stack": "gvisor",
     "output_mark": 0,
     "route_exclude_ports": [
       22

@@ -29,7 +29,6 @@
       "fc00::1/64"
     ],
     "auto_route": true,
-    "stack": "gvisor",
     "output_mark": 0,
     "route_exclude_ports": [
       22

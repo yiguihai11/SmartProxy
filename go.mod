@@ -6,10 +6,10 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/golang/protobuf v1.5.4
 	github.com/miekg/dns v1.1.73
-	github.com/sagernet/netlink v0.0.0-20240612041022-b9a21c07ac6a
-	github.com/sagernet/sing v0.9.3
+	github.com/sagernet/netlink v0.0.0-20260814022025-64455d367bbf
+	github.com/sagernet/sing v0.9.4-0.20260912053229-7776850263cd
 	github.com/sagernet/sing-shadowsocks v0.2.9
-	github.com/sagernet/sing-tun v0.9.3
+	github.com/sagernet/sing-tun v0.9.4-0.20260914145202-3a0d3878577a
 	github.com/sevlyar/go-daemon v0.1.7
 	github.com/stretchr/testify v1.12.1
 	github.com/v2fly/v2ray-core/v5 v5.45.1
