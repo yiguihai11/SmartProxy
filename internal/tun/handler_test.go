@@ -465,6 +465,27 @@ func TestTUNHandler_Start_InvalidIPv6Prefix(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid IPv6 prefix")
 }
 
+func TestTUNHandler_Start_AddressDualStack(t *testing.T) {
+	handler := NewHandler(&config.Config{}, nil, nil, nil, nil)
+	_, _, err := handler.Start(context.Background(), config.TUNConfig{
+		Enabled: true,
+		Address: []string{"not-a-valid-prefix"},
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid address prefix")
+}
+
+func TestMemoryPressure(t *testing.T) {
+	SetMemoryPressure(0)
+	assert.Equal(t, singtun.MemoryPressure(0), GetMemoryPressure())
+	SetMemoryPressure(1)
+	assert.Equal(t, singtun.MemoryPressure(1), GetMemoryPressure())
+	SetMemoryPressure(2)
+	assert.Equal(t, singtun.MemoryPressure(2), GetMemoryPressure())
+	SetMemoryPressure(0)
+	assert.Equal(t, singtun.MemoryPressure(0), GetMemoryPressure())
+}
+
 func TestTUNHandler_Start_DefaultStack(t *testing.T) {
 	if runtime.GOOS == "android" {
 		t.Skip("skipping non-fd TUN start test on Android (netlink banned in untrusted_app)")

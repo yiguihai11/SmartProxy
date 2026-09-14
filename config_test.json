@@ -22,13 +22,12 @@
     "enabled": false,
     "name": "tun0",
     "mtu": 1500,
-    "inet4_address": [
-      "172.19.0.1/30"
-    ],
-    "inet6_address": [
+    "address": [
+      "172.19.0.1/30",
       "fc00::1/64"
     ],
     "auto_route": true,
+    "auto_redirect": false,
     "output_mark": 0,
     "route_exclude_ports": [
       22

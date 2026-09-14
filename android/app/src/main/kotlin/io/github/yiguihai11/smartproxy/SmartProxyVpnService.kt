@@ -639,6 +639,25 @@ class SmartProxyVpnService : VpnService() {
         Log.i(TAG, "[onRevoke] Completed.")
     }
 
+    /** 系统低内存水位通知:映射 Android TRIM_MEMORY 水位到 sing-tun MemoryPressure 接口 (0=None, 1=Warning, 2=Critical),
+     *  通知 Go 协议栈执行缓冲收缩与 GC 回收,降低前台进程被 OOM Killer 杀死的风险。 */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        val pressure = when {
+            level >= android.content.ComponentCallbacks2.TRIM_MEMORY_COMPLETE ||
+            level == android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> 2
+            level >= android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND ||
+            level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> 1
+            else -> 0
+        }
+        try {
+            smartproxy.mobile.Mobile.notifyMemoryPressure(pressure)
+            Log.d(TAG, "[onTrimMemory] Reported level=$level -> memory pressure=$pressure to Go stack")
+        } catch (e: Throwable) {
+            Log.w(TAG, "[onTrimMemory] Failed to notify memory pressure: ${e.message}")
+        }
+    }
+
     override fun onDestroy() {
         Log.i(TAG, "[onDestroy] Service onDestroy() entered.")
         restartNeeded.set(0)

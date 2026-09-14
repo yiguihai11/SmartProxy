@@ -1009,7 +1009,7 @@ func TestResolveIPv4_NetIP(t *testing.T) {
 }
 
 func TestResolveIPv4_InvalidReturnsError(t *testing.T) {
-	_, err := resolveIPv4(context.Background(), "this-is-not-a-valid-hostname-xyz.invalid")
+	_, err := resolveIPv4(context.Background(), "invalid host name with spaces")
 	if err == nil {
 		t.Error("expected error for unresolvable hostname")
 	}

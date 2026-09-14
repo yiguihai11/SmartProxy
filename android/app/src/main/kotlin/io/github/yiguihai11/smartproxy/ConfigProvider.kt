@@ -103,25 +103,25 @@ object ConfigProvider {
         atomicWriteText(File(context.filesDir, CONFIG_NAME), json.toString())
     }
 
-    /** IPv4 拦截 = tun.inet4_address 非空数组(空 [] 或缺失都算关)。只读,不触发写盘。 */
+    /** IPv4 拦截 = tun.address 包含 IPv4 前缀(兼容旧 inet4_address)。只读,不触发写盘。 */
     fun ipv4(context: Context): Boolean =
-        (readRaw(context)?.optJSONObject("tun")?.optJSONArray("inet4_address")?.length() ?: 0) > 0
+        readRaw(context)?.let { TunConfig.parse(it).inet4 != null } ?: false
 
-    /** IPv6 拦截 = tun.inet6_address 非空数组。只读,不触发写盘。 */
+    /** IPv6 拦截 = tun.address 包含 IPv6 前缀(兼容旧 inet6_address)。只读,不触发写盘。 */
     fun ipv6(context: Context): Boolean =
-        (readRaw(context)?.optJSONObject("tun")?.optJSONArray("inet6_address")?.length() ?: 0) > 0
+        readRaw(context)?.let { TunConfig.parse(it).inet6 != null } ?: false
 
-    /** 开关 IPv4 拦截:关写空数组 []、开补默认值(运行中改由调用方重启 VPN)。 */
+    /** 开关 IPv4 拦截:关则从 address 移除 v4、开补默认值(运行中改由调用方重启 VPN)。 */
     fun setIpv4(context: Context, on: Boolean) {
         val json = readConfig(context)
-        setAddress(json, "inet4_address", on, DEFAULT_TUN_V4)
+        updateAddress(json, isV6 = false, on = on, defaultCidr = DEFAULT_TUN_V4)
         writeConfig(context, json)
     }
 
-    /** 开关 IPv6 拦截:关写空数组 []、开补默认值。 */
+    /** 开关 IPv6 拦截:关则从 address 移除 v6、开补默认值。 */
     fun setIpv6(context: Context, on: Boolean) {
         val json = readConfig(context)
-        setAddress(json, "inet6_address", on, DEFAULT_TUN_V6)
+        updateAddress(json, isV6 = true, on = on, defaultCidr = DEFAULT_TUN_V6)
         writeConfig(context, json)
     }
 
@@ -192,6 +192,16 @@ object ConfigProvider {
         // eng.Config.TUN.Enabled 撒谎(ReloadConfig 只 Store 不读,暂时无害,但是脏的)。
         tun.put("enabled", AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN)
         tun.put("auto_route", false)
+
+        // 统一字段平滑迁移:若缺少 address 但存在旧 inet4_address / inet6_address,归一化写入 address 并清理旧键
+        if (!tun.has("address") && (tun.has("inet4_address") || tun.has("inet6_address"))) {
+            val addrArr = JSONArray()
+            tun.optJSONArray("inet4_address")?.takeIf { it.length() > 0 }?.let { addrArr.put(it.getString(0)) }
+            tun.optJSONArray("inet6_address")?.takeIf { it.length() > 0 }?.let { addrArr.put(it.getString(0)) }
+            tun.put("address", addrArr)
+            tun.remove("inet4_address")
+            tun.remove("inet6_address")
+        }
         base.put("tun", tun)
 
         // 仅代理(SOCKS5)模式:listen.host 由 AppPrefs.socksListen 派生(首页 v4/v6
@@ -241,18 +251,29 @@ object ConfigProvider {
         return base
     }
 
-    private fun setAddress(json: JSONObject, key: String, on: Boolean, default: String) {
+    private fun updateAddress(json: JSONObject, isV6: Boolean, on: Boolean, defaultCidr: String) {
         val tun = json.optJSONObject("tun") ?: JSONObject().also { json.put("tun", it) }
-        if (on) {
-            // 开:数组非空则保留(面板改过的自定义值),空/缺失才补默认。
-            val arr = tun.optJSONArray(key)
-            if (arr == null || arr.length() == 0) tun.put(key, JSONArray().put(default))
+        val current = TunConfig.parse(json)
+
+        val newV4: String? = if (!isV6) {
+            if (on) current.inet4?.let { "${it.ip}/${it.prefix}" } ?: defaultCidr else null
         } else {
-            // 关:写空数组 [] 而非删 key——保留字段让 config.json 自文档化。
-            // 删 key 后 Go 侧 nil slice 序列化成 null,编辑 config 的新手看不懂;
-            // [] 语义明确(空 = 该族未启用),与引擎 len()==0 行为完全一致。
-            tun.put(key, JSONArray())
+            current.inet4?.let { "${it.ip}/${it.prefix}" }
         }
+
+        val newV6: String? = if (isV6) {
+            if (on) current.inet6?.let { "${it.ip}/${it.prefix}" } ?: defaultCidr else null
+        } else {
+            current.inet6?.let { "${it.ip}/${it.prefix}" }
+        }
+
+        val newAddress = JSONArray()
+        if (newV4 != null) newAddress.put(newV4)
+        if (newV6 != null) newAddress.put(newV6)
+
+        tun.put("address", newAddress)
+        tun.remove("inet4_address")
+        tun.remove("inet6_address")
         json.put("tun", tun)
     }
 

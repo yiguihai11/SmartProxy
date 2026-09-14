@@ -21,10 +21,9 @@
   "tun": {
     "enabled": false,
     "mtu": 1400,
-    "inet4_address": [
+    "address": [
       "172.19.0.1/30"
     ],
-    "inet6_address": [],
     "auto_route": false
   },
   "upstream": {

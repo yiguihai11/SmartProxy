@@ -749,6 +749,7 @@ func TestConfig_Clone_FullDeepCopy(t *testing.T) {
 			AdminCertSANs: []string{"192.168.1.1", "proxy.local"},
 		},
 		TUN: TUNConfig{
+			Address:           []string{"172.19.0.1/30"},
 			Inet4Address:      []string{"172.19.0.1/30"},
 			Inet6Address:      []string{"fdfe::1/64"},
 			RouteExcludePorts: []int{22, 53},

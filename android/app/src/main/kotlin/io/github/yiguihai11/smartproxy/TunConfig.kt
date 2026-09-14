@@ -15,8 +15,8 @@ data class Cidr(val ip: String, val prefix: Int)
 
 data class TunParams(
     val mtu: Int,
-    val inet4: Cidr?,       // tun.inet4_address[0],如 "172.19.0.1/30"
-    val inet6: Cidr?,       // tun.inet6_address[0],如 "fc00::1/64"
+    val inet4: Cidr?,       // tun.address 中的 IPv4 条目,如 "172.19.0.1/30" (兼容旧 inet4_address)
+    val inet6: Cidr?,       // tun.address 中的 IPv6 条目,如 "fc00::1/64" (兼容旧 inet6_address)
 )
 
 object TunConfig {
@@ -24,16 +24,35 @@ object TunConfig {
     /** 移动端推荐 TUN MTU 设为 1400(预留 80~100 字节代理头与蜂窝链路冗余,防 IP 分片与跳 ping)。 */
     const val DEFAULT_TUN_MTU = 1400
 
-    /** 解析 tun 段。缺字段时回退到引擎默认值,与 internal/config 的 DefaultConfig 对齐。 */
+    /** 解析 tun 段。优先解析 address 统一字段,支持双栈;缺省时回退旧 inet4_address / inet6_address。与 internal/config 的 DefaultConfig 对齐。 */
     fun parse(json: JSONObject): TunParams {
         val tun = json.optJSONObject("tun") ?: JSONObject()
+        var inet4: Cidr? = null
+        var inet6: Cidr? = null
+
+        val addressArr = tun.optJSONArray("address")
+        if (addressArr != null) {
+            for (i in 0 until addressArr.length()) {
+                val str = addressArr.optString(i)
+                if (str.isNotBlank()) {
+                    val cidr = parseCidr(str)
+                    if (cidr.ip.contains(':')) {
+                        if (inet6 == null) inet6 = cidr
+                    } else {
+                        if (inet4 == null) inet4 = cidr
+                    }
+                }
+            }
+        } else {
+            // 兼容旧字段:空数组([])与缺失等价 = 该族未启用
+            inet4 = tun.optJSONArray("inet4_address")?.takeIf { it.length() > 0 }?.let { parseCidr(it.getString(0)) }
+            inet6 = tun.optJSONArray("inet6_address")?.takeIf { it.length() > 0 }?.let { parseCidr(it.getString(0)) }
+        }
+
         return TunParams(
             mtu = tun.optInt("mtu", DEFAULT_TUN_MTU),
-            // 空数组([])与缺失等价 = 该族未启用:关掉开关时 ConfigProvider 写 [] 而非删 key
-            // (自文档化),这里必须跳过空数组,否则 getString(0) 抛 JSONException,establishVpn
-            // 兜住返回 false,VPN 静默起不来。
-            inet4 = tun.optJSONArray("inet4_address")?.takeIf { it.length() > 0 }?.let { parseCidr(it.getString(0)) },
-            inet6 = tun.optJSONArray("inet6_address")?.takeIf { it.length() > 0 }?.let { parseCidr(it.getString(0)) }
+            inet4 = inet4,
+            inet6 = inet6
         )
     }
 

@@ -15,6 +15,7 @@ import (
 	"smartproxy/internal/engine"
 	"smartproxy/internal/logbuf"
 	"smartproxy/internal/route"
+	"smartproxy/internal/tun"
 )
 
 var (
@@ -44,6 +45,12 @@ func SetUIDResolver(r UIDResolver) {
 	defer engineMu.Unlock()
 	uidResolver = r
 	slog.Info("[Go-Bridge] SetUIDResolver called", "set", r != nil)
+}
+
+// NotifyMemoryPressure 通知 Go 协议栈当前系统的内存压力等级 (0=None, 1=Warning, 2=Critical)。
+// Android 侧可在 ComponentCallbacks2.onTrimMemory 回调中调用。
+func NotifyMemoryPressure(level int32) {
+	tun.SetMemoryPressure(int(level))
 }
 
 // Android→Go 反向桥已删除(2026-08,停 VPN 后图标赖着不掉排查):configReload 曾经

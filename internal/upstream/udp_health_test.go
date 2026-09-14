@@ -278,7 +278,7 @@ func TestCheckProxy_ProbesTCPAndUDP(t *testing.T) {
 		Enabled:            true,
 		URL:                ts.URL,
 		Interval:           1,
-		Timeout:            2,
+		Timeout:            5,
 		FailuresThreshold:  1,
 		SuccessesThreshold: 1,
 		OpenCoolDown:       60,

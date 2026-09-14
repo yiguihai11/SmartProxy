@@ -1006,6 +1006,21 @@ func (h *TUNHandler) handleDNS(ctx context.Context, conn N.PacketConn, host stri
 var NewTUN = singtun.New
 var NewTUNStack = singtun.NewStack
 
+var currentMemoryPressure atomic.Uint32
+
+// SetMemoryPressure updates the memory pressure level (0=None, 1=Warning, 2=Critical).
+func SetMemoryPressure(level int) {
+	currentMemoryPressure.Store(uint32(level))
+	if level > 0 {
+		slog.Warn("TUN memory pressure updated", "level", level)
+	}
+}
+
+// GetMemoryPressure returns current memory pressure.
+func GetMemoryPressure() singtun.MemoryPressure {
+	return singtun.MemoryPressure(currentMemoryPressure.Load())
+}
+
 func (h *TUNHandler) Start(ctx context.Context, cfg config.TUNConfig) (singtun.Tun, singtun.Stack, error) {
 	if !cfg.Enabled {
 		return nil, nil, nil
@@ -1013,8 +1028,8 @@ func (h *TUNHandler) Start(ctx context.Context, cfg config.TUNConfig) (singtun.T
 
 	isFdMode := cfg.FileDescriptor != 0
 	if isFdMode {
-		if cfg.MTU <= 0 {
-			slog.Warn("fd mode: MTU not set, defaulting to 1500 — ensure this matches the OS TUN configuration")
+		cfg.AutoRoute = false
+		if cfg.MTU == 0 {
 			cfg.MTU = 1500
 		}
 		if cfg.Name == "" {
@@ -1023,20 +1038,35 @@ func (h *TUNHandler) Start(ctx context.Context, cfg config.TUNConfig) (singtun.T
 	}
 
 	var inet4 []netip.Prefix
-	for _, s := range cfg.Inet4Address {
-		p, err := netip.ParsePrefix(s)
-		if err != nil {
-			return nil, nil, fmt.Errorf("invalid IPv4 prefix %s: %w", s, err)
-		}
-		inet4 = append(inet4, p)
-	}
 	var inet6 []netip.Prefix
-	for _, s := range cfg.Inet6Address {
-		p, err := netip.ParsePrefix(s)
-		if err != nil {
-			return nil, nil, fmt.Errorf("invalid IPv6 prefix %s: %w", s, err)
+
+	if len(cfg.Address) > 0 {
+		for _, s := range cfg.Address {
+			p, err := netip.ParsePrefix(s)
+			if err != nil {
+				return nil, nil, fmt.Errorf("invalid address prefix %s: %w", s, err)
+			}
+			if p.Addr().Is4() {
+				inet4 = append(inet4, p)
+			} else if p.Addr().Is6() {
+				inet6 = append(inet6, p)
+			}
 		}
-		inet6 = append(inet6, p)
+	} else {
+		for _, s := range cfg.Inet4Address {
+			p, err := netip.ParsePrefix(s)
+			if err != nil {
+				return nil, nil, fmt.Errorf("invalid IPv4 prefix %s: %w", s, err)
+			}
+			inet4 = append(inet4, p)
+		}
+		for _, s := range cfg.Inet6Address {
+			p, err := netip.ParsePrefix(s)
+			if err != nil {
+				return nil, nil, fmt.Errorf("invalid IPv6 prefix %s: %w", s, err)
+			}
+			inet6 = append(inet6, p)
+		}
 	}
 
 	// fd 模式(Android VpnService)下接口监控全程零消费:NativeTun.Start() 在
@@ -1062,13 +1092,14 @@ func (h *TUNHandler) Start(ctx context.Context, cfg config.TUNConfig) (singtun.T
 	}
 
 	tunOpts := singtun.Options{
-		Name:             cfg.Name,
-		MTU:              uint32(cfg.MTU),
-		Inet4Address:     inet4,
-		Inet6Address:     inet6,
-		AutoRoute:        cfg.AutoRoute,
-		FileDescriptor:   cfg.FileDescriptor,
-		InterfaceMonitor: interfaceMonitor,
+		Name:                 cfg.Name,
+		MTU:                  uint32(cfg.MTU),
+		Inet4Address:         inet4,
+		Inet6Address:         inet6,
+		AutoRoute:            cfg.AutoRoute,
+		AutoRedirectMarkMode: cfg.AutoRedirect,
+		FileDescriptor:       cfg.FileDescriptor,
+		InterfaceMonitor:     interfaceMonitor,
 	}
 
 	t, err := NewTUN(tunOpts)
@@ -1112,12 +1143,13 @@ func (h *TUNHandler) Start(ctx context.Context, cfg config.TUNConfig) (singtun.T
 	// UDPTimeout/ICMPTimeout must be non-zero: sing-tun's UDP forwarder panics
 	// directly in udpnat2.New when timeout==0 (previously omitted, causing the TUN to fail to start).
 	stackOpts := singtun.StackOptions{
-		Context:     ctx,
-		Tun:         t,
-		TunOptions:  tunOpts,
-		Handler:     h,
-		UDPTimeout:  5 * time.Minute,
-		ICMPTimeout: 30 * time.Second,
+		Context:        ctx,
+		Tun:            t,
+		TunOptions:     tunOpts,
+		Handler:        h,
+		UDPTimeout:     5 * time.Minute,
+		ICMPTimeout:    30 * time.Second,
+		MemoryPressure: GetMemoryPressure,
 	}
 
 	s, err := NewTUNStack(stackType, stackOpts)

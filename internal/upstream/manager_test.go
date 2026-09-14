@@ -1259,7 +1259,9 @@ func TestManager_TestProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lat, err := mLive.TestProxy(ctx, "live-node", "tcping")
+	liveCtx, liveCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer liveCancel()
+	lat, err := mLive.TestProxy(liveCtx, "live-node", "tcping")
 	if err != nil {
 		t.Fatalf("expected tcping to succeed, got %v", err)
 	}

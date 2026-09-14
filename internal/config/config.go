@@ -22,11 +22,13 @@ type TUNConfig struct {
 	Enabled        bool     `json:"enabled"`
 	Name           string   `json:"name"`
 	MTU            int      `json:"mtu"`
+	Address        []string `json:"address"`
 	Inet4Address   []string `json:"inet4_address"`
 	Inet6Address   []string `json:"inet6_address"`
 	AutoRoute      bool     `json:"auto_route"`
+	AutoRedirect   bool     `json:"auto_redirect"`
 	FileDescriptor int      `json:"-"`
-	Stack          string   `json:"stack"`
+	Stack          string   `json:"stack,omitempty"`
 	// OutputMark applies SO_MARK to outbound connections made by the router itself
 	// (so routing rules can identify and exclude it, preventing loops). 0 = disabled
 	// (default, zero behavior change); >0 = enabled and uses this mark value.
@@ -50,6 +52,9 @@ type TUNConfig struct {
 // Behaviorally nil and [] are identical (len() == 0), so this is lossless.
 func (t TUNConfig) MarshalJSON() ([]byte, error) {
 	type alias TUNConfig
+	if t.Address == nil {
+		t.Address = []string{}
+	}
 	if t.Inet4Address == nil {
 		t.Inet4Address = []string{}
 	}
@@ -250,6 +255,7 @@ func (c *Config) Clone() *Config {
 	cp.Listen.AdminCertSANs = cloneStringSlice(c.Listen.AdminCertSANs)
 
 	// TUN
+	cp.TUN.Address = cloneStringSlice(c.TUN.Address)
 	cp.TUN.Inet4Address = cloneStringSlice(c.TUN.Inet4Address)
 	cp.TUN.Inet6Address = cloneStringSlice(c.TUN.Inet6Address)
 	cp.TUN.RouteExcludePorts = cloneIntSlice(c.TUN.RouteExcludePorts)
@@ -606,8 +612,11 @@ func DefaultConfig() *Config {
 			Enabled:           false,
 			Name:              "tun0",
 			MTU:               1500,
-			Inet4Address:      []string{"172.19.0.1/30"},
+			Address:           []string{"172.19.0.1/30"},
+			Inet4Address:      []string{},
+			Inet6Address:      []string{},
 			AutoRoute:         false,
+			AutoRedirect:      false,
 			Stack:             "",
 			OutputMark:        0,
 			RouteExcludePorts: []int{22},

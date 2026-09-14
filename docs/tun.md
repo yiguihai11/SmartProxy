@@ -1,15 +1,15 @@
 # TUN 模块（internal/tun）
 
-本文是 TUN 透明代理的专题文档，覆盖 `internal/tun` 的职责边界、sing-tun 集成、gvisor 栈回调、TCP/UDP/DNS 连接处理、fd 模式、启动/关闭顺序、开发坑点，以及与 sing-tun v0.8.10 库源码的接口对照表。
+本文是 TUN 透明代理的专题文档，覆盖 `internal/tun` 的职责边界、sing-tun 集成、协议栈回调、TCP/UDP/DNS 连接处理、fd 模式、启动/关闭顺序、开发坑点，以及与 sing-tun v0.9.4+ 库源码的接口对照表。
 
-> 版本说明：所有对 sing-tun / sing 库 API 的描述均对照 `go.mod` 锁定的 **v0.8.10** 源码核实（模块缓存 `$GOPATH/pkg/mod/github.com/sagernet/sing-tun@v0.8.10` 与 `sing@v0.8.10`）。升级依赖后请复核 §8 对照表。
+> 版本说明：所有对 sing-tun / sing 库 API 的描述均对照 `go.mod` 锁定的 **v0.9.4+** 源码核实（模块缓存 `$GOPATH/pkg/mod/github.com/sagernet/sing-tun@v0.9.4-...` 与 `sing@v0.9.4-...`）。升级依赖后请复核 §8 对照表。
 
 ## §1 职责边界
 
 `internal/tun` 负责：
 
 1. **创建/接管 TUN 设备**：普通模式自建 TUN（`singtun.New`，Linux 下打开 `/dev/net/tun`）；fd 模式包装 OS 提供的 fd（移动端、已有 VPN fd 场景）。
-2. **gvisor 用户态网络栈**：创建并启动 sing-tun 的 gvisor stack，充当 TCP/UDP/DNS 流量的接收层。
+2. **用户态网络栈**：创建并启动 sing-tun 协议栈（默认自研原生高性能 Go 栈），充当 TCP/UDP/DNS 流量的接收层。
 3. **把流量接入路由与规则引擎**：实现 `singtun.Handler` 的三个回调方法，把 TCP/UDP/DNS 交给 `internal/route`、`internal/rules`、`internal/upstream`、`internal/dns` 处理。
 
 入口为 `TUNHandler`（`internal/tun/handler.go`），编译期断言 `var _ singtun.Handler = (*TUNHandler)(nil)` 保证回调签名与库一致——若三个方法签名不匹配会直接编译失败。
@@ -25,43 +25,42 @@ networkMonitor, _ := singtun.NewNetworkUpdateMonitor(logger.NOP())
 interfaceMonitor, _ := singtun.NewDefaultInterfaceMonitor(networkMonitor, logger.NOP(), singtun.DefaultInterfaceMonitorOptions{})
 
 tunOpts := singtun.Options{
-    Name:             cfg.Name,
-    MTU:              uint32(cfg.MTU),
-    Inet4Address:     inet4,
-    Inet6Address:     inet6,
-    AutoRoute:        cfg.AutoRoute,
-    FileDescriptor:   cfg.FileDescriptor,
-    InterfaceMonitor: interfaceMonitor,
+    Name:                 cfg.Name,
+    MTU:                  uint32(cfg.MTU),
+    Inet4Address:         inet4,
+    Inet6Address:         inet6,
+    AutoRoute:            cfg.AutoRoute,
+    AutoRedirectMarkMode: cfg.AutoRedirect,
+    FileDescriptor:       cfg.FileDescriptor,
+    InterfaceMonitor:     interfaceMonitor,
 }
 t, err := NewTUN(tunOpts)                // singtun.New
 
 // t.Start() 是接口置 UP + auto_route 规则安装的唯一入口（见 §6），必须调用
 if err := t.Start(); err != nil { ... }
 
-stackType := cfg.Stack
-if stackType == "" {
-    stackType = "gvisor"                 // 空串强制 gvisor
-}
-
 stackOpts := singtun.StackOptions{
-    Context:     context.Background(),
-    Tun:         t,
-    TunOptions:  tunOpts,
-    Handler:     h,                      // TUNHandler 实现 singtun.Handler
-    UDPTimeout:  5 * time.Minute,        // 必须非零（见下）
-    ICMPTimeout: 30 * time.Second,
+    Context:        context.Background(),
+    Tun:            t,
+    TunOptions:     tunOpts,
+    Handler:        h,                      // TUNHandler 实现 singtun.Handler
+    UDPTimeout:     5 * time.Minute,        // 必须非零（见下）
+    ICMPTimeout:    30 * time.Second,
+    MemoryPressure: GetMemoryPressure,     // 接入内存压力感知 (0=None, 1=Warning, 2=Critical)
 }
-s, err := NewTUNStack(stackType, stackOpts)  // singtun.NewStack
+s, err := NewTUNStack(cfg.Stack, stackOpts)  // singtun.NewStack, cfg.Stack 留空即默认自研 Go 栈
 ```
 
 要点：
 
 - `NewTUN` / `NewTUNStack` 是 `singtun.New` / `singtun.NewStack` 的别名（`handler.go` 底部 `var NewTUN = singtun.New; var NewTUNStack = singtun.NewStack`）。
-- **协议栈选择与默认栈**：sing-tun 自 0.9.4+ / sing-box 1.15+ 起引入原生自研高性能 `go` 协议栈。当 `cfg.Stack` 留空（默认推荐）时直接传空串给 `NewTUNStack`，由 sing-tun 自动使用原生自研轻量级协议栈；同时向前兼容旧配置显式指定的 `"gvisor"`、`"system"` 或 `"mixed"`。
+- **协议栈选择与自研 Go Stack**：sing-tun 自 0.9.4+ / sing-box 1.15+ 起引入自研轻量级原生 `go` 协议栈，性能与能效大幅超越旧 gVisor 栈。当 `cfg.Stack` 留空（默认推荐）时直接传空串给 `NewTUNStack`，由 sing-tun 自动使用原生自研轻量级协议栈；同时兼容旧配置显式指定的 `"gvisor"`、`"system"` 或 `"mixed"`。
+- **内存压力感知（MemoryPressure）**：通过 `StackOptions.MemoryPressure` 接口注入当前系统内存压力级别。在 Android 端联动 `ComponentCallbacks2.onTrimMemory`，在低内存时及时收缩 TCP 缓冲区以防被系统 OOM Killer 杀进程。
+- **透明重定向（AutoRedirect）**：`AutoRedirectMarkMode` 支持配合 Linux nftables 对打标流量自动重定向进 TUN。
 - **UDPTimeout/ICMPTimeout 必须非零**：sing-tun 的 UDP forwarder 在 `timeout == 0` 时内部 `udpnat.New` 会直接 panic（源码注释记录：此前漏设导致 TUN 无法启动）。本项目显式设为 `5min / 30s`。
 - `AutoRoute` 在 fd 模式下由 `Engine.Start` 强制置为 `false`（不接管系统路由）。
 
-## §3 gvisor 栈与回调
+## §3 用户态协议栈与回调
 
 `singtun.Handler` 接口由以下方法组成（`tun.go`）：
 
@@ -236,17 +235,18 @@ nftables（inet smartproxy，type route output 链，只改 mark 不丢包）
 10. **启动 monitor 用 `logger.NOP()` 即可**：`NewNetworkUpdateMonitor`/`NewDefaultInterfaceMonitor` 非 Android 上构造时不打开 netlink 通道，`Start()` 才订阅；本工程不 `Start()` 它们，仅用于满足 `RegisterMyInterface` 的非 nil 要求，无运行时开销。
 11. **netlink 跨平台**：`sagernet/netlink` 包本身在 Windows/Darwin 无法编译（`xfrm.go` 用了 Linux 专属常量），netlink 逻辑必须全部隔离在 `//go:build linux` 文件，非 Linux 用 no-op 桩（`selective_route_other.go`）。
 
-## §8 与 sing-tun 库源码的接口对照（v0.8.10）
+## §8 与 sing-tun 库源码的接口对照（v0.9.4+）
 
 | 项目用法 | 库定义 | 备注 |
 | --- | --- | --- |
 | `NewTUNStack = singtun.NewStack` | `NewStack(stack string, options StackOptions) (Stack, error)`（`stack.go`） | 空串/`""` → 默认自研原生 `NewGo` 栈；显式 `"gvisor"` → `NewGVisor` |
-| `StackOptions{Context, Tun, TunOptions, Handler}` | `Handler Handler`（`stack.go`） | `TUNHandler` 实现它（编译期断言 `var _ singtun.Handler`） |
+| `StackOptions{Context, Tun, TunOptions, Handler, MemoryPressure}` | `Handler Handler`, `MemoryPressure func() MemoryPressure`（`stack.go`） | `TUNHandler` 实现它；接入内存感知回调 |
 | `singtun.New(tunOpts)` | `New(options Options) (Tun, error)`，平台分文件（`tun_linux.go` / `tun_darwin.go` / `tun_windows.go` / `tun_other.go`） | Linux 打开 `/dev/net/tun`（`open()` + `TUNSETIFF`），需 root / CAP_NET_ADMIN |
 | `Options.FileDescriptor` | 非 0 时 `os.NewFile(uintptr(options.FileDescriptor), "tun")`（`tun_linux.go:64,74`） | fd 模式依据；fd 模式下 `Start()`/`unsetRoute` 等跳过 OS 配置 |
+| `Options.AutoRedirectMarkMode` | `AutoRedirectMarkMode bool`（`tun.go`） | 配合 nftables 的透明重定向标记模式 |
 | `Options.InterfaceMonitor` | `NativeTun.Start()` 调用 `InterfaceMonitor.RegisterMyInterface`（`tun_linux.go`） | 必须非 nil，否则 panic（见 §6） |
 | `sagernet/netlink` | `github.com/sagernet/netlink@v0.0.0-20240612041022-b9a21c07ac6a` | 源选择性路由安装/清理（仅 Linux，见 §6.1） |
 | `Handler` 接口 | `JudgeFlow(...)` + `NewDNSPacket(...)` + `N.TCPConnectionHandlerEx`（`NewConnectionEx(...)`）+ `N.UDPConnectionHandlerEx`（`NewPacketConnectionEx(...)`） | `sing-tun/tun.go` 与 `sing/common/network/conn.go` |
-| UDP 转发 | gvisor UDP 经 `udpnat.New(handler, ...)`（`stack_gvisor_udp.go`），nat 创建会话时 `go ...NewPacketConnectionEx(...)`（`udpnat/service.go:116`） | 每 UDP 会话一个 goroutine |
+| UDP 转发 | 经 `udpnat.New(handler, ...)`，nat 创建会话时 `go ...NewPacketConnectionEx(...)` | 每 UDP 会话一个 goroutine |
 | `s.Start()` / `s.Close()` | `Stack.Start() error` / `Stack.Close() error`（`stack.go`） | `Engine.Stop` 顺序关闭 stack → tun → handler |
 | `t.Name()` | `Tun.Name() (string, error)`（`tun.go:40`） | 记录接口名，失败仅告警 |

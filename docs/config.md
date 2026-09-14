@@ -41,9 +41,11 @@
 | `Enabled` | `enabled` | `false` | 是否创建 TUN 设备 |
 | `Name` | `name` | `"tun0"` | TUN 设备名 |
 | `MTU` | `mtu` | `1500` | 设备 MTU |
-| `Inet4Address` | `inet4_address` | `["172.19.0.1/30"]` | IPv4 前缀列表 |
-| `Inet6Address` | `inet6_address` | `[]` | IPv6 前缀列表 |
+| `Address` | `address` | `["172.19.0.1/30"]` | TUN IP 前缀列表（统一单字段，自动识别 IPv4 与 IPv6，支持双栈如 `["172.19.0.1/30", "fc00::1/64"]`；平滑兼容旧 `inet4_address`/`inet6_address`） |
+| `Inet4Address` | `inet4_address` | `[]` | （兼容旧字段，推荐迁移到 `address`）IPv4 前缀列表 |
+| `Inet6Address` | `inet6_address` | `[]` | （兼容旧字段，推荐迁移到 `address`）IPv6 前缀列表 |
 | `AutoRoute` | `auto_route` | `false` | 是否自动配置路由。**服务器上保持 `false`**：`true` 会全局劫持 0.0.0.0/0 出站（含 SSH），导致卡顿/环路；`false` 时自动安装"源选择性路由"，仅 TUN 子网流量走 tun0，服务器自身不受影响（见 `tun.md` §6） |
+| `AutoRedirect` | `auto_redirect` | `false` | 是否启用 Linux nftables 标记模式自动重定向（基于 sing-tun AutoRedirectMarkMode），配合透明代理劫持 |
 | `OutputMark` | `output_mark` | `0` | 自身出站打标值（SO_MARK），`0`=关闭（默认）。**`>0` 且 `auto_route: true`、非 fd 模式时生效**：自动加 `ip rule fwmark <值> lookup main`（自身绕过 TUN 劫持）+ nftables 输出链给 `route_exclude_ports` 打标（SSH 等绕过），实现"全量捕获但不卡自身/SSH"。需 root / CAP_NET_ADMIN（见 `tun.md` §6.2） |
 | `RouteExcludePorts` | `route_exclude_ports` | `[22]` | 打 `OutputMark` 排除的本地端口（默认 SSH 22），仅 `auto_route=true` + `output_mark>0` 时生效 |
 | `BlockedUIDs` | `blocked_uids` | `[]` | 按 UID 丢弃流量的应用列表（per-app「禁止联网」），空 = 不启用。**仅移动端生效**：依赖 gomobile 反向回调 `SetUIDResolver`（mobile 包在 `StartRouter` 后注入，Android 侧由 AppPrefs.blockedApps 解析成 UID 写进 config.json）；桌面/服务器（`cmd/smartproxy`）无此回调，`resolveUID` 恒返回 -1，字段空转并打一次性告警，保持留空即可 |

@@ -633,10 +633,17 @@ func TestBuildSERVFAIL_BadWire(t *testing.T) {
 // the handler answers SERVFAIL — bounded by the configured queryTimeout — instead
 // of returning nil and letting the client hang.
 func TestHandleDNS_ForeignFailureAnswersSERVFAIL(t *testing.T) {
+	deadLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadAddr := deadLn.Addr().String()
+	deadLn.Close()
+
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
 		Default: "failover",
 		Proxies: []upstream.ProxyEntry{
-			{Alias: "dead", URL: "socks5://127.0.0.1:1081"},
+			{Alias: "dead", URL: "socks5://" + deadAddr},
 		},
 	})
 	if err != nil {

@@ -52,10 +52,17 @@ func newTestServer(t *testing.T) *Server {
 }
 func newTestManager(t *testing.T) *upstream.Manager {
 	t.Helper()
+	deadLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+	deadAddr := deadLn.Addr().String()
+	deadLn.Close()
+
 	cfg := upstream.UpstreamConfig{
 		Default: "failover",
 		Proxies: []upstream.ProxyEntry{
-			{Alias: "ss-local", URL: "socks5://127.0.0.1:1081"},
+			{Alias: "ss-local", URL: "socks5://" + deadAddr},
 		},
 	}
 	m, err := upstream.NewManager(cfg)
