@@ -134,9 +134,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-core") // 首页 Apps 卡 / 应用选择页导航图标
-    implementation("androidx.compose.material:material-icons-extended") // 主题切换太阳/月亮/自动图标(release 有 R8 裁剪,不涨包)
-    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.material:material-icons-extended") // 包含 core 全量图标，主题切换太阳/月亮/自动图标等(release 有 R8 裁剪,不涨包)
     // core-ktx 1.19 / lifecycle 2.11 要求 minCompileSdk=37(API 37 未发布),用不上,停在新版兼容线。
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
@@ -147,6 +145,4 @@ dependencies {
 
     // 单元测试(JUnit 4):测试 TetheringUiState / TetheringPlatformCompat / TetheringCoreSync。
     testImplementation("junit:junit:4.13.2")
-
-    debugImplementation("androidx.compose.ui:ui-tooling")
 }
