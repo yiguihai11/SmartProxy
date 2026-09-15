@@ -91,6 +91,9 @@ type Proxy struct {
 	// and v2ray-plugin/xray-plugin (all 5 Android modes of websocket/grpc/quic, see
 	// v2ray.go); on TCP connect it wraps the matching transport under the SS encryption layer, and unknown plugins return a clear error.
 	Plugin string
+	// Provider identifies the dynamic source or subscription provider (e.g. "lantern"),
+	// or empty for static user-configured nodes.
+	Provider string
 	// UDPInTCP selects the hev UDP-in-TCP relay (hev-socks5-server's private CMD=5
 	// extension) for a socks5/socks5h node: UDP packets are framed over a TCP connection
 	// instead of a UDP ASSOCIATE, so the node needs no UDP listener. It is set from the

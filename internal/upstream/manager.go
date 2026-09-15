@@ -206,6 +206,7 @@ func (m *Manager) rebuildLocked() {
 			slog.Warn("failed to create proxy", "url", MaskProxyURL(entry.URL), "error", err)
 			continue
 		}
+		proxy.Provider = entry.Provider
 		if proxy.CountryCode() == "" {
 			if cc := inferCountryCode(alias, proxy.Name, proxy.Host); cc != "" {
 				proxy.SetGeoInfo(cc, "")
@@ -237,7 +238,12 @@ func (m *Manager) SetProviderProxies(provider string, entries []ProxyEntry) {
 		delete(m.providerProxies, provider)
 	} else {
 		copied := make([]ProxyEntry, len(entries))
-		copy(copied, entries)
+		for i, e := range entries {
+			if e.Provider == "" {
+				e.Provider = provider
+			}
+			copied[i] = e
+		}
 		m.providerProxies[provider] = copied
 	}
 	pins := m.captureManualPins()
@@ -267,6 +273,7 @@ type ProxyEntry struct {
 	// UDPInTCP carries the node's udp_in_tcp switch from the config entry (see
 	// Proxy.UDPInTCP). It is OR-ed with whatever the URL's ?udp_in_tcp=1 query set.
 	UDPInTCP bool
+	Provider string
 }
 
 func (m *Manager) SelectProxy(ctx context.Context, targetIP string, targetPort int, domain string, engine *rules.Engine) (string, *Proxy) {
@@ -564,6 +571,7 @@ type ProxyInfo struct {
 	PingLatency   time.Duration       `json:"ping_latency,omitempty"`
 	CountryCode   string              `json:"country_code,omitempty"`
 	ExitIP        string              `json:"exit_ip,omitempty"`
+	Provider      string              `json:"provider,omitempty"`
 }
 
 func (m *Manager) Proxies() []ProxyInfo {
@@ -595,6 +603,7 @@ func (m *Manager) Proxies() []ProxyInfo {
 			PingLatency:   proxy.PingLatency(),
 			CountryCode:   proxy.CountryCode(),
 			ExitIP:        proxy.ExitIP(),
+			Provider:      proxy.Provider,
 		})
 	}
 	return infos
@@ -623,6 +632,7 @@ func (m *Manager) ProxyInfo(alias string) (ProxyInfo, bool) {
 		PingLatency:   proxy.PingLatency(),
 		CountryCode:   proxy.CountryCode(),
 		ExitIP:        proxy.ExitIP(),
+		Provider:      proxy.Provider,
 	}, true
 }
 

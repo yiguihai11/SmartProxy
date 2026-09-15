@@ -60,6 +60,13 @@ var zhStrings = map[string]string{
 	"0 selected":        "已选 0 项", "0 entries": "0 条",
 	"All": "全部", "Block": "屏蔽", "Allow": "放行", "Proxy": "代理",
 	"Direct": "直连",
+	"Group: All ▾": "分组：全部 ▾",
+	"Custom Proxies": "自定义节点",
+	"Lantern Shared": "Lantern 共享节点",
+	"Collapse": "折叠",
+	"Expand": "展开",
+	"{0} nodes": "{0} 个节点",
+	"{0} online": "{0} 个在线",
 
 	// health banner
 	"All proxy nodes are unavailable — proxied internet is down": "所有代理节点不可用，经代理的联网已中断",
