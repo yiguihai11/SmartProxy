@@ -50,7 +50,11 @@ func New(cfg Config) (*Client, error) {
 		cfg.NodesFile = "lantern_nodes.json"
 	}
 	if cfg.DataDir == "" {
-		cfg.DataDir = "."
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			cfg.DataDir = home
+		} else {
+			cfg.DataDir = "."
+		}
 	}
 
 	accMgr, err := NewAccountManager(cfg.DataDir, cfg.AccountsFile, cfg.MaxAccounts, cfg.MinRemainBytes)

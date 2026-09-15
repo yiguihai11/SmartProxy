@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// FindSingBoxExecutable attempts to find a valid sing-box binary on the system.
+// FindSingBoxExecutable attempts to find a valid sing-box binary on the system dynamically.
 func FindSingBoxExecutable(preferredPath string) string {
 	if preferredPath != "" {
 		if fi, err := os.Stat(preferredPath); err == nil && !fi.IsDir() {
@@ -22,20 +22,42 @@ func FindSingBoxExecutable(preferredPath string) string {
 		}
 	}
 
-	knownPaths := []string{
-		"/data/data/com.termux/files/home/lantern_re/bin/sing-box",
-		"/data/data/com.termux/files/usr/bin/sing-box",
-		"/usr/local/bin/sing-box",
-		"/usr/bin/sing-box",
+	// 1. Check system PATH first
+	if p, err := exec.LookPath("sing-box"); err == nil {
+		return p
 	}
-	for _, p := range knownPaths {
+
+	// 2. Check user's home directory dynamically
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		userPaths := []string{
+			filepath.Join(home, "lantern_re", "bin", "sing-box"),
+			filepath.Join(home, "bin", "sing-box"),
+			filepath.Join(home, ".local", "bin", "sing-box"),
+		}
+		for _, p := range userPaths {
+			if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+				return p
+			}
+		}
+	}
+
+	// 3. Check environment prefixes if available (e.g. Termux $PREFIX/bin/sing-box)
+	if prefix := os.Getenv("PREFIX"); prefix != "" {
+		p := filepath.Join(prefix, "bin", "sing-box")
 		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
 			return p
 		}
 	}
 
-	if p, err := exec.LookPath("sing-box"); err == nil {
-		return p
+	// 4. Standard unix paths
+	stdPaths := []string{
+		"/usr/local/bin/sing-box",
+		"/usr/bin/sing-box",
+	}
+	for _, p := range stdPaths {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return p
+		}
 	}
 
 	return ""

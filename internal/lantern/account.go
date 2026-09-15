@@ -37,7 +37,11 @@ func NewAccountManager(dataDir, fileName string, maxAccounts int, minRemainBytes
 		fileName = "accounts.json"
 	}
 	if dataDir == "" {
-		dataDir = "."
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			dataDir = home
+		} else {
+			dataDir = "."
+		}
 	}
 
 	fullPath := filepath.Join(dataDir, fileName)

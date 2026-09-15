@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 )
@@ -16,13 +17,17 @@ func TestLiveNodesConnectivity(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		home = "."
+	}
+
 	client, err := New(Config{
-		DataDir:         "/data/data/com.termux/files/home",
+		DataDir:         home,
 		AccountsFile:    "accounts.json",
 		NodesFile:       "lantern_nodes.json",
 		MaxAccounts:     5,
 		EnableSSE:       false,
-		SingBoxPath:     "/data/data/com.termux/files/home/lantern_re/bin/sing-box",
 		TestURL:         "http://cp.cloudflare.com/generate_204",
 		TestTimeout:     5 * time.Second,
 		FilterDeadNodes: true,
