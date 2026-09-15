@@ -70,8 +70,10 @@ import io.github.yiguihai11.smartproxy.shizuku.tetheringTypeBit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuProvider
 import java.util.UUID
@@ -210,6 +212,7 @@ fun TetheringDialog(
     var tetheringService by remember { mutableStateOf<IShizukuTetheringService?>(null) }
     var operationJob by remember { mutableStateOf<Job?>(null) }
     var operationGeneration by remember { mutableStateOf(0L) }
+    var bindJob by remember { mutableStateOf<Job?>(null) }
 
     fun cancelOperation(): Long {
         operationGeneration++
@@ -232,7 +235,11 @@ fun TetheringDialog(
                 scope.launch {
                     val service = tetheringService ?: return@launch
                     val status = withContext(Dispatchers.IO) {
-                        runCatching { service.getStatus(state.ipv6Enabled) }.getOrNull()
+                        runCatching {
+                            withTimeoutOrNull(4000L) {
+                                service.getStatus(state.ipv6Enabled)
+                            }
+                        }.getOrNull()
                     }
                     if (status != null) {
                         state = state.copy(
@@ -253,29 +260,41 @@ fun TetheringDialog(
     val serviceConnection = remember {
         object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+                bindJob?.cancel()
+                bindJob = null
                 val service = IShizukuTetheringService.Stub.asInterface(binder)
                 tetheringService = service
                 runCatching { service.setStatusListener(statusListener) }
                 scope.launch {
-                    val configJson = ConfigProvider.readConfig(context)
-                    val tun = TunConfig.parse(configJson)
-                    val ipv6 = tun.inet6 != null
-                    val status = withContext(Dispatchers.IO) {
-                        runCatching { service.getStatus(ipv6) }.getOrNull()
-                    }
-                    state = state.withServiceConnection(true)
-                    if (status != null) {
-                        state = state.withTetheringStatus(status, ipv6Enabled = ipv6)
-                        if (status.warning == ShizukuTetheringService.RESULT_UNPROTECTED_UPSTREAM) {
-                            toast(R.string.shizuku_tethering_wrong_upstream)
+                    try {
+                        val configJson = ConfigProvider.readConfig(context)
+                        val tun = TunConfig.parse(configJson)
+                        val ipv6 = tun.inet6 != null
+                        val status = withContext(Dispatchers.IO) {
+                            runCatching {
+                                withTimeoutOrNull(4000L) {
+                                    service.getStatus(ipv6)
+                                }
+                            }.getOrNull()
                         }
-                    } else {
+                        state = state.withServiceConnection(true)
+                        if (status != null) {
+                            state = state.withTetheringStatus(status, ipv6Enabled = ipv6)
+                            if (status.warning == ShizukuTetheringService.RESULT_UNPROTECTED_UPSTREAM) {
+                                toast(R.string.shizuku_tethering_wrong_upstream)
+                            }
+                        } else {
+                            state = state.copy(operation = TetheringOperation.NONE)
+                        }
+                    } catch (_: Throwable) {
                         state = state.copy(operation = TetheringOperation.NONE)
                     }
                 }
             }
 
             override fun onServiceDisconnected(name: ComponentName) {
+                bindJob?.cancel()
+                bindJob = null
                 tetheringService = null
                 state = state.withServiceConnection(false)
             }
@@ -313,11 +332,23 @@ fun TetheringDialog(
             if (shizuku == ShizukuStatus.READY) {
                 if (tetheringService == null) {
                     state = state.copy(operation = TetheringOperation.CONNECTING)
-                    runCatching {
-                        Shizuku.bindUserService(userServiceArgs, serviceConnection)
-                    }.onFailure {
-                        state = state.copy(operation = TetheringOperation.NONE)
-                        toast(R.string.shizuku_operation_failed)
+                    bindJob?.cancel()
+                    bindJob = scope.launch {
+                        try {
+                            runCatching {
+                                Shizuku.bindUserService(userServiceArgs, serviceConnection)
+                            }.onFailure {
+                                state = state.copy(operation = TetheringOperation.NONE)
+                                toast(R.string.shizuku_operation_failed)
+                                return@launch
+                            }
+                            delay(5000L)
+                            if (tetheringService == null && state.operation == TetheringOperation.CONNECTING) {
+                                state = state.copy(operation = TetheringOperation.NONE)
+                                toast(R.string.shizuku_status_not_running)
+                            }
+                        } catch (_: CancellationException) {
+                        }
                     }
                 } else {
                     val service = tetheringService ?: return@launch
@@ -325,10 +356,15 @@ fun TetheringDialog(
                     val tun = TunConfig.parse(configJson)
                     val ipv6 = tun.inet6 != null
                     val status = withContext(Dispatchers.IO) {
-                        runCatching { service.getStatus(ipv6) }.getOrNull()
+                        runCatching {
+                            withTimeoutOrNull(4000L) {
+                                service.getStatus(ipv6)
+                            }
+                        }.getOrNull()
                     }
                     if (status != null) {
                         state = state.copy(
+                            operation = TetheringOperation.NONE,
                             routingState = status.routingState,
                             routingDetail = status.routingDetail,
                             activeTetheringTypes = status.activeTetheringTypes,
@@ -336,9 +372,13 @@ fun TetheringDialog(
                             ipv6Enabled = ipv6,
                             hasRoutingSession = status.hasRoutingSession,
                         )
+                    } else {
+                        state = state.copy(operation = TetheringOperation.NONE)
                     }
                 }
             } else {
+                bindJob?.cancel()
+                bindJob = null
                 if (tetheringService != null) {
                     runCatching {
                         Shizuku.unbindUserService(userServiceArgs, serviceConnection, false)
@@ -532,6 +572,8 @@ fun TetheringDialog(
         refreshAll()
         onDispose {
             cancelOperation()
+            bindJob?.cancel()
+            bindJob = null
             Shizuku.removeBinderReceivedListener(binderReceivedListener)
             Shizuku.removeBinderDeadListener(binderDeadListener)
             Shizuku.removeRequestPermissionResultListener(permissionResultListener)
@@ -559,9 +601,9 @@ fun TetheringDialog(
     val shizukuReady = state.shizukuStatus == ShizukuStatus.READY
 
     val routingStatusRes = when {
-        state.operation == TetheringOperation.CONNECTING -> R.string.shizuku_routing_status_connecting
+        state.operation == TetheringOperation.CONNECTING -> R.string.shizuku_hotspot_status_connecting
         state.operation == TetheringOperation.CHECKING -> R.string.shizuku_routing_status_checking
-        state.operation == TetheringOperation.STARTING_ROUTING -> R.string.shizuku_routing_status_starting
+        state.operation == TetheringOperation.STARTING_ROUTING -> R.string.shizuku_routing_status_connecting
         state.operation == TetheringOperation.STOPPING_ROUTING -> R.string.shizuku_routing_status_stopping
         !shizukuReady -> R.string.shizuku_routing_status_need_permission
         !serviceConnected -> R.string.shizuku_routing_status_unavailable
@@ -576,16 +618,7 @@ fun TetheringDialog(
 
     val routingToggleEnabled = shizukuReady &&
         serviceConnected &&
-        state.operation == TetheringOperation.NONE &&
-        when (state.routingState) {
-            ShizukuTetheringService.ROUTING_STATE_ACTIVE,
-            ShizukuTetheringService.ROUTING_STATE_WAITING -> true
-            ShizukuTetheringService.ROUTING_STATE_ERROR ->
-                // 会话还在(fail-closed:引擎死但没显式停)→ 允许关掉;否则看主 core 能否重开。
-                state.hasRoutingSession || state.coreRunning
-            ShizukuTetheringService.ROUTING_STATE_DISABLED -> state.coreRunning
-            else -> false
-        }
+        state.operation == TetheringOperation.NONE
 
     val hotspotStatusRes = when {
         state.operation == TetheringOperation.CONNECTING -> R.string.shizuku_hotspot_status_connecting
@@ -604,10 +637,7 @@ fun TetheringDialog(
 
     val hotspotToggleEnabled = shizukuReady &&
         serviceConnected &&
-        state.operation == TetheringOperation.NONE &&
-        (state.hotspotEnabled ||
-            state.tetheringStateKnown &&
-            (state.routingActive || state.coreRunning))
+        state.operation == TetheringOperation.NONE
 
     Dialog(
         onDismissRequest = onDismiss,

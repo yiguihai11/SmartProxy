@@ -45,21 +45,42 @@ import java.util.concurrent.atomic.AtomicLong
  * 否则 UI 状态轮询和 fail-closed 回调会在锁队列里堵几十秒。
  */
 @Keep
-class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub() {
+class ShizukuTetheringService : IShizukuTetheringService.Stub {
+
+    private val baseContext: Context?
+
+    constructor() : super() {
+        this.baseContext = null
+    }
+
+    @Keep
+    constructor(context: Context) : super() {
+        this.baseContext = context
+    }
 
     private val executor = Executor { command -> command.run() }
-    private val appContext = context.applicationContext
-    private val shellContext = ShellContextCompat.create(context)
-    private val tetheringManager = if (usesPublicTetheringApi()) {
-        TetheringApi36.getManager(shellContext)
-    } else {
-        requireNotNull(shellContext.getSystemService(TETHERING_SERVICE)) {
-            "TetheringManager is unavailable"
+    private val shellContext: Context by lazy {
+        val ctx = baseContext ?: runCatching {
+            val activityThreadClass = Class.forName("android.app.ActivityThread")
+            val systemMain = activityThreadClass.getDeclaredMethod("systemMain").invoke(null)
+            activityThreadClass.getDeclaredMethod("getSystemContext").invoke(systemMain) as Context
+        }.getOrNull() ?: error("Failed to resolve system context")
+        ShellContextCompat.create(ctx)
+    }
+    private val tetheringManager by lazy {
+        if (usesPublicTetheringApi()) {
+            TetheringApi36.getManager(shellContext)
+        } else {
+            requireNotNull(shellContext.getSystemService(TETHERING_SERVICE)) {
+                "TetheringManager is unavailable"
+            }
         }
     }
-    private val connectivityManager = requireNotNull(
-        shellContext.getSystemService(ConnectivityManager::class.java)
-    ) { "ConnectivityManager is unavailable" }
+    private val connectivityManager by lazy {
+        requireNotNull(
+            shellContext.getSystemService(ConnectivityManager::class.java)
+        ) { "ConnectivityManager is unavailable" }
+    }
 
     // routingWorker 独占写;getStatus 在 binder 线程读,@Volatile 保证可见性。
     @Volatile private var routingState = ROUTING_STATE_DISABLED
