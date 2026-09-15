@@ -123,7 +123,7 @@ func resolvePingCmd(candidates []string, loopback string) (string, error) {
 
 func (p *Preference) checkPingCommands() {
 	if pingPath, err := resolvePingCmd(pingCandidates, "127.0.0.1"); err != nil {
-		slog.Warn("ping command not available, fallback to TCP for IPv4", "error", err)
+		slog.Warn("ping command not available for IPv4", "error", err)
 	} else {
 		p.hasPing = true
 		p.pingPath = pingPath
@@ -143,7 +143,7 @@ func (p *Preference) checkPingCommands() {
 				return
 			}
 		}
-		slog.Warn("ping6 command not available, fallback to TCP for IPv6", "error", err)
+		slog.Warn("ping6 command not available for IPv6", "error", err)
 	} else {
 		p.hasPing6 = true
 		p.ping6Path = ping6Path
@@ -179,9 +179,6 @@ func (p *Preference) PreferIPs(ctx context.Context, ips []string) string {
 			switch p.mode {
 			case PreferPing:
 				lat, ok = p.pingLatency(ctx, ip)
-				if !ok {
-					lat, ok = p.tcpLatency(ctx, ip)
-				}
 			case PreferTCP:
 				lat, ok = p.tcpLatency(ctx, ip)
 			default:
