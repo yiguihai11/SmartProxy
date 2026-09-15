@@ -1,7 +1,9 @@
 plugins {
-    // 只剩 AGP:Kotlin 编译走 AGP 9 内置 Kotlin(根 build.gradle.kts 把内置 KGP
-    // 顶到 2.4.20),Compose 编译器由 buildFeatures.compose=true 自动接线。
+    // AGP 9 内置 Kotlin 接管 Kotlin 编译(不再 apply org.jetbrains.kotlin.android,
+    // 根 build.gradle.kts buildscript classpath 把内置 KGP 顶到 2.4.20);
+    // Compose 编译器插件仍需显式声明(内置 Kotlin 不管它,缺了直接构建报错)。
     id("com.android.application")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 // 版本号:HEAD 顶在 tag 上为干净号(如 1.1),tag 后提交为 1.1-3-g2d27600。

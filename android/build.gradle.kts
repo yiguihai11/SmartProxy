@@ -18,7 +18,11 @@ buildscript {
 
 plugins {
     // AGP 9.x 最新特性线(9.4.0),与 Gradle 9.6.0 配套。
-    // Kotlin Android / Compose 编译器插件都不再声明:AGP 9 内置 Kotlin 接管 Kotlin
-    // 编译,buildFeatures.compose=true 时 AGP 自动接线 Compose 编译器。
     id("com.android.application") version "9.4.0" apply false
+    // Kotlin Android 插件不再需要(AGP 9 内置 Kotlin 接管),但 Compose 编译器是
+    // 独立的 Kotlin 编译器插件:Kotlin 2.0+ 只要 buildFeatures.compose=true 就必须
+    // 显式 apply org.jetbrains.kotlin.plugin.compose,AGP 9.4 不会替你自动应用
+    // (否则报 "the Compose Compiler Gradle plugin is required when compose is enabled")。
+    // 版本必须与 buildscript classpath 上的 KGP 2.4.20 对齐。
+    id("org.jetbrains.kotlin.plugin.compose") version "2.4.20" apply false
 }
