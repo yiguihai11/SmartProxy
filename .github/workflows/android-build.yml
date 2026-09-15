@@ -61,7 +61,7 @@ jobs:
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "VERSION_CODE=$((100000 + $(git rev-list --count HEAD)))" >> "$GITHUB_ENV"
 
-      # JDK 21 (LTS):AGP 8.13 / Gradle 8.14 都支持,比 17 新的 LTS。
+      # JDK 21 (LTS):AGP 9.4 / Gradle 9.6 都支持,比 17 新的 LTS。
       - name: Set up JDK 21
         uses: actions/setup-java@v6
         with:
