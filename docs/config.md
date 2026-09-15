@@ -111,7 +111,8 @@
 | Go 字段 | JSON 键 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `Enabled` | `enabled` | `true` | 是否启用智能代理 |
-| `Timeout` | `timeout` | `3` | 建连探测超时（秒） |
+| `Timeout` | `timeout` | `2` | 建连探测超时（秒），若配置 `timeout_ms` 则以毫秒优先 |
+| `TimeoutMs` | `timeout_ms` | 可选（默认 2000ms） | 建连探测超时（毫秒），支持 1100 等亚秒级粒度 |
 | `Ports` | `ports` | `[80, 443]` | 智能代理目标端口 |
 | `BlacklistTTL` | `blacklist_ttl` | `300` | 失败黑名单 TTL（秒） |
 | `Quic` | `quic` | 见下（默认 `enabled=false`） | UDP/443 QUIC(HTTP/3) 被动 SNI 嗅探 + GFW 黑洞自愈子结构，字段见下表 |
@@ -135,7 +136,7 @@
 | --- | --- |
 | `listen.port` 在 1~65535 | 否则报错 |
 | `dns.query_timeout > 0` | 必须为正 |
-| `smart_proxy.timeout > 0` | 必须为正 |
+| `smart_proxy.timeout > 0` 或 `smart_proxy.timeout_ms > 0` | 至少一个必须为正 |
 | `smart_proxy.blacklist_ttl > 0` | 必须为正 |
 | `smart_proxy.quic` 启用时 | `ports` 非空、每端口在 1~65535、`max_buffered > 0`、`hold_ms >= 0`、`timeout_ms > 0`；`enabled=false` 时不校验（老配置无 `quic` 段照常加载） |
 | `dns.cache.size > 0` | 必须为正 |

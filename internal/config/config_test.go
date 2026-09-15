@@ -24,8 +24,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Upstream.Default != "failover" {
 		t.Errorf("expected Upstream.Default=failover, got %s", cfg.Upstream.Default)
 	}
-	if cfg.SmartProxy.Timeout != 3 {
-		t.Errorf("expected SmartProxy.Timeout=3, got %d", cfg.SmartProxy.Timeout)
+	if cfg.SmartProxy.Timeout != 2 {
+		t.Errorf("expected SmartProxy.Timeout=2, got %d", cfg.SmartProxy.Timeout)
 	}
 	if len(cfg.SmartProxy.Ports) != 2 {
 		t.Errorf("expected 2 smart ports, got %d", len(cfg.SmartProxy.Ports))
@@ -887,8 +887,8 @@ func TestSmartProxy_TimeoutMs(t *testing.T) {
 	// Test SmartTimeout method behavior
 	t.Run("defaults", func(t *testing.T) {
 		sp := SmartProxyConf{}
-		if got := sp.SmartTimeout(); got != 3*time.Second {
-			t.Errorf("expected 3s default, got %v", got)
+		if got := sp.SmartTimeout(); got != 2*time.Second {
+			t.Errorf("expected 2s default, got %v", got)
 		}
 	})
 

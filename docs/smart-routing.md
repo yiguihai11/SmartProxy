@@ -47,7 +47,7 @@ SelectProxy(host, port, domain, engine)
 ```
 
 - 直连成功还需**读取验证**：`io.ReadFull` 读 1 字节证明目标确实响应；这 1 字节用 `prefixedConn` 塞回 relay 首包，避免丢数据（`TestPrefixedConn_*` 覆盖）。
-- `smartTimeout` 默认 3s（`config.SmartProxy.Timeout`），dial / write / read 三个阶段共用。
+- `smartTimeout` 默认 2s（`config.SmartProxy.Timeout` / `timeout_ms`），dial / write / read 三个阶段共用。
 - `simplifyError` 把 `net.OpError` 规约为 `i/o timeout` / `connection refused` / `no route to host` 等简短原因，用于日志与黑名单 reason。
 - 非 smart 路径 `EstablishConnection`：先规则选路（direct / alias），否则 `isDomesticHost` → 直连，最后兜底 `upstreamMgr.Connect`（返回状态 `proxy` / `direct` / `failed`）。
 

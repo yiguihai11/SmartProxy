@@ -224,7 +224,7 @@ func (s SmartProxyConf) SmartTimeout() time.Duration {
 	if s.Timeout > 0 {
 		return time.Duration(s.Timeout) * time.Second
 	}
-	return 3 * time.Second
+	return 2 * time.Second
 }
 
 // SmartProxyQuicConf 配置 UDP/443 QUIC(HTTP/3)被动 SNI 识别与 GFW 黑洞自愈。
@@ -667,7 +667,7 @@ func DefaultConfig() *Config {
 		},
 		SmartProxy: SmartProxyConf{
 			Enabled:      true,
-			Timeout:      3,
+			Timeout:      2,
 			Ports:        []int{80, 443},
 			BlacklistTTL: 300,
 		},
