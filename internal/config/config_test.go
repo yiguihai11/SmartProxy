@@ -38,6 +38,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Upstream.HealthCheck.UDPProbeDomain != "dns.google" {
 		t.Errorf("expected UDPProbeDomain=dns.google, got %q", cfg.Upstream.HealthCheck.UDPProbeDomain)
 	}
+	if cfg.TUN.Stack != "gvisor" {
+		t.Errorf("expected TUN.Stack=gvisor, got %q", cfg.TUN.Stack)
+	}
 	if !cfg.Listen.AdminHTTPS {
 		t.Error("expected Listen.AdminHTTPS=true by default")
 	}

@@ -32,6 +32,9 @@ func (c *Config) applyDefaults() {
 	if c.Upstream.Default == "" {
 		c.Upstream.Default = "failover"
 	}
+	if c.TUN.Stack == "" {
+		c.TUN.Stack = "gvisor"
+	}
 	if c.Routing.ChnrouteFile == "" {
 		c.Routing.ChnrouteFile = "chnroute.txt"
 	}

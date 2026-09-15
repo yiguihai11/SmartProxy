@@ -28,7 +28,7 @@ type TUNConfig struct {
 	AutoRoute      bool     `json:"auto_route"`
 	AutoRedirect   bool     `json:"auto_redirect"`
 	FileDescriptor int      `json:"-"`
-	Stack          string   `json:"stack,omitempty"`
+	Stack          string   `json:"stack"`
 	// OutputMark applies SO_MARK to outbound connections made by the router itself
 	// (so routing rules can identify and exclude it, preventing loops). 0 = disabled
 	// (default, zero behavior change); >0 = enabled and uses this mark value.
@@ -615,7 +615,7 @@ func DefaultConfig() *Config {
 			Address:           []string{"172.19.0.1/30"},
 			AutoRoute:         false,
 			AutoRedirect:      false,
-			Stack:             "",
+			Stack:             "gvisor",
 			OutputMark:        0,
 			RouteExcludePorts: []int{22},
 		},

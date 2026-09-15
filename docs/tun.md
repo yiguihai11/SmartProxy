@@ -48,13 +48,13 @@ stackOpts := singtun.StackOptions{
     ICMPTimeout:    30 * time.Second,
     MemoryPressure: GetMemoryPressure,     // 接入内存压力感知 (0=None, 1=Warning, 2=Critical)
 }
-s, err := NewTUNStack(cfg.Stack, stackOpts)  // singtun.NewStack, cfg.Stack 留空即默认自研 Go 栈
+s, err := NewTUNStack(cfg.Stack, stackOpts)  // singtun.NewStack, 默认使用稳定成熟的 gvisor 栈
 ```
 
 要点：
 
 - `NewTUN` / `NewTUNStack` 是 `singtun.New` / `singtun.NewStack` 的别名（`handler.go` 底部 `var NewTUN = singtun.New; var NewTUNStack = singtun.NewStack`）。
-- **协议栈选择与自研 Go Stack**：sing-tun 自 0.9.4+ / sing-box 1.15+ 起引入自研轻量级原生 `go` 协议栈，性能与能效大幅超越旧 gVisor 栈。当 `cfg.Stack` 留空（默认推荐）时直接传空串给 `NewTUNStack`，由 sing-tun 自动使用原生自研轻量级协议栈；同时兼容旧配置显式指定的 `"gvisor"`、`"system"` 或 `"mixed"`。
+- **协议栈选择（gVisor 默认）**：`cfg.Stack` 默认值设为 `"gvisor"`（成熟、稳固、全平台兼容零拷贝；移动端 Android VpnService 必须使用此栈）；可选兼容支持 `"system"`、`"mixed"` 或实验性桌面 `"go"` 栈。如果传入空串 `""`，工程内部自动补全为 `"gvisor"` 保底。
 - **内存压力感知（MemoryPressure）**：通过 `StackOptions.MemoryPressure` 接口注入当前系统内存压力级别。在 Android 端联动 `ComponentCallbacks2.onTrimMemory`，在低内存时及时收缩 TCP 缓冲区以防被系统 OOM Killer 杀进程。
 - **透明重定向（AutoRedirect）**：`AutoRedirectMarkMode` 支持配合 Linux nftables 对打标流量自动重定向进 TUN。
 - **UDPTimeout/ICMPTimeout 必须非零**：sing-tun 的 UDP forwarder 在 `timeout == 0` 时内部 `udpnat.New` 会直接 panic（源码注释记录：此前漏设导致 TUN 无法启动）。本项目显式设为 `5min / 30s`。
@@ -161,7 +161,7 @@ if isFdMode {
 创建 InterfaceMonitor（NativeTun.Start 内部依赖 RegisterMyInterface，非 nil 否则 panic）
   → 创建 TUN（singtun.New，普通模式只配置 MTU + 地址，此时接口还是 DOWN）
   → t.Start()（关键：netlink.LinkSetUp 把接口置 UP；auto_route=true 时安装源策略路由/规则）
-  → 创建 stack（singtun.NewStack，空串默认使用原生自研高性能 go 栈）
+  → 创建 stack（singtun.NewStack，默认使用稳定成熟的 gvisor 栈）
   → s.Start()（协议栈开始接收包，仅初始化 IP 栈，不碰 tun 接口状态）
   → t.Name() 记录接口名
 ```
@@ -239,7 +239,7 @@ nftables（inet smartproxy，type route output 链，只改 mark 不丢包）
 
 | 项目用法 | 库定义 | 备注 |
 | --- | --- | --- |
-| `NewTUNStack = singtun.NewStack` | `NewStack(stack string, options StackOptions) (Stack, error)`（`stack.go`） | 空串/`""` → 默认自研原生 `NewGo` 栈；显式 `"gvisor"` → `NewGVisor` |
+| `NewTUNStack = singtun.NewStack` | `NewStack(stack string, options StackOptions) (Stack, error)`（`stack.go`） | 默认 `"gvisor"`；空串自动补全为 `"gvisor"`；可选 `"system"`、`"mixed"` 或 `"go"` |
 | `StackOptions{Context, Tun, TunOptions, Handler, MemoryPressure}` | `Handler Handler`, `MemoryPressure func() MemoryPressure`（`stack.go`） | `TUNHandler` 实现它；接入内存感知回调 |
 | `singtun.New(tunOpts)` | `New(options Options) (Tun, error)`，平台分文件（`tun_linux.go` / `tun_darwin.go` / `tun_windows.go` / `tun_other.go`） | Linux 打开 `/dev/net/tun`（`open()` + `TUNSETIFF`），需 root / CAP_NET_ADMIN |
 | `Options.FileDescriptor` | 非 0 时 `os.NewFile(uintptr(options.FileDescriptor), "tun")`（`tun_linux.go:64,74`） | fd 模式依据；fd 模式下 `Start()`/`unsetRoute` 等跳过 OS 配置 |

@@ -24,7 +24,8 @@
     "address": [
       "172.19.0.1/30"
     ],
-    "auto_route": false
+    "auto_route": false,
+    "stack": "gvisor"
   },
   "upstream": {
     "default": "failover",
