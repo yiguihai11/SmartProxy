@@ -3,7 +3,6 @@ package io.github.yiguihai11.smartproxy
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.InetAddresses
-import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import android.util.LruCache
@@ -53,9 +52,6 @@ class UIDResolver(context: Context) : smartproxy.mobile.UIDResolver {
         remoteIP: String,
         remotePort: Int
     ): Int {
-        // 只支持 API 29+:老系统无 UID 反查通道(/proc/net 不可读),直接放行不拦。
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return UNKNOWN
-
         val cacheKey = "$proto:$localPort:$remoteIP:$remotePort"
         val now = SystemClock.elapsedRealtime()
 
@@ -70,16 +66,8 @@ class UIDResolver(context: Context) : smartproxy.mobile.UIDResolver {
         // 2. 缓存未命中,发起系统 IPC 调用
         return try {
             val manager = cm ?: return UNKNOWN
-            val localAddr = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                InetAddresses.parseNumericAddress(localIP)
-            } else {
-                java.net.InetAddress.getByName(localIP)
-            }
-            val remoteAddr = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                InetAddresses.parseNumericAddress(remoteIP)
-            } else {
-                java.net.InetAddress.getByName(remoteIP)
-            }
+            val localAddr = InetAddresses.parseNumericAddress(localIP)
+            val remoteAddr = InetAddresses.parseNumericAddress(remoteIP)
             val local = InetSocketAddress(localAddr, localPort)
             val remote = InetSocketAddress(remoteAddr, remotePort)
 

@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.DeadObjectException
 import android.os.Handler
 import android.os.IBinder
@@ -24,15 +23,11 @@ private const val TAG = "ShizukuSyncReceiver"
 class ShizukuRoutingSyncReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         intent.setExtrasClassLoader(HotspotRoutingSync::class.java.classLoader)
-        val update = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent.getSerializableExtra("content", HotspotRoutingSync::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            intent.getSerializableExtra("content") as? HotspotRoutingSync
-        } ?: run {
-            Log.w(TAG, "Ignoring malformed hotspot synchronization broadcast")
-            return
-        }
+        val update = intent.getSerializableExtra("content", HotspotRoutingSync::class.java)
+            ?: run {
+                Log.w(TAG, "Ignoring malformed hotspot synchronization broadcast")
+                return
+            }
         // 慢同步(建测试网络/等 tethering 状态,可达 30s)交给进程级单例 dispatcher 的 worker
         // 线程异步跑,不用 goAsync:慢路径只在 EVENT_CORE_STARTED 触发,此刻 VPN 前台服务(FGS)
         // 活着、进程不会被回收;而 goAsync 只有 ~10s 预算,onReceive 里同步等 synchronizeRouting

@@ -7,12 +7,10 @@ import android.net.IpPrefix
 import android.net.LinkAddress
 import android.net.LinkProperties
 import android.net.Network
-import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.annotation.Keep
-import androidx.annotation.RequiresApi
 import io.github.yiguihai11.smartproxy.BuildConfig
 import org.json.JSONObject
 import rikka.shizuku.Shizuku
@@ -177,9 +175,6 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
     }
 
     override fun setWifiHotspotEnabled(enabled: Boolean): Int = runRoutingWork {
-        if (enabled && Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            return@runRoutingWork RESULT_ROUTING_FAILED
-        }
         val result = setTetheringEnabled(TETHERING_TYPE_WIFI, enabled)
         if (result == RESULT_OK) {
             val bit = tetheringTypeBit(TETHERING_TYPE_WIFI)
@@ -227,9 +222,8 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
     }
 
     private fun hasDelegatedIpv6Prefix(interfaceName: String): Boolean {
-        val prefix = TETHERING_IPV6_PREFIX ?: return false
         val addresses = NetworkInterface.getByName(interfaceName)?.inetAddresses ?: return false
-        return addresses.asSequence().any(prefix::contains)
+        return addresses.asSequence().any(TETHERING_IPV6_PREFIX::contains)
     }
 
     private fun currentRoutingStateLocked(): Int {
@@ -309,9 +303,6 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         launchId: String,
         coreLease: ICoreTetheringLease,
     ): Int {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            return RESULT_ROUTING_FAILED
-        }
         // launchId 代次校验:停→启竞态里在途的旧 EVENT 带旧 launchId,isCurrentLaunch 判 false
         // 即静默丢弃——绝不把已换代(或已死)主 core 的配置应用到一个还活着的会话上。
         if (!coreLease.isCurrentLaunch(launchId)) {
@@ -361,7 +352,6 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         return result
     }
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun startRoutingLocked(config: HotspotRoutingLaunchConfig, activeTypes: Int): Int {
         if (routingActive) {
             routingDetail = "Tethering routing is already active"
@@ -389,7 +379,6 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun createRoutingLocked(config: HotspotRoutingLaunchConfig) {
         cleanupRouting()
         routingState = ROUTING_STATE_STARTING
@@ -489,9 +478,6 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         launchId: String,
         coreLease: ICoreTetheringLease,
     ): Int = runRoutingWork {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            return@runRoutingWork RESULT_ROUTING_FAILED
-        }
         // 同 startRouting:代次不符的同步静默丢弃。
         if (!coreLease.isCurrentLaunch(launchId)) {
             Log.i(TAG, "Ignoring tethering synchronization for a replaced core launch")
@@ -590,7 +576,6 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         coreLifetime = null
     }
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun applyRoutingConfigLocked(
         launchConfig: HotspotRoutingLaunchConfig,
         session: RoutingSession,
@@ -932,7 +917,6 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         }.getOrDefault(RESULT_INTERNAL_ERROR)
     }
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun rebuildRoutingLocked(config: HotspotRoutingLaunchConfig, restoreTypes: Int): Int {
         val stopResult = stopActiveTetheringLocked(clearDesired = false)
         check(stopResult == RESULT_OK) {
@@ -948,7 +932,6 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         Log.w(TAG, routingDetail)
     }
 
-    @RequiresApi(Build.VERSION_CODES.Q)
     private fun createTestNetwork(dnsServers: List<String>, ipv6Enabled: Boolean) {
         val manager = checkNotNull(shellContext.getSystemService(TEST_NETWORK_SERVICE)) {
             "TestNetworkManager is unavailable"
@@ -1197,14 +1180,12 @@ class ShizukuTetheringService(context: Context) : IShizukuTetheringService.Stub(
         val USER_SERVICE_VERSION: Int = BuildConfig.ShizukuServiceVersion
         private const val TETHERING_SERVICE = "tethering"
         private const val TEST_NETWORK_SERVICE = "test_network"
-        private val TETHERING_IPV6_PREFIX = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            HotspotRoutingConfig.SHIZUKU_TUN_ADDR_V6.let { cidr ->
-                IpPrefix(
-                    InetAddress.getByName(cidr.substringBefore('/')),
-                    cidr.substringAfter('/').toInt(),
-                )
-            }
-        } else null
+        private val TETHERING_IPV6_PREFIX = HotspotRoutingConfig.SHIZUKU_TUN_ADDR_V6.let { cidr ->
+            IpPrefix(
+                InetAddress.getByName(cidr.substringBefore('/')),
+                cidr.substringAfter('/').toInt(),
+            )
+        }
         private const val SHELL_RUNTIME_DIR = "/data/local/tmp"
         private const val ASSET_DIRECTORY_NAME = "smartproxy-tethering-assets"
         private const val CALLBACK_TIMEOUT_SECONDS = 10L

@@ -3,7 +3,6 @@ package io.github.yiguihai11.smartproxy
 import android.app.PendingIntent
 import android.content.Intent
 import android.net.VpnService
-import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import kotlinx.coroutines.CoroutineScope
@@ -52,12 +51,10 @@ class QuickToggleService : TileService() {
     private fun renderTile(running: Boolean) {
         val tile = qsTile ?: return
         tile.state = if (running) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
-        // subtitle API 29+;磁贴标签/图标由 manifest 固定为 app_name/白盾牌
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            tile.subtitle = getString(
-                if (running) R.string.tile_connected else R.string.tile_disconnected
-            )
-        }
+        // 磁贴副标题(minSdk 31 原生支持);磁贴标签/图标由 manifest 固定为 app_name/白盾牌
+        tile.subtitle = getString(
+            if (running) R.string.tile_connected else R.string.tile_disconnected
+        )
         tile.updateTile()
     }
 
@@ -77,17 +74,11 @@ class QuickToggleService : TileService() {
         val intent = Intent(this, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             .putExtra(EXTRA_START_VPN, true)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // API 30+:startActivityAndCollapse 只收 PendingIntent
-            val pi = PendingIntent.getActivity(
-                this, 0, intent,
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            )
-            startActivityAndCollapse(pi)
-        } else {
-            @Suppress("DEPRECATION")
-            startActivityAndCollapse(intent)
-        }
+        val pi = PendingIntent.getActivity(
+            this, 0, intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        startActivityAndCollapse(pi)
     }
 
     override fun onDestroy() {

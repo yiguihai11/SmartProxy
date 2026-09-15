@@ -127,16 +127,16 @@ android:
 	# 所以 -javapkg=smartproxy → Java 包 smartproxy.mobile,类 smartproxy.mobile.Mobile。
 	# 若写 -javapkg=smartproxy.mobile 会得到 smartproxy.mobile.mobile(多一层),别踩。
 	# -androidapi:gomobile 默认 16,而 CI 显式安装的 NDK r30 只支持 21..37,必须 >=21。
-	# 用 26 = app 的 minSdk:该值同时写进 AAR 的 minSdkVersion(manifestFmt),若用 35 会
-	# 和 app 的 minSdk 26 冲突导致 manifest 合并失败。AndroidAPIPath(26) 会选已装的
-	# platforms/android-36(>=26 的最高版)当编译用的 android.jar。
+	# 用 33 = app 的 minSdk(Android 13):该值同时写进 AAR 的 minSdkVersion(manifestFmt),
+	# 若用 35 会和 app 的 minSdk 冲突导致 manifest 合并失败。AndroidAPIPath(33) 会选已装的
+	# platforms/android-36(>=33 的最高版)当编译用的 android.jar。
 	# -ldflags="$(LDFLAGS)":$(LDFLAGS) 已含 -s -w(剥 DWARF/符号表瘦身)+ 三个 -X 版本
 	# 注入(Version/GitCommit/BuildTime)。之前 android 只传 -s -w,版本没注入,导致 AAR 里
 	# Go 引擎 version.Version 恒为默认 1.0,web 控制面板 /version 永远显示 1.0 不跟随。
 	# gomobile 把 -ldflags 整个字符串透传给 go build,单引号(BuildTime 含空格)由 go 的
 	# quoted.Split 解析,跟桌面 go build -ldflags="$(LDFLAGS)" 完全等价。
 	# -trimpath:剥源码绝对路径。配合 ABI 分包 + APK 内 .so 压缩控体积。
-	gomobile bind -tags with_gvisor -target=android -androidapi=26 -javapkg=smartproxy \
+	gomobile bind -tags with_gvisor -target=android -androidapi=33 -javapkg=smartproxy \
 		-ldflags="$(LDFLAGS)" -trimpath -o $(OUTDIR)/smartproxy.aar ./mobile
 	@echo "=> $(OUTDIR)/smartproxy.aar"
 

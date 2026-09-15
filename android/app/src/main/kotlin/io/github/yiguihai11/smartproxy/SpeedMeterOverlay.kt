@@ -42,7 +42,7 @@ import kotlin.math.hypot
  * δ 速率 = 本快照累计字节 − 上一次;和联网状态页共用采集闸 ConnStatsGate(悬浮窗
  * 是第二个消费者,显示期间持有一份采集)。
  *
- * 视图用经典 View + WindowManager(TYPE_APPLICATION_OVERLAY,API 26 = minSdk,无需
+ * 视图用经典 View + WindowManager(TYPE_APPLICATION_OVERLAY,minSdk 31 原生支持,无需
  * 兼容分支);轮询在独立 HandlerThread,碰视图/WM 一律 post 回主线程。
  */
 object SpeedMeterOverlay {

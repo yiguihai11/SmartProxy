@@ -2,7 +2,6 @@ package io.github.yiguihai11.smartproxy
 
 import android.content.Intent
 import android.net.VpnService
-import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.ServiceCompat
@@ -299,26 +298,22 @@ class SmartProxyVpnService : VpnService() {
                 Log.i(TAG, "[establishVpn] IPv6 address=${inet6.ip}/${inet6.prefix}, route=::/0, DNS=$effectiveDnsV6")
             }
 
-            // 排除路由 (excludeRoute, 仅限 Android 13+ / API 33+ 特性)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                val excluded = AppPrefs.excludedRoutes(this)
-                if (excluded.isNotEmpty()) {
-                    Log.i(TAG, "[establishVpn] Applying ${excluded.size} excludeRoute rules (API 33+)...")
-                    excluded.forEach { cidrStr ->
-                        if (cidrStr.isNotBlank()) {
-                            try {
-                                val cidr = TunConfig.parseCidr(cidrStr.trim())
-                                val inetAddr = java.net.InetAddress.getByName(cidr.ip)
-                                builder.excludeRoute(android.net.IpPrefix(inetAddr, cidr.prefix))
-                                Log.i(TAG, "[establishVpn] Excluded route: ${cidr.ip}/${cidr.prefix}")
-                            } catch (e: Exception) {
-                                Log.w(TAG, "[establishVpn] Failed to parse excludeRoute '$cidrStr': ${e.message}")
-                            }
+            // 排除路由 (excludeRoute, API 33+ 特性, minSdk 33 原生支持)
+            val excluded = AppPrefs.excludedRoutes(this)
+            if (excluded.isNotEmpty()) {
+                Log.i(TAG, "[establishVpn] Applying ${excluded.size} excludeRoute rules...")
+                excluded.forEach { cidrStr ->
+                    if (cidrStr.isNotBlank()) {
+                        try {
+                            val cidr = TunConfig.parseCidr(cidrStr.trim())
+                            val inetAddr = java.net.InetAddress.getByName(cidr.ip)
+                            builder.excludeRoute(android.net.IpPrefix(inetAddr, cidr.prefix))
+                            Log.i(TAG, "[establishVpn] Excluded route: ${cidr.ip}/${cidr.prefix}")
+                        } catch (e: Exception) {
+                            Log.w(TAG, "[establishVpn] Failed to parse excludeRoute '$cidrStr': ${e.message}")
                         }
                     }
                 }
-            } else {
-                Log.i(TAG, "[establishVpn] Current SDK ${Build.VERSION.SDK_INT} < 33, excludeRoute skipped.")
             }
 
             // 流量模式(§4):M1 默认"仅绕过(global)",M2/M5 从 AppPrefs 喂选中列表。
@@ -406,15 +401,9 @@ class SmartProxyVpnService : VpnService() {
                 smartproxy.mobile.Mobile.startRouter(configPath, goFd.toLong(), true)
                 Log.i(TAG, "[establishVpn] Mobile.startRouter() returned successfully in ${System.currentTimeMillis() - t0} ms. (goFd=$goFd, kotlinPfd=${pfd.fd}, tunFds=${tunFdCount()})")
                 tunPfd = pfd
-                // 绑定 Underlying Networks:通知系统底层网络状态,API 29+ 传 null 自动跟踪默认物理网络(Wi-Fi/移动数据漫游不断流);
-                // API 28 及以下显式传入当前活跃网络。
+                // 绑定 Underlying Networks:通知系统底层网络状态,API 29+(minSdk 31)传 null 自动跟踪默认物理网络(Wi-Fi/移动数据漫游不断流)。
                 try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        setUnderlyingNetworks(null)
-                    } else {
-                        val cm = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
-                        cm?.activeNetwork?.let { setUnderlyingNetworks(arrayOf(it)) }
-                    }
+                    setUnderlyingNetworks(null)
                 } catch (e: Exception) {
                     Log.w(TAG, "[establishVpn] Failed to setUnderlyingNetworks: ${e.message}")
                 }
@@ -641,7 +630,7 @@ class SmartProxyVpnService : VpnService() {
 
     /** 系统低内存水位通知:映射 Android TRIM_MEMORY 水位到 sing-tun MemoryPressure 接口 (0=None, 1=Warning, 2=Critical),
      *  通知 Go 协议栈执行缓冲收缩与 GC 回收,降低前台进程被 OOM Killer 杀死的风险。
-     *  TRIM_MEMORY_* 常量在 API 35 废弃(API 34+ 系统不再派发细分级别),但 minSdk=26 需兼容 Android 8~13 旧设备。 */
+     *  TRIM_MEMORY_* 常量在 API 35 废弃(API 34+ 系统不再派发细分级别),但 minSdk=31 需兼容 Android 12~13 设备。 */
     @Suppress("DEPRECATION")
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)

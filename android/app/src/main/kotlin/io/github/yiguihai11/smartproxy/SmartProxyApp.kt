@@ -5,10 +5,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.Build
 import androidx.core.content.ContextCompat
 import io.github.yiguihai11.smartproxy.shizuku.ShizukuForegroundRecovery
-import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -55,21 +53,8 @@ class SmartProxyApp : Application() {
         }
     }
 
-    /** 主进程判定。API 28+ 用 Application.getProcessName();26/27 读 /proc/self/cmdline
-     *  (本 App 只有主进程与 :shizuku_tethering,cmdline 前缀即 applicationId)。 */
-    private fun isMainProcess(): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            return Application.getProcessName() == packageName
-        }
-        return try {
-            val bytes = File("/proc/self/cmdline").readBytes()
-            val end = bytes.indexOf(0)
-            val cmd = if (end < 0) bytes else bytes.copyOfRange(0, end)
-            String(cmd) == packageName
-        } catch (_: Exception) {
-            true // 兜底:读不到就当主进程,最坏情况只是多一次无害的预加载
-        }
-    }
+    /** 主进程判定(API 28+ 用 Application.getProcessName(),minSdk 31 原生可用)。 */
+    private fun isMainProcess(): Boolean = Application.getProcessName() == packageName
 
     /** 启动即后台预加载分应用列表:用户在 MainActivity 操作、点进应用选择页时缓存早已就绪。 */
     private fun preloadAppList() {

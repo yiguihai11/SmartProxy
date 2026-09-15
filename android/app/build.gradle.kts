@@ -39,7 +39,7 @@ android {
 
     defaultConfig {
         applicationId = "io.github.yiguihai11.smartproxy"
-        minSdk = 26
+        minSdk = 33
         targetSdk = 35
         versionCode = ciVersionCode
         versionName = ciVersion

@@ -4,7 +4,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -285,9 +284,8 @@ private fun AppSelectionScreen(
     // 角标语义随模式翻转:仅代理=绿"仅代理",仅绕过=红"已排除"(sockstun 同款)。
     val proxyMode = !mode
 
-    // 「禁止联网」只在 API 29+ 可用(getConnectionOwnerUid 唯一重载的起点);
-    // 低于此隐藏全部相关 UI(按钮/白名单提示/统计),不误导用户。
-    val blockSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+    // 「禁止联网」在 minSdk 31(Android 12+)原生全面支持(API 29+ 起始)。
+    val blockSupported = true
 
     // 流量模式卡随列表滚动收起:滚离顶部(>48px)隐藏,回到顶部再显示(§5 UX)。
     // 搜索 / tab / 统计条保持固定,过滤随时可用;只有模式卡让出屏幕空间。

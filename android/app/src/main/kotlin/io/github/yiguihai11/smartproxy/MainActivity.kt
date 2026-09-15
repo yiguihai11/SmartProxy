@@ -13,7 +13,6 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.VpnService
-import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
@@ -263,9 +262,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun ensureNotifyPermission() {
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
         ) {
             notifyPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -284,7 +282,6 @@ class MainActivity : ComponentActivity() {
      *     +pkg` 静默加白、不弹窗,失败/无 Shizuku 才回退 AOSP「忽略电池优化」系统弹框。
      *  弹框路径受 MAX_BATTERY_OPT_ASKS 次上限约束防误触;Shizuku 静默成功不计次数。 */
     private fun maybeRequestBatteryOptimizationExemption() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
         // OriginOS(vivo/iQOO)智能冻结独立于 AOSP doze 白名单,shell 加白也盖不住,
         // 只能走厂商深链引导。
         if (isOriginOS()) {
@@ -679,9 +676,9 @@ private fun AppDrawerContent(
                 )
             }
 
-            // 侧边栏菜单项：排除路由(builder.excludeRoute,仅 VPN 隧道模式 + API 33+ 特性;
+            // 侧边栏菜单项：排除路由(builder.excludeRoute,仅 VPN 隧道模式;
             // 仅代理 SOCKS5 无 VpnService,excludeRoute 不生效,入口一并隐藏(§6.1))。
-            if (serviceMode == AppPrefs.MODE_VPN && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (serviceMode == AppPrefs.MODE_VPN) {
                 DrawerMenuItem(
                     title = stringResource(R.string.drawer_exclude),
                     subtitle = stringResource(R.string.drawer_exclude_subtitle),
@@ -696,10 +693,10 @@ private fun AppDrawerContent(
                 onClick = onOpenServiceMode
             )
 
-            // 侧边栏菜单项：网络共享 (Shizuku 免 Root 共享代理至热点/USB, Android 13+ 支持)。
+            // 侧边栏菜单项：网络共享 (Shizuku 免 Root 共享代理至热点/USB)。
             // 只挂 TUN 数据路径(Shizuku 读 TUN fd 转发到热点),仅代理(SOCKS5)模式无 TUN 可
             // 共享,入口一并隐藏(§6.1)。
-            if (serviceMode == AppPrefs.MODE_VPN && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (serviceMode == AppPrefs.MODE_VPN) {
                 DrawerMenuItem(
                     title = stringResource(R.string.drawer_tethering),
                     subtitle = stringResource(R.string.drawer_tethering_subtitle),

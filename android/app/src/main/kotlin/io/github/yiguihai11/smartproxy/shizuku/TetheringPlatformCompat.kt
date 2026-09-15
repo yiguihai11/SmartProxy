@@ -32,7 +32,7 @@ internal object TetheringPlatformCompat {
         executor: Executor,
         onChanged: () -> Unit,
     ): TetheringUpstreamMonitor {
-        require(Build.VERSION.SDK_INT in Build.VERSION_CODES.TIRAMISU until Build.VERSION_CODES.BAKLAVA)
+        require(Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA)
         val callbackClass = Class.forName(TETHERING_EVENT_CALLBACK_CLASS)
         check(callbackClass.isInterface) { "Tethering event callback is not an interface" }
         val interfaceClass = Class.forName("android.net.TetheringInterface")
@@ -102,7 +102,6 @@ internal object TetheringPlatformCompat {
 
     @SuppressLint("NewApi")
     fun startTethering(service: Any, type: Int, executor: Executor, timeoutSeconds: Long): Int {
-        require(Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
         val manager = service as TetheringManager
         var result = ShizukuTetheringService.RESULT_INTERNAL_ERROR
         val callbackReceived = CountDownLatch(1)
@@ -125,7 +124,7 @@ internal object TetheringPlatformCompat {
     }
 
     fun getTetheredInterfaces(service: Any): List<ActiveTetheringInterface> {
-        require(Build.VERSION.SDK_INT in Build.VERSION_CODES.TIRAMISU until Build.VERSION_CODES.BAKLAVA)
+        require(Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA)
         val monitor = service
         val interfaces = invokeStringList(monitor, "getTetheredIfaces")
             ?: error("TetheringManager.getTetheredIfaces is unavailable")
@@ -140,7 +139,7 @@ internal object TetheringPlatformCompat {
     }
 
     fun stopTethering(service: Any, type: Int): Int {
-        require(Build.VERSION.SDK_INT in Build.VERSION_CODES.TIRAMISU until Build.VERSION_CODES.BAKLAVA)
+        require(Build.VERSION.SDK_INT < Build.VERSION_CODES.BAKLAVA)
         val method = service.javaClass.methods.firstOrNull {
             it.name == "stopTethering" && it.parameterTypes.contentEquals(arrayOf(Integer.TYPE))
         } ?: error("TetheringManager.stopTethering(int) is unavailable")
