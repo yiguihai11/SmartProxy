@@ -268,11 +268,12 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 		return conn, nil, true, nil
 	}
 
-	ll.Info("attempting smart proxy direct connection", "host", host, "port", port, "domain", domain, "timeout", cfg.smartTimeout)
+	start := time.Now()
+	ll.Info("attempting smart proxy direct connection", "host", host, "port", port, "domain", domain, "timeout_ms", cfg.smartTimeout.Milliseconds())
 	conn, err := dialTCP(ctx, host, port, cfg.smartTimeout)
 	if err != nil {
 		shortReason := simplifyError(err, host, port)
-		ll.Warn("direct connection failed, falling back to proxy", "host", host, "port", port, "domain", domain, "reason", shortReason)
+		ll.Warn("direct connection failed, falling back to proxy", "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds(), "reason", shortReason)
 		r.addToBlacklists(host, port, domain, shortReason)
 
 		proxyConn, pErr := r.upstreamMgr.ConnectDefault(ctx, host, port)
@@ -293,7 +294,7 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 		r.addToBlacklists(host, port, domain, shortReason)
 		if wn == 0 {
 			// 0 bytes sent to direct remote: safe to fallback to proxy
-			ll.Warn("direct write failed with 0 bytes, falling back to proxy", "host", host, "port", port, "domain", domain, "reason", shortReason)
+			ll.Warn("direct write failed with 0 bytes, falling back to proxy", "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds(), "reason", shortReason)
 			proxyConn, pErr := r.upstreamMgr.ConnectDefault(ctx, host, port)
 			if pErr != nil {
 				return nil, nil, false, fmt.Errorf("direct write failed (%v) and proxy fallback failed (%v)", writeErr, pErr)
@@ -306,7 +307,7 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 		}
 		// Partial write (wn > 0): data has entered the wire!
 		// Replay is STRICTLY FORBIDDEN to prevent duplicate processing.
-		ll.Error("direct write failed partially, replay forbidden", "written", wn, "total", len(firstPkt), "host", host, "port", port, "domain", domain, "reason", shortReason)
+		ll.Error("direct write failed partially, replay forbidden", "written", wn, "total", len(firstPkt), "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds(), "reason", shortReason)
 		return nil, nil, false, fmt.Errorf("direct partial write failed (%d/%d bytes sent): %w", wn, len(firstPkt), writeErr)
 	}
 
@@ -318,7 +319,7 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 	if readErr != nil {
 		conn.Close()
 		shortReason := simplifyError(readErr, host, port)
-		ll.Warn("direct connection failed on read verify, falling back to proxy", "host", host, "port", port, "domain", domain, "reason", shortReason)
+		ll.Warn("direct connection failed on read verify, falling back to proxy", "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds(), "reason", shortReason)
 		r.addToBlacklists(host, port, domain, shortReason)
 
 		// All bytes of firstPkt were written to direct server, but no response was received within timeout.
@@ -339,11 +340,11 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 		// Non-handshake or unknown application data (e.g. HTTP POST, non-idempotent TCP payload):
 		// Server may have already received and started processing the request.
 		// Fail safe: return read error to caller, do NOT replay.
-		ll.Error("direct read timeout for non-handshake payload, replay forbidden", "host", host, "port", port, "domain", domain, "reason", shortReason)
+		ll.Error("direct read timeout for non-handshake payload, replay forbidden", "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds(), "reason", shortReason)
 		return nil, nil, false, fmt.Errorf("direct connection read verify timeout (payload not replay-safe): %w", readErr)
 	}
 
-	ll.Info("direct connection successfully verified, keeping direct", "host", host, "port", port, "domain", domain)
+	ll.Info("direct connection successfully verified, keeping direct", "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds())
 	// Return the raw connection plus the first byte already read, which relay replays before
 	// splicing, avoiding a prefixedConn that would break zero-copy.
 	return conn, oneByte, false, nil

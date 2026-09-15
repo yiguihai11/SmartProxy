@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -880,5 +881,69 @@ func TestSetStaticRecordIP_NoSpareCapacityMutation(t *testing.T) {
 	if spareSlot.Host != "" || len(spareSlot.IP) != 0 {
 		t.Errorf("original slice spare capacity was overwritten! got %+v", spareSlot)
 	}
+}
+
+func TestSmartProxy_TimeoutMs(t *testing.T) {
+	// Test SmartTimeout method behavior
+	t.Run("defaults", func(t *testing.T) {
+		sp := SmartProxyConf{}
+		if got := sp.SmartTimeout(); got != 3*time.Second {
+			t.Errorf("expected 3s default, got %v", got)
+		}
+	})
+
+	t.Run("timeout only", func(t *testing.T) {
+		sp := SmartProxyConf{Timeout: 5}
+		if got := sp.SmartTimeout(); got != 5*time.Second {
+			t.Errorf("expected 5s, got %v", got)
+		}
+	})
+
+	t.Run("timeout_ms precedence", func(t *testing.T) {
+		sp := SmartProxyConf{Timeout: 5, TimeoutMs: 1100}
+		if got := sp.SmartTimeout(); got != 1100*time.Millisecond {
+			t.Errorf("expected 1100ms, got %v", got)
+		}
+	})
+
+	t.Run("json loading with timeout_ms", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		content := `{
+			"upstream": { "default": "direct" },
+			"smart_proxy": {
+				"enabled": true,
+				"timeout_ms": 1100,
+				"blacklist_ttl": 600
+			}
+		}`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.SmartProxy.TimeoutMs != 1100 {
+			t.Errorf("expected TimeoutMs 1100, got %d", cfg.SmartProxy.TimeoutMs)
+		}
+		if got := cfg.SmartProxy.SmartTimeout(); got != 1100*time.Millisecond {
+			t.Errorf("expected 1100ms SmartTimeout, got %v", got)
+		}
+	})
+
+	t.Run("validation", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.SmartProxy.Timeout = 0
+		cfg.SmartProxy.TimeoutMs = 0
+		if err := cfg.Validate(); err == nil {
+			t.Error("expected validation error when both timeout and timeout_ms are <= 0")
+		}
+
+		cfg.SmartProxy.TimeoutMs = 1100
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("expected validation to pass with timeout_ms > 0, got %v", err)
+		}
+	})
 }
 

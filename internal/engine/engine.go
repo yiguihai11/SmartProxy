@@ -90,7 +90,7 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 		return nil, fmt.Errorf("failed to setup upstream manager: %w", err)
 	}
 
-	smartTimeout := time.Duration(cfg.SmartProxy.Timeout) * time.Second
+	smartTimeout := cfg.SmartProxy.SmartTimeout()
 	blacklistTTL := time.Duration(cfg.SmartProxy.BlacklistTTL) * time.Second
 	router := route.New(cn, upstreamMgr, cfg.Routing.BypassLAN, smartTimeout, cfg.SmartProxy.Ports, blacklistTTL)
 	router.StartCleanup(60 * time.Second)
@@ -908,7 +908,7 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 		e.TUNHandler.ReloadConfig(newCfg)
 	}
 
-	smartTimeout := time.Duration(newCfg.SmartProxy.Timeout) * time.Second
+	smartTimeout := newCfg.SmartProxy.SmartTimeout()
 	blacklistTTL := time.Duration(newCfg.SmartProxy.BlacklistTTL) * time.Second
 	e.Router.UpdateConfig(smartTimeout, blacklistTTL, newCfg.Routing.BypassLAN)
 

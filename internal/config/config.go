@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -207,9 +208,23 @@ type DNSForeign struct {
 type SmartProxyConf struct {
 	Enabled      bool               `json:"enabled"`
 	Timeout      int                `json:"timeout"`
+	TimeoutMs    int                `json:"timeout_ms,omitempty"`
 	Ports        []int              `json:"ports"`
 	BlacklistTTL int                `json:"blacklist_ttl"`
 	Quic         SmartProxyQuicConf `json:"quic"`
+}
+
+// SmartTimeout returns the effective timeout for smart proxy direct connection verification.
+// If TimeoutMs > 0, it takes precedence (allowing sub-second / millisecond granularity such
+// as 1100ms for 1.1s, consistent with Quic.TimeoutMs). Otherwise, Timeout (seconds) is used.
+func (s SmartProxyConf) SmartTimeout() time.Duration {
+	if s.TimeoutMs > 0 {
+		return time.Duration(s.TimeoutMs) * time.Millisecond
+	}
+	if s.Timeout > 0 {
+		return time.Duration(s.Timeout) * time.Second
+	}
+	return 3 * time.Second
 }
 
 // SmartProxyQuicConf 配置 UDP/443 QUIC(HTTP/3)被动 SNI 识别与 GFW 黑洞自愈。
@@ -343,8 +358,8 @@ func (c *Config) Validate() error {
 	if c.DNS.QueryTimeout <= 0 {
 		errs = append(errs, "dns.query_timeout must be positive")
 	}
-	if c.SmartProxy.Timeout <= 0 {
-		errs = append(errs, "smart_proxy.timeout must be positive")
+	if c.SmartProxy.Timeout <= 0 && c.SmartProxy.TimeoutMs <= 0 {
+		errs = append(errs, "smart_proxy.timeout or smart_proxy.timeout_ms must be positive")
 	}
 	if c.SmartProxy.BlacklistTTL <= 0 {
 		errs = append(errs, "smart_proxy.blacklist_ttl must be positive")

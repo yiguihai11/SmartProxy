@@ -50,7 +50,7 @@ func (c *Config) applyDefaults() {
 	if c.DNS.QueryTimeout == 0 {
 		c.DNS.QueryTimeout = 3
 	}
-	if c.SmartProxy.Timeout == 0 {
+	if c.SmartProxy.Timeout == 0 && c.SmartProxy.TimeoutMs == 0 {
 		c.SmartProxy.Timeout = 3
 	}
 	if c.SmartProxy.BlacklistTTL == 0 {
