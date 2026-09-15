@@ -22,6 +22,7 @@ import (
 	"time"
 
 	mdns "github.com/miekg/dns"
+	"github.com/quic-go/quic-go/http3"
 	"smartproxy/internal/chnroute"
 
 	"smartproxy/internal/config"
@@ -58,6 +59,8 @@ type Server struct {
 	tcpLn     net.Listener
 	server    *http.Server
 	tcpServer *http.Server
+	h3Server  *http3.Server
+	udpLn     net.PacketConn
 	// tcpExposed records whether the TCP listener was bound to all interfaces (auth
 	// was configured at Start) vs loopback-only. The bind can't move at runtime, so a
 	// hot-reload that drops auth must not turn a LAN-exposed listener into an open
@@ -209,6 +212,27 @@ func (s *Server) Start() error {
 					s.tcpServer = newHTTPServer(s.tlsDispatch(tcpHandler))
 					slog.Info("admin HTTPS server started (HTTP redirects to https)", "port", s.tcpPort)
 					go s.tcpServer.Serve(&splitListener{Listener: tcpLn, tlsCfg: tlsCfg})
+
+					// HTTP/3 (QUIC) over UDP on the same port
+					udpLn, err := net.ListenPacket("udp", addr)
+					if err != nil {
+						slog.Warn("admin HTTP/3 (QUIC) UDP listen failed", "addr", addr, "error", err)
+					} else {
+						s.udpLn = udpLn
+						h3TLS := http3.ConfigureTLSConfig(tlsCfg.Clone())
+						s.h3Server = &http3.Server{
+							Addr:      addr,
+							Port:      s.tcpPort,
+							TLSConfig: h3TLS,
+							Handler:   tcpHandler,
+						}
+						slog.Info("admin HTTP/3 (QUIC) server started", "port", s.tcpPort)
+						safego.Go("admin.http3Server", func() {
+							if err := s.h3Server.Serve(udpLn); err != nil && err != http.ErrServerClosed {
+								slog.Debug("admin HTTP/3 server stopped", "error", err)
+							}
+						})
+					}
 				}
 			} else {
 				// The TCP port requires authentication
@@ -228,6 +252,9 @@ func (s *Server) Start() error {
 func (s *Server) tlsDispatch(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.TLS != nil {
+			if s.h3Server != nil {
+				w.Header().Set("Alt-Svc", fmt.Sprintf("h3=\":%d\"; ma=2592000", s.tcpPort))
+			}
 			handler.ServeHTTP(w, r)
 			return
 		}
@@ -250,6 +277,12 @@ func (s *Server) tlsDispatch(handler http.Handler) http.Handler {
 
 func (s *Server) Stop() {
 	close(s.stopCh)
+	if s.h3Server != nil {
+		s.h3Server.Close()
+	}
+	if s.udpLn != nil {
+		s.udpLn.Close()
+	}
 	if s.server != nil {
 		s.server.Close()
 	}
@@ -327,6 +360,9 @@ func (s *Server) authEnabled() bool {
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.h3Server != nil {
+			w.Header().Set("Alt-Svc", fmt.Sprintf("h3=\":%d\"; ma=2592000", s.tcpPort))
+		}
 		// The CA download is a public trust anchor (only the public cert, never the
 		// private key): allow it without Basic Auth. On Android, clicking the download
 		// link hands the request to the system DownloadManager, a separate app that

@@ -6,6 +6,7 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/golang/protobuf v1.5.4
 	github.com/miekg/dns v1.1.73
+	github.com/quic-go/quic-go v0.59.0
 	github.com/sagernet/netlink v0.0.0-20260814022025-64455d367bbf
 	github.com/sagernet/sing v0.9.4-0.20260912053229-7776850263cd
 	github.com/sagernet/sing-shadowsocks v0.2.9
@@ -31,7 +32,7 @@ require (
 	github.com/mdlayher/netlink v1.11.2 // indirect
 	github.com/mdlayher/socket v0.6.0 // indirect
 	github.com/pires/go-proxyproto v0.11.0 // indirect
-	github.com/quic-go/quic-go v0.59.0 // indirect
+	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/sagernet/fswatch v0.1.2 // indirect
 	github.com/sagernet/gvisor v0.0.0-20260727.0-sing-box-mod.1 // indirect
 	github.com/sagernet/nftables v0.3.0-mod.4 // indirect

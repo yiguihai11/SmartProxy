@@ -22,6 +22,7 @@ import (
 	"time"
 
 	mdns "github.com/miekg/dns"
+	"github.com/quic-go/quic-go/http3"
 
 	"smartproxy/internal/chnroute"
 	"smartproxy/internal/config"
@@ -1708,3 +1709,58 @@ func TestAdmin_FlagIcons(t *testing.T) {
 		t.Errorf("expected svg content for hk.svg")
 	}
 }
+
+func TestAdminServer_HTTP3(t *testing.T) {
+	s := newTestServer(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+
+	s.SetTCPPort(port)
+	s.SetTLS("", "", true)
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(s.Stop)
+
+	// 1. Verify Alt-Svc header in standard TCP HTTPS response
+	tcpClient := &http.Client{
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		Timeout:   5 * time.Second,
+	}
+	base := fmt.Sprintf("https://127.0.0.1:%d", port)
+	resp, err := tcpClient.Get(base + "/admin.crt")
+	if err != nil {
+		t.Fatalf("TCP HTTPS GET /admin.crt: %v", err)
+	}
+	defer resp.Body.Close()
+	altSvc := resp.Header.Get("Alt-Svc")
+	expectedAltSvc := fmt.Sprintf("h3=\":%d\"", port)
+	if !strings.Contains(altSvc, expectedAltSvc) {
+		t.Errorf("Alt-Svc header %q missing %q", altSvc, expectedAltSvc)
+	}
+
+	// 2. Perform real HTTP/3 request over UDP
+	h3Client := &http.Client{
+		Transport: &http3.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+		Timeout: 5 * time.Second,
+	}
+	h3Resp, err := h3Client.Get(base + "/admin.crt")
+	if err != nil {
+		t.Fatalf("HTTP/3 GET /admin.crt: %v", err)
+	}
+	defer h3Resp.Body.Close()
+	if h3Resp.StatusCode != http.StatusOK {
+		t.Errorf("HTTP/3 status %d, want 200", h3Resp.StatusCode)
+	}
+	body, _ := io.ReadAll(h3Resp.Body)
+	if !bytes.Contains(body, []byte("BEGIN CERTIFICATE")) {
+		t.Errorf("HTTP/3 download body missing PEM certificate")
+	}
+}
+
