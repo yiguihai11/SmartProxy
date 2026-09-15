@@ -21,6 +21,8 @@ LDFLAGS := -s -w \
 	-X smartproxy/internal/version.GitCommit=$(GIT_COMMIT) \
 	-X 'smartproxy/internal/version.BuildTime=$(BUILD_TIME)'
 
+BUILD_TAGS := with_gvisor,with_quic,with_utls,with_wireguard
+
 CROSS := \
 	$(OUTDIR)/$(BINARY)-linux-amd64 \
 	$(OUTDIR)/$(BINARY)-linux-arm64 \
@@ -48,7 +50,7 @@ all: build
 ## build: compile for current platform
 build: check-js
 	@mkdir -p $(OUTDIR)
-	go build -tags with_gvisor -ldflags="$(LDFLAGS)" -o $(OUTDIR)/$(BINARY) $(MAIN)
+	go build -tags $(BUILD_TAGS) -ldflags="$(LDFLAGS)" -o $(OUTDIR)/$(BINARY) $(MAIN)
 # and also in the "all" default target
 all: build
 
@@ -59,7 +61,7 @@ build-all: $(CROSS)
 
 $(OUTDIR)/$(BINARY)-%:
 	@mkdir -p $(OUTDIR)
-	GOOS=$(GOOS) GOARCH=$(GOARCH) go build -tags with_gvisor -ldflags="$(LDFLAGS)" -o $@ $(MAIN)
+	GOOS=$(GOOS) GOARCH=$(GOARCH) go build -tags $(BUILD_TAGS) -ldflags="$(LDFLAGS)" -o $@ $(MAIN)
 	@echo "=> $@"
 
 ## test: run all unit tests
@@ -136,14 +138,14 @@ android:
 	# gomobile 把 -ldflags 整个字符串透传给 go build,单引号(BuildTime 含空格)由 go 的
 	# quoted.Split 解析,跟桌面 go build -ldflags="$(LDFLAGS)" 完全等价。
 	# -trimpath:剥源码绝对路径。配合 ABI 分包 + APK 内 .so 压缩控体积。
-	gomobile bind -tags with_gvisor -target=android -androidapi=33 -javapkg=smartproxy \
+	gomobile bind -tags $(BUILD_TAGS) -target=android -androidapi=33 -javapkg=smartproxy \
 		-ldflags="$(LDFLAGS)" -trimpath -o $(OUTDIR)/smartproxy.aar ./mobile
 	@echo "=> $(OUTDIR)/smartproxy.aar"
 
 ## ios: build iOS Framework
 ios:
 	@mkdir -p $(OUTDIR)
-	gomobile bind -tags with_gvisor -target=ios -o $(OUTDIR)/SmartProxy.xcframework ./mobile
+	gomobile bind -tags $(BUILD_TAGS) -target=ios -o $(OUTDIR)/SmartProxy.xcframework ./mobile
 	@echo "=> $(OUTDIR)/SmartProxy.xcframework"
 
 ## run: build and start the server (pass config path as CONFIG=...)

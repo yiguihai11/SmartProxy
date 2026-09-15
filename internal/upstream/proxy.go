@@ -22,6 +22,7 @@ import (
 	"github.com/sagernet/sing-shadowsocks"
 	"smartproxy/internal/fwmark"
 	"smartproxy/internal/netutil"
+	"smartproxy/internal/singbox"
 	"smartproxy/internal/trace"
 )
 
@@ -38,7 +39,13 @@ const (
 	// SchemeSS connects to the remote SS server directly with the shadowsocks protocol
 	// (classic AEAD encryption, see internal/upstream/ss.go). The URL looks like
 	// ss://base64(method:password)@host:port, and plaintext ss://method:password@host:port is also accepted.
-	SchemeSS ProxyScheme = "ss"
+	SchemeSS        ProxyScheme = "ss"
+	SchemeVLESS     ProxyScheme = "vless"
+	SchemeVMess     ProxyScheme = "vmess"
+	SchemeTrojan    ProxyScheme = "trojan"
+	SchemeHysteria2 ProxyScheme = "hysteria2"
+	SchemeHy2       ProxyScheme = "hy2"
+	SchemeTUIC      ProxyScheme = "tuic"
 )
 
 // Mode values for Proxy.EffectiveMode — the same three-state status marker shadowsocks uses
@@ -118,6 +125,9 @@ type Proxy struct {
 	// ssMethod is the encryption implementation for the ss:// scheme (classic AEAD or
 	// none/plain), built once by NewProxy when parsing method:password; Method is immutable and safe for concurrent use.
 	ssMethod shadowsocks.Method
+
+	// singboxTag is the registered outbound tag in sing-box engine for modern protocols (vless, vmess, trojan, etc.)
+	singboxTag string
 }
 
 func (p *Proxy) PingLatency() time.Duration {
@@ -298,10 +308,11 @@ func isAlphaNum(b byte) bool {
 // are only UDP-probed once the user releases the circuit.
 func (p *Proxy) SchemeSupportsUDP() bool {
 	switch p.Scheme {
-	case SchemeSOCKS5, SchemeSOCKS5H, SchemeSS:
+	case SchemeSOCKS5, SchemeSOCKS5H, SchemeSS,
+		SchemeVLESS, SchemeVMess, SchemeTrojan, SchemeHysteria2, SchemeHy2, SchemeTUIC:
 		return true
 	}
-	return false
+	return p.singboxTag != ""
 }
 
 // EffectiveMode returns the mode routing and reporting actually use, derived purely from the
@@ -541,6 +552,9 @@ const MaskPassword = "******"
 // 用户名(ss 的 method、http/socks 的账号)保留以便定位。ss:// 的 legacy base64
 // 形式整个 payload 都是凭据,无结构可拆,整段打码。
 func MaskProxyURL(proxyURL string) string {
+	if isSingBoxURL(proxyURL) {
+		return maskSingBoxURL(proxyURL)
+	}
 	u, err := url.Parse(proxyURL)
 	if err != nil {
 		return "<invalid proxy url>"
@@ -565,6 +579,41 @@ func MaskProxyURL(proxyURL string) string {
 }
 
 func NewProxy(proxyURL string) (*Proxy, error) {
+	if isSingBoxURL(proxyURL) {
+		outbound, err := singbox.ParseLink(proxyURL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid sing-box node %q: %w", MaskProxyURL(proxyURL), err)
+		}
+		uniqueTag := uniqueSingBoxTag(outbound.Tag, proxyURL)
+		if err := outbound.SetTag(uniqueTag); err != nil {
+			return nil, fmt.Errorf("failed to set unique tag for %q: %w", MaskProxyURL(proxyURL), err)
+		}
+		if err := singbox.GlobalEngine().RegisterOutbound(outbound.Tag, outbound.RawJSON); err != nil {
+			return nil, fmt.Errorf("failed to register sing-box outbound %q: %w", outbound.Tag, err)
+		}
+		p := &Proxy{
+			URL:           proxyURL,
+			Scheme:        ProxyScheme(outbound.Type),
+			Host:          outbound.Server,
+			Port:          outbound.Port,
+			singboxTag:    outbound.Tag,
+			udpCapability: UDPCapStandard,
+		}
+		if strings.HasPrefix(strings.TrimSpace(proxyURL), "{") {
+			p.Name = outbound.Tag
+		} else if u, err := url.Parse(proxyURL); err == nil {
+			p.Name = strings.TrimSpace(u.Fragment)
+		}
+		if p.Name == "" {
+			p.Name = outbound.Tag
+		}
+		if cc := inferCountryCode(p.Name, p.Host); cc != "" {
+			p.SetGeoInfo(cc, "")
+		}
+		slog.Info("upstream proxy loaded (sing-box)", "url", MaskProxyURL(proxyURL), "tag", p.singboxTag, "name", p.Name)
+		return p, nil
+	}
+
 	u, err := url.Parse(proxyURL)
 	if err != nil {
 		// 错误信息会进日志,URL 打码
@@ -664,6 +713,9 @@ func parsePort(s string) int {
 }
 
 func (p *Proxy) Connect(ctx context.Context, targetHost string, targetPort int) (net.Conn, error) {
+	if p.singboxTag != "" {
+		return p.singboxConnect(ctx, targetHost, targetPort)
+	}
 	switch p.Scheme {
 	case SchemeSOCKS5, SchemeSOCKS5H:
 		return p.socks5Connect(ctx, targetHost, targetPort)
@@ -679,6 +731,9 @@ func (p *Proxy) Connect(ctx context.Context, targetHost string, targetPort int) 
 }
 
 func (p *Proxy) UDPAssociate(ctx context.Context, targetHost string, targetPort int) (net.Conn, error) {
+	if p.singboxTag != "" {
+		return p.singboxUDPAssociate(ctx, targetHost, targetPort)
+	}
 	// No effective-mode gate here: routing decides whether to call UDPAssociate
 	// (SupportsUDP), while the health probe calls it regardless of the current circuits so a
 	// degraded node can detect UDP recovery. Non-UDP schemes fail in the switch below.

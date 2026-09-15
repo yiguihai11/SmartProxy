@@ -365,11 +365,8 @@ func (hc *HealthChecker) ProbeTCP(ctx context.Context, p *Proxy) (time.Duration,
 			probeURL = cfg.URL
 		}
 	}
-	if p != nil && (p.CountryCode() == "" || p.ExitIP() == "") {
-		traceLatency, traceErr := probeTCP(ctx, p, "http://cp.cloudflare.com/cdn-cgi/trace")
-		if traceErr == nil {
-			return traceLatency, nil
-		}
+	if p != nil && (p.CountryCode() == "" || p.ExitIP() == "") && probeURL == "http://cp.cloudflare.com/generate_204" {
+		probeURL = "http://cp.cloudflare.com/cdn-cgi/trace"
 	}
 	return probeTCP(ctx, p, probeURL)
 }

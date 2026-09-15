@@ -17,6 +17,14 @@ type Config struct {
 	Routing    RoutingConf    `json:"routing"`
 	DNS        DNSConf        `json:"dns"`
 	SmartProxy SmartProxyConf `json:"smart_proxy"`
+	Lantern    LanternConf    `json:"lantern"`
+}
+
+type LanternConf struct {
+	Enabled         bool   `json:"enabled"`
+	DataDir         string `json:"data_dir"`
+	MaxAccounts     int    `json:"max_accounts"`
+	FilterDeadNodes bool   `json:"filter_dead_nodes"`
 }
 
 type TUNConfig struct {
@@ -670,6 +678,11 @@ func DefaultConfig() *Config {
 			Timeout:      2,
 			Ports:        []int{80, 443},
 			BlacklistTTL: 300,
+		},
+		Lantern: LanternConf{
+			Enabled:         false,
+			MaxAccounts:     5,
+			FilterDeadNodes: true,
 		},
 	}
 }

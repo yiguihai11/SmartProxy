@@ -19,20 +19,27 @@ import (
 )
 
 type Manager struct {
-	mu             sync.RWMutex
-	aliasMap       map[string]*Proxy
-	defaultProxies []*Proxy
-	strategy       string
-	rrCounter      atomic.Uint64
-	healthChecker  *HealthChecker
-	dnsUDPPool     *UDPAssociatePool
+	mu              sync.RWMutex
+	aliasMap        map[string]*Proxy
+	defaultProxies  []*Proxy
+	strategy        string
+	rrCounter       atomic.Uint64
+	healthChecker   *HealthChecker
+	dnsUDPPool      *UDPAssociatePool
+	healthCfg       config.HealthCheckConf
+	staticProxies   []ProxyEntry
+	providerProxies map[string][]ProxyEntry
 }
 
 func NewManager(cfg UpstreamConfig) (*Manager, error) {
 	m := &Manager{
-		dnsUDPPool: NewUDPAssociatePool(4),
+		dnsUDPPool:      NewUDPAssociatePool(4),
+		providerProxies: make(map[string][]ProxyEntry),
 	}
-	m.rebuildFromConfig(cfg)
+	m.staticProxies = cfg.Proxies
+	m.healthCfg = cfg.HealthCheck
+	m.strategy = cfg.Default
+	m.rebuildLocked()
 	m.healthChecker = NewHealthChecker(cfg.HealthCheck, m.defaultProxies)
 	m.healthChecker.Start()
 	m.probeInitialGeo()
@@ -46,7 +53,10 @@ func (m *Manager) Reload(cfg UpstreamConfig) {
 	// silently revert any explicit user disable/enable. Preserve the manual pins (keyed by
 	// alias) so a config hot-reload keeps the user's choice.
 	pins := m.captureManualPins()
-	m.rebuildFromConfig(cfg)
+	m.staticProxies = cfg.Proxies
+	m.healthCfg = cfg.HealthCheck
+	m.strategy = cfg.Default
+	m.rebuildLocked()
 	newProxies := m.defaultProxies
 	m.mu.Unlock()
 
@@ -159,13 +169,21 @@ func (m *Manager) restoreManualPins(states map[string]savedNodeState) {
 	}
 }
 
-func (m *Manager) rebuildFromConfig(cfg UpstreamConfig) {
+// rebuildLocked rebuilds aliasMap and defaultProxies from staticProxies + all providerProxies.
+// Caller must hold m.mu.Lock().
+func (m *Manager) rebuildLocked() {
 	aliasMap := make(map[string]*Proxy)
 	aliasMap["direct"] = nil
 	reservedAliases := map[string]bool{"direct": true}
 	var defaultProxies []*Proxy
 
-	for i, entry := range cfg.Proxies {
+	var allEntries []ProxyEntry
+	allEntries = append(allEntries, m.staticProxies...)
+	for _, pEntries := range m.providerProxies {
+		allEntries = append(allEntries, pEntries...)
+	}
+
+	for i, entry := range allEntries {
 		alias := entry.Alias
 		if alias == "" {
 			alias = fmt.Sprintf("proxy%d", i)
@@ -179,6 +197,9 @@ func (m *Manager) rebuildFromConfig(cfg UpstreamConfig) {
 		if reservedAliases[alias] {
 			slog.Warn("cannot override reserved alias, skipping", "alias", alias)
 			continue
+		}
+		if _, exists := aliasMap[alias]; exists {
+			alias = fmt.Sprintf("%s-%d", alias, i)
 		}
 		proxy, err := NewProxy(entry.URL)
 		if err != nil {
@@ -203,7 +224,35 @@ func (m *Manager) rebuildFromConfig(cfg UpstreamConfig) {
 	}
 	m.aliasMap = aliasMap
 	m.defaultProxies = defaultProxies
-	m.strategy = cfg.Default
+}
+
+// SetProviderProxies dynamically registers or updates a set of proxies provided by an
+// external provider (e.g. Lantern free nodes). Passing empty entries removes that provider's proxies.
+func (m *Manager) SetProviderProxies(provider string, entries []ProxyEntry) {
+	m.mu.Lock()
+	if m.providerProxies == nil {
+		m.providerProxies = make(map[string][]ProxyEntry)
+	}
+	if len(entries) == 0 {
+		delete(m.providerProxies, provider)
+	} else {
+		copied := make([]ProxyEntry, len(entries))
+		copy(copied, entries)
+		m.providerProxies[provider] = copied
+	}
+	pins := m.captureManualPins()
+	m.rebuildLocked()
+	newProxies := m.defaultProxies
+	healthCfg := m.healthCfg
+	m.mu.Unlock()
+
+	m.restoreManualPins(pins)
+
+	if m.healthChecker != nil {
+		m.healthChecker.Reload(healthCfg, newProxies)
+	}
+	m.probeInitialGeo()
+	slog.Info("provider proxies updated", "provider", provider, "count", len(entries), "totalProxies", len(newProxies))
 }
 
 type UpstreamConfig struct {

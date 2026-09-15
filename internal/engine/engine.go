@@ -22,6 +22,7 @@ import (
 	"smartproxy/internal/config"
 	"smartproxy/internal/dns"
 	"smartproxy/internal/fwmark"
+	"smartproxy/internal/lantern"
 	"smartproxy/internal/netutil"
 	"smartproxy/internal/relay"
 	"smartproxy/internal/route"
@@ -42,18 +43,16 @@ type Engine struct {
 	DNSHandler  *dns.Handler
 	TUNHandler  *tun.TUNHandler
 
-	tunDev      interface{}
-	tunStack    interface{}
-	listener    net.Listener
-	cancel      context.CancelFunc
-	stopOnce    sync.Once
-	adminServer *admin.Server
-	reloadFn    func()
-	configPath  string
-	// clientSem caps concurrent SOCKS5 client handlers. Without it a burst of TCP
-	// connects spawns an unbounded number of goroutines (one per conn) and exhausts
-	// fds. The accept loop blocks on this before spawning, which throttles accept.
-	clientSem chan struct{}
+	tunDev          interface{}
+	tunStack        interface{}
+	listener        net.Listener
+	cancel          context.CancelFunc
+	stopOnce        sync.Once
+	adminServer     *admin.Server
+	reloadFn        func()
+	configPath      string
+	clientSem       chan struct{}
+	lanternProvider *lantern.Provider
 }
 
 func New(cfg *config.Config, cfgDir string) (*Engine, error) {
@@ -106,14 +105,38 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 	)
 	dnsHandler.SetStaticRecords(cfg.DNS.StaticRecordsMap())
 
+	var lanternProvider *lantern.Provider
+	if cfg.Lantern.Enabled {
+		dataDir := cfg.Lantern.DataDir
+		if dataDir == "" {
+			dataDir = cfgDir
+		}
+		maxAcc := cfg.Lantern.MaxAccounts
+		if maxAcc <= 0 {
+			maxAcc = 5
+		}
+		lp, err := lantern.NewProvider(lantern.Config{
+			DataDir:         dataDir,
+			MaxAccounts:     maxAcc,
+			FilterDeadNodes: cfg.Lantern.FilterDeadNodes,
+		}, upstreamMgr)
+		if err != nil {
+			slog.Warn("failed to initialize lantern provider", "error", err)
+		} else {
+			lanternProvider = lp
+			lanternProvider.Start()
+		}
+	}
+
 	eng := &Engine{
-		Chnroute:    cn,
-		RuleEng:     ruleEng,
-		UpstreamMgr: upstreamMgr,
-		Router:      router,
-		DNSHandler:  dnsHandler,
-		TUNHandler:  tun.NewHandler(cfg, router, ruleEng, upstreamMgr, dnsHandler),
-		clientSem:   make(chan struct{}, maxConcurrentClients),
+		Chnroute:        cn,
+		RuleEng:         ruleEng,
+		UpstreamMgr:     upstreamMgr,
+		Router:          router,
+		DNSHandler:      dnsHandler,
+		TUNHandler:      tun.NewHandler(cfg, router, ruleEng, upstreamMgr, dnsHandler),
+		clientSem:       make(chan struct{}, maxConcurrentClients),
+		lanternProvider: lanternProvider,
 	}
 	eng.Config.Store(cfg)
 	return eng, nil
@@ -819,6 +842,11 @@ func (e *Engine) Stop() {
 			slog.Info("[Go-Engine] Stopping upstream manager...")
 			e.UpstreamMgr.Stop()
 			slog.Info("[Go-Engine] upstream manager stopped")
+		}
+		if e.lanternProvider != nil {
+			slog.Info("[Go-Engine] Stopping lantern provider...")
+			e.lanternProvider.Stop()
+			slog.Info("[Go-Engine] lantern provider stopped")
 		}
 		if e.adminServer != nil {
 			slog.Info("[Go-Engine] Stopping adminServer...")
