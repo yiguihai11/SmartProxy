@@ -25,7 +25,7 @@
     <string name="drawer_dns">DNS servers</string>
     <string name="drawer_dns_subtitle">IPv4 / IPv6 DNS injected on start</string>
     <string name="drawer_exclude">Excluded routes</string>
-    <string name="drawer_exclude_subtitle">Networks bypassing the VPN tunnel (API 33+)</string>
+    <string name="drawer_exclude_subtitle">Networks bypassing the VPN tunnel</string>
     <string name="drawer_service_mode">Service mode</string>
     <string name="drawer_service_mode_subtitle">Current: %1$s</string>
     <string name="drawer_network_status">Network status</string>
@@ -93,7 +93,7 @@
     <!-- Dialogs -->
     <string name="dialog_dns_help">DNS injected when VPN starts (addDnsServer); empty = default.\nDomestic DNS recommended (default 223.5.5.5 / 2400:3200::1):\nthe engine queries it directly and anti-pollution-checks the\nreply (domestic DNS is the one that can return poisoned answers);\nforeign domains fall back to foreign DNS via the proxy.\nA foreign DNS also works, but every query then rides the\nupstream proxy, which must support UDP.\nRestart VPN to apply.</string>
     <string name="toast_invalid_dns">Invalid DNS address format</string>
-    <string name="dialog_exclude_title">Excluded routes (API 33+)</string>
+    <string name="dialog_exclude_title">Excluded routes</string>
     <string name="dialog_exclude_hint">One CIDR per line</string>
     <string name="dialog_exclude_help">Leave blank to exclude nothing; the grey 127.0.0.1/8 is a loopback hint —\nadd it only to keep local services (SOCKS/admin) off the tunnel.\nRestart VPN to apply.</string>
     <string name="cd_choose_service_mode">Choose service mode</string>

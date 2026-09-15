@@ -25,7 +25,7 @@
     <string name="drawer_dns">DNS 服务器</string>
     <string name="drawer_dns_subtitle">启动时注入的 IPv4 / IPv6 DNS</string>
     <string name="drawer_exclude">排除路由</string>
-    <string name="drawer_exclude_subtitle">不走 VPN 隧道直连的网段 (API 33+)</string>
+    <string name="drawer_exclude_subtitle">不走 VPN 隧道直连的网段</string>
     <string name="drawer_service_mode">服务模式</string>
     <string name="drawer_service_mode_subtitle">当前: %1$s</string>
     <string name="drawer_network_status">联网状态</string>
@@ -93,7 +93,7 @@
     <!-- Dialogs -->
     <string name="dialog_dns_help">启动 VPN 时注入的 DNS(addDnsServer),留空 = 默认。\n推荐填国内 DNS(默认 223.5.5.5 / 2400:3200::1):引擎直连它\n并做反污染检测(国内 DNS 才可能回污染答案),国外域名自动\n回退国外 DNS 走代理。填国外 DNS 也能用,但每次查询都走上游\n代理,需上游支持 UDP。修改后需重启 VPN 生效。</string>
     <string name="toast_invalid_dns">DNS 地址格式不正确</string>
-    <string name="dialog_exclude_title">排除路由 (API 33+)</string>
+    <string name="dialog_exclude_title">排除路由</string>
     <string name="dialog_exclude_hint">每行一个 CIDR</string>
     <string name="dialog_exclude_help">留空 = 不排除任何网段(纯真空);灰色 127.0.0.1/8 只是回环默认提示,\n需要本机服务(SOCKS/面板)直连时手动填入。修改后需重启 VPN 生效。</string>
     <string name="cd_choose_service_mode">选择服务模式</string>
