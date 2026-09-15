@@ -106,7 +106,7 @@ type Config struct {
 	MinRemainBytes  int64         // Threshold below which an account is considered exhausted (default: 1MB)
 	HTTPTimeout     time.Duration // Timeout for HTTP API calls (default: 30s)
 	EnableSSE       bool          // Whether to enable background SSE listener (default: false, battery-saving)
-	SingBoxPath     string        // Path to sing-box executable for connectivity testing
+	SingBoxPath     string        // Deprecated: sing-box is now embedded in-process as a Go library
 	TestURL         string        // Probe URL to verify node connectivity (default: http://cp.cloudflare.com/generate_204)
 	TestTimeout     time.Duration // Timeout per node connectivity test (default: 5s)
 	FilterDeadNodes bool          // Whether to automatically test and prune unreachable nodes (default: true)

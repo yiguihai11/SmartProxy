@@ -222,7 +222,7 @@ func (c *Client) EnsureNodes(ctx context.Context) ([]json.RawMessage, error) {
 	nodes := rawNodes
 	// Test connectivity and filter out dead nodes if requested
 	if c.cfg.FilterDeadNodes && len(nodes) > 0 {
-		tested, tErr := TestAndFilterNodes(ctx, nodes, c.cfg.SingBoxPath, c.cfg.TestURL, c.cfg.TestTimeout)
+		tested, tErr := TestAndFilterNodes(ctx, nodes, c.cfg.TestURL, c.cfg.TestTimeout)
 		if tErr == nil && len(tested) > 0 {
 			nodes = tested
 		}
@@ -294,7 +294,7 @@ func (c *Client) ReportFailure(ctx context.Context) (newNodes []json.RawMessage,
 
 		nodes := rawNodes
 		if c.cfg.FilterDeadNodes && len(nodes) > 0 {
-			tested, tErr := TestAndFilterNodes(ctx, nodes, c.cfg.SingBoxPath, c.cfg.TestURL, c.cfg.TestTimeout)
+			tested, tErr := TestAndFilterNodes(ctx, nodes, c.cfg.TestURL, c.cfg.TestTimeout)
 			if tErr == nil && len(tested) > 0 {
 				nodes = tested
 			}
@@ -316,7 +316,7 @@ func (c *Client) ReportFailure(ctx context.Context) (newNodes []json.RawMessage,
 		c.mu.RUnlock()
 
 		if len(existing) > 0 {
-			tested, tErr := TestAndFilterNodes(ctx, existing, c.cfg.SingBoxPath, c.cfg.TestURL, c.cfg.TestTimeout)
+			tested, tErr := TestAndFilterNodes(ctx, existing, c.cfg.TestURL, c.cfg.TestTimeout)
 			if tErr == nil && len(tested) > 0 {
 				c.mu.Lock()
 				c.currentNodes = tested

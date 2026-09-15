@@ -7,61 +7,13 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"sync"
 	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/option"
 )
-
-// FindSingBoxExecutable attempts to find a valid sing-box binary on the system dynamically.
-func FindSingBoxExecutable(preferredPath string) string {
-	if preferredPath != "" {
-		if fi, err := os.Stat(preferredPath); err == nil && !fi.IsDir() {
-			return preferredPath
-		}
-	}
-
-	// 1. Check system PATH first
-	if p, err := exec.LookPath("sing-box"); err == nil {
-		return p
-	}
-
-	// 2. Check user's home directory dynamically
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		userPaths := []string{
-			filepath.Join(home, "lantern_re", "bin", "sing-box"),
-			filepath.Join(home, "bin", "sing-box"),
-			filepath.Join(home, ".local", "bin", "sing-box"),
-		}
-		for _, p := range userPaths {
-			if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
-				return p
-			}
-		}
-	}
-
-	// 3. Check environment prefixes if available (e.g. Termux $PREFIX/bin/sing-box)
-	if prefix := os.Getenv("PREFIX"); prefix != "" {
-		p := filepath.Join(prefix, "bin", "sing-box")
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
-			return p
-		}
-	}
-
-	// 4. Standard unix paths
-	stdPaths := []string{
-		"/usr/local/bin/sing-box",
-		"/usr/bin/sing-box",
-	}
-	for _, p := range stdPaths {
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
-			return p
-		}
-	}
-
-	return ""
-}
 
 func getFreePorts(count int) ([]int, error) {
 	var ports []int
@@ -106,17 +58,12 @@ type testSingBoxConfig struct {
 	} `json:"route"`
 }
 
-// TestAndFilterNodes verifies internet connectivity for each node using sing-box and returns only working nodes.
-func TestAndFilterNodes(ctx context.Context, nodes []json.RawMessage, singboxBin string, testURL string, timeout time.Duration) ([]json.RawMessage, error) {
+// TestAndFilterNodes verifies internet connectivity for each candidate node
+// using an in-process sing-box instance (compiled directly via github.com/sagernet/sing-box,
+// requiring NO external binary or subprocess), and returns only working nodes.
+func TestAndFilterNodes(ctx context.Context, nodes []json.RawMessage, testURL string, timeout time.Duration) ([]json.RawMessage, error) {
 	if len(nodes) == 0 {
 		return nodes, nil
-	}
-
-	if singboxBin == "" {
-		singboxBin = FindSingBoxExecutable("")
-	}
-	if singboxBin == "" {
-		return nodes, fmt.Errorf("sing-box binary not found, skipping node connectivity testing")
 	}
 
 	if testURL == "" {
@@ -131,12 +78,11 @@ func TestAndFilterNodes(ctx context.Context, nodes []json.RawMessage, singboxBin
 		return nil, fmt.Errorf("failed to allocate test ports: %w", err)
 	}
 
-	// Prepare sing-box probe config
+	// Prepare sing-box probe config: assign each node an ephemeral SOCKS5 inbound
 	var sbCfg testSingBoxConfig
 	sbCfg.Log.Level = "warn"
 	sbCfg.Outbounds = nodes
 
-	nodeTags := make([]string, len(nodes))
 	for i, raw := range nodes {
 		var meta struct {
 			Tag string `json:"tag"`
@@ -146,7 +92,6 @@ func TestAndFilterNodes(ctx context.Context, nodes []json.RawMessage, singboxBin
 		if tag == "" {
 			tag = fmt.Sprintf("node-%d", i)
 		}
-		nodeTags[i] = tag
 
 		inTag := fmt.Sprintf("in-%s", tag)
 		sbCfg.Inbounds = append(sbCfg.Inbounds, testInbound{
@@ -162,58 +107,48 @@ func TestAndFilterNodes(ctx context.Context, nodes []json.RawMessage, singboxBin
 		})
 	}
 
-	cfgBytes, err := json.MarshalIndent(sbCfg, "", "  ")
+	cfgBytes, err := json.Marshal(sbCfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize test config: %w", err)
 	}
 
-	tmpDir, err := os.MkdirTemp("", "lantern_test_*")
+	// Initialize and start sing-box in-process (pure Go library)
+	boxCtx := include.Context(ctx)
+	var opts option.Options
+	if err := opts.UnmarshalJSONContext(boxCtx, cfgBytes); err != nil {
+		return nil, fmt.Errorf("failed to parse config into sing-box library: %w", err)
+	}
+
+	instance, err := box.New(box.Options{
+		Context: boxCtx,
+		Options: opts,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create temp dir: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	tmpCfgPath := filepath.Join(tmpDir, "test_config.json")
-	if err := os.WriteFile(tmpCfgPath, cfgBytes, 0644); err != nil {
-		return nil, fmt.Errorf("failed to write temp test config: %w", err)
+		return nil, fmt.Errorf("failed to create in-process sing-box instance: %w", err)
 	}
 
-	// Start sing-box runner
-	procCtx, cancelProc := context.WithCancel(ctx)
-	defer cancelProc()
-
-	cmd := exec.CommandContext(procCtx, singboxBin, "run", "-c", tmpCfgPath)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start sing-box for testing: %w", err)
+	if err := instance.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start in-process sing-box: %w", err)
 	}
-	defer func() {
-		cancelProc()
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-			_ = cmd.Wait()
-		}
-	}()
+	defer instance.Close()
 
-	// Wait up to 1.5s for the first port to be ready
+	// Wait briefly (up to 1s) for the first port to start listening
 	ready := false
 	firstPort := ports[0]
-	for i := 0; i < 15; i++ {
+	for i := 0; i < 10; i++ {
 		c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", firstPort), 100*time.Millisecond)
 		if err == nil {
 			_ = c.Close()
 			ready = true
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 	if !ready {
-		return nil, fmt.Errorf("sing-box failed to start listening within timeout")
+		return nil, fmt.Errorf("in-process sing-box failed to bind listener within timeout")
 	}
 
-	// Concurrently test each node
+	// Concurrently probe all candidate nodes through their assigned in-process SOCKS5 inbounds
 	type testResult struct {
 		index int
 		alive bool
