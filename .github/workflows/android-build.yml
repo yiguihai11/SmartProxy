@@ -100,6 +100,27 @@ jobs:
           # AGP 会报 "different paths to the SDK" 而拒绝构建。对齐成同一个。
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
 
+      # Android NDK r30: 官方最新版，提供给 gomobile bind 编译 CGO / 产出 .so 并带缓存
+      - name: Cache Android NDK r30
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          path: /opt/android-ndk-r30
+          key: android-ndk-r30-linux
+
+      - name: Download and Set up Android NDK r30
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        run: |
+          set -euxo pipefail
+          curl -fsSL -o /tmp/ndk-r30.zip "https://dl.google.com/android/repository/android-ndk-r30-linux.zip"
+          sudo unzip -q /tmp/ndk-r30.zip -d /opt/
+          sudo rm -f /tmp/ndk-r30.zip
+
+      - name: Export NDK r30 environment
+        run: |
+          echo "ANDROID_NDK_HOME=/opt/android-ndk-r30" >> "$GITHUB_ENV"
+          echo "NDK_HOME=/opt/android-ndk-r30" >> "$GITHUB_ENV"
+
       # acl.txt 唯一真源在仓库根目录(桌面端直接读);Android 把它打进 APK assets,
       # 首启 copyAssetIfMissing 落到 cacheDir 供 Go 引擎读。构建前强制覆盖,
       # 保证 APK 自带规则与根目录同步,不用手维护 assets 那份。
@@ -110,7 +131,6 @@ jobs:
         run: |
           set -euxo pipefail
           export PATH="$PATH:$(go env GOPATH)/bin"
-          # 首次会下载 Android NDK 到 gomobile 缓存(约 1 GB,仅第一次慢)。
           gomobile init
           make android
           mkdir -p android/app/libs

@@ -126,7 +126,7 @@ android:
 	# -javapkg 是"前缀",gomobile 会在后面追加 Go 包名(pkg.Name()=="mobile"),
 	# 所以 -javapkg=smartproxy → Java 包 smartproxy.mobile,类 smartproxy.mobile.Mobile。
 	# 若写 -javapkg=smartproxy.mobile 会得到 smartproxy.mobile.mobile(多一层),别踩。
-	# -androidapi:gomobile 默认 16,而 CI runner 预装 NDK 27 只支持 21..35,必须 >=21。
+	# -androidapi:gomobile 默认 16,而 CI 显式安装的 NDK r30 只支持 21..37,必须 >=21。
 	# 用 26 = app 的 minSdk:该值同时写进 AAR 的 minSdkVersion(manifestFmt),若用 35 会
 	# 和 app 的 minSdk 26 冲突导致 manifest 合并失败。AndroidAPIPath(26) 会选已装的
 	# platforms/android-36(>=26 的最高版)当编译用的 android.jar。

@@ -12,6 +12,9 @@ version: 2.1
 #    path-filtering orb(第二 pipeline 参数化)再补。
 #  - executor 用 cimg/android 镜像(自带 Android SDK / cmdline-tools),SDK 组件
 #    仍显式 sdkmanager 幂等补齐(compileSdk=36 需要 platforms;android-36)。
+#  - NDK 不依赖镜像自带版本(-ndk 变体里的旧 NDK 会随镜像漂移):与 GH Actions
+#    同源,显式下载解压 r30 到 /opt/android-ndk-r30 并走 cache,ANDROID_NDK_HOME
+#    指向它(gomobile 优先认该 env,镜像自带 NDK 成为无害死重量)。
 #  - 环境变量跨步骤用 $BASH_ENV(GH 用 $GITHUB_ENV)。
 #  - APK 产物用 store_artifacts 暴露到 CircleCI Artifacts 页。
 # ─────────────────────────────────────────────────────────────────────────────
@@ -56,8 +59,13 @@ jobs:
       - restore_cache:
           keys:
             - gradle-v1-{{ checksum "android/gradle/wrapper/gradle-wrapper.properties" }}-{{ checksum "android/app/build.gradle.kts" }}
+      # NDK r30(对齐 GitHub Actions):缓存命中直接用 /opt/android-ndk-r30,
+      # 否则后面的安装步骤现拉 738MB 官方 zip。静态 key——r30 不变就一直命中。
+      - restore_cache:
+          keys:
+            - ndk-r30-v1
 
-      # 系统工具兜底(make/unzip:gomobile init 解 NDK 用 zip,make 跑 Makefile)。
+      # 系统工具兜底(make 跑 Makefile;unzip 解 NDK r30 的 zip)。
       - run:
           name: Ensure system tools (make, unzip)
           command: |
@@ -69,6 +77,30 @@ jobs:
               sudo apt-get update -qq && sudo apt-get install -y -qq $missing
             fi
             command -v make; command -v unzip
+
+      # NDK r30,与 .github/workflows/android-build.yml 同一个官方 zip / 同一路径。
+      # zip 顶层目录即 android-ndk-r30/,解压到 /opt 后正好落在 /opt/android-ndk-r30。
+      # 缓存恢复命中(目录已在)就跳过下载;否则现拉 738MB。chown 给 circleci 是为
+      # save_cache 打包时不碰 root 属主的权限边角。
+      - run:
+          name: Install Android NDK r30
+          command: |
+            set -euxo pipefail
+            if [ -x /opt/android-ndk-r30/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then
+              echo "NDK r30 already present (cache restored)"
+            else
+              curl -fsSL -o /tmp/ndk-r30.zip \
+                "https://dl.google.com/android/repository/android-ndk-r30-linux.zip"
+              sudo unzip -q /tmp/ndk-r30.zip -d /opt/
+              sudo chown -R circleci:circleci /opt/android-ndk-r30
+              rm -f /tmp/ndk-r30.zip
+            fi
+
+      - run:
+          name: Export NDK r30 environment
+          command: |
+            echo 'export ANDROID_NDK_HOME=/opt/android-ndk-r30' >> "$BASH_ENV"
+            echo 'export NDK_HOME=/opt/android-ndk-r30' >> "$BASH_ENV"
 
       # 显式装 Go 1.27(对齐 go.mod 的 go directive;gomobile init 内部会
       # `go install gobind@latest`,go directive 漂移会导致失败,工具链必须匹配)。
@@ -126,21 +158,22 @@ jobs:
             # 但许可此时已接受,`|| true` 吞掉即可(与 GH workflow 同)。
             yes | "$SDKMAN" --licenses >/dev/null 2>&1 || true
             "$SDKMAN" "platform-tools" "platforms;android-36" "build-tools;35.0.0" >/dev/null
-            # gomobile bind 需要 NDK(普通 cimg/android 不带,报 no usable NDK)。
-            # 本镜像用 -ndk 变体预装,探测路径并导出 ANDROID_NDK_HOME 给 gomobile。
-            NDK_DIR=$(ls -d "$ANDROID_HOME/ndk/"* 2>/dev/null | head -1)
-            if [ -z "$NDK_DIR" ]; then
-              echo "NDK not found under $ANDROID_HOME/ndk"; exit 1
-            fi
-            echo "export ANDROID_NDK_HOME=$NDK_DIR" >> "$BASH_ENV"
-            echo "using NDK: $NDK_DIR"
+            # gomobile bind 需要 NDK。不用镜像 -ndk 变体自带的旧 NDK(版本随镜像漂移),
+            # r30 已由前一步显式装到 /opt 且 ANDROID_NDK_HOME 写进了 $BASH_ENV
+            # (gomobile 优先认该 env)。这里只做冒烟校验:元数据 + clang + 主版本号,
+            # 缺一样直接判红,别等到 gomobile init 才报 no usable NDK。
+            test -f /opt/android-ndk-r30/meta/platforms.json
+            test -x /opt/android-ndk-r30/toolchains/llvm/prebuilt/linux-x86_64/bin/clang
+            REV=$(grep -E '^Pkg\.Revision = 30\.' /opt/android-ndk-r30/source.properties)
+            echo "using NDK: /opt/android-ndk-r30 (${REV#*= })"
 
       - run:
           name: Build Go engine AAR
           command: |
             set -euxo pipefail
             export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
-            # 首次会下载 Android NDK 到 gomobile 缓存(约 1 GB,仅第一次慢)。
+            # ANDROID_NDK_HOME 指向 /opt/android-ndk-r30($BASH_ENV),gomobile init
+            # 检测到现成 NDK 即跳过自带下载,不再有首次 1 GB 的 gomobile 缓存开销。
             gomobile init
             make android
             mkdir -p android/app/libs
@@ -180,6 +213,12 @@ jobs:
           paths:
             - ~/go/pkg/mod
             - ~/.cache/go-build
+      # 静态 key:首次构建打包上传后,后续 save 会因 key 已存在自动跳过,
+      # restore 那边一直命中,738MB 下载只付一次。
+      - save_cache:
+          key: ndk-r30-v1
+          paths:
+            - /opt/android-ndk-r30
       - save_cache:
           key: gradle-v1-{{ checksum "android/gradle/wrapper/gradle-wrapper.properties" }}-{{ checksum "android/app/build.gradle.kts" }}
           paths:
