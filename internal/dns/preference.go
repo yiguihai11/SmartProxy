@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -84,26 +86,68 @@ func NewPreference(enabled bool, mode PreferMode, tcpPorts []int) *Preference {
 	return p
 }
 
-func (p *Preference) checkPingCommands() {
+var (
+	pingCandidates  = []string{"ping", "/system/bin/ping", "/system/xbin/ping", "/bin/ping", "/usr/bin/ping", "/sbin/ping"}
+	ping6Candidates = []string{"ping6", "/system/bin/ping6", "/system/xbin/ping6", "/bin/ping6", "/usr/bin/ping6", "/sbin/ping6"}
+)
 
-	pingPath, err := exec.LookPath("ping")
-	if err != nil {
-		slog.Warn("ping command not available, fallback to TCP for IPv4", "error", err)
-	} else if err := exec.Command(pingPath, "-c1", "-W1", "127.0.0.1").Run(); err != nil {
+func resolvePingCmd(candidates []string, loopback string) (string, error) {
+	var lastErr error
+	for _, cand := range candidates {
+		path := cand
+		if !filepath.IsAbs(cand) {
+			var err error
+			path, err = exec.LookPath(cand)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+		} else {
+			fi, err := os.Stat(path)
+			if err != nil || fi.IsDir() {
+				lastErr = err
+				continue
+			}
+		}
+		// 校验回环地址执行权限与参数支持
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := exec.CommandContext(ctx, path, "-c1", "-W1", loopback).Run()
+		cancel()
+		if err == nil {
+			return path, nil
+		}
+		lastErr = err
+	}
+	return "", lastErr
+}
+
+func (p *Preference) checkPingCommands() {
+	if pingPath, err := resolvePingCmd(pingCandidates, "127.0.0.1"); err != nil {
 		slog.Warn("ping command not available, fallback to TCP for IPv4", "error", err)
 	} else {
 		p.hasPing = true
 		p.pingPath = pingPath
+		slog.Debug("found IPv4 ping command", "path", pingPath)
 	}
 
-	ping6Path, err := exec.LookPath("ping6")
-	if err != nil {
-		slog.Warn("ping6 command not available, fallback to TCP for IPv6", "error", err)
-	} else if err := exec.Command(ping6Path, "-c1", "-W1", "::1").Run(); err != nil {
+	if ping6Path, err := resolvePingCmd(ping6Candidates, "::1"); err != nil {
+		// 部分现代 Linux 系统的 ping 已同时支持 IPv6,尝试用 ping 测试 ::1
+		if p.hasPing {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			err6 := exec.CommandContext(ctx, p.pingPath, "-c1", "-W1", "::1").Run()
+			cancel()
+			if err6 == nil {
+				p.hasPing6 = true
+				p.ping6Path = p.pingPath
+				slog.Debug("IPv4 ping command supports IPv6", "path", p.pingPath)
+				return
+			}
+		}
 		slog.Warn("ping6 command not available, fallback to TCP for IPv6", "error", err)
 	} else {
 		p.hasPing6 = true
 		p.ping6Path = ping6Path
+		slog.Debug("found IPv6 ping command", "path", ping6Path)
 	}
 }
 
@@ -135,6 +179,9 @@ func (p *Preference) PreferIPs(ctx context.Context, ips []string) string {
 			switch p.mode {
 			case PreferPing:
 				lat, ok = p.pingLatency(ctx, ip)
+				if !ok {
+					lat, ok = p.tcpLatency(ctx, ip)
+				}
 			case PreferTCP:
 				lat, ok = p.tcpLatency(ctx, ip)
 			default:
@@ -199,7 +246,11 @@ func (p *Preference) pingLatency(ctx context.Context, ip string) (time.Duration,
 }
 
 func (p *Preference) tcpLatency(ctx context.Context, ip string) (time.Duration, bool) {
-	for _, port := range p.tcpPorts {
+	ports := p.tcpPorts
+	if len(ports) == 0 {
+		ports = []int{80, 443}
+	}
+	for _, port := range ports {
 		d := net.Dialer{Timeout: 2 * time.Second, Control: fwmark.Control}
 		start := time.Now()
 		conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(ip, fmt.Sprintf("%d", port)))
