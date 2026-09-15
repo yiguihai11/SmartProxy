@@ -32,8 +32,7 @@ var (
 //	Mobile.setUIDResolver(UIDResolver)
 //
 // proto: 6=TCP, 17=UDP;四元组即连接两端地址。返回 UID,未知返回 -1。
-// 实现见 Android UIDResolver.kt(API29+ ConnectivityManager.getConnectionOwnerUid,
-// API26-28 回退 /proc/net 解析)。
+// 实现见 Android UIDResolver.kt(ConnectivityManager.getConnectionOwnerUid)。
 type UIDResolver interface {
 	ResolveUID(proto int32, localIP string, localPort int32, remoteIP string, remotePort int32) int32
 }
