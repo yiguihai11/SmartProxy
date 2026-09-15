@@ -1,7 +1,7 @@
 plugins {
+    // 只剩 AGP:Kotlin 编译走 AGP 9 内置 Kotlin(根 build.gradle.kts 把内置 KGP
+    // 顶到 2.4.20),Compose 编译器由 buildFeatures.compose=true 自动接线。
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 // 版本号:HEAD 顶在 tag 上为干净号(如 1.1),tag 后提交为 1.1-3-g2d27600。
@@ -106,7 +106,9 @@ android {
     }
 }
 
-// KGP 2.x 推荐 DSL:android{} 里的 kotlinOptions 已废弃(2.4 可能移除),jvmTarget 移这里。
+// 内置 Kotlin 的顶层 kotlin{} 扩展(AGP 9 迁移指南钦定位置;android{} 里的
+// kotlinOptions 已废弃)。jvmTarget 内置模式默认跟随 compileOptions.targetCompatibility,
+// 这里显式写 JVM_17 保持与 compileOptions 一致、可读。
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
