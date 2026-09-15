@@ -640,7 +640,9 @@ class SmartProxyVpnService : VpnService() {
     }
 
     /** 系统低内存水位通知:映射 Android TRIM_MEMORY 水位到 sing-tun MemoryPressure 接口 (0=None, 1=Warning, 2=Critical),
-     *  通知 Go 协议栈执行缓冲收缩与 GC 回收,降低前台进程被 OOM Killer 杀死的风险。 */
+     *  通知 Go 协议栈执行缓冲收缩与 GC 回收,降低前台进程被 OOM Killer 杀死的风险。
+     *  TRIM_MEMORY_* 常量在 API 35 废弃(API 34+ 系统不再派发细分级别),但 minSdk=26 需兼容 Android 8~13 旧设备。 */
+    @Suppress("DEPRECATION")
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         val pressure = when {
