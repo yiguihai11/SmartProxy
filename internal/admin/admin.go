@@ -60,6 +60,7 @@ type Server struct {
 	server    *http.Server
 	tcpServer *http.Server
 	h3Server  *http3.Server
+	h3Once    sync.Once
 	udpLn     net.PacketConn
 	// tcpExposed records whether the TCP listener was bound to all interfaces (auth
 	// was configured at Start) vs loopback-only. The bind can't move at runtime, so a
@@ -362,6 +363,15 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.h3Server != nil {
 			w.Header().Set("Alt-Svc", fmt.Sprintf("h3=\":%d\"; ma=2592000", s.tcpPort))
+		}
+		w.Header().Set("X-Client-Proto", r.Proto)
+		if r.ProtoMajor == 3 || r.Proto == "HTTP/3.0" {
+			s.h3Once.Do(func() {
+				slog.Info("admin HTTP/3 (QUIC) client connected successfully", "proto", r.Proto, "remote", r.RemoteAddr)
+			})
+		}
+		if r.URL.Path == "/" || r.URL.Path == "/dashboard" {
+			slog.Info("admin panel accessed", "proto", r.Proto, "remote", r.RemoteAddr, "tls", r.TLS != nil)
 		}
 		// The CA download is a public trust anchor (only the public cert, never the
 		// private key): allow it without Basic Auth. On Android, clicking the download

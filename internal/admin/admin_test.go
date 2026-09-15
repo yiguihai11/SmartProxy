@@ -1742,6 +1742,9 @@ func TestAdminServer_HTTP3(t *testing.T) {
 	if !strings.Contains(altSvc, expectedAltSvc) {
 		t.Errorf("Alt-Svc header %q missing %q", altSvc, expectedAltSvc)
 	}
+	if p := resp.Header.Get("X-Client-Proto"); !strings.HasPrefix(p, "HTTP/") {
+		t.Errorf("expected X-Client-Proto header on TCP HTTPS, got %q", p)
+	}
 
 	// 2. Perform real HTTP/3 request over UDP
 	h3Client := &http.Client{
@@ -1757,6 +1760,9 @@ func TestAdminServer_HTTP3(t *testing.T) {
 	defer h3Resp.Body.Close()
 	if h3Resp.StatusCode != http.StatusOK {
 		t.Errorf("HTTP/3 status %d, want 200", h3Resp.StatusCode)
+	}
+	if p := h3Resp.Header.Get("X-Client-Proto"); p != "HTTP/3.0" {
+		t.Errorf("expected X-Client-Proto=HTTP/3.0 on HTTP/3 response, got %q", p)
 	}
 	body, _ := io.ReadAll(h3Resp.Body)
 	if !bytes.Contains(body, []byte("BEGIN CERTIFICATE")) {

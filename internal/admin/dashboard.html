@@ -194,6 +194,14 @@ tr:last-child td{border-bottom:none}
 .seg-btn{flex:1 1 auto;min-width:60px;padding:8px 6px;border-radius:6px;font-size:.76rem;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--surface2);color:var(--text2);transition:all .15s;font-family:var(--font);line-height:1;white-space:nowrap}
 .seg-btn:hover{border-color:var(--border2);color:var(--text)}
 .seg-btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.proto-badge{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:12px;font-size:.75rem;font-weight:600;letter-spacing:.3px;cursor:pointer;user-select:none;transition:all .18s;border:1px solid var(--border);background:var(--surface2);color:var(--text2);line-height:1.2}
+.proto-badge:hover{filter:brightness(1.18);transform:translateY(-1px)}
+.proto-dot{width:6px;height:6px;border-radius:50%;background:currentColor;display:inline-block;flex-shrink:0}
+.proto-badge.h3{background:rgba(60,207,142,.12);color:var(--green);border-color:rgba(60,207,142,.35);box-shadow:0 0 10px rgba(60,207,142,.12)}
+.proto-badge.h3 .proto-dot{box-shadow:0 0 6px var(--green)}
+.proto-badge.h2{background:rgba(91,110,245,.12);color:var(--accent);border-color:rgba(91,110,245,.3)}
+.proto-badge.h1{background:rgba(245,179,75,.12);color:var(--yellow);border-color:rgba(245,179,75,.3)}
+.proto-badge.unknown{color:var(--text3)}
 .fb-list{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:6px;margin-bottom:10px;max-height:240px;overflow-y:auto;font-size:.85rem}
 .fb-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:6px;cursor:pointer;color:var(--text);transition:background .1s;word-break:break-all}
 .fb-item:hover{background:var(--accent-glow);color:var(--accent)}
@@ -250,7 +258,7 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
 <button class="hamburger" id="hamburger" onclick="toggleDrawer()" aria-label="Toggle menu">☰</button>
 <div class="scrim" id="scrim" onclick="closeDrawer()"></div>
 <div class="sidebar">
-  <div class="sidebar-header"><div class="sidebar-logo"><img src="/logo.png" alt="SmartProxy"></div><div class="sidebar-title">SmartProxy <span id="app-version"></span></div><button class="sidebar-close" id="sidebar-close" onclick="closeDrawer()" aria-label="Close menu">✕</button></div>
+  <div class="sidebar-header"><div class="sidebar-logo"><img src="/logo.png" alt="SmartProxy"></div><div class="sidebar-title">SmartProxy <span id="app-version"></span> <span class="proto-badge unknown" id="sb-proto-badge" onclick="showProtoModal()" style="font-size:.68rem;padding:2px 7px;margin-left:6px;vertical-align:middle" title="Protocol status"><span class="proto-dot"></span><span class="proto-label">HTTP</span></span></div><button class="sidebar-close" id="sidebar-close" onclick="closeDrawer()" aria-label="Close menu">✕</button></div>
   <div class="sidebar-nav">
     <div class="nav-item section">Monitoring</div>
     <div class="nav-item active" data-view="dashboard"><span class="nav-icon">~</span><span>Overview</span></div>
@@ -279,7 +287,7 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
 </div>
 <div class="view active" id="view-dashboard">
   <div class="view-title">Overview</div>
-  <div class="view-meta"><span class="dot"></span>Live <span id="dash-time"></span></div>
+  <div class="view-meta"><span class="dot"></span>Live <span id="dash-time"></span><span class="proto-badge unknown" id="dash-proto-badge" onclick="showProtoModal()" style="margin-left:auto" title="Click to view protocol & upgrade guide"><span class="proto-dot"></span><span class="proto-label">Detecting...</span></span></div>
   <div class="cards-ov" id="dash-cards"></div>
   <div id="dash-cards2" style="display:none"></div>
 </div>
@@ -389,7 +397,7 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
 </div>
 <div class="view" id="view-tls">
   <div class="view-title">TLS Certificate</div>
-  <div class="view-meta"><span class="dot"></span><span>Built-in root CA &amp; CA-signed leaf</span></div>
+  <div class="view-meta"><span class="dot"></span><span>Built-in root CA &amp; CA-signed leaf</span><span class="proto-badge unknown" id="tls-proto-badge" onclick="showProtoModal()" style="margin-left:auto" title="Click to view protocol & upgrade guide"><span class="proto-dot"></span><span class="proto-label">Detecting...</span></span></div>
   <div class="card" style="max-width:720px;line-height:1.7;color:var(--text2)">
     <p data-i18n="tls1" style="margin-bottom:16px">The panel serves HTTPS with a short-lived <b>leaf</b>
       certificate signed by a built-in root CA (<code>admin.crt</code>). Install that CA as a
@@ -2612,14 +2620,203 @@ document.querySelectorAll('.nav-item:not(.section)').forEach(function(item){
     if(ld[item.dataset.view])ld[item.dataset.view]();
   });
 });
+var _curProtoInfo = { key: 'unknown', text: 'HTTP', full: 'HTTP' };
+
+function detectProtocol() {
+  var proto = '';
+  try {
+    if (window.performance && performance.getEntriesByType) {
+      var navs = performance.getEntriesByType('navigation');
+      if (navs && navs.length > 0 && navs[0].nextHopProtocol) {
+        proto = navs[0].nextHopProtocol.toLowerCase();
+      }
+    }
+  } catch(e) {}
+  if (!proto) {
+    try {
+      if (window.performance && performance.getEntriesByType) {
+        var res = performance.getEntriesByType('resource');
+        for (var i = res.length - 1; i >= 0; i--) {
+          if (res[i].nextHopProtocol) {
+            proto = res[i].nextHopProtocol.toLowerCase();
+            break;
+          }
+        }
+      }
+    } catch(e) {}
+  }
+  if (!proto && window.__srvProto) {
+    proto = window.__srvProto.toLowerCase();
+  }
+  return proto;
+}
+
+function parseProto(raw) {
+  if (!raw) return { key: 'unknown', text: 'HTTP', full: 'HTTP' };
+  raw = raw.toLowerCase();
+  if (raw.indexOf('h3') !== -1 || raw.indexOf('http/3') !== -1) {
+    return { key: 'h3', text: 'HTTP/3 (QUIC)', full: 'HTTP/3 over QUIC (' + raw + ')' };
+  }
+  if (raw.indexOf('h2') !== -1 || raw.indexOf('http/2') !== -1) {
+    return { key: 'h2', text: 'HTTP/2', full: 'HTTP/2 (' + raw + ')' };
+  }
+  if (raw.indexOf('http/1.1') !== -1 || raw === 'http1.1' || raw === '1.1') {
+    return { key: 'h1', text: 'HTTP/1.1', full: 'HTTP/1.1' };
+  }
+  return { key: 'unknown', text: raw.toUpperCase(), full: raw };
+}
+
+function updateProtoBadges() {
+  _curProtoInfo = parseProto(detectProtocol());
+  var badges = document.querySelectorAll('.proto-badge');
+  badges.forEach(function(b) {
+    b.className = 'proto-badge ' + _curProtoInfo.key;
+    var lbl = b.querySelector('.proto-label');
+    if (lbl) lbl.textContent = _curProtoInfo.text;
+  });
+}
+
+function showProtoModal() {
+  updateProtoBadges();
+  var isZh = window.SP_LANG === 'zh' || document.documentElement.lang === 'zh-CN';
+  var titleEl = document.getElementById('proto-modal-title');
+  var bodyEl = document.getElementById('proto-modal-body');
+  var actBtn = document.getElementById('proto-modal-action-btn');
+  if (titleEl) titleEl.textContent = isZh ? ('网络传输协议：' + _curProtoInfo.text) : ('Web Protocol: ' + _curProtoInfo.text);
+
+  var isLoopback = location.hostname === '127.0.0.1' || location.hostname === 'localhost';
+  var host = location.hostname;
+  var html = '';
+
+  if (_curProtoInfo.key === 'h3') {
+    if (isZh) {
+      html = '<div style="display:flex;align-items:center;gap:12px;margin:12px 0;padding:12px 14px;background:var(--green-bg);border:1px solid rgba(60,207,142,.35);border-radius:8px">' +
+        '<span style="font-size:1.6rem">🚀</span>' +
+        '<div>' +
+          '<div style="font-weight:600;color:var(--green);font-size:.95rem">HTTP/3 (QUIC) 极速模式已生效</div>' +
+          '<div style="font-size:.8rem;color:var(--text2);margin-top:2px">当前控制面板正通过 UDP 传输，实现 0-RTT 握手、无队头阻塞与极强抗丢包能力。</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="font-size:.84rem;line-height:1.6;color:var(--text2)">' +
+        '<p style="margin-bottom:8px"><b>传输层参数：</b></p>' +
+        '<ul style="padding-left:18px;margin-bottom:10px">' +
+          '<li>底层协议：<code>' + _curProtoInfo.full + '</code></li>' +
+          '<li>连接端点：<code>' + location.host + '</code> (UDP)</li>' +
+          '<li>加密套件：TLS 1.3 强加密</li>' +
+        '</ul>' +
+        '<p>当前已处于最快连接状态，无需任何额外配置。</p>' +
+      '</div>';
+    } else {
+      html = '<div style="display:flex;align-items:center;gap:12px;margin:12px 0;padding:12px 14px;background:var(--green-bg);border:1px solid rgba(60,207,142,.35);border-radius:8px">' +
+        '<span style="font-size:1.6rem">🚀</span>' +
+        '<div>' +
+          '<div style="font-weight:600;color:var(--green);font-size:.95rem">HTTP/3 (QUIC) Active</div>' +
+          '<div style="font-size:.8rem;color:var(--text2);margin-top:2px">Zero-RTT handshake and multiplexing over UDP without head-of-line blocking.</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="font-size:.84rem;line-height:1.6;color:var(--text2)">' +
+        '<p style="margin-bottom:8px"><b>Connection Details:</b></p>' +
+        '<ul style="padding-left:18px;margin-bottom:10px">' +
+          '<li>Protocol: <code>' + _curProtoInfo.full + '</code></li>' +
+          '<li>Endpoint: <code>' + location.host + '</code> (UDP)</li>' +
+          '<li>Encryption: TLS 1.3</li>' +
+        '</ul>' +
+        '<p>The panel is already running at peak performance.</p>' +
+      '</div>';
+    }
+    if (actBtn) {
+      actBtn.textContent = isZh ? '完成' : 'Done';
+      actBtn.onclick = closeProtoModal;
+    }
+  } else {
+    if (isZh) {
+      html = '<div style="display:flex;align-items:center;gap:12px;margin:12px 0;padding:12px 14px;background:rgba(245,179,75,.12);border:1px solid rgba(245,179,75,.35);border-radius:8px">' +
+        '<span style="font-size:1.6rem">⚡</span>' +
+        '<div>' +
+          '<div style="font-weight:600;color:var(--yellow);font-size:.95rem">当前连接：' + _curProtoInfo.text + ' (TCP)</div>' +
+          '<div style="font-size:.8rem;color:var(--text2);margin-top:2px">服务端已全面支持 HTTP/3 (QUIC)，客户端尚未协商成功。</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="font-size:.84rem;line-height:1.65;color:var(--text2)">' +
+        '<div style="font-weight:600;color:var(--text);margin-bottom:8px">为什么浏览器还没有走 QUIC (HTTP/3)？</div>' +
+        '<ol style="padding-left:18px;display:flex;flex-direction:column;gap:10px">' +
+          '<li>' +
+            '<b>信任根证书（核心必选）</b>：<br>' +
+            'Chromium / Safari 等现代浏览器内核安全策略规定：<b>对于证书不被系统信任的站点，强制关闭 QUIC 协议并降级为 TCP</b>。请在系统信任凭据中安装 <code>admin.crt</code> 消除不安全警告。' +
+          '</li>' +
+          '<li>' +
+            '<b>避免使用 127.0.0.1 访问</b>：<br>' +
+            'Chrome 等浏览器内核默认<b>禁止对本地环回地址 (127.0.0.1 / localhost) 发起 QUIC 探测</b>。' +
+            (isLoopback ? '<br><span style="color:var(--red);font-weight:600">⚠ 您当前正在通过 ' + host + ' 访问，请改用手机局域网真实 IP（如 192.168.x.x）访问控制面板！</span>' : '<br>（您当前使用 <code>' + host + '</code> 访问，符合要求）') +
+          '</li>' +
+          '<li>' +
+            '<b>Alt-Svc 规范刷新生效</b>：<br>' +
+            '浏览器首次打开必须先走 TCP HTTPS 接收 <code>Alt-Svc: h3=":9090"</code> 头并在后台探测 UDP 端口。完成上述步骤后，<b>刷新页面</b>或重新打开即可切到 HTTP/3！' +
+          '</li>' +
+        '</ol>' +
+      '</div>';
+    } else {
+      html = '<div style="display:flex;align-items:center;gap:12px;margin:12px 0;padding:12px 14px;background:rgba(245,179,75,.12);border:1px solid rgba(245,179,75,.35);border-radius:8px">' +
+        '<span style="font-size:1.6rem">⚡</span>' +
+        '<div>' +
+          '<div style="font-weight:600;color:var(--yellow);font-size:.95rem">Current Protocol: ' + _curProtoInfo.text + ' (TCP)</div>' +
+          '<div style="font-size:.8rem;color:var(--text2);margin-top:2px">Server supports HTTP/3 (QUIC). Here is how to upgrade:</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="font-size:.84rem;line-height:1.65;color:var(--text2)">' +
+        '<div style="font-weight:600;color:var(--text);margin-bottom:8px">Why hasn\'t the browser switched to QUIC yet?</div>' +
+        '<ol style="padding-left:18px;display:flex;flex-direction:column;gap:10px">' +
+          '<li>' +
+            '<b>Trust Root CA (Mandatory)</b>:<br>' +
+            'Browser engines (Chromium/Safari) enforce a policy that <b>untrusted self-signed certificates disable QUIC completely</b>. Install <code>admin.crt</code> as a trusted CA in your OS settings to remove the untrusted warning.' +
+          '</li>' +
+          '<li>' +
+            '<b>Avoid 127.0.0.1 / localhost</b>:<br>' +
+            'Chrome disables QUIC probing on loopback addresses.' +
+            (isLoopback ? '<br><span style="color:var(--red);font-weight:600">⚠ You are currently visiting via ' + host + '. Please use the device\'s LAN IP (e.g. 192.168.x.x) instead!</span>' : '<br>(You are currently using <code>' + host + '</code>, which is supported)') +
+          '</li>' +
+          '<li>' +
+            '<b>Alt-Svc Negotiation</b>:<br>' +
+            'RFC 9114 requires initial connections to use TCP HTTPS to discover the <code>Alt-Svc: h3=":9090"</code> header. Once trusted, <b>refresh the page</b> to upgrade to HTTP/3.' +
+          '</li>' +
+        '</ol>' +
+      '</div>';
+    }
+    if (actBtn) {
+      actBtn.textContent = isZh ? '下载根证书 (admin.crt)' : 'Download admin.crt';
+      actBtn.onclick = function() {
+        window.location.href = '/admin.crt';
+      };
+    }
+  }
+
+  if (bodyEl) bodyEl.innerHTML = html;
+  var overlay = document.getElementById('proto-overlay');
+  if (overlay) overlay.classList.add('show');
+}
+
+function closeProtoModal() {
+  var overlay = document.getElementById('proto-overlay');
+  if (overlay) overlay.classList.remove('show');
+}
+
 function loadVersion(){
-  fetch('/version').then(function(r){return r.json()}).then(function(d){
+  fetch('/version').then(function(r){
+    var cp = r.headers.get('x-client-proto');
+    if (cp) {
+      window.__srvProto = cp;
+      updateProtoBadges();
+    }
+    return r.json();
+  }).then(function(d){
     var el=document.getElementById('app-version');
     if(el&&d.version)el.textContent=d.version;
   }).catch(function(){});
 }
 loadDashboard();
 loadVersion();
+updateProtoBadges();
+setTimeout(updateProtoBadges, 600);
 function setDot(ok){
   document.querySelectorAll('.view-meta .dot').forEach(function(d){d.style.background=ok?'var(--green)':'var(--red)'});
 }
@@ -2864,6 +3061,16 @@ es.onmessage=function(e){
     <div class="dialog-actions">
       <button class="btn btn-sm" onclick="closeNewFileModal()">Cancel</button>
       <button class="btn btn-sm primary" id="fb-new-confirm" onclick="fbCreateFile()">Confirm</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="proto-overlay" onclick="if(event.target===this)closeProtoModal()">
+  <div class="dialog" style="max-width:540px" onclick="event.stopPropagation()">
+    <div class="dialog-title" id="proto-modal-title">Web Protocol Status</div>
+    <div id="proto-modal-body"></div>
+    <div class="dialog-actions" style="margin-top:16px">
+      <button class="btn btn-sm" onclick="closeProtoModal()">Close</button>
+      <button class="btn btn-sm primary" id="proto-modal-action-btn" onclick="closeProtoModal()">Done</button>
     </div>
   </div>
 </div>
