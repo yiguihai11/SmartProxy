@@ -746,8 +746,9 @@ async function testGroupProxies(gid, proto, btn){
     return;
   }
   _batchTestingGroups[gid]=true;
-  if(proxyGroupsCollapsed[gid]){
+  if(proxyGroupsCollapsed[gid] !== false){
     proxyGroupsCollapsed[gid]=false;
+    saveProxyGroupsCollapsed();
   }
   for(var j=0;j<tasks.length;j++){
     proxyTestState[tasks[j].alias+':'+tasks[j].proto]={testing:true};
@@ -915,7 +916,8 @@ function getProxyGroupLabel(gid){
   return gid.charAt(0).toUpperCase()+gid.slice(1);
 }
 function toggleGroupCollapse(gid){
-  proxyGroupsCollapsed[gid]=!proxyGroupsCollapsed[gid];
+  var cur = proxyGroupsCollapsed[gid] !== undefined ? !!proxyGroupsCollapsed[gid] : true;
+  proxyGroupsCollapsed[gid] = !cur;
   saveProxyGroupsCollapsed();
   var sec=document.querySelector('.proxy-group-section[data-group="'+gid+'"]');
   if(sec){
@@ -1103,7 +1105,13 @@ function lhealth(d){
   var lanternEnabled=lanternInfo?!!lanternInfo.enabled:false;
   if(d&&d.health&&d.health.subscriptions!==undefined){
     renderSubscriptions(d.health.subscriptions);
+    window._lastKnownSubs=d.health.subscriptions;
   }
+  var currentSubs=window._lastKnownSubs||(d&&d.health&&d.health.subscriptions)||[];
+  var subsByName={};
+  currentSubs.forEach(function(s){
+    if(s&&s.name)subsByName[s.name]=s;
+  });
 
   var groups={};
   var groupOrder=[];
@@ -1117,6 +1125,30 @@ function lhealth(d){
     var udpScheme=isUDPSupportedScheme(p);
     var anyUp=p.health.available||(udpScheme&&p.udp_health&&p.udp_health.available);
     if(anyUp)groups[gid].onlineCount++;
+  });
+
+  currentSubs.forEach(function(s){
+    var gid='sub:'+s.name;
+    var subEnabled=!!s.enabled;
+    if(!groups[gid]){
+      groups[gid]={
+        id:gid,
+        label:subEnabled?getProxyGroupLabel(gid):(getProxyGroupLabel(gid)+' ('+t('Disabled')+')'),
+        items:[],
+        onlineCount:0,
+        disabled:!subEnabled,
+        subName:s.name,
+        subEnabled:subEnabled
+      };
+      groupOrder.push(gid);
+    }else{
+      groups[gid].subName=s.name;
+      groups[gid].subEnabled=subEnabled;
+      if(!subEnabled){
+        groups[gid].disabled=true;
+        groups[gid].label=getProxyGroupLabel(gid)+' ('+t('Disabled')+')';
+      }
+    }
   });
 
   if(!groups['lantern']){
@@ -1160,7 +1192,7 @@ function lhealth(d){
   var container=document.getElementById('proxy-cards');
   if(!container)return;
 
-  if(proxies.length===0&&!lanternInfo&&subs.length===0){
+  if(proxies.length===0&&!lanternInfo&&currentSubs.length===0){
     container.innerHTML='<div style="color:var(--text2);padding:24px;text-align:center">'+t('No proxy nodes to test')+'</div>';
     st('health-time');
     return;
@@ -1170,7 +1202,7 @@ function lhealth(d){
   groupOrder.forEach(function(gid){
     var g=groups[gid];
     var isHidden=(proxyGroupFilter!=='all'&&proxyGroupFilter!==gid);
-    var isCollapsed=!!proxyGroupsCollapsed[gid];
+    var isCollapsed=proxyGroupsCollapsed[gid]!==undefined?!!proxyGroupsCollapsed[gid]:true;
     var groupIcon=(gid==='lantern'?'🏮':gid==='custom'?'📌':gid.indexOf('sub:')===0?'📑':'🌐');
     var badgeText=g.disabled?t('Disabled'):(tf('{0} nodes',[g.items.length])+' · '+tf('{0} online',[g.onlineCount]));
 
@@ -1183,8 +1215,14 @@ function lhealth(d){
         actionsHtml='<button class="btn btn-sm primary" onclick="toggleLantern(true)">'+t('Enable')+'</button>';
       }
     }else if(gid.indexOf('sub:')===0){
-      var subName=gid.slice(4);
-      actionsHtml='<button class="btn btn-sm" onclick="refreshSub(\''+escAttr(subName)+'\',this)" title="'+escAttr(t('Refresh Subscription'))+'">🔄 '+t('Refresh')+'</button>';
+      var subName=g.subName||gid.slice(4);
+      var subEnabled=(g.subEnabled!==undefined)?g.subEnabled:(subsByName[subName]?!!subsByName[subName].enabled:true);
+      if(subEnabled){
+        actionsHtml='<button class="btn btn-sm" onclick="refreshSub(\''+escAttr(subName)+'\',this)" title="'+escAttr(t('Refresh Subscription'))+'">🔄 '+t('Refresh')+'</button>'+
+          '<button class="btn btn-sm danger" onclick="toggleSub(\''+escAttr(subName)+'\',false)" title="'+escAttr(t('Disable this subscription'))+'">'+t('Disable')+'</button>';
+      }else{
+        actionsHtml='<button class="btn btn-sm primary" onclick="toggleSub(\''+escAttr(subName)+'\',true)" title="'+escAttr(t('Enable this subscription'))+'">'+t('Enable')+'</button>';
+      }
     }
 
     if(g.items.length>0){
@@ -1204,6 +1242,10 @@ function lhealth(d){
         cardsHtml='<div style="color:var(--text2);padding:24px;text-align:center;grid-column:1/-1;">'+t('Lantern shared pool is disabled. Click Enable to fetch free nodes.')+'</div>';
       }else if(gid==='lantern'&&lanternEnabled){
         cardsHtml='<div style="color:var(--text2);padding:24px;text-align:center;grid-column:1/-1;">'+t('Fetching nodes from Lantern...')+'</div>';
+      }else if(gid.indexOf('sub:')===0&&g.disabled){
+        cardsHtml='<div style="color:var(--text2);padding:24px;text-align:center;grid-column:1/-1;">'+t('Subscription is disabled. Click Enable to activate nodes.')+'</div>';
+      }else if(gid.indexOf('sub:')===0&&!g.disabled){
+        cardsHtml='<div style="color:var(--text2);padding:24px;text-align:center;grid-column:1/-1;">'+t('Subscription has no nodes. Click Refresh to fetch nodes.')+'</div>';
       }else{
         cardsHtml='<div style="color:var(--text2);padding:24px;text-align:center;grid-column:1/-1;">'+t('No entries')+'</div>';
       }
