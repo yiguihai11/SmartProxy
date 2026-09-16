@@ -55,6 +55,7 @@ type Server struct {
 	lanternStatus       func() map[string]interface{}
 	refreshSubscription func(context.Context, string) (int, error)
 	subscriptionsStatus func() []subscription.ItemState
+	removeSubNodes      func([]string) int
 	refreshInt          int
 	statsMu             sync.Mutex
 	stats               cachedStats
@@ -174,6 +175,10 @@ func (s *Server) getSubscriptionsStatus() []subscription.ItemState {
 		return s.subscriptionsStatus()
 	}
 	return nil
+}
+
+func (s *Server) SetRemoveSubscriptionNodes(fn func([]string) int) {
+	s.removeSubNodes = fn
 }
 func (s *Server) Start() error {
 	mux := s.setupMux()
@@ -374,6 +379,7 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/subscriptions/save", s.handleSubscriptionsSave)
 	mux.HandleFunc("/subscriptions/delete", s.handleSubscriptionsDelete)
 	mux.HandleFunc("/subscriptions/toggle", s.handleSubscriptionsToggle)
+	mux.HandleFunc("/proxies/clean-dead", s.handleProxiesCleanDead)
 	mux.HandleFunc("/version", s.handleVersion)
 	mux.HandleFunc("/files", s.handleFiles)
 	mux.HandleFunc("/files/validate", s.handleFileValidate)
@@ -1363,6 +1369,100 @@ func (s *Server) handleSubscriptionsToggle(w http.ResponseWriter, r *http.Reques
 	slog.Info("admin: subscription toggled", "name", name, "enabled", enable)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "enabled": enable})
+}
+
+func (s *Server) handleProxiesCleanDead(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Aliases []string `json:"aliases"`
+		Group   string   `json:"group,omitempty"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	if len(req.Aliases) == 0 && s.mgr != nil {
+		proxies := s.mgr.Proxies()
+		for _, p := range proxies {
+			if req.Group != "" && req.Group != "all" {
+				pGroup := p.Provider
+				if pGroup == "" {
+					pGroup = "custom"
+				}
+				if pGroup != req.Group {
+					continue
+				}
+			}
+			isUDP := p.UDPCapability != "none"
+			tcpUp := p.Health.Available
+			udpUp := isUDP && p.UDPHealth.Available
+			if !tcpUp && (!isUDP || !udpUp) {
+				req.Aliases = append(req.Aliases, p.Alias)
+			}
+		}
+	}
+
+	if len(req.Aliases) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "count": 0})
+		return
+	}
+
+	totalDeleted := 0
+	aliasSet := make(map[string]bool, len(req.Aliases))
+	for _, a := range req.Aliases {
+		if a != "" {
+			aliasSet[a] = true
+		}
+	}
+
+	// 1. Remove custom nodes from config.json
+	if s.configSrc != nil && s.configPath != "" {
+		cfg := s.configSrc()
+		if cfg != nil && len(cfg.Upstream.Proxies) > 0 {
+			hasCustom := false
+			for _, p := range cfg.Upstream.Proxies {
+				if aliasSet[p.Alias] {
+					hasCustom = true
+					break
+				}
+			}
+			if hasCustom {
+				var removedCount int
+				_, _, _ = s.saveConfig(func(c *config.Config) {
+					var kept []config.ProxyEntry
+					for _, p := range c.Upstream.Proxies {
+						if aliasSet[p.Alias] {
+							removedCount++
+						} else {
+							kept = append(kept, p)
+						}
+					}
+					c.Upstream.Proxies = kept
+				})
+				totalDeleted += removedCount
+			}
+		}
+	}
+
+	// 2. Remove subscription nodes
+	if s.removeSubNodes != nil {
+		totalDeleted += s.removeSubNodes(req.Aliases)
+	}
+
+	// 3. Remove provider nodes (Lantern etc.)
+	if s.mgr != nil {
+		totalDeleted += s.mgr.RemoveProviderNodes(req.Aliases)
+	}
+
+	slog.Info("admin: proxies cleaned up", "count", totalDeleted, "requested", len(req.Aliases))
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "ok",
+		"count":  totalDeleted,
+	})
 }
 
 // saveConfig copies the live config, applies mutate to the copy, validates it,

@@ -261,6 +261,57 @@ func (m *Manager) SetProviderProxies(provider string, entries []ProxyEntry) {
 	slog.Info("provider proxies updated", "provider", provider, "count", len(entries), "totalProxies", len(newProxies))
 }
 
+// RemoveProviderNodes removes specific aliases from provider proxies and rebuilds the active pool.
+func (m *Manager) RemoveProviderNodes(aliases []string) int {
+	if len(aliases) == 0 {
+		return 0
+	}
+	aliasSet := make(map[string]bool, len(aliases))
+	for _, a := range aliases {
+		if a != "" {
+			aliasSet[a] = true
+		}
+	}
+	m.mu.Lock()
+	totalRemoved := 0
+	for pName, entries := range m.providerProxies {
+		var kept []ProxyEntry
+		removedHere := 0
+		for _, e := range entries {
+			if aliasSet[e.Alias] {
+				removedHere++
+			} else {
+				kept = append(kept, e)
+			}
+		}
+		if removedHere > 0 {
+			if len(kept) == 0 {
+				delete(m.providerProxies, pName)
+			} else {
+				m.providerProxies[pName] = kept
+			}
+			totalRemoved += removedHere
+		}
+	}
+	if totalRemoved > 0 {
+		pins := m.captureManualPins()
+		m.rebuildLocked()
+		newProxies := m.defaultProxies
+		healthCfg := m.healthCfg
+		m.mu.Unlock()
+
+		m.restoreManualPins(pins)
+		if m.healthChecker != nil {
+			m.healthChecker.Reload(healthCfg, newProxies)
+		}
+		m.probeInitialGeo()
+		slog.Info("provider nodes removed", "removed", totalRemoved, "remaining", len(newProxies))
+		return totalRemoved
+	}
+	m.mu.Unlock()
+	return 0
+}
+
 type UpstreamConfig struct {
 	Default     string
 	HealthCheck config.HealthCheckConf

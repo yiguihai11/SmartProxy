@@ -187,6 +187,15 @@ var zhStrings = map[string]string{
 	"Test All":                                       "一键测全部",
 	"No proxy nodes to test":                        "暂无节点可测试",
 	"Batch test complete: {0} available, {1} failed": "批量测试完成：{0} 个连通，{1} 个失败",
+	"Clean Dead":                                     "一键清理",
+	"Clean up nodes where both TCP and UDP are unavailable": "一键删除清理 TCP 与 UDP 均不可用的节点",
+	"Found {0} dead nodes (both TCP and UDP unavailable). Delete and clean them up now?": "发现 {0} 个不可用节点（TCP 与 UDP 均不通），是否一键删除清理？",
+	"Found {0} dead nodes in this group. Delete and clean them up now?": "本分组发现 {0} 个不可用节点，是否一键删除清理？",
+	"Proxy \"{0}\" is completely down (TCP & UDP both failed). Delete and clean it up now?": "节点「{0}」完全不可用（TCP 与 UDP 均失败），是否删除清理？",
+	"Successfully cleaned up {0} dead nodes":         "已成功删除清理 {0} 个不可用节点",
+	"No dead nodes found in this group":              "本分组暂无不可用节点",
+	"No dead nodes found":                            "未发现不可用节点",
+	"Cleaning up dead nodes...":                      "正在清理不可用节点…",
 
 	// theme
 	"Light": "浅色", "Dark": "深色",
@@ -360,7 +369,12 @@ var zhDynamicKeys = map[string]bool{
 	"Subscription enabled":              true,
 	"Subscription disabled":             true,
 	"Subscription Name and URL are required": true,
-	"Remaining":                         true,
+	"Remaining":                                             true,
+	"Clean Dead":                                            true,
+	"Clean up nodes where both TCP and UDP are unavailable": true,
+	"No dead nodes found in this group":                     true,
+	"No dead nodes found":                                   true,
+	"Cleaning up dead nodes...":                             true,
 }
 
 // zhPrefixes — applied to a text node that starts with the prefix (longest
@@ -374,6 +388,7 @@ var zhPrefixes = []struct{ Pre, Zh string }{
 	{"File not usable: ", "文件不可用："},
 	{"Save failed: ", "保存失败："},
 	{"Delete failed: ", "删除失败："},
+	{"Clean up failed: ", "清理失败："},
 	{"Refresh failed: ", "刷新失败："},
 	{"Operation failed: ", "操作失败："},
 	{"QR render failed: ", "二维码渲染失败："},

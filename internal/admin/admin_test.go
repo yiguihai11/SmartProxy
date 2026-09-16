@@ -1890,4 +1890,66 @@ func TestAdmin_Subscriptions(t *testing.T) {
 	}
 }
 
+func TestAdmin_ProxiesCleanDead(t *testing.T) {
+	s := newTestServer(t)
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	initialCfg := config.DefaultConfig()
+	initialCfg.Upstream.Proxies = []config.ProxyEntry{
+		{Alias: "custom-dead", URL: "socks5://1.1.1.1:1080"},
+		{Alias: "custom-alive", URL: "socks5://2.2.2.2:1080"},
+	}
+	data, _ := json.Marshal(initialCfg)
+	_ = os.WriteFile(cfgPath, data, 0o600)
+
+	s.SetConfigPath(cfgPath)
+	s.SetConfigSrc(func() *config.Config {
+		c, _ := config.Load(cfgPath)
+		return c
+	})
+	s.SetReloadConfig(func() {})
+
+	subCleaned := 0
+	s.SetRemoveSubscriptionNodes(func(aliases []string) int {
+		subCleaned = len(aliases)
+		return len(aliases)
+	})
+
+	startServer(t, s)
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", s.sockPath)
+			},
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	// 1. Clean with explicit aliases (1 custom, 1 sub)
+	reqBody := `{"aliases":["custom-dead","sub-dead"]}`
+	resp, err := client.Post("http://unix/proxies/clean-dead", "application/json", strings.NewReader(reqBody))
+	if err != nil {
+		t.Fatalf("POST /proxies/clean-dead failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var res map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&res)
+	if res["count"].(float64) < 2 {
+		t.Errorf("expected at least 2 deleted, got %+v", res)
+	}
+
+	// Verify custom-dead removed from config
+	savedCfg, _ := config.Load(cfgPath)
+	if len(savedCfg.Upstream.Proxies) != 1 || savedCfg.Upstream.Proxies[0].Alias != "custom-alive" {
+		t.Errorf("expected only custom-alive remaining, got %+v", savedCfg.Upstream.Proxies)
+	}
+	if subCleaned != 2 {
+		t.Errorf("expected subCleaned=2, got %d", subCleaned)
+	}
+}
+
 

@@ -400,6 +400,52 @@ func (m *Manager) TotalNodeCount() int {
 	return count
 }
 
+// RemoveNodes removes nodes matching the given aliases across all subscriptions,
+// updates the upstream manager provider proxies, and persists the cache.
+func (m *Manager) RemoveNodes(aliases []string) int {
+	if len(aliases) == 0 {
+		return 0
+	}
+	aliasSet := make(map[string]bool, len(aliases))
+	for _, a := range aliases {
+		if a != "" {
+			aliasSet[a] = true
+		}
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	totalRemoved := 0
+	for _, item := range m.subs {
+		if len(item.Nodes) == 0 {
+			continue
+		}
+		var kept []upstream.ProxyEntry
+		removedHere := 0
+		for _, node := range item.Nodes {
+			if aliasSet[node.Alias] {
+				removedHere++
+			} else {
+				kept = append(kept, node)
+			}
+		}
+		if removedHere > 0 {
+			item.Nodes = kept
+			item.NodeCount = len(kept)
+			totalRemoved += removedHere
+			if item.Enabled && m.upstreamMgr != nil {
+				m.upstreamMgr.SetProviderProxies("sub:"+item.Name, item.Nodes)
+			}
+		}
+	}
+	if totalRemoved > 0 {
+		m.saveCacheLocked()
+		slog.Info("subscription nodes cleaned up", "removed", totalRemoved)
+	}
+	return totalRemoved
+}
+
 func (m *Manager) recordError(name, errStr string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -298,6 +298,7 @@ func (e *Engine) Start(ctx context.Context) error {
 		e.adminServer.SetLanternStatus(e.LanternStatus)
 		e.adminServer.SetRefreshSubscription(e.RefreshSubscription)
 		e.adminServer.SetSubscriptionsStatus(e.SubscriptionsStatus)
+		e.adminServer.SetRemoveSubscriptionNodes(e.RemoveSubscriptionNodes)
 		e.adminServer.SetTCPPort(lc.AdminPort)
 		e.adminServer.SetRefreshInterval(lc.AdminRefreshInterval)
 		// Extra SANs land in the auto-generated self-signed cert, so a LAN IP in
@@ -333,6 +334,14 @@ func (e *Engine) SubscriptionsStatus() []subscription.ItemState {
 		return nil
 	}
 	return e.subscriptionMgr.Status()
+}
+
+// RemoveSubscriptionNodes removes nodes matching the aliases from subscriptions.
+func (e *Engine) RemoveSubscriptionNodes(aliases []string) int {
+	if e.subscriptionMgr == nil {
+		return 0
+	}
+	return e.subscriptionMgr.RemoveNodes(aliases)
 }
 
 // RefreshLantern triggers on-demand fetching and testing of Lantern nodes.

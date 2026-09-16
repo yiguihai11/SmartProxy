@@ -103,6 +103,15 @@ func TestManager_LifecycleAndCache(t *testing.T) {
 		t.Errorf("expected 2 nodes restored from cache, got %+v", status2)
 	}
 
+	// Test RemoveNodes
+	removed := subMgr2.RemoveNodes([]string{"HK 01"})
+	if removed != 1 {
+		t.Errorf("expected 1 node removed, got %d", removed)
+	}
+	if st := subMgr2.Status(); len(st) != 1 || st[0].NodeCount != 1 {
+		t.Errorf("expected 1 node remaining, got %+v", st)
+	}
+
 	// 3. Test Reload: disable subscription
 	subsConf[0].Enabled = false
 	subMgr2.Reload(subsConf)

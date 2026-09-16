@@ -704,6 +704,19 @@ async function testProxy(i,proto){
     if(toast)showCopyToast(toast,failMsg);
   }
   try{await loadHealth()}catch(_){lhealth(healthD)}
+  var isUDP=isUDPSupportedScheme(p);
+  var stTCP=proxyTestState[p.alias+':tcp'];
+  var stTCPing=proxyTestState[p.alias+':tcping'];
+  var stUDP=proxyTestState[p.alias+':udp'];
+  var tcpUp=(stTCP&&stTCP.available)||(stTCPing&&stTCPing.available)||(p.health&&p.health.available&&(!stTCP||stTCP.available));
+  var udpUp=isUDP?((stUDP&&stUDP.available)||(p.udp_health&&p.udp_health.available&&(!stUDP||stUDP.available))):false;
+  if(!tcpUp&&(!isUDP||!udpUp)){
+    setTimeout(function(){
+      if(confirm(tf('Proxy "{0}" is completely down (TCP & UDP both failed). Delete and clean it up now?',[p.alias]))){
+        cleanDeadProxies([p.alias]);
+      }
+    },200);
+  }
 }
 var _batchTestingGroups={};
 async function testGroupProxies(gid, proto, btn){
@@ -780,6 +793,82 @@ async function testGroupProxies(gid, proto, btn){
     showCopyToast(toast,tf('Batch test complete: {0} available, {1} failed',[String(okCount),String(failCount)]));
   }
   try{await loadHealth()}catch(_){lhealth(healthD)}
+
+  var deadAliases=[];
+  proxies.forEach(function(p){
+    var isUDP=isUDPSupportedScheme(p);
+    var stTCP=proxyTestState[p.alias+':tcp'];
+    var stTCPing=proxyTestState[p.alias+':tcping'];
+    var stUDP=proxyTestState[p.alias+':udp'];
+
+    var tcpUp=false;
+    if(stTCP)tcpUp=!!stTCP.available;
+    else if(stTCPing)tcpUp=!!stTCPing.available;
+    else tcpUp=!!(p.health&&p.health.available);
+
+    var udpUp=false;
+    if(isUDP){
+      if(stUDP)udpUp=!!stUDP.available;
+      else udpUp=!!(p.udp_health&&p.udp_health.available);
+    }
+
+    if(!tcpUp&&(!isUDP||!udpUp)){
+      deadAliases.push(p.alias);
+    }
+  });
+
+  if(deadAliases.length>0){
+    setTimeout(function(){
+      if(confirm(tf('Found {0} dead nodes (both TCP and UDP unavailable). Delete and clean them up now?',[deadAliases.length]))){
+        cleanDeadProxies(deadAliases);
+      }
+    },250);
+  }
+}
+async function cleanDeadProxies(aliases){
+  if(!aliases||aliases.length===0)return;
+  showToast(t('Cleaning up dead nodes...'));
+  try{
+    var r=await fetch('/proxies/clean-dead',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({aliases:aliases})
+    });
+    if(!r.ok){
+      var msg=await r.text();
+      throw new Error(msg||('HTTP '+r.status));
+    }
+    var res=await r.json();
+    showToast(tf('Successfully cleaned up {0} dead nodes',[res.count||aliases.length]));
+    loadHealth();
+    if(document.querySelector('#view-config.active'))loadConfig();
+  }catch(e){
+    alert(tf('Clean up failed: {0}',[e.message]));
+  }
+}
+async function cleanDeadGroupProxies(gid){
+  var allProxies=(healthD&&healthD.health&&healthD.health.proxies)||[];
+  var proxies=allProxies;
+  if(gid&&gid!=='all'){
+    proxies=allProxies.filter(function(p){return getProxyGroup(p)===gid;});
+  }
+  var deadAliases=[];
+  proxies.forEach(function(p){
+    var isUDP=isUDPSupportedScheme(p);
+    var tcpUp=!!(p.health&&p.health.available);
+    var udpUp=isUDP?!!(p.udp_health&&p.udp_health.available):false;
+    if(!tcpUp&&(!isUDP||!udpUp)){
+      deadAliases.push(p.alias);
+    }
+  });
+  if(deadAliases.length===0){
+    showToast(t('No dead nodes found in this group'));
+    return;
+  }
+  if(!confirm(tf('Found {0} dead nodes in this group. Delete and clean them up now?',[deadAliases.length]))){
+    return;
+  }
+  await cleanDeadProxies(deadAliases);
 }
 function testAllProxies(proto){
   return testGroupProxies(proxyGroupFilter||'all', proto);
@@ -975,7 +1064,9 @@ function renderProxyCard(p,i){
       '<button class="btn btn-sm" onclick="openRawConfigDialog('+i+')" title="'+escAttr(t('Edit and save as custom proxy'))+'">'+t('Edit Raw Config')+'</button>'+
       '<button class="btn btn-sm '+(anyUp?'danger':'primary')+'" onclick="tp('+i+')">'+t(anyUp?'Disable':'Enable')+'</button>'+
       '</div>'+
-      '<div class="mgmt-right"></div>';
+      '<div class="mgmt-right">'+
+      '<button class="btn btn-sm danger" onclick="deleteProxy('+i+')">'+t('Delete')+'</button>'+
+      '</div>';
   }else{
     mgmtHtml='<div class="mgmt-left">'+
       '<button class="btn btn-sm primary" onclick="openProxyDialog('+i+')">'+t('Edit')+'</button>'+
@@ -1100,7 +1191,8 @@ function lhealth(d){
       actionsHtml+='<button class="btn btn-sm" onclick="testGroupProxies(\''+escAttr(gid)+'\',\'tcping\',this)" title="'+escAttr(t('Test TCPing latency'))+'"'+(isTesting?' disabled':'')+'>'+t('Test All TCPing')+'</button>'+
         '<button class="btn btn-sm" onclick="testGroupProxies(\''+escAttr(gid)+'\',\'tcp\',this)" title="'+escAttr(t('Test TCP latency and availability'))+'"'+(isTesting?' disabled':'')+'>'+t('Test All TCP')+'</button>'+
         '<button class="btn btn-sm" onclick="testGroupProxies(\''+escAttr(gid)+'\',\'udp\',this)" title="'+escAttr(t('Test UDP latency and availability'))+'"'+(isTesting?' disabled':'')+'>'+t('Test All UDP')+'</button>'+
-        '<button class="btn btn-sm" onclick="testGroupProxies(\''+escAttr(gid)+'\',\'all\',this)" title="'+escAttr(t('Test All'))+'"'+(isTesting?' disabled':'')+'>'+t('Test All')+'</button>';
+        '<button class="btn btn-sm" onclick="testGroupProxies(\''+escAttr(gid)+'\',\'all\',this)" title="'+escAttr(t('Test All'))+'"'+(isTesting?' disabled':'')+'>'+t('Test All')+'</button>'+
+        '<button class="btn btn-sm" onclick="cleanDeadGroupProxies(\''+escAttr(gid)+'\')" title="'+escAttr(t('Clean up nodes where both TCP and UDP are unavailable'))+'">🧹 '+t('Clean Dead')+'</button>';
     }
 
     actionsHtml+='<button class="btn btn-sm ghost proxy-group-collapse-btn" onclick="toggleGroupCollapse(\''+gid+'\')">'+t(isCollapsed?'Expand':'Collapse')+'</button>';
@@ -1771,15 +1863,11 @@ async function saveProxy(){
   }
 }
 async function deleteProxy(i){
-  var p=healthD.health.proxies[i];
+  var p=(healthD&&healthD.health&&healthD.health.proxies&&healthD.health.proxies[i])||null;
   if(!p)return;
   if(!confirm(tf('Delete proxy "{0}" ?',[p.alias])))return;
   try{
-    await putProxyConfig(function(cfg){
-      cfg.upstream.proxies=cfg.upstream.proxies.filter(function(x){return x.alias!==p.alias});
-    });
-    loadHealth();
-    if(document.querySelector('#view-config.active'))loadConfig();
+    await cleanDeadProxies([p.alias]);
   }catch(e){alert('Delete failed: '+e.message)}
 }
 function showToast(msg){
