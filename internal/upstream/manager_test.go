@@ -1315,3 +1315,88 @@ func TestManager_TestProxy(t *testing.T) {
 		t.Errorf("expected ProxyInfo to reflect positive PingLatency, got %+v", proxies)
 	}
 }
+
+func TestManager_SetProviderProxies(t *testing.T) {
+	mgr, err := NewManager(UpstreamConfig{
+		Default: "round_robin",
+		Proxies: []ProxyEntry{
+			{
+				Alias: "static-1",
+				URL:   "socks5://127.0.0.1:1080",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer mgr.Stop()
+
+	// Initial state: only static-1
+	if len(mgr.defaultProxies) != 1 {
+		t.Fatalf("expected 1 initial proxy, got %d", len(mgr.defaultProxies))
+	}
+
+	// Register 2 Lantern provider nodes
+	lanternNodes := []ProxyEntry{
+		{
+			Alias: "[Lantern] JP-01",
+			URL:   "socks5://127.0.0.1:1081",
+		},
+		{
+			Alias: "[Lantern] US-01",
+			URL:   "socks5://127.0.0.1:1082",
+		},
+	}
+	mgr.SetProviderProxies("lantern", lanternNodes)
+
+	if len(mgr.defaultProxies) != 3 {
+		t.Fatalf("expected 3 proxies after provider register, got %d", len(mgr.defaultProxies))
+	}
+	if _, ok := mgr.aliasMap["[Lantern] JP-01"]; !ok {
+		t.Errorf("expected [Lantern] JP-01 in aliasMap")
+	}
+	if _, ok := mgr.aliasMap["[Lantern] US-01"]; !ok {
+		t.Errorf("expected [Lantern] US-01 in aliasMap")
+	}
+
+	// Manually pin one provider circuit
+	if err := mgr.SetCircuitHealth("[Lantern] JP-01", "tcp", "disable"); err != nil {
+		t.Fatalf("SetCircuitHealth failed: %v", err)
+	}
+	if mgr.aliasMap["[Lantern] JP-01"].IsAvailable() {
+		t.Errorf("expected [Lantern] JP-01 to be disabled")
+	}
+
+	// Update provider nodes (e.g. account rotated or new nodes)
+	updatedNodes := []ProxyEntry{
+		{
+			Alias: "[Lantern] JP-01", // Should keep manual disabled pin!
+			URL:   "socks5://127.0.0.1:1083",
+		},
+		{
+			Alias: "[Lantern] SG-01",
+			URL:   "socks5://127.0.0.1:1084",
+		},
+	}
+	mgr.SetProviderProxies("lantern", updatedNodes)
+
+	if len(mgr.defaultProxies) != 3 {
+		t.Fatalf("expected 3 proxies after provider update, got %d", len(mgr.defaultProxies))
+	}
+	if _, ok := mgr.aliasMap["[Lantern] US-01"]; ok {
+		t.Errorf("[Lantern] US-01 should have been removed")
+	}
+	if _, ok := mgr.aliasMap["[Lantern] SG-01"]; !ok {
+		t.Errorf("[Lantern] SG-01 should be present")
+	}
+	// Verify manual pin was preserved
+	if mgr.aliasMap["[Lantern] JP-01"].IsAvailable() {
+		t.Errorf("[Lantern] JP-01 manual pin should have been preserved across update")
+	}
+
+	// Remove provider nodes
+	mgr.SetProviderProxies("lantern", nil)
+	if len(mgr.defaultProxies) != 1 {
+		t.Fatalf("expected 1 proxy after provider remove, got %d", len(mgr.defaultProxies))
+	}
+}

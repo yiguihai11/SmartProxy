@@ -1,6 +1,7 @@
 package singbox
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -50,6 +51,9 @@ func (e *Engine) RegisterOutbound(tag string, rawJSON []byte) error {
 	defer e.mu.Unlock()
 
 	old, exists := e.outbounds[tag]
+	if exists && bytes.Equal(old, rawJSON) && e.instance != nil {
+		return nil
+	}
 	e.outbounds[tag] = rawJSON
 	if err := e.rebuildLocked(context.Background()); err != nil {
 		if exists {
@@ -136,17 +140,17 @@ func (e *Engine) rebuildLocked(ctx context.Context) error {
 		return fmt.Errorf("failed to create sing-box instance: %w", err)
 	}
 
-	if err := newInstance.Start(); err != nil {
-		return fmt.Errorf("failed to start sing-box instance: %w", err)
-	}
-
 	oldInstance := e.instance
-	e.instance = newInstance
-
+	e.instance = nil
 	if oldInstance != nil {
 		_ = oldInstance.Close()
 	}
 
+	if err := newInstance.Start(); err != nil {
+		return fmt.Errorf("failed to start sing-box instance: %w", err)
+	}
+
+	e.instance = newInstance
 	slog.Debug("sing-box outbound engine rebuilt", "outbounds", len(e.outbounds))
 	return nil
 }
