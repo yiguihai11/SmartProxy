@@ -954,6 +954,35 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 		e.adminServer.SetAdminAuth(newCfg.Listen.AdminAuth)
 	}
 
+	if newCfg.Lantern.Enabled {
+		if e.lanternProvider == nil {
+			dataDir := newCfg.Lantern.DataDir
+			if dataDir == "" {
+				dataDir = cfgDir
+			}
+			maxAcc := newCfg.Lantern.MaxAccounts
+			if maxAcc <= 0 {
+				maxAcc = 5
+			}
+			lp, err := lantern.NewProvider(lantern.Config{
+				DataDir:         dataDir,
+				MaxAccounts:     maxAcc,
+				FilterDeadNodes: newCfg.Lantern.FilterDeadNodes,
+			}, e.UpstreamMgr)
+			if err != nil {
+				slog.Warn("failed to initialize lantern provider on reload", "error", err)
+			} else {
+				e.lanternProvider = lp
+				e.lanternProvider.Start()
+			}
+		}
+	} else {
+		if e.lanternProvider != nil {
+			e.lanternProvider.Stop()
+			e.lanternProvider = nil
+		}
+	}
+
 	// Publish the new configuration snapshot after runtime components have
 	// been updated. This Store is atomic for the Config pointer itself, but
 	// ReloadConfig as a whole is intentionally not a cross-component transaction.

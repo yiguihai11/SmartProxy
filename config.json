@@ -106,5 +106,10 @@
       "dummy": false,
       "timeout_ms": 1000
     }
+  },
+  "lantern": {
+    "enabled": true,
+    "max_accounts": 5,
+    "filter_dead_nodes": true
   }
 }
