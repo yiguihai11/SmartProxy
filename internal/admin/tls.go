@@ -48,9 +48,8 @@ func (s *Server) buildTLSConfig() (*tls.Config, error) {
 	return &tls.Config{
 		MinVersion:   tls.VersionTLS12,
 		Certificates: []tls.Certificate{cert},
-		// The custom listener hands *tls.Conn to http.Server directly (not ServeTLS),
-		// so HTTP/2 is not negotiated; serve the panel over HTTP/1.1 explicitly.
-		NextProtos: []string{"http/1.1"},
+		// NextProtos enables HTTP/2 (ALPN "h2") and HTTP/1.1 over TLS.
+		NextProtos: []string{"h2", "http/1.1"},
 	}, nil
 }
 

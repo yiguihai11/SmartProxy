@@ -242,7 +242,8 @@ func (s *Server) Start() error {
 					// One port, two protocols: TLS handshakes are served as HTTPS,
 					// plaintext requests are 301-redirected to https (see tls.go).
 					s.tcpServer = newHTTPServer(s.tlsDispatch(tcpHandler))
-					slog.Info("admin HTTPS server started (HTTP redirects to https)", "port", s.tcpPort)
+					s.tcpServer.TLSConfig = tlsCfg
+					slog.Info("admin HTTPS server started (HTTP/2 & HTTP/1.1, HTTP redirects to https)", "port", s.tcpPort)
 					go s.tcpServer.Serve(&splitListener{Listener: tcpLn, tlsCfg: tlsCfg})
 
 					// HTTP/3 (QUIC) over UDP on the same port

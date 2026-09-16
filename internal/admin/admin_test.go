@@ -1726,10 +1726,13 @@ func TestAdminServer_HTTP3(t *testing.T) {
 	}
 	t.Cleanup(s.Stop)
 
-	// 1. Verify Alt-Svc header in standard TCP HTTPS response
+	// 1. Verify HTTP/2 and Alt-Svc header in standard TCP HTTPS response
 	tcpClient := &http.Client{
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
-		Timeout:   5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+			ForceAttemptHTTP2: true,
+		},
+		Timeout: 5 * time.Second,
 	}
 	base := fmt.Sprintf("https://127.0.0.1:%d", port)
 	resp, err := tcpClient.Get(base + "/admin.crt")
@@ -1737,13 +1740,16 @@ func TestAdminServer_HTTP3(t *testing.T) {
 		t.Fatalf("TCP HTTPS GET /admin.crt: %v", err)
 	}
 	defer resp.Body.Close()
+	if resp.Proto != "HTTP/2.0" {
+		t.Errorf("expected HTTP/2.0 over TCP TLS, got %q", resp.Proto)
+	}
 	altSvc := resp.Header.Get("Alt-Svc")
 	expectedAltSvc := fmt.Sprintf("h3=\":%d\"", port)
 	if !strings.Contains(altSvc, expectedAltSvc) {
 		t.Errorf("Alt-Svc header %q missing %q", altSvc, expectedAltSvc)
 	}
-	if p := resp.Header.Get("X-Client-Proto"); !strings.HasPrefix(p, "HTTP/") {
-		t.Errorf("expected X-Client-Proto header on TCP HTTPS, got %q", p)
+	if p := resp.Header.Get("X-Client-Proto"); p != "HTTP/2.0" {
+		t.Errorf("expected X-Client-Proto=HTTP/2.0 on TCP HTTPS, got %q", p)
 	}
 
 	// 2. Perform real HTTP/3 request over UDP
