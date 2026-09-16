@@ -3315,6 +3315,7 @@ function buildProxySelectOptions(proxies){
   });
   var html='';
   html+='<option value="__KEEP__">'+t('(Keep unchanged)')+'</option>';
+  html+='<option value="__DELETE__">'+t('🗑️ Delete these rules')+'</option>';
   html+='<option value="default">default ('+t('Fallback to default strategy')+')</option>';
   html+='<option value="direct">direct ('+t('Direct connection')+')</option>';
   if(groupOrder.length>1){
@@ -3422,6 +3423,8 @@ function renderACLAuditModal(missingMap, proxies){
   if(confirmBtn)confirmBtn.textContent=t('Apply & Save to ACL');
   var cancelBtn=document.getElementById('acl-audit-cancel-btn');
   if(cancelBtn)cancelBtn.textContent=t('Dismiss');
+  var deleteAllBtn=document.getElementById('acl-audit-delete-all-btn');
+  if(deleteAllBtn)deleteAllBtn.textContent='🗑️ '+t('Delete All Invalid Rules');
 
   var selectOptionsHtml=buildProxySelectOptions(proxies);
   var html='';
@@ -3433,6 +3436,7 @@ function renderACLAuditModal(missingMap, proxies){
           '<span>🔴</span> <span style="font-family:monospace;color:var(--danger, #ef4444)">'+escHtml(missingAlias)+'</span>'+
           '<span class="badge" style="font-size:0.75rem">'+tf('{0} rules affected',[items.length])+'</span>'+
         '</div>'+
+        '<button class="btn btn-sm danger" onclick="quickDeleteACLRulesForAlias(\''+escAttr(missingAlias)+'\')" title="'+escAttr(t('Delete Rules'))+'">🗑️ '+t('Delete Rules')+'</button>'+
       '</div>'+
       '<div style="font-size:0.78rem;max-height:90px;overflow-y:auto;background:var(--bg3, rgba(128,128,128,0.15));padding:6px 10px;border-radius:4px;font-family:monospace;margin-bottom:10px;display:flex;flex-direction:column;gap:3px">';
     items.forEach(function(it){
@@ -3452,34 +3456,65 @@ function renderACLAuditModal(missingMap, proxies){
   if(overlay)overlay.classList.add('show');
 }
 
+function quickDeleteACLRulesForAlias(alias){
+  var selects=document.querySelectorAll('.acl-audit-select');
+  for(var i=0;i<selects.length;i++){
+    if(selects[i].dataset.alias===alias){
+      selects[i].value='__DELETE__';
+      break;
+    }
+  }
+  applyACLAuditFixes();
+}
+
+function deleteAllInvalidACLRules(){
+  if(!confirm(t('Are you sure you want to delete all rules pointing to invalid proxies?')))return;
+  var selects=document.querySelectorAll('.acl-audit-select');
+  selects.forEach(function(sel){
+    sel.value='__DELETE__';
+  });
+  applyACLAuditFixes();
+}
+
 async function applyACLAuditFixes(){
   var selects=document.querySelectorAll('.acl-audit-select');
-  var replacements={};
+  var actions={};
   selects.forEach(function(sel){
     var oldAlias=sel.dataset.alias;
-    var newAlias=sel.value;
-    if(newAlias&&newAlias!=='__KEEP__'){
-      replacements[oldAlias]=newAlias;
+    var val=sel.value;
+    if(val&&val!=='__KEEP__'){
+      actions[oldAlias]=val;
     }
   });
-  if(Object.keys(replacements).length===0){
-    alert(t('Please select a replacement node for at least one invalid alias'));
+  if(Object.keys(actions).length===0){
+    alert(t('Please select an action (replace or delete) for at least one invalid alias'));
     return;
   }
   var text=(window.cm_acl?window.cm_acl.getValue():(cfgD&&cfgD.acl))||'';
   var lines=text.split('\n');
-  var updatedCount=0;
+  var updatedCount=0, deletedCount=0;
+  var newLines=[];
   for(var i=0;i<lines.length;i++){
     var parsed=parseACLLine(lines[i]);
-    if(parsed&&replacements[parsed.alias]){
-      var newLine=replaceRuleAlias(lines[i],parsed.alias,replacements[parsed.alias]);
-      if(newLine!==lines[i]){
-        lines[i]=newLine;
-        updatedCount++;
+    if(parsed&&actions[parsed.alias]){
+      var act=actions[parsed.alias];
+      if(act==='__DELETE__'){
+        deletedCount++;
+        continue;
+      }else{
+        var newLine=replaceRuleAlias(lines[i],parsed.alias,act);
+        if(newLine!==lines[i]){
+          updatedCount++;
+          newLines.push(newLine);
+        }else{
+          newLines.push(lines[i]);
+        }
       }
+    }else{
+      newLines.push(lines[i]);
     }
   }
-  var newText=lines.join('\n');
+  var newText=newLines.join('\n');
   if(window.cm_acl)window.cm_acl.setValue(newText);
   if(cfgD)cfgD.acl=newText;
 
@@ -3492,7 +3527,10 @@ async function applyACLAuditFixes(){
       throw new Error(msg||('HTTP '+r.status));
     }
     closeACLAuditDialog();
-    showToast(tf('Successfully updated {0} rules in ACL.',[updatedCount]));
+    var msgParts=[];
+    if(updatedCount>0)msgParts.push(tf('{0} updated',[updatedCount]));
+    if(deletedCount>0)msgParts.push(tf('{0} deleted',[deletedCount]));
+    showToast(tf('Successfully processed ACL rules: {0}',[msgParts.join(', ')]));
     checkACLInvalidUpstreams(false);
   }catch(e){
     alert(tf('Save failed: {0}',[e.message]));
@@ -4119,9 +4157,12 @@ es.onmessage=function(e){
 
     <div id="acl-audit-list" style="flex:1;overflow-y:auto;max-height:50vh;margin-bottom:14px;display:flex;flex-direction:column;gap:12px"></div>
 
-    <div class="dialog-actions" style="margin-top:auto;border-top:1px solid var(--border);padding-top:12px">
-      <button class="btn btn-sm" id="acl-audit-cancel-btn" onclick="closeACLAuditDialog()">Dismiss</button>
-      <button class="btn btn-sm primary" id="acl-audit-confirm-btn" onclick="applyACLAuditFixes()">Apply &amp; Save to ACL</button>
+    <div class="dialog-actions" style="margin-top:auto;border-top:1px solid var(--border);padding-top:12px;display:flex;justify-content:space-between;align-items:center">
+      <button class="btn btn-sm danger" id="acl-audit-delete-all-btn" onclick="deleteAllInvalidACLRules()">🗑️ Delete All Invalid Rules</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sm" id="acl-audit-cancel-btn" onclick="closeACLAuditDialog()">Dismiss</button>
+        <button class="btn btn-sm primary" id="acl-audit-confirm-btn" onclick="applyACLAuditFixes()">Apply &amp; Save to ACL</button>
+      </div>
     </div>
   </div>
 </div>
