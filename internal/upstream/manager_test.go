@@ -1438,3 +1438,49 @@ func TestManager_DuplicateAliases(t *testing.T) {
 	}
 }
 
+func TestManager_FindProxyLocked_Fallback(t *testing.T) {
+	mgr, err := NewManager(UpstreamConfig{})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	lanternNodes := []ProxyEntry{
+		{
+			Alias: "[Lantern] vless-reality-node-01",
+			URL:   `{"type":"vless","tag":"vless-reality-node-01","server":"1.2.3.4","server_port":443}`,
+		},
+	}
+	mgr.SetProviderProxies("lantern", lanternNodes)
+
+	// 1. Exact alias match with [Lantern] prefix
+	mgr.mu.RLock()
+	p1, a1 := mgr.findProxyLocked("[Lantern] vless-reality-node-01")
+	mgr.mu.RUnlock()
+	if p1 == nil || a1 != "[Lantern] vless-reality-node-01" {
+		t.Fatalf("expected exact alias match, got p=%v, a=%q", p1, a1)
+	}
+
+	// 2. Case-insensitive match
+	mgr.mu.RLock()
+	p2, a2 := mgr.findProxyLocked("[lantern] VLESS-REALITY-NODE-01")
+	mgr.mu.RUnlock()
+	if p2 == nil || a2 != "[Lantern] vless-reality-node-01" {
+		t.Fatalf("expected case-insensitive match, got p=%v, a=%q", p2, a2)
+	}
+
+	// 3. Fallback match via proxy.Name (omitting the [Lantern] prefix)
+	mgr.mu.RLock()
+	p3, a3 := mgr.findProxyLocked("vless-reality-node-01")
+	mgr.mu.RUnlock()
+	if p3 == nil || a3 != "[Lantern] vless-reality-node-01" {
+		t.Fatalf("expected fallback match via Name, got p=%v, a=%q", p3, a3)
+	}
+
+	// 4. Test via ProxyInfo
+	info, ok := mgr.ProxyInfo("vless-reality-node-01")
+	if !ok || info.Alias != "[Lantern] vless-reality-node-01" {
+		t.Fatalf("ProxyInfo fallback failed: ok=%v, info.Alias=%q", ok, info.Alias)
+	}
+}
+
+

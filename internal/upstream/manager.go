@@ -348,17 +348,8 @@ func (m *Manager) SelectProxy(ctx context.Context, targetIP string, targetPort i
 			if strings.EqualFold(alias, "direct") {
 				return "direct", nil
 			}
-			proxy, ok := m.aliasMap[alias]
-			if !ok {
-				for k, p := range m.aliasMap {
-					if strings.EqualFold(k, alias) {
-						proxy = p
-						ok = true
-						break
-					}
-				}
-			}
-			if ok && proxy != nil {
+			proxy, _ := m.findProxyLocked(alias)
+			if proxy != nil {
 				return "", proxy
 			}
 			ll.Warn("alias not found, falling back to default proxy", "alias", alias)
@@ -676,16 +667,48 @@ func (m *Manager) Proxies() []ProxyInfo {
 	return infos
 }
 
+// findProxyLocked searches for a proxy by alias. If an exact match is not found,
+// it falls back to case-insensitive match, and then to matching proxy.Name
+// (e.g. for provider nodes where the displayed name omits the [Provider] prefix).
+// Caller must hold m.mu (RLock or Lock).
+func (m *Manager) findProxyLocked(alias string) (*Proxy, string) {
+	if p, ok := m.aliasMap[alias]; ok && p != nil {
+		return p, alias
+	}
+	aliasClean := strings.TrimSpace(alias)
+	for k, p := range m.aliasMap {
+		if p == nil {
+			continue
+		}
+		if strings.EqualFold(k, aliasClean) {
+			return p, k
+		}
+		if p.Name != "" && strings.EqualFold(p.Name, aliasClean) {
+			return p, k
+		}
+		// If k has a "[Provider] " prefix (e.g. "[Lantern] node-name"), allow matching without the prefix
+		if strings.HasPrefix(k, "[") {
+			if idx := strings.Index(k, "] "); idx != -1 {
+				unprefixed := strings.TrimSpace(k[idx+2:])
+				if strings.EqualFold(unprefixed, aliasClean) {
+					return p, k
+				}
+			}
+		}
+	}
+	return nil, ""
+}
+
 // ProxyInfo returns the snapshot info for a specific proxy alias.
 func (m *Manager) ProxyInfo(alias string) (ProxyInfo, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	proxy, ok := m.aliasMap[alias]
-	if !ok || proxy == nil {
+	proxy, canonicalAlias := m.findProxyLocked(alias)
+	if proxy == nil {
 		return ProxyInfo{}, false
 	}
 	return ProxyInfo{
-		Alias:         alias,
+		Alias:         canonicalAlias,
 		URL:           proxy.URL,
 		Name:          proxy.Name,
 		Host:          proxy.Host,
@@ -710,9 +733,9 @@ func (m *Manager) ProxyInfo(alias string) (ProxyInfo, bool) {
 // across probe cycles until released.
 func (m *Manager) SetCircuitHealth(alias, circuit, action string) error {
 	m.mu.RLock()
-	proxy, ok := m.aliasMap[alias]
+	proxy, _ := m.findProxyLocked(alias)
 	m.mu.RUnlock()
-	if !ok || proxy == nil {
+	if proxy == nil {
 		return fmt.Errorf("proxy alias %q not found", alias)
 	}
 	apply := func(ph *ProxyHealth) {
@@ -769,9 +792,9 @@ func (m *Manager) Strategy() string {
 // Returns the round-trip latency and any error encountered during the probe.
 func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.Duration, error) {
 	m.mu.RLock()
-	proxy, ok := m.aliasMap[alias]
+	proxy, _ := m.findProxyLocked(alias)
 	m.mu.RUnlock()
-	if !ok || proxy == nil {
+	if proxy == nil {
 		return 0, fmt.Errorf("proxy alias %q not found", alias)
 	}
 
