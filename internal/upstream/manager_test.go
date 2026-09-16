@@ -1400,3 +1400,34 @@ func TestManager_SetProviderProxies(t *testing.T) {
 		t.Fatalf("expected 1 proxy after provider remove, got %d", len(mgr.defaultProxies))
 	}
 }
+
+func TestManager_DuplicateAliases(t *testing.T) {
+	cfg := UpstreamConfig{
+		Default: "failover",
+		Proxies: []ProxyEntry{
+			{Alias: "Node-A", URL: "ss://YWVzLTEyOC1nY206cGFzczE@1.1.1.1:8388"},
+			{Alias: "Node-A", URL: "ss://YWVzLTEyOC1nY206cGFzczI@2.2.2.2:8388"},
+			{Alias: "Node-A", URL: "ss://YWVzLTEyOC1nY206cGFzczM@3.3.3.3:8388"},
+		},
+	}
+	mgr, err := NewManager(cfg)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	proxies := mgr.Proxies()
+	if len(proxies) != 3 {
+		t.Fatalf("expected 3 proxies, got %d", len(proxies))
+	}
+
+	expectedAliases := []string{"Node-A", "Node-A (2)", "Node-A (3)"}
+	for i, exp := range expectedAliases {
+		if proxies[i].Alias != exp {
+			t.Errorf("expected proxy %d alias %q, got %q", i, exp, proxies[i].Alias)
+		}
+		if _, ok := mgr.aliasMap[exp]; !ok {
+			t.Errorf("alias %q not found in aliasMap", exp)
+		}
+	}
+}
+

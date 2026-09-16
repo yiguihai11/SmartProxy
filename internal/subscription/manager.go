@@ -221,12 +221,19 @@ func (m *Manager) Refresh(ctx context.Context, name string) (int, error) {
 		return 0, fmt.Errorf("failed to parse subscription content: %w", err)
 	}
 
-	// Tag nodes with provider and clean prefix
+	// Tag nodes with provider and deduplicate aliases within the subscription
+	seenAliases := make(map[string]int)
 	for i := range entries {
 		entries[i].Provider = "sub:" + name
-		if entries[i].Alias == "" {
-			entries[i].Alias = fmt.Sprintf("[%s] %d", name, i+1)
+		alias := strings.TrimSpace(entries[i].Alias)
+		if alias == "" {
+			alias = fmt.Sprintf("[%s] %d", name, i+1)
 		}
+		seenAliases[alias]++
+		if seenAliases[alias] > 1 {
+			alias = fmt.Sprintf("%s (%d)", alias, seenAliases[alias])
+		}
+		entries[i].Alias = alias
 	}
 
 	// Update in-memory state

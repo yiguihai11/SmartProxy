@@ -2,6 +2,7 @@ package subscription
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -156,3 +157,56 @@ func TestManager_ErrorHandling(t *testing.T) {
 		t.Errorf("expected LastError to be recorded, got %+v", status)
 	}
 }
+
+func TestManager_DuplicateAliases(t *testing.T) {
+	tempDir := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lines := "ss://YWVzLTEyOC1nY206cGFzczE@1.1.1.1:8388#HK-Node\n" +
+			"ss://YWVzLTEyOC1nY206cGFzczI@2.2.2.2:8388#HK-Node\n" +
+			"ss://YWVzLTEyOC1nY206cGFzczM@3.3.3.3:8388#HK-Node\n"
+		b64 := base64.StdEncoding.EncodeToString([]byte(lines))
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(b64))
+	}))
+	defer server.Close()
+
+	mgrConfig := upstream.UpstreamConfig{Default: "failover"}
+	upMgr, _ := upstream.NewManager(mgrConfig)
+
+	subsConf := []config.SubscriptionConf{
+		{
+			Name:    "TestAirport",
+			URL:     server.URL,
+			Enabled: true,
+		},
+	}
+
+	subMgr := NewManager(tempDir, subsConf, upMgr)
+	defer subMgr.Stop()
+
+	n, err := subMgr.Refresh(context.Background(), "TestAirport")
+	if err != nil {
+		t.Fatalf("refresh failed: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("expected 3 nodes, got %d", n)
+	}
+
+	subMgr.mu.RLock()
+	nodes := subMgr.subs["TestAirport"].Nodes
+	subMgr.mu.RUnlock()
+
+	if len(nodes) != 3 {
+		t.Fatalf("expected 3 nodes in state, got %d", len(nodes))
+	}
+	if nodes[0].Alias != "HK-Node" {
+		t.Errorf("expected node 0 alias 'HK-Node', got %q", nodes[0].Alias)
+	}
+	if nodes[1].Alias != "HK-Node (2)" {
+		t.Errorf("expected node 1 alias 'HK-Node (2)', got %q", nodes[1].Alias)
+	}
+	if nodes[2].Alias != "HK-Node (3)" {
+		t.Errorf("expected node 2 alias 'HK-Node (3)', got %q", nodes[2].Alias)
+	}
+}
+

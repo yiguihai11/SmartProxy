@@ -199,7 +199,14 @@ func (m *Manager) rebuildLocked() {
 			continue
 		}
 		if _, exists := aliasMap[alias]; exists {
-			alias = fmt.Sprintf("%s-%d", alias, i)
+			base := alias
+			for count := 2; ; count++ {
+				candidate := fmt.Sprintf("%s (%d)", base, count)
+				if _, taken := aliasMap[candidate]; !taken {
+					alias = candidate
+					break
+				}
+			}
 		}
 		proxy, err := NewProxy(entry.URL)
 		if err != nil {
