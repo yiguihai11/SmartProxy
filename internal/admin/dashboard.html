@@ -317,6 +317,7 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
   <div class="toolbar">
     <button class="btn primary btn-sm" onclick="openProxyDialog(-1)">+ Add Proxy</button>
     <button class="btn btn-sm" onclick="openRawConfigDialog(-1)" title="Add node via raw JSON or link">+ Raw Config</button>
+    <button class="btn btn-sm" onclick="openSubscriptionDialog('')" title="Add or manage proxy subscriptions">+ Add Subscription</button>
     <span class="filter-wrap" id="proxy-group-filter-wrap">
       <span class="filter-trigger" id="proxy-group-filter-trigger" onclick="toggleProxyGroupFilter()">Group: All ▾</span>
       <div class="filter-dropdown" id="proxy-group-filter-dropdown">
@@ -329,6 +330,7 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
     <button class="btn btn-sm" id="test-all-btn" onclick="testAllProxies('all')">Test All</button>
     <span class="page-info" id="health-info">Edits upstream.proxies in config</span>
   </div>
+  <div id="subscriptions-container"></div>
   <div id="proxy-cards"></div>
 </div>
 <div class="view" id="view-blacklist">
@@ -830,6 +832,7 @@ function getProxyGroup(p){
 function getProxyGroupLabel(gid){
   if(gid==='custom')return t('Custom Proxies');
   if(gid==='lantern')return t('Lantern Shared');
+  if(gid.indexOf('sub:')===0)return t('Subscription')+': '+gid.slice(4);
   return gid.charAt(0).toUpperCase()+gid.slice(1);
 }
 function toggleGroupCollapse(gid){
@@ -1017,6 +1020,8 @@ function lhealth(d){
   var proxies=(d&&d.health&&d.health.proxies)||[];
   var lanternInfo=(d&&d.health&&d.health.lantern)||null;
   var lanternEnabled=lanternInfo?!!lanternInfo.enabled:false;
+  var subs=(d&&d.health&&d.health.subscriptions)||[];
+  renderSubscriptions(subs);
 
   var groups={};
   var groupOrder=[];
@@ -1049,6 +1054,8 @@ function lhealth(d){
   groupOrder.sort(function(a,b){
     if(a==='custom')return -1;
     if(b==='custom')return 1;
+    if(a.indexOf('sub:')===0&&b==='lantern')return -1;
+    if(b.indexOf('sub:')===0&&a==='lantern')return 1;
     if(a==='lantern')return -1;
     if(b==='lantern')return 1;
     return a.localeCompare(b);
@@ -1071,7 +1078,7 @@ function lhealth(d){
   var container=document.getElementById('proxy-cards');
   if(!container)return;
 
-  if(proxies.length===0&&!lanternInfo){
+  if(proxies.length===0&&!lanternInfo&&subs.length===0){
     container.innerHTML='<div style="color:var(--text2);padding:24px;text-align:center">'+t('No proxy nodes to test')+'</div>';
     st('health-time');
     return;
@@ -1082,7 +1089,7 @@ function lhealth(d){
     var g=groups[gid];
     var isHidden=(proxyGroupFilter!=='all'&&proxyGroupFilter!==gid);
     var isCollapsed=!!proxyGroupsCollapsed[gid];
-    var groupIcon=(gid==='lantern'?'🏮':gid==='custom'?'📌':'🌐');
+    var groupIcon=(gid==='lantern'?'🏮':gid==='custom'?'📌':gid.indexOf('sub:')===0?'📑':'🌐');
     var badgeText=g.disabled?t('Disabled'):(tf('{0} nodes',[g.items.length])+' · '+tf('{0} online',[g.onlineCount]));
 
     var actionsHtml='';
@@ -1093,6 +1100,9 @@ function lhealth(d){
       }else{
         actionsHtml='<button class="btn btn-sm primary" onclick="toggleLantern(true)">'+t('Enable')+'</button>';
       }
+    }else if(gid.indexOf('sub:')===0){
+      var subName=gid.slice(4);
+      actionsHtml='<button class="btn btn-sm" onclick="refreshSub(\''+escAttr(subName)+'\',this)" title="'+escAttr(t('Refresh Subscription'))+'">🔄 '+t('Refresh')+'</button>';
     }
     actionsHtml+='<button class="btn btn-sm ghost proxy-group-collapse-btn" onclick="toggleGroupCollapse(\''+gid+'\')">'+t(isCollapsed?'Expand':'Collapse')+'</button>';
 
@@ -2129,6 +2139,203 @@ async function toggleLantern(enable){
     loadHealth();
   }catch(e){
     alert(tf('Operation failed: {0}',[e.message]));
+  }
+}
+function renderSubscriptions(subs){
+  var el=document.getElementById('subscriptions-container');
+  if(!el)return;
+  if(!subs||subs.length===0){
+    el.innerHTML='';
+    return;
+  }
+  var html='<div class="card" style="margin-bottom:16px;padding:14px 16px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:10px">'+
+      '<div style="font-weight:600;font-size:0.95rem;display:flex;align-items:center;gap:8px">'+
+        '<span>📑</span> <span>'+t('Subscriptions')+'</span>'+
+        '<span class="badge" style="font-size:0.75rem">'+subs.length+'</span>'+
+      '</div>'+
+      '<button class="btn btn-sm" onclick="openSubscriptionDialog(\'\')">'+t('+ Add Subscription')+'</button>'+
+    '</div>'+
+    '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px">';
+
+  subs.forEach(function(s){
+    var hasErr=!!s.last_error;
+    var typeBadge=s.type||'auto';
+    var totalTraffic=s.total||0;
+    var usedTraffic=(s.upload||0)+(s.download||0);
+    var remainingTraffic=Math.max(0,totalTraffic-usedTraffic);
+    var percent=totalTraffic>0?Math.min(100,Math.round((usedTraffic/totalTraffic)*100)):0;
+    var progressColor=percent>90?'var(--danger, #ef4444)':percent>75?'var(--warning, #f59e0b)':'var(--primary, #3b82f6)';
+    var expireStr=s.expire>0?ts2t(s.expire):'';
+    var lastUpdateStr=s.last_update?s.last_update.replace('T',' ').substring(0,19):'-';
+
+    html+='<div style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--bg2);display:flex;flex-direction:column;gap:8px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center">'+
+        '<div style="font-weight:600;font-size:0.9rem;display:flex;align-items:center;gap:6px">'+
+          '<span>'+escHtml(s.name)+'</span>'+
+          '<span class="badge" style="font-size:0.7rem;text-transform:uppercase">'+escHtml(typeBadge)+'</span>'+
+          (!s.enabled?'<span class="badge badge-inactive" style="font-size:0.7rem">'+t('Disabled')+'</span>':'')+
+        '</div>'+
+        '<div style="font-size:0.8rem;color:var(--text2)">'+tf('{0} nodes',[s.node_count||0])+'</div>'+
+      '</div>'+
+      '<div style="font-size:0.78rem;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+escAttr(s.url)+'">'+escHtml(s.url)+'</div>';
+
+    if(totalTraffic>0){
+      html+='<div style="margin-top:2px">'+
+        '<div style="display:flex;justify-content:space-between;font-size:0.75rem;color:var(--text2);margin-bottom:4px">'+
+          '<span>'+t('Traffic')+': '+fmtNum(usedTraffic)+' / '+fmtNum(totalTraffic)+'</span>'+
+          '<span>'+t('Remaining')+': '+fmtNum(remainingTraffic)+'</span>'+
+        '</div>'+
+        '<div style="background:var(--bg3, rgba(128,128,128,0.2));border-radius:4px;height:6px;overflow:hidden">'+
+          '<div style="background:'+progressColor+';width:'+percent+'%;height:100%"></div>'+
+        '</div>'+
+      '</div>';
+    }
+
+    if(expireStr){
+      html+='<div style="font-size:0.75rem;color:var(--text2)">'+t('Expires')+': '+escHtml(expireStr)+'</div>';
+    }
+
+    if(hasErr){
+      html+='<div style="font-size:0.75rem;color:var(--danger, #ef4444);background:rgba(239,68,68,0.1);padding:4px 8px;border-radius:4px;word-break:break-all">'+escHtml(s.last_error)+'</div>';
+    }
+
+    html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-top:auto;padding-top:6px;border-top:1px solid var(--border)">'+
+      '<span style="font-size:0.72rem;color:var(--text3)">'+escHtml(lastUpdateStr)+'</span>'+
+      '<div style="display:flex;gap:6px">'+
+        '<button class="btn btn-sm" onclick="refreshSub(\''+escAttr(s.name)+'\',this)" title="'+escAttr(t('Refresh Subscription'))+'">🔄</button>'+
+        '<button class="btn btn-sm" onclick="openSubscriptionDialog(\''+escAttr(s.name)+'\')" title="'+escAttr(t('Edit Subscription'))+'">✏️</button>'+
+        '<button class="btn btn-sm '+(s.enabled?'':'primary')+'" onclick="toggleSub(\''+escAttr(s.name)+'\','+(!s.enabled)+')" title="'+escAttr(t(s.enabled?'Subscription disabled':'Subscription enabled'))+'">'+(s.enabled?t('Disable'):t('Enable'))+'</button>'+
+        '<button class="btn btn-sm danger" onclick="deleteSub(\''+escAttr(s.name)+'\')" title="'+escAttr(t('Delete Subscription'))+'">🗑️</button>'+
+      '</div>'+
+    '</div></div>';
+  });
+
+  html+='</div></div>';
+  el.innerHTML=html;
+}
+function openSubscriptionDialog(name){
+  var title=document.getElementById('sub-modal-title');
+  var nameInput=document.getElementById('sub-name');
+  var urlInput=document.getElementById('sub-url');
+  var typeInput=document.getElementById('sub-type');
+  var intervalInput=document.getElementById('sub-interval');
+  var enabledInput=document.getElementById('sub-enabled');
+
+  if(name){
+    title.textContent=t('Edit Subscription');
+    nameInput.value=name;
+    nameInput.disabled=true;
+    var sub=null;
+    if(healthD&&healthD.health&&healthD.health.subscriptions){
+      sub=healthD.health.subscriptions.find(function(s){return s.name===name;});
+    }
+    if(sub){
+      urlInput.value=sub.url||'';
+      typeInput.value=sub.type||'';
+      intervalInput.value=sub.update_interval||'12h';
+      enabledInput.checked=!!sub.enabled;
+    }
+  }else{
+    title.textContent=t('Add Subscription');
+    nameInput.value='';
+    nameInput.disabled=false;
+    urlInput.value='';
+    typeInput.value='';
+    intervalInput.value='12h';
+    enabledInput.checked=true;
+  }
+  document.getElementById('sub-overlay').classList.add('show');
+}
+function closeSubscriptionDialog(){
+  document.getElementById('sub-overlay').classList.remove('show');
+}
+async function saveSubscriptionBtn(){
+  var name=document.getElementById('sub-name').value.trim();
+  var url=document.getElementById('sub-url').value.trim();
+  var type=document.getElementById('sub-type').value.trim();
+  var interval=document.getElementById('sub-interval').value.trim()||'12h';
+  var enabled=document.getElementById('sub-enabled').checked;
+
+  if(!name||!url){
+    alert(t('Subscription Name and URL are required'));
+    return;
+  }
+  var btn=document.getElementById('sub-confirm-btn');
+  btn.disabled=true;
+  try{
+    var payload={
+      name: name,
+      url: url,
+      type: type,
+      update_interval: interval,
+      enabled: enabled
+    };
+    var r=await fetch('/subscriptions/save',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload)
+    });
+    if(!r.ok){
+      var msg=await r.text();
+      throw new Error(msg||('HTTP '+r.status));
+    }
+    closeSubscriptionDialog();
+    showToast(t('Subscription saved successfully!'));
+    loadHealth();
+    if(document.querySelector('#view-config.active'))loadConfig();
+  }catch(e){
+    alert(tf('Save failed: {0}',[e.message]));
+  }finally{
+    btn.disabled=false;
+  }
+}
+async function refreshSub(name, btn){
+  var oldText=btn?btn.textContent:'';
+  if(btn){btn.disabled=true;btn.textContent='🔄...';}
+  showToast(t('Refreshing subscription...'));
+  try{
+    var r=await fetch('/subscriptions/refresh?name='+encodeURIComponent(name),{method:'POST'});
+    if(!r.ok){
+      var msg=await r.text();
+      throw new Error(msg||('HTTP '+r.status));
+    }
+    var res=await r.json();
+    showToast(tf('Successfully refreshed {0} subscription nodes',[res.count||0]));
+    loadHealth();
+  }catch(e){
+    alert(tf('Refresh failed: {0}',[e.message]));
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent=oldText;}
+  }
+}
+async function toggleSub(name, enable){
+  try{
+    var r=await fetch('/subscriptions/toggle?name='+encodeURIComponent(name)+'&enable='+(enable?'true':'false'),{method:'POST'});
+    if(!r.ok){
+      var msg=await r.text();
+      throw new Error(msg||('HTTP '+r.status));
+    }
+    showToast(t(enable?'Subscription enabled':'Subscription disabled'));
+    loadHealth();
+    if(document.querySelector('#view-config.active'))loadConfig();
+  }catch(e){
+    alert(tf('Operation failed: {0}',[e.message]));
+  }
+}
+async function deleteSub(name){
+  if(!confirm(tf('Are you sure you want to delete subscription "{0}"?',[name])))return;
+  try{
+    var r=await fetch('/subscriptions/delete?name='+encodeURIComponent(name),{method:'POST'});
+    if(!r.ok){
+      var msg=await r.text();
+      throw new Error(msg||('HTTP '+r.status));
+    }
+    showToast(t('Subscription deleted'));
+    loadHealth();
+    if(document.querySelector('#view-config.active'))loadConfig();
+  }catch(e){
+    alert(tf('Delete failed: {0}',[e.message]));
   }
 }
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
@@ -3721,6 +3928,47 @@ es.onmessage=function(e){
       <button class="btn btn-sm" onclick="copyRawConfigContent()">Copy</button>
       <button class="btn btn-sm" onclick="closeRawConfigDialog()">Cancel</button>
       <button class="btn btn-sm primary" id="raw-config-confirm" onclick="saveRawConfigProxy()">Save as Custom</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="sub-overlay" onclick="if(event.target===this)closeSubscriptionDialog()">
+  <div class="dialog" style="max-width:540px" onclick="event.stopPropagation()">
+    <div class="dialog-title" id="sub-modal-title">Add Subscription</div>
+    <div style="font-size:0.8rem;color:var(--text2);margin-bottom:12px">Supports SIP008 Shadowsocks JSON, Base64/Plain proxy links (ss, vless, vmess, trojan, hy2, etc.), sing-box outbounds, and Clash YAML.</div>
+
+    <div class="dialog-label">Subscription Name</div>
+    <input class="dialog-input" id="sub-name" placeholder="airport1" autocomplete="off">
+
+    <div class="dialog-label">Subscription URL</div>
+    <input class="dialog-input" id="sub-url" placeholder="https://example.com/api/v1/client/subscribe?token=..." autocomplete="off">
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div>
+        <div class="dialog-label">Subscription Type</div>
+        <select class="dialog-input" id="sub-type">
+          <option value="">Auto-detect (SIP008 / Base64 / sing-box / Clash)</option>
+          <option value="sip008">SIP008 (Shadowsocks JSON)</option>
+          <option value="base64">Base64 / Proxy Links</option>
+          <option value="sing-box">sing-box (Outbounds JSON)</option>
+          <option value="clash">Clash (YAML)</option>
+        </select>
+      </div>
+      <div>
+        <div class="dialog-label">Update Interval</div>
+        <input class="dialog-input" id="sub-interval" placeholder="12h" value="12h" autocomplete="off">
+      </div>
+    </div>
+
+    <div style="margin-top:10px;margin-bottom:16px">
+      <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;cursor:pointer">
+        <input type="checkbox" id="sub-enabled" checked>
+        <span>Enabled</span>
+      </label>
+    </div>
+
+    <div class="dialog-actions">
+      <button class="btn btn-sm" onclick="closeSubscriptionDialog()">Cancel</button>
+      <button class="btn btn-sm primary" id="sub-confirm-btn" onclick="saveSubscriptionBtn()">Save</button>
     </div>
   </div>
 </div>

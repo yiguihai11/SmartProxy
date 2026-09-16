@@ -118,9 +118,18 @@ type AuthConf struct {
 }
 
 type UpstreamConf struct {
-	Default     string          `json:"default"`
-	HealthCheck HealthCheckConf `json:"health_check"`
-	Proxies     []ProxyEntry    `json:"proxies"`
+	Default       string             `json:"default"`
+	HealthCheck   HealthCheckConf    `json:"health_check"`
+	Proxies       []ProxyEntry       `json:"proxies"`
+	Subscriptions []SubscriptionConf `json:"subscriptions,omitempty"`
+}
+
+type SubscriptionConf struct {
+	Name           string `json:"name"`
+	URL            string `json:"url"`
+	Type           string `json:"type,omitempty"`            // "auto", "sip008", "base64", "clash", "sing-box"
+	UpdateInterval string `json:"update_interval,omitempty"` // e.g. "12h", "24h"
+	Enabled        bool   `json:"enabled"`
 }
 
 type HealthCheckConf struct {
@@ -394,6 +403,14 @@ func (c *Config) Validate() error {
 	for i, p := range c.Upstream.Proxies {
 		if p.URL == "" {
 			errs = append(errs, fmt.Sprintf("upstream.proxies[%d].url is empty", i))
+		}
+	}
+	for i, s := range c.Upstream.Subscriptions {
+		if strings.TrimSpace(s.Name) == "" {
+			errs = append(errs, fmt.Sprintf("upstream.subscriptions[%d].name is empty", i))
+		}
+		if strings.TrimSpace(s.URL) == "" {
+			errs = append(errs, fmt.Sprintf("upstream.subscriptions[%d].url is empty", i))
 		}
 	}
 	if c.DNS.Cache.Size <= 0 {

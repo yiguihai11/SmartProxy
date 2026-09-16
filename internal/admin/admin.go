@@ -32,6 +32,7 @@ import (
 	"smartproxy/internal/route"
 	"smartproxy/internal/rules"
 	"smartproxy/internal/safego"
+	"smartproxy/internal/subscription"
 	"smartproxy/internal/udp"
 	"smartproxy/internal/upstream"
 	"smartproxy/internal/version"
@@ -47,14 +48,16 @@ type Server struct {
 	logBuf       *logbuf.RingBuffer
 	adminAuth    atomic.Pointer[config.AdminAuthConf]
 	startTime    time.Time
-	reloadConfig   func()
-	configSrc      func() *config.Config
-	configPath     string
-	refreshLantern func(context.Context) (int, error)
-	lanternStatus  func() map[string]interface{}
-	refreshInt     int
-	statsMu        sync.Mutex
-	stats          cachedStats
+	reloadConfig        func()
+	configSrc           func() *config.Config
+	configPath          string
+	refreshLantern      func(context.Context) (int, error)
+	lanternStatus       func() map[string]interface{}
+	refreshSubscription func(context.Context, string) (int, error)
+	subscriptionsStatus func() []subscription.ItemState
+	refreshInt          int
+	statsMu             sync.Mutex
+	stats               cachedStats
 
 	stopCh    chan struct{}
 	listener  net.Listener
@@ -156,6 +159,21 @@ func (s *Server) getLanternStatus() map[string]interface{} {
 		"running":    false,
 		"node_count": 0,
 	}
+}
+
+func (s *Server) SetRefreshSubscription(fn func(context.Context, string) (int, error)) {
+	s.refreshSubscription = fn
+}
+
+func (s *Server) SetSubscriptionsStatus(fn func() []subscription.ItemState) {
+	s.subscriptionsStatus = fn
+}
+
+func (s *Server) getSubscriptionsStatus() []subscription.ItemState {
+	if s.subscriptionsStatus != nil {
+		return s.subscriptionsStatus()
+	}
+	return nil
 }
 func (s *Server) Start() error {
 	mux := s.setupMux()
@@ -352,6 +370,10 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/config", s.handleConfig)
 	mux.HandleFunc("/lantern/refresh", s.handleLanternRefresh)
 	mux.HandleFunc("/lantern/toggle", s.handleLanternToggle)
+	mux.HandleFunc("/subscriptions/refresh", s.handleSubscriptionsRefresh)
+	mux.HandleFunc("/subscriptions/save", s.handleSubscriptionsSave)
+	mux.HandleFunc("/subscriptions/delete", s.handleSubscriptionsDelete)
+	mux.HandleFunc("/subscriptions/toggle", s.handleSubscriptionsToggle)
 	mux.HandleFunc("/version", s.handleVersion)
 	mux.HandleFunc("/files", s.handleFiles)
 	mux.HandleFunc("/files/validate", s.handleFileValidate)
@@ -748,9 +770,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"strategy": s.mgr.Strategy(),
-		"proxies":  s.mgr.Proxies(),
-		"lantern":  s.getLanternStatus(),
+		"strategy":      s.mgr.Strategy(),
+		"proxies":       s.mgr.Proxies(),
+		"lantern":       s.getLanternStatus(),
+		"subscriptions": s.getSubscriptionsStatus(),
 	})
 }
 
@@ -1195,6 +1218,151 @@ func (s *Server) handleLanternToggle(w http.ResponseWriter, r *http.Request) {
 		"status":  "ok",
 		"enabled": enable,
 	})
+}
+
+func (s *Server) handleSubscriptionsRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.refreshSubscription == nil {
+		http.Error(w, "subscriptions are not configured", http.StatusServiceUnavailable)
+		return
+	}
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		var req struct {
+			Name string `json:"name"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		name = strings.TrimSpace(req.Name)
+	}
+	count, err := s.refreshSubscription(r.Context(), name)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("refresh failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "ok",
+		"count":  count,
+	})
+}
+
+func (s *Server) handleSubscriptionsSave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req config.SubscriptionConf
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.URL = strings.TrimSpace(req.URL)
+	if req.Name == "" || req.URL == "" {
+		http.Error(w, "name and url must not be empty", http.StatusBadRequest)
+		return
+	}
+	if req.UpdateInterval == "" {
+		req.UpdateInterval = "12h"
+	}
+
+	_, valErr, writeErr := s.saveConfig(func(c *config.Config) {
+		found := false
+		for i, sub := range c.Upstream.Subscriptions {
+			if sub.Name == req.Name {
+				c.Upstream.Subscriptions[i] = req
+				found = true
+				break
+			}
+		}
+		if !found {
+			c.Upstream.Subscriptions = append(c.Upstream.Subscriptions, req)
+		}
+	})
+	if valErr != nil {
+		http.Error(w, "validation failed: "+valErr.Error(), http.StatusBadRequest)
+		return
+	}
+	if writeErr != nil {
+		http.Error(w, "write failed: "+writeErr.Error(), http.StatusInternalServerError)
+		return
+	}
+	slog.Info("admin: subscription saved", "name", req.Name, "url", req.URL)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+}
+
+func (s *Server) handleSubscriptionsDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		var req struct {
+			Name string `json:"name"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		name = strings.TrimSpace(req.Name)
+	}
+	if name == "" {
+		http.Error(w, "name must not be empty", http.StatusBadRequest)
+		return
+	}
+
+	_, valErr, writeErr := s.saveConfig(func(c *config.Config) {
+		var filtered []config.SubscriptionConf
+		for _, sub := range c.Upstream.Subscriptions {
+			if sub.Name != name {
+				filtered = append(filtered, sub)
+			}
+		}
+		c.Upstream.Subscriptions = filtered
+	})
+	if valErr != nil {
+		http.Error(w, "validation failed: "+valErr.Error(), http.StatusBadRequest)
+		return
+	}
+	if writeErr != nil {
+		http.Error(w, "write failed: "+writeErr.Error(), http.StatusInternalServerError)
+		return
+	}
+	slog.Info("admin: subscription deleted", "name", name)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+}
+
+func (s *Server) handleSubscriptionsToggle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	enableStr := r.URL.Query().Get("enable")
+	enable := enableStr == "true" || enableStr == "1"
+
+	_, valErr, writeErr := s.saveConfig(func(c *config.Config) {
+		for i, sub := range c.Upstream.Subscriptions {
+			if sub.Name == name {
+				c.Upstream.Subscriptions[i].Enabled = enable
+				break
+			}
+		}
+	})
+	if valErr != nil {
+		http.Error(w, "validation failed: "+valErr.Error(), http.StatusBadRequest)
+		return
+	}
+	if writeErr != nil {
+		http.Error(w, "write failed: "+writeErr.Error(), http.StatusInternalServerError)
+		return
+	}
+	slog.Info("admin: subscription toggled", "name", name, "enabled", enable)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "enabled": enable})
 }
 
 // saveConfig copies the live config, applies mutate to the copy, validates it,

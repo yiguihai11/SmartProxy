@@ -20,9 +20,10 @@ admin.key
 # local tooling config
 .claude/settings.local.json
 
-# runtime-generated lantern caches
+# runtime-generated lantern and subscription caches
 accounts.json
 lantern_nodes.json
+subscriptions_cache.json
 
 # Claude Code local tooling config
 .claude/

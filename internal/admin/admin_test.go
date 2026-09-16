@@ -29,6 +29,7 @@ import (
 	"smartproxy/internal/dns"
 	"smartproxy/internal/logbuf"
 	"smartproxy/internal/route"
+	"smartproxy/internal/subscription"
 	"smartproxy/internal/upstream"
 )
 
@@ -1775,4 +1776,118 @@ func TestAdminServer_HTTP3(t *testing.T) {
 		t.Errorf("HTTP/3 download body missing PEM certificate")
 	}
 }
+
+func TestAdmin_Subscriptions(t *testing.T) {
+	s := newTestServer(t)
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	initialCfg := config.DefaultConfig()
+	data, _ := json.Marshal(initialCfg)
+	_ = os.WriteFile(cfgPath, data, 0o600)
+
+	s.SetConfigPath(cfgPath)
+	s.SetConfigSrc(func() *config.Config {
+		c, _ := config.Load(cfgPath)
+		return c
+	})
+	s.SetReloadConfig(func() {})
+
+	mockStatusCalled := false
+	s.SetSubscriptionsStatus(func() []subscription.ItemState {
+		mockStatusCalled = true
+		return []subscription.ItemState{
+			{
+				Name:      "Sub1",
+				URL:       "https://example.com/sub",
+				NodeCount: 5,
+				Enabled:   true,
+			},
+		}
+	})
+
+	mockRefreshCalled := false
+	s.SetRefreshSubscription(func(ctx context.Context, name string) (int, error) {
+		mockRefreshCalled = true
+		return 5, nil
+	})
+
+	startServer(t, s)
+
+	// 1. Health check includes subscriptions
+	resp, err := httpGet(s.sockPath, "/health")
+	if err != nil {
+		t.Fatalf("GET /health failed: %v", err)
+	}
+	defer resp.Body.Close()
+	var healthData map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&healthData); err != nil {
+		t.Fatalf("decode health JSON: %v", err)
+	}
+	if !mockStatusCalled {
+		t.Errorf("expected getSubscriptionsStatus to be called")
+	}
+	if subs, ok := healthData["subscriptions"].([]any); !ok || len(subs) != 1 {
+		t.Errorf("expected 1 subscription in /health, got %+v", healthData["subscriptions"])
+	}
+
+	// 2. POST /subscriptions/refresh
+	refreshResp, err := httpPost(s.sockPath, "/subscriptions/refresh?name=Sub1")
+	if err != nil {
+		t.Fatalf("POST /subscriptions/refresh failed: %v", err)
+	}
+	defer refreshResp.Body.Close()
+	if !mockRefreshCalled {
+		t.Errorf("expected refreshSubscription callback to be called")
+	}
+
+	// 3. POST /subscriptions/save
+	saveBody := `{"name":"NewSub","url":"https://example.com/sip008.json","update_interval":"6h","enabled":true}`
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", s.sockPath)
+			},
+		},
+		Timeout: 5 * time.Second,
+	}
+	saveResp, err := client.Post("http://unix/subscriptions/save", "application/json", strings.NewReader(saveBody))
+	if err != nil {
+		t.Fatalf("POST /subscriptions/save failed: %v", err)
+	}
+	defer saveResp.Body.Close()
+	if saveResp.StatusCode != http.StatusOK {
+		t.Errorf("expected save status 200, got %d", saveResp.StatusCode)
+	}
+
+	// Verify saved to disk
+	savedCfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("failed to reload saved config: %v", err)
+	}
+	if len(savedCfg.Upstream.Subscriptions) != 1 || savedCfg.Upstream.Subscriptions[0].Name != "NewSub" {
+		t.Errorf("unexpected saved subscriptions: %+v", savedCfg.Upstream.Subscriptions)
+	}
+
+	// 4. POST /subscriptions/toggle?name=NewSub&enable=false
+	toggleResp, err := client.Post("http://unix/subscriptions/toggle?name=NewSub&enable=false", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /subscriptions/toggle failed: %v", err)
+	}
+	defer toggleResp.Body.Close()
+	savedCfg, _ = config.Load(cfgPath)
+	if savedCfg.Upstream.Subscriptions[0].Enabled != false {
+		t.Errorf("expected subscription to be disabled")
+	}
+
+	// 5. POST /subscriptions/delete?name=NewSub
+	delResp, err := client.Post("http://unix/subscriptions/delete?name=NewSub", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST /subscriptions/delete failed: %v", err)
+	}
+	defer delResp.Body.Close()
+	savedCfg, _ = config.Load(cfgPath)
+	if len(savedCfg.Upstream.Subscriptions) != 0 {
+		t.Errorf("expected 0 subscriptions after delete, got %d", len(savedCfg.Upstream.Subscriptions))
+	}
+}
+
 

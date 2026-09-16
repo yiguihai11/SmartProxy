@@ -28,6 +28,7 @@ import (
 	"smartproxy/internal/route"
 	"smartproxy/internal/rules"
 	"smartproxy/internal/socks5"
+	"smartproxy/internal/subscription"
 	"smartproxy/internal/trace"
 	"smartproxy/internal/tun"
 	"smartproxy/internal/udp"
@@ -53,6 +54,7 @@ type Engine struct {
 	configPath      string
 	clientSem       chan struct{}
 	lanternProvider *lantern.Provider
+	subscriptionMgr *subscription.Manager
 }
 
 func New(cfg *config.Config, cfgDir string) (*Engine, error) {
@@ -128,6 +130,9 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 		}
 	}
 
+	subMgr := subscription.NewManager(cfgDir, cfg.Upstream.Subscriptions, upstreamMgr)
+	subMgr.Start()
+
 	eng := &Engine{
 		Chnroute:        cn,
 		RuleEng:         ruleEng,
@@ -137,6 +142,7 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 		TUNHandler:      tun.NewHandler(cfg, router, ruleEng, upstreamMgr, dnsHandler),
 		clientSem:       make(chan struct{}, maxConcurrentClients),
 		lanternProvider: lanternProvider,
+		subscriptionMgr: subMgr,
 	}
 	eng.Config.Store(cfg)
 	return eng, nil
@@ -290,6 +296,8 @@ func (e *Engine) Start(ctx context.Context) error {
 		}
 		e.adminServer.SetRefreshLantern(e.RefreshLantern)
 		e.adminServer.SetLanternStatus(e.LanternStatus)
+		e.adminServer.SetRefreshSubscription(e.RefreshSubscription)
+		e.adminServer.SetSubscriptionsStatus(e.SubscriptionsStatus)
 		e.adminServer.SetTCPPort(lc.AdminPort)
 		e.adminServer.SetRefreshInterval(lc.AdminRefreshInterval)
 		// Extra SANs land in the auto-generated self-signed cert, so a LAN IP in
@@ -304,6 +312,27 @@ func (e *Engine) Start(ctx context.Context) error {
 
 func (e *Engine) AdminServer() *admin.Server {
 	return e.adminServer
+}
+
+// SubscriptionMgr returns the subscription manager instance.
+func (e *Engine) SubscriptionMgr() *subscription.Manager {
+	return e.subscriptionMgr
+}
+
+// RefreshSubscription triggers on-demand fetching for a subscription.
+func (e *Engine) RefreshSubscription(ctx context.Context, name string) (int, error) {
+	if e.subscriptionMgr == nil {
+		return 0, fmt.Errorf("subscription manager is not running")
+	}
+	return e.subscriptionMgr.Refresh(ctx, name)
+}
+
+// SubscriptionsStatus reports the status of all subscriptions.
+func (e *Engine) SubscriptionsStatus() []subscription.ItemState {
+	if e.subscriptionMgr == nil {
+		return nil
+	}
+	return e.subscriptionMgr.Status()
 }
 
 // RefreshLantern triggers on-demand fetching and testing of Lantern nodes.
@@ -878,6 +907,11 @@ func (e *Engine) Stop() {
 			e.lanternProvider.Stop()
 			slog.Info("[Go-Engine] lantern provider stopped")
 		}
+		if e.subscriptionMgr != nil {
+			slog.Info("[Go-Engine] Stopping subscription manager...")
+			e.subscriptionMgr.Stop()
+			slog.Info("[Go-Engine] subscription manager stopped")
+		}
 		if e.adminServer != nil {
 			slog.Info("[Go-Engine] Stopping adminServer...")
 			e.adminServer.Stop()
@@ -1011,6 +1045,10 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 			e.lanternProvider.Stop()
 			e.lanternProvider = nil
 		}
+	}
+
+	if e.subscriptionMgr != nil {
+		e.subscriptionMgr.Reload(newCfg.Upstream.Subscriptions)
 	}
 
 	// Publish the new configuration snapshot after runtime components have
