@@ -158,9 +158,6 @@ func parseVLESS(u *url.URL) (*ParsedOutbound, error) {
 			"public_key": q.Get("pbk"),
 			"short_id":   q.Get("sid"),
 		}
-		if spx := q.Get("spx"); spx != "" {
-			realityConfig["spider_x"] = spx
-		}
 		tlsConfig["reality"] = realityConfig
 	}
 
