@@ -3239,6 +3239,8 @@ function confirmACL(){
         if(data.skipped>0)setTimeout(function(){alert(tf('{0} added, {1} skipped (duplicates)',[data.count,data.skipped]))},100);
       });
     }else{r.text().then(function(t){alert('Error: '+t)})}
+  }).catch(function(e){alert('Error: '+e.message)}).finally(function(){btn.disabled=false;btn.textContent=t('Add')});
+}
 function parseACLLine(line){
   var l=line.trim();
   if(!l||l.startsWith('#'))return null;
