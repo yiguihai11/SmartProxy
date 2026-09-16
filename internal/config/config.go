@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 	"time"
 )
@@ -52,6 +53,21 @@ type TUNConfig struct {
 	// Android 侧 establish 时由 AppPrefs.blockedApps 解析成 UID 写进 config.json;
 	// TUN 路径按连接经 UIDResolver 反查 UID,命中即拦截。空/缺省 = 不启用。
 	BlockedUIDs []int32 `json:"blocked_uids"`
+}
+
+// HasIPv6 reports whether any IPv6 address prefix is configured in Address or Inet6Address.
+func (t TUNConfig) HasIPv6() bool {
+	for _, s := range t.Address {
+		if p, err := netip.ParsePrefix(s); err == nil && p.Addr().Is6() {
+			return true
+		}
+	}
+	for _, s := range t.Inet6Address {
+		if p, err := netip.ParsePrefix(s); err == nil && p.Addr().Is6() {
+			return true
+		}
+	}
+	return false
 }
 
 // MarshalJSON renders a TUNConfig with nil slice fields as empty arrays ("[]")
@@ -166,6 +182,7 @@ type RoutingConf struct {
 
 type DNSConf struct {
 	Enabled        bool       `json:"enabled"`
+	FilterAAAA     bool       `json:"filter_aaaa"`
 	Cache          DNSCacheC  `json:"cache"`
 	Foreign        DNSForeign `json:"foreign"`
 	QueryTimeout   int        `json:"query_timeout"`

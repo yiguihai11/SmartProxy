@@ -42,6 +42,7 @@
   },
   "dns": {
     "enabled": true,
+    "filter_aaaa": false,
     "cache": {
       "size": 10000,
       "ttl": 86400

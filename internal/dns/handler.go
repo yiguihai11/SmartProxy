@@ -40,6 +40,7 @@ type dnsConfig struct {
 	blockedIP6      string
 	enabled         bool
 	preference      *Preference
+	filterAAAA      bool
 }
 
 type Handler struct {
@@ -67,7 +68,7 @@ func NewHandler(cacheSize, cacheTTL int,
 		upstreamMgr: mgr,
 	}
 	h.storeConfig(foreignIPv4, foreignIPv6, queryTimeout, blockedIP, blockedIP6,
-		enabled, preferEnabled, preferMode, preferPorts)
+		enabled, preferEnabled, preferMode, preferPorts, false)
 	return h
 }
 
@@ -75,6 +76,7 @@ func (h *Handler) storeConfig(
 	foreignIPv4, foreignIPv6 string,
 	queryTimeout int, blockedIP, blockedIP6 string,
 	enabled bool, preferEnabled bool, preferMode PreferMode, preferPorts []int,
+	filterAAAA bool,
 ) {
 	v4Host, v4Port := netutil.ParseHostPort(foreignIPv4, 53)
 	v6Host, v6Port := netutil.ParseHostPort(foreignIPv6, 53)
@@ -88,7 +90,37 @@ func (h *Handler) storeConfig(
 		blockedIP6:      blockedIP6,
 		enabled:         enabled,
 		preference:      NewPreference(preferEnabled, preferMode, preferPorts),
+		filterAAAA:      filterAAAA,
 	})
+	if filterAAAA {
+		h.cache.ClearType(dns.TypeAAAA)
+	}
+}
+
+// SetFilterAAAA dynamically enables or disables filtering of AAAA (IPv6) DNS queries.
+// When enabled, AAAA queries immediately return an empty NOERROR answer (NODATA),
+// and any cached AAAA records are purged.
+func (h *Handler) SetFilterAAAA(filter bool) {
+	old := h.cfg.Load()
+	if old == nil {
+		return
+	}
+	if old.filterAAAA == filter {
+		return
+	}
+	next := *old
+	next.filterAAAA = filter
+	h.cfg.Store(&next)
+	if filter {
+		h.cache.ClearType(dns.TypeAAAA)
+	}
+	slog.Info("DNS handler filter_aaaa updated", "filter_aaaa", filter)
+}
+
+// FilterAAAA reports whether AAAA filtering is currently enabled.
+func (h *Handler) FilterAAAA() bool {
+	cfg := h.cfg.Load()
+	return cfg != nil && cfg.filterAAAA
 }
 
 func (h *Handler) UpdateConfig(
@@ -96,11 +128,16 @@ func (h *Handler) UpdateConfig(
 	queryTimeout int, blockedIP, blockedIP6 string,
 	enabled bool, preferEnabled bool, preferMode PreferMode, preferPorts []int,
 ) {
+	old := h.cfg.Load()
+	filterAAAA := false
+	if old != nil {
+		filterAAAA = old.filterAAAA
+	}
 	h.storeConfig(foreignIPv4, foreignIPv6, queryTimeout, blockedIP, blockedIP6,
-		enabled, preferEnabled, preferMode, preferPorts)
+		enabled, preferEnabled, preferMode, preferPorts, filterAAAA)
 	slog.Info("DNS handler config updated",
 		"foreignIPv4", foreignIPv4, "foreignIPv6", foreignIPv6,
-		"queryTimeout", queryTimeout, "enabled", enabled)
+		"queryTimeout", queryTimeout, "enabled", enabled, "filter_aaaa", filterAAAA)
 }
 
 // SetCacheConfig 热更 DNS 缓存容量与默认 TTL(dns.cache.size / dns.cache.ttl),
@@ -155,12 +192,17 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 	// Logging INFO for every query is pure overhead under high query rates; the hot path is downgraded to Debug
 	ll.Debug("handling DNS query", "qname", qname, "qtype", qtype)
 
+	if cfg.filterAAAA && qtype == dns.TypeAAAA {
+		ll.Debug("filter_aaaa: dropping AAAA query, returning NODATA", "qname", qname)
+		return buildNODATAResponse(msg)
+	}
+
 	// Static records are authoritative overrides: answer before block rules so an
 	// explicit hosts-style entry always wins over a blocklist or stale cache.
 	if m := h.staticRecords.Load(); m != nil && len(*m) > 0 {
 		if ips, ok := (*m)[qname]; ok {
 			ll.Debug("static record hit", "qname", qname)
-			if resp, ok := buildStaticResponse(msg, ips); ok {
+			if resp, ok := buildStaticResponse(msg, ips, cfg.filterAAAA); ok {
 				return resp
 			}
 		}
@@ -299,6 +341,7 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 
 	// Share the result and fix the DNS transaction ID for the current caller
 	resp := result.([]byte)
+	resp = sanitizeResponse(resp, cfg.filterAAAA)
 	if len(resp) >= 2 && (resp[0] != queryWire[0] || resp[1] != queryWire[1]) {
 		respCopy := make([]byte, len(resp))
 		copy(respCopy, resp)
@@ -541,7 +584,7 @@ const staticRecordTTL = 60
 // record type follows the query type: TypeA → A records (IPv4 entries), TypeAAAA →
 // AAAA records (IPv6 entries), TypeANY → both families, and any other type yields
 // an empty NOERROR answer (NODATA) so the client can fall back to another query.
-func buildStaticResponse(msg *dns.Msg, ips []net.IP) ([]byte, bool) {
+func buildStaticResponse(msg *dns.Msg, ips []net.IP, filterAAAA bool) ([]byte, bool) {
 	qtype := msg.Question[0].Qtype
 	resp := msg.SetReply(msg)
 	resp.Authoritative = true
@@ -551,7 +594,7 @@ func buildStaticResponse(msg *dns.Msg, ips []net.IP) ([]byte, bool) {
 				Hdr: dns.RR_Header{Name: msg.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: staticRecordTTL},
 				A:   v4,
 			})
-		} else if v4 == nil && (qtype == dns.TypeAAAA || qtype == dns.TypeANY) {
+		} else if v4 == nil && !filterAAAA && (qtype == dns.TypeAAAA || qtype == dns.TypeANY) {
 			resp.Answer = append(resp.Answer, &dns.AAAA{
 				Hdr:  dns.RR_Header{Name: msg.Question[0].Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: staticRecordTTL},
 				AAAA: ip,
@@ -587,12 +630,63 @@ func (h *Handler) StaticRecordAnswer(queryWire []byte) ([]byte, bool) {
 	if len(msg.Question) == 0 {
 		return nil, false
 	}
+	filterAAAA := h.FilterAAAA()
+	if filterAAAA && msg.Question[0].Qtype == dns.TypeAAAA {
+		return buildNODATAResponse(msg), true
+	}
 	qname := strings.ToLower(strings.TrimSuffix(msg.Question[0].Name, "."))
 	ips, ok := (*m)[qname]
 	if !ok || len(ips) == 0 {
 		return nil, false
 	}
-	return buildStaticResponse(msg, ips)
+	return buildStaticResponse(msg, ips, filterAAAA)
+}
+
+// buildNODATAResponse returns a standard empty answer with NOERROR (NODATA)
+// for filtered query types such as AAAA when IPv6 is disabled.
+func buildNODATAResponse(msg *dns.Msg) []byte {
+	resp := msg.SetReply(msg)
+	resp.Rcode = dns.RcodeSuccess
+	resp.Authoritative = false
+	resp.RecursionAvailable = true
+	wire, err := resp.Pack()
+	if err != nil {
+		return nil
+	}
+	return wire
+}
+
+// sanitizeResponse strips AAAA records from the DNS answer when filterAAAA is enabled.
+func sanitizeResponse(wire []byte, filterAAAA bool) []byte {
+	if !filterAAAA || len(wire) == 0 {
+		return wire
+	}
+	msg := new(dns.Msg)
+	if err := msg.Unpack(wire); err != nil {
+		return wire
+	}
+	hasAAAA := false
+	for _, rr := range msg.Answer {
+		if rr.Header().Rrtype == dns.TypeAAAA {
+			hasAAAA = true
+			break
+		}
+	}
+	if !hasAAAA {
+		return wire
+	}
+	filtered := make([]dns.RR, 0, len(msg.Answer))
+	for _, rr := range msg.Answer {
+		if rr.Header().Rrtype != dns.TypeAAAA {
+			filtered = append(filtered, rr)
+		}
+	}
+	msg.Answer = filtered
+	newWire, err := msg.Pack()
+	if err != nil {
+		return wire
+	}
+	return newWire
 }
 
 // buildSERVFAIL packs a ServerFailure response for the given query, so a failed

@@ -96,6 +96,7 @@
 | Go 字段 | JSON 键 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `Enabled` | `enabled` | `true` | 是否接管 DNS 转发 |
+| `FilterAAAA` | `filter_aaaa` | `false` | 是否过滤 AAAA（IPv6）DNS 查询。开启时 AAAA 查询直接返回空 NOERROR（NODATA），且清除缓存中的 AAAA 记录；若 TUN 启用但未配置任何 IPv6 地址（如在安卓端关闭 IPv6 拦截），引擎会自动开启过滤以防 IPv6 泄露与断流 |
 | `QueryTimeout` | `query_timeout` | `3` | DNS 查询超时（秒） |
 | `Foreign` | `foreign` | `{ipv4, ipv6}` | 国外 DNS 地址（`foreign.ipv4` 默认 `1.1.1.1:53`，`foreign.ipv6` 默认 `[2606:4700:4700::1111]:53`） |
 | `Cache` | `cache` | `{size:10000, ttl:300}` | DNS 缓存：`cache.size` 条目数、`cache.ttl` 秒 |

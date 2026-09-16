@@ -106,6 +106,7 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 		cfg.DNS.Enabled,
 	)
 	dnsHandler.SetStaticRecords(cfg.DNS.StaticRecordsMap())
+	dnsHandler.SetFilterAAAA(shouldFilterAAAA(cfg))
 
 	var lanternProvider *lantern.Provider
 	if cfg.Lantern.Enabled {
@@ -1022,6 +1023,7 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 	)
 	e.DNSHandler.SetStaticRecords(newCfg.DNS.StaticRecordsMap())
 	e.DNSHandler.SetCacheConfig(newCfg.DNS.Cache.Size, time.Duration(newCfg.DNS.Cache.TTL)*time.Second)
+	e.DNSHandler.SetFilterAAAA(shouldFilterAAAA(newCfg))
 
 	if e.adminServer != nil {
 		e.adminServer.SetAdminAuth(newCfg.Listen.AdminAuth)
@@ -1065,6 +1067,22 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 	// ReloadConfig as a whole is intentionally not a cross-component transaction.
 	e.Config.Store(newCfg)
 	return nil
+}
+
+// shouldFilterAAAA determines whether AAAA (IPv6) DNS queries should be filtered.
+// It returns true if explicitly enabled via dns.filter_aaaa, or if TUN is enabled
+// but has no IPv6 addresses configured (preventing IPv6 DNS leakage / broken connectivity).
+func shouldFilterAAAA(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	if cfg.DNS.FilterAAAA {
+		return true
+	}
+	if cfg.TUN.Enabled && !cfg.TUN.HasIPv6() {
+		return true
+	}
+	return false
 }
 
 // ReloadACL reloads the ACL file currently configured in e.Config and terminates any

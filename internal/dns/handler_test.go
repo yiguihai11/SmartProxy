@@ -1164,3 +1164,84 @@ func TestStaticRecords_BeforeBlock(t *testing.T) {
 		t.Errorf("static record should win over block rule, got %s", a.A.String())
 	}
 }
+
+func TestHandleDNS_FilterAAAA(t *testing.T) {
+	cn := chnroute.New()
+	h := NewHandler(100, 60, "", "", cn, nil, 3, "0.0.0.0", "::", false, PreferNone, nil, true)
+	h.SetStaticRecords(map[string][]net.IP{
+		"example.com": {net.ParseIP("192.168.1.10"), net.ParseIP("2001:db8::1")},
+	})
+
+	// 1. When FilterAAAA is false (default), AAAA returns IPv6 record
+	if h.FilterAAAA() {
+		t.Fatal("expected FilterAAAA to be false by default")
+	}
+	resp1 := h.HandleDNS(context.Background(), buildTestDNSQuery("example.com", dns.TypeAAAA), "8.8.8.8", 53, nil)
+	msg1 := new(dns.Msg)
+	if err := msg1.Unpack(resp1); err != nil {
+		t.Fatalf("unpack: %v", err)
+	}
+	if len(msg1.Answer) != 1 {
+		t.Fatalf("expected 1 answer when filterAAAA is false, got %d", len(msg1.Answer))
+	}
+	if aaaa, ok := msg1.Answer[0].(*dns.AAAA); !ok || aaaa.AAAA.String() != "2001:db8::1" {
+		t.Fatalf("expected AAAA 2001:db8::1, got %v", msg1.Answer[0])
+	}
+
+	// 2. Enable FilterAAAA
+	h.SetFilterAAAA(true)
+	if !h.FilterAAAA() {
+		t.Fatal("expected FilterAAAA to be true")
+	}
+
+	// 3. AAAA query returns NOERROR with 0 answers (NODATA)
+	resp2 := h.HandleDNS(context.Background(), buildTestDNSQuery("example.com", dns.TypeAAAA), "8.8.8.8", 53, nil)
+	msg2 := new(dns.Msg)
+	if err := msg2.Unpack(resp2); err != nil {
+		t.Fatalf("unpack: %v", err)
+	}
+	if msg2.Rcode != dns.RcodeSuccess {
+		t.Errorf("expected NOERROR (RcodeSuccess), got %v", msg2.Rcode)
+	}
+	if len(msg2.Answer) != 0 {
+		t.Errorf("expected 0 answers (NODATA), got %d answers: %v", len(msg2.Answer), msg2.Answer)
+	}
+
+	// 4. A query still works normally and returns IPv4
+	resp3 := h.HandleDNS(context.Background(), buildTestDNSQuery("example.com", dns.TypeA), "8.8.8.8", 53, nil)
+	msg3 := new(dns.Msg)
+	if err := msg3.Unpack(resp3); err != nil {
+		t.Fatalf("unpack: %v", err)
+	}
+	if len(msg3.Answer) != 1 {
+		t.Fatalf("expected 1 A record, got %d", len(msg3.Answer))
+	}
+	if a, ok := msg3.Answer[0].(*dns.A); !ok || a.A.String() != "192.168.1.10" {
+		t.Fatalf("expected A 192.168.1.10, got %v", msg3.Answer[0])
+	}
+
+	// 5. StaticRecordAnswer also honors FilterAAAA
+	staticResp, ok := h.StaticRecordAnswer(buildTestDNSQuery("example.com", dns.TypeAAAA))
+	if !ok {
+		t.Fatal("expected StaticRecordAnswer to return ok=true")
+	}
+	msg4 := new(dns.Msg)
+	if err := msg4.Unpack(staticResp); err != nil {
+		t.Fatalf("unpack: %v", err)
+	}
+	if len(msg4.Answer) != 0 {
+		t.Errorf("expected 0 answers for StaticRecordAnswer when filterAAAA is true, got %d", len(msg4.Answer))
+	}
+
+	// 6. Disable FilterAAAA again -> AAAA returns normally
+	h.SetFilterAAAA(false)
+	resp5 := h.HandleDNS(context.Background(), buildTestDNSQuery("example.com", dns.TypeAAAA), "8.8.8.8", 53, nil)
+	msg5 := new(dns.Msg)
+	if err := msg5.Unpack(resp5); err != nil {
+		t.Fatalf("unpack: %v", err)
+	}
+	if len(msg5.Answer) != 1 {
+		t.Fatalf("expected AAAA record restored, got %d", len(msg5.Answer))
+	}
+}
+

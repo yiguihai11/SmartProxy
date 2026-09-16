@@ -118,10 +118,12 @@ object ConfigProvider {
         writeConfig(context, json)
     }
 
-    /** 开关 IPv6 拦截:关则从 address 移除 v6、开补默认值。 */
+    /** 开关 IPv6 拦截:关则从 address 移除 v6、开补默认值,同时同步 dns.filter_aaaa。 */
     fun setIpv6(context: Context, on: Boolean) {
         val json = readConfig(context)
         updateAddress(json, isV6 = true, on = on, defaultCidr = DEFAULT_TUN_V6)
+        val dns = json.optJSONObject("dns") ?: JSONObject().also { json.put("dns", it) }
+        dns.put("filter_aaaa", !on)
         writeConfig(context, json)
     }
 

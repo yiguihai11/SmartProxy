@@ -991,6 +991,10 @@ private fun HomeLauncher(
                                 v -> AppPrefs.SOCKS_LISTEN_V6
                                 else -> AppPrefs.SOCKS_LISTEN_V4
                             })
+                            val json = ConfigProvider.readConfig(context)
+                            val dns = json.optJSONObject("dns") ?: org.json.JSONObject().also { json.put("dns", it) }
+                            dns.put("filter_aaaa", !v)
+                            ConfigProvider.writeConfig(context, json)
                         }
                         SmartProxyVpnService.restart(context)
                     },

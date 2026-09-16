@@ -164,4 +164,35 @@ func TestEngine_ReloadConfig_ACLParseFailure_DoesNotMutateChnrouteOrConfig(t *te
 	assert.True(t, e.Chnroute.Contains(net.ParseIP("10.0.0.1")), "original chnroute must stay intact")
 }
 
+func TestShouldFilterAAAA(t *testing.T) {
+	// 1. Nil config
+	assert.False(t, shouldFilterAAAA(nil))
+
+	// 2. Explicit filter_aaaa
+	cfg1 := config.DefaultConfig()
+	cfg1.DNS.FilterAAAA = true
+	assert.True(t, shouldFilterAAAA(cfg1))
+
+	// 3. TUN enabled with IPv4 only (e.g. user turned off IPv6 interception on Android)
+	cfg2 := config.DefaultConfig()
+	cfg2.TUN.Enabled = true
+	cfg2.TUN.Address = []string{"172.19.0.1/30"}
+	cfg2.DNS.FilterAAAA = false
+	assert.True(t, shouldFilterAAAA(cfg2), "TUN with IPv4 only must filter AAAA")
+
+	// 4. TUN enabled with dual-stack (IPv4 + IPv6)
+	cfg3 := config.DefaultConfig()
+	cfg3.TUN.Enabled = true
+	cfg3.TUN.Address = []string{"172.19.0.1/30", "fc00::1/64"}
+	cfg3.DNS.FilterAAAA = false
+	assert.False(t, shouldFilterAAAA(cfg3), "TUN with dual-stack must NOT filter AAAA")
+
+	// 5. TUN disabled and filter_aaaa false (pure SOCKS proxy mode)
+	cfg4 := config.DefaultConfig()
+	cfg4.TUN.Enabled = false
+	cfg4.DNS.FilterAAAA = false
+	assert.False(t, shouldFilterAAAA(cfg4))
+}
+
+
 

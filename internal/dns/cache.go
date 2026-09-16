@@ -77,6 +77,17 @@ func (c *Cache) Close() {
 	c.cleanWg.Wait()
 }
 
+// ClearType removes all cache entries matching the given DNS query type (e.g. TypeAAAA).
+func (c *Cache) ClearType(qtype uint16) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for k, v := range c.entries {
+		if k.qtype == qtype {
+			c.deleteEntry(k, v)
+		}
+	}
+}
+
 func (c *Cache) Get(qname string, qtype uint16) []byte {
 	key := cacheKey{qname: qname, qtype: qtype}
 
