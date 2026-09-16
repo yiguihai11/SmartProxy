@@ -22,6 +22,9 @@ object NotificationHelper {
 
     const val ACTION_STOP = "io.github.yiguihai11.smartproxy.STOP_VPN"
 
+    /** 悬浮网速计(流量条)位置锁定/解锁切换。 */
+    const val ACTION_TOGGLE_SPEED_METER_LOCK = "io.github.yiguihai11.smartproxy.TOGGLE_SPEED_METER_LOCK"
+
     /** 通知授权补发(§4.3):startForeground 先于 POST_NOTIFICATIONS 授权执行时,系统压住
      *  通知;授权落定后重发本 action,让 FGS 只重刷通知、不动引擎。 */
     const val ACTION_REFRESH_FOREGROUND = "io.github.yiguihai11.smartproxy.REFRESH_FOREGROUND"
@@ -62,14 +65,45 @@ object NotificationHelper {
             .setContentIntent(openPending)
             .setOngoing(true)
             .setShowWhen(false)
-            .addAction(
+
+        // 流量条锁定/解锁开关:仅当悬浮网速计开启时显示。未锁定时为"锁定",锁定后变为"解锁"。
+        if (AppPrefs.speedMeterEnabled(context)) {
+            val locked = AppPrefs.speedMeterLocked(context)
+            val lockTitle = if (locked) {
+                context.getString(R.string.notification_speed_meter_unlock)
+            } else {
+                context.getString(R.string.notification_speed_meter_lock)
+            }
+            val lockIntent = Intent(context, SmartProxyVpnService::class.java)
+                .setAction(ACTION_TOGGLE_SPEED_METER_LOCK)
+            val lockPending = PendingIntent.getService(
+                context, 2, lockIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            content.addAction(
                 Notification.Action.Builder(
                     null,
-                    context.getString(R.string.notification_stop),
-                    stopPending
+                    lockTitle,
+                    lockPending
                 ).build()
             )
+        }
+
+        content.addAction(
+            Notification.Action.Builder(
+                null,
+                context.getString(R.string.notification_stop),
+                stopPending
+            ).build()
+        )
         return content.build()
+    }
+
+    /** 原地更新前台保活通知(不重启服务)。 */
+    fun refresh(context: Context) {
+        ensureChannel(context)
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(NOTIFICATION_ID, build(context))
     }
 
     /** §4.5 被动断连提示:一次性(auto-cancel)通知,非 ongoing,点掉即消失。 */

@@ -60,6 +60,7 @@ object AppPrefs {
     private const val KEY_SPEED_METER_UP_COLOR = "speed_meter_up_color"
     private const val KEY_SPEED_METER_DOWN_COLOR = "speed_meter_down_color"
     private const val KEY_SPEED_METER_SWAP_ORDER = "speed_meter_swap_order"
+    private const val KEY_SPEED_METER_LOCKED = "speed_meter_locked"
 
     private fun sp(context: Context) =
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -222,6 +223,14 @@ object AppPrefs {
 
     fun setSpeedMeterPos(context: Context, x: Int, y: Int) {
         sp(context).edit().putInt(KEY_SPEED_METER_X, x).putInt(KEY_SPEED_METER_Y, y).apply()
+    }
+
+    /** 胶囊位置锁定状态:true = 固定位置不可拖动,false = 可拖动。默认 false。 */
+    fun speedMeterLocked(context: Context): Boolean =
+        sp(context).getBoolean(KEY_SPEED_METER_LOCKED, false)
+
+    fun setSpeedMeterLocked(context: Context, value: Boolean) {
+        sp(context).edit().putBoolean(KEY_SPEED_METER_LOCKED, value).apply()
     }
 
     // ── 悬浮网速计外观(长按设置对话框读写,见 SpeedMeterSettingsActivity)──────

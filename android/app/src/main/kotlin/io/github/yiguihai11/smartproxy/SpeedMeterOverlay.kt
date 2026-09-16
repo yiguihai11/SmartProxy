@@ -80,6 +80,16 @@ object SpeedMeterOverlay {
      *  tick 会走淡出,滑块预览就没得看了)。仅主线程读写。 */
     private var settingsOpen = false
 
+    /** 胶囊位置是否锁定(锁定后固定位置不可拖动)。 */
+    @Volatile
+    private var isLocked = false
+
+    fun setLocked(locked: Boolean) {
+        isLocked = locked
+    }
+
+    fun isLocked(): Boolean = isLocked
+
     private var pollThread: HandlerThread? = null
     private var bgHandler: Handler? = null
     private val mainHandler = Handler(android.os.Looper.getMainLooper())
@@ -117,6 +127,7 @@ object SpeedMeterOverlay {
     private fun showOnMain(app: Context) {
         if (capsule != null) return // 已显示
         val manager = app.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
+        isLocked = AppPrefs.speedMeterLocked(app)
         val view = buildCapsule(app)
         val (sx, sy) = AppPrefs.speedMeterPos(app)
         val defaultPos = sx < 0 || sy < 0
@@ -362,9 +373,11 @@ object SpeedMeterOverlay {
                 MotionEvent.ACTION_MOVE -> {
                     val dx = ev.rawX - startRawX
                     val dy = ev.rawY - startRawY
-                    if (!dragging && abs(dx) + abs(dy) > slop) {
-                        dragging = true
+                    if (abs(dx) + abs(dy) > slop) {
                         mainHandler.removeCallbacks(longPress) // 超 slop 即取消长按
+                        if (!isLocked && !dragging) {
+                            dragging = true
+                        }
                     }
                     if (dragging) {
                         val dm = app.resources.displayMetrics

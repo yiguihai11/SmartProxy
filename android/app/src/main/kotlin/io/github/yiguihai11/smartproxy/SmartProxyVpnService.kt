@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import android.widget.Toast
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -157,6 +158,20 @@ class SmartProxyVpnService : VpnService() {
             Log.i(TAG, "[onStartCommand] ACTION_STOP is user stop; enqueue full shutdown.")
             enqueueEngineWork("ACTION_STOP") { shutdown() }
             return START_NOT_STICKY
+        }
+
+        // 悬浮网速计(流量条)锁定/解锁切换:仅改锁定偏好 + 通知原地刷新 + 弹 Toast 提示。
+        if (action == NotificationHelper.ACTION_TOGGLE_SPEED_METER_LOCK) {
+            val nowLocked = !AppPrefs.speedMeterLocked(this)
+            AppPrefs.setSpeedMeterLocked(this, nowLocked)
+            SpeedMeterOverlay.setLocked(nowLocked)
+            NotificationHelper.refresh(this)
+            Toast.makeText(
+                this,
+                if (nowLocked) R.string.toast_speed_meter_locked else R.string.toast_speed_meter_unlocked,
+                Toast.LENGTH_SHORT
+            ).show()
+            return START_STICKY
         }
 
         // 设置变更重建(§6 / 首页 IPv4 / IPv6 开关):停旧会话 → 立即按新配置重建。

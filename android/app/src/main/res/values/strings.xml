@@ -77,6 +77,10 @@
     <string name="speed_meter_down_color">Down color</string>
     <string name="speed_meter_rate_order">Up/Down order</string>
     <string name="speed_meter_swap_order">⇅ Swap sides</string>
+    <string name="notification_speed_meter_lock">Lock</string>
+    <string name="notification_speed_meter_unlock">Unlock</string>
+    <string name="toast_speed_meter_locked">Traffic meter locked</string>
+    <string name="toast_speed_meter_unlocked">Traffic meter unlocked</string>
 
     <!-- Admin panel card -->
     <string name="panel_title">Admin panel</string>

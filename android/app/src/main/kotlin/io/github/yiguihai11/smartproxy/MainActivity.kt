@@ -1030,7 +1030,10 @@ private fun HomeLauncher(
                             if (Settings.canDrawOverlays(context)) {
                                 speedMeterOn = true
                                 AppPrefs.setSpeedMeterEnabled(context, true)
-                                if (running) SpeedMeterOverlay.autoShow(context)
+                                if (running) {
+                                    SpeedMeterOverlay.autoShow(context)
+                                    NotificationHelper.refresh(context)
+                                }
                                 // 前台应用判定需「使用情况访问权限」:引导授权(不阻塞,未授权退回流量最大)。
                                 if (SpeedMeterOverlay.needsUsageAccess(context)) showUsageAccessDialog = true
                             } else {
@@ -1046,6 +1049,9 @@ private fun HomeLauncher(
                             speedMeterOn = false
                             AppPrefs.setSpeedMeterEnabled(context, false)
                             SpeedMeterOverlay.hide()
+                            if (running) {
+                                NotificationHelper.refresh(context)
+                            }
                         }
                     },
                     modifier = Modifier.weight(1f)
