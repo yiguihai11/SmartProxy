@@ -105,7 +105,7 @@ tr:last-child td{border-bottom:none}
 .btn.active-auto{background:var(--green-bg);border-color:var(--green);color:var(--green)}
 .proxy-group-section{margin-bottom:22px;display:flex;flex-direction:column;gap:12px}
 .proxy-group-section.hidden{display:none}
-.proxy-group-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;user-select:none;transition:background .15s,border-color .15s}
+.proxy-group-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;user-select:none;transition:background .15s,border-color .15s;gap:8px;flex-wrap:wrap}
 .proxy-group-header:hover{background:var(--surface2);border-color:var(--border2)}
 .proxy-group-title{display:flex;align-items:center;gap:10px;font-weight:600;font-size:.92rem;color:var(--text)}
 .proxy-group-arrow{font-size:.72rem;color:var(--text2);transition:transform .2s ease;display:inline-block;line-height:1}
@@ -113,7 +113,7 @@ tr:last-child td{border-bottom:none}
 .proxy-group-section.collapsed .proxy-group-cards{display:none}
 .proxy-group-badge{display:inline-flex;align-items:center;font-size:.72rem;font-weight:500;padding:2px 8px;border-radius:12px;background:var(--surface2);color:var(--text2);border:1px solid var(--border)}
 .proxy-group-badge.online{color:var(--green);border-color:rgba(60,207,142,.3);background:var(--green-bg)}
-.proxy-group-actions{display:flex;align-items:center;gap:8px}
+.proxy-group-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .proxy-group-actions .btn{padding:3px 8px;font-size:.75rem}
 .proxy-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(min(100%,340px),1fr))}
 .proxy-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;transition:border-color .18s,box-shadow .18s;display:flex;flex-direction:column;gap:12px;position:relative;overflow:hidden}
@@ -324,10 +324,6 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
         <div class="filter-option selected" data-value="all" onclick="setProxyGroupFilter('all')">All</div>
       </div>
     </span>
-    <button class="btn btn-sm" id="test-all-tcping-btn" onclick="testAllProxies('tcping')">Test All TCPing</button>
-    <button class="btn btn-sm" id="test-all-tcp-btn" onclick="testAllProxies('tcp')">Test All TCP</button>
-    <button class="btn btn-sm" id="test-all-udp-btn" onclick="testAllProxies('udp')">Test All UDP</button>
-    <button class="btn btn-sm" id="test-all-btn" onclick="testAllProxies('all')">Test All</button>
     <span class="page-info" id="health-info">Edits upstream.proxies in config</span>
   </div>
   <div id="subscriptions-container"></div>
@@ -709,12 +705,13 @@ async function testProxy(i,proto){
   }
   try{await loadHealth()}catch(_){lhealth(healthD)}
 }
-var _batchTesting=false;
-async function testAllProxies(proto){
-  if(_batchTesting)return;
-  var proxies=(healthD&&healthD.health&&healthD.health.proxies)||[];
-  if(proxyGroupFilter!=='all'){
-    proxies=proxies.filter(function(p){return getProxyGroup(p)===proxyGroupFilter});
+var _batchTestingGroups={};
+async function testGroupProxies(gid, proto, btn){
+  if(_batchTestingGroups[gid])return;
+  var allProxies=(healthD&&healthD.health&&healthD.health.proxies)||[];
+  var proxies=allProxies;
+  if(gid&&gid!=='all'){
+    proxies=allProxies.filter(function(p){return getProxyGroup(p)===gid;});
   }
   var tasks=[];
   for(var i=0;i<proxies.length;i++){
@@ -735,16 +732,10 @@ async function testAllProxies(proto){
     if(toast)showCopyToast(toast,t('No proxy nodes to test'));
     return;
   }
-  _batchTesting=true;
-  var btnTCPing=document.getElementById('test-all-tcping-btn')||document.getElementById('test-all-ping-btn');
-  var btnTCP=document.getElementById('test-all-tcp-btn');
-  var btnUDP=document.getElementById('test-all-udp-btn');
-  var btnAll=document.getElementById('test-all-btn');
-  if(btnTCPing)btnTCPing.disabled=true;
-  if(btnTCP)btnTCP.disabled=true;
-  if(btnUDP)btnUDP.disabled=true;
-  if(btnAll)btnAll.disabled=true;
-
+  _batchTestingGroups[gid]=true;
+  if(proxyGroupsCollapsed[gid]){
+    proxyGroupsCollapsed[gid]=false;
+  }
   for(var j=0;j<tasks.length;j++){
     proxyTestState[tasks[j].alias+':'+tasks[j].proto]={testing:true};
   }
@@ -782,17 +773,16 @@ async function testAllProxies(proto){
   try{
     await Promise.all(promises);
   }finally{
-    _batchTesting=false;
-    if(btnTCPing)btnTCPing.disabled=false;
-    if(btnTCP)btnTCP.disabled=false;
-    if(btnUDP)btnUDP.disabled=false;
-    if(btnAll)btnAll.disabled=false;
+    delete _batchTestingGroups[gid];
   }
 
   if(toast){
     showCopyToast(toast,tf('Batch test complete: {0} available, {1} failed',[String(okCount),String(failCount)]));
   }
   try{await loadHealth()}catch(_){lhealth(healthD)}
+}
+function testAllProxies(proto){
+  return testGroupProxies(proxyGroupFilter||'all', proto);
 }
 var countryNamesZh={
   HK:'香港',MO:'澳门',TW:'台湾',CN:'中国',
@@ -1104,6 +1094,15 @@ function lhealth(d){
       var subName=gid.slice(4);
       actionsHtml='<button class="btn btn-sm" onclick="refreshSub(\''+escAttr(subName)+'\',this)" title="'+escAttr(t('Refresh Subscription'))+'">🔄 '+t('Refresh')+'</button>';
     }
+
+    if(g.items.length>0){
+      var isTesting=!!_batchTestingGroups[gid];
+      actionsHtml+='<button class="btn btn-sm" onclick="testGroupProxies(\''+escAttr(gid)+'\',\'tcping\',this)" title="'+escAttr(t('Test TCPing latency'))+'"'+(isTesting?' disabled':'')+'>'+t('Test All TCPing')+'</button>'+
+        '<button class="btn btn-sm" onclick="testGroupProxies(\''+escAttr(gid)+'\',\'tcp\',this)" title="'+escAttr(t('Test TCP latency and availability'))+'"'+(isTesting?' disabled':'')+'>'+t('Test All TCP')+'</button>'+
+        '<button class="btn btn-sm" onclick="testGroupProxies(\''+escAttr(gid)+'\',\'udp\',this)" title="'+escAttr(t('Test UDP latency and availability'))+'"'+(isTesting?' disabled':'')+'>'+t('Test All UDP')+'</button>'+
+        '<button class="btn btn-sm" onclick="testGroupProxies(\''+escAttr(gid)+'\',\'all\',this)" title="'+escAttr(t('Test All'))+'"'+(isTesting?' disabled':'')+'>'+t('Test All')+'</button>';
+    }
+
     actionsHtml+='<button class="btn btn-sm ghost proxy-group-collapse-btn" onclick="toggleGroupCollapse(\''+gid+'\')">'+t(isCollapsed?'Expand':'Collapse')+'</button>';
 
     var cardsHtml='';
