@@ -965,3 +965,49 @@ proxy domain *.SUB.EXAMPLE.COM. proxy_sub
 		t.Errorf("expected normalized wildcard match proxy_sub, got %q (matched=%v)", alias, matched)
 	}
 }
+
+func TestEngine_ProxyRule_ComplexAliasesWithSpaces(t *testing.T) {
+	rulesText := strings.TrimSpace(`
+# Quoted with double quotes
+proxy domain double.example.com "Hong Kong 01" # comment
+# Quoted with single quotes
+proxy domain single.example.com 'US VIP 02' # comment
+# Unquoted with spaces
+proxy domain unquoted.example.com SG - BGP (2)
+# Unquoted with spaces and trailing comment
+proxy domain unquoted-comment.example.com 未知 SS-01 | free-nodes # comment
+# Emojis and brackets
+proxy domain emoji.example.com 🇭🇰 [v2rayfree] 香港 IPLC-01
+# Case preservation
+proxy domain case.example.com My-Custom-Case-Alias
+`)
+	path := writeTempRuleFile(t, rulesText)
+	e, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		domain        string
+		expectedAlias string
+	}{
+		{"double.example.com", "Hong Kong 01"},
+		{"single.example.com", "US VIP 02"},
+		{"unquoted.example.com", "SG - BGP (2)"},
+		{"unquoted-comment.example.com", "未知 SS-01 | free-nodes"},
+		{"emoji.example.com", "🇭🇰 [v2rayfree] 香港 IPLC-01"},
+		{"case.example.com", "My-Custom-Case-Alias"},
+	}
+
+	for _, tt := range tests {
+		alias, matched := e.MatchProxyRule("", 0, tt.domain)
+		if !matched {
+			t.Errorf("domain %q did not match rule", tt.domain)
+			continue
+		}
+		if alias != tt.expectedAlias {
+			t.Errorf("domain %q: expected alias %q, got %q", tt.domain, tt.expectedAlias, alias)
+		}
+	}
+}
+

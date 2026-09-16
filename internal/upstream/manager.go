@@ -345,10 +345,19 @@ func (m *Manager) SelectProxy(ctx context.Context, targetIP string, targetPort i
 		alias, matched := engine.MatchProxyRule(targetIP, targetPort, domain)
 		if matched {
 			ll.Info("proxy rule matched", "alias", alias)
-			if alias == "direct" {
+			if strings.EqualFold(alias, "direct") {
 				return "direct", nil
 			}
 			proxy, ok := m.aliasMap[alias]
+			if !ok {
+				for k, p := range m.aliasMap {
+					if strings.EqualFold(k, alias) {
+						proxy = p
+						ok = true
+						break
+					}
+				}
+			}
 			if ok && proxy != nil {
 				return "", proxy
 			}

@@ -1982,7 +1982,11 @@ func (s *Server) handleACLAdd(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "upstream is required for proxy action", http.StatusBadRequest)
 				return
 			}
-			line += " " + e.Upstream
+			if strings.ContainsAny(e.Upstream, " \t\"'#") {
+				line += " " + strconv.Quote(e.Upstream)
+			} else {
+				line += " " + e.Upstream
+			}
 		}
 		if !existingSet[line] {
 			lines = append(lines, line)

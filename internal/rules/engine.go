@@ -120,56 +120,33 @@ func (rs *ruleSet) load(path string) error {
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
+		rawLine := scanner.Text()
+		action, objType, value, alias, ok := parseRuleTokens(rawLine)
+		if !ok {
 			continue
 		}
-		parts := strings.Fields(strings.ToLower(line))
-		if len(parts) < 2 {
-			continue
-		}
-		action := parts[0]
-		objType := parts[1]
 
 		switch action {
 		case "allow":
-			rs.parseAllowBlock(objType, parts, true)
+			rs.parseAllowBlockValue(objType, value, true)
 		case "block":
-			rs.parseAllowBlock(objType, parts, false)
+			rs.parseAllowBlockValue(objType, value, false)
 		case "proxy":
-			if len(parts) >= 4 {
-				rule := ProxyRule{Type: parts[1], Value: parts[2], Alias: parts[3]}
-				ruleIndex := len(rs.proxyRules)
-				target := proxyTarget{alias: rule.Alias, index: ruleIndex}
-				switch rule.Type {
-				case "port":
-					port, err := strconv.Atoi(rule.Value)
-					if err != nil {
-						slog.Warn("invalid port in proxy rule", "value", rule.Value)
-						continue
-					}
-					if _, exists := rs.proxyPorts[port]; !exists {
-						rs.proxyPorts[port] = target
-					}
-				case "ip":
-					if strings.Contains(rule.Value, "/") {
-						prefix, err := netip.ParsePrefix(rule.Value)
-						if err != nil {
-							addr, err2 := netip.ParseAddr(rule.Value)
-							if err2 != nil {
-								slog.Warn("invalid CIDR in proxy rule", "value", rule.Value)
-								continue
-							}
-							prefix = netip.PrefixFrom(addr, addr.BitLen())
-						}
-						rule.parsedPrefix = &prefix
-						rs.proxyCIDRTrie.insert(prefix, target)
-					} else {
-						if _, exists := rs.proxyIPs[rule.Value]; !exists {
-							rs.proxyIPs[rule.Value] = target
-						}
-					}
-				case "cidr":
+			rule := ProxyRule{Type: objType, Value: value, Alias: alias}
+			ruleIndex := len(rs.proxyRules)
+			target := proxyTarget{alias: rule.Alias, index: ruleIndex}
+			switch rule.Type {
+			case "port":
+				port, err := strconv.Atoi(rule.Value)
+				if err != nil {
+					slog.Warn("invalid port in proxy rule", "value", rule.Value)
+					continue
+				}
+				if _, exists := rs.proxyPorts[port]; !exists {
+					rs.proxyPorts[port] = target
+				}
+			case "ip":
+				if strings.Contains(rule.Value, "/") {
 					prefix, err := netip.ParsePrefix(rule.Value)
 					if err != nil {
 						addr, err2 := netip.ParseAddr(rule.Value)
@@ -181,18 +158,34 @@ func (rs *ruleSet) load(path string) error {
 					}
 					rule.parsedPrefix = &prefix
 					rs.proxyCIDRTrie.insert(prefix, target)
-				case "domain":
-					d := normalizeDomain(rule.Value)
-					if strings.HasPrefix(d, "*.") {
-						rs.proxySuffixes.insert(d[1:], target)
-					} else {
-						if _, exists := rs.proxyDomains[d]; !exists {
-							rs.proxyDomains[d] = target
-						}
+				} else {
+					if _, exists := rs.proxyIPs[rule.Value]; !exists {
+						rs.proxyIPs[rule.Value] = target
 					}
 				}
-				rs.proxyRules = append(rs.proxyRules, rule)
+			case "cidr":
+				prefix, err := netip.ParsePrefix(rule.Value)
+				if err != nil {
+					addr, err2 := netip.ParseAddr(rule.Value)
+					if err2 != nil {
+						slog.Warn("invalid CIDR in proxy rule", "value", rule.Value)
+						continue
+					}
+					prefix = netip.PrefixFrom(addr, addr.BitLen())
+				}
+				rule.parsedPrefix = &prefix
+				rs.proxyCIDRTrie.insert(prefix, target)
+			case "domain":
+				d := normalizeDomain(rule.Value)
+				if strings.HasPrefix(d, "*.") {
+					rs.proxySuffixes.insert(d[1:], target)
+				} else {
+					if _, exists := rs.proxyDomains[d]; !exists {
+						rs.proxyDomains[d] = target
+					}
+				}
 			}
+			rs.proxyRules = append(rs.proxyRules, rule)
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -209,12 +202,95 @@ func (rs *ruleSet) load(path string) error {
 	return nil
 }
 
-func (rs *ruleSet) parseAllowBlock(objType string, parts []string, isAllow bool) {
-	if len(parts) < 3 {
-		return
+// parseRuleTokens parses an ACL line into action, objType, value, and alias.
+// It supports:
+//   - Comments (# ...)
+//   - Spaces, unicode, emojis, and quotes in aliases:
+//       proxy domain google.com "Hong Kong 01"
+//       proxy domain google.com 'Hong Kong 01'
+//       proxy domain google.com Hong Kong 01
+//       proxy domain google.com [v2rayfree] 未知 SS-01 | free-nodes # remark
+//   - Preserves original case for alias, while action, objType, and domain value are lowercased.
+func parseRuleTokens(line string) (action, objType, value, alias string, ok bool) {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return "", "", "", "", false
 	}
-	value := parts[2]
 
+	// 1. Action
+	sp1 := strings.IndexAny(line, " \t")
+	if sp1 == -1 {
+		return "", "", "", "", false
+	}
+	action = strings.ToLower(line[:sp1])
+	rest := strings.TrimSpace(line[sp1:])
+
+	// 2. Object Type (port, ip, cidr, domain)
+	sp2 := strings.IndexAny(rest, " \t")
+	if sp2 == -1 {
+		return "", "", "", "", false
+	}
+	objType = strings.ToLower(rest[:sp2])
+	rest = strings.TrimSpace(rest[sp2:])
+
+	// 3. Value
+	sp3 := strings.IndexAny(rest, " \t")
+	if sp3 == -1 {
+		value = rest
+		rest = ""
+	} else {
+		value = rest[:sp3]
+		rest = strings.TrimSpace(rest[sp3:])
+	}
+
+	// Clean any inline comments from value if there was no rest
+	if hashIdx := strings.IndexByte(value, '#'); hashIdx != -1 {
+		value = strings.TrimSpace(value[:hashIdx])
+		rest = ""
+	}
+
+	if objType == "domain" {
+		value = strings.ToLower(value)
+	}
+
+	if action != "proxy" {
+		return action, objType, value, "", value != ""
+	}
+
+	// 4. Alias for proxy action
+	if rest == "" {
+		return "", "", "", "", false
+	}
+
+	// Check if quoted with " or '
+	if rest[0] == '"' || rest[0] == '\'' {
+		q := rest[0]
+		endQuote := strings.IndexByte(rest[1:], q)
+		if endQuote != -1 {
+			alias = rest[1 : 1+endQuote]
+		} else {
+			// Unclosed quote: take remainder up to comment
+			alias = rest[1:]
+			if hashIdx := strings.IndexByte(alias, '#'); hashIdx != -1 {
+				alias = alias[:hashIdx]
+			}
+			alias = strings.TrimSpace(alias)
+		}
+	} else {
+		// Unquoted alias: everything up to '#' is the alias
+		if hashIdx := strings.IndexByte(rest, '#'); hashIdx != -1 {
+			rest = rest[:hashIdx]
+		}
+		alias = strings.TrimSpace(rest)
+	}
+
+	if alias == "" {
+		return "", "", "", "", false
+	}
+	return action, objType, value, alias, true
+}
+
+func (rs *ruleSet) parseAllowBlockValue(objType, value string, isAllow bool) {
 	switch objType {
 	case "port":
 		port, err := strconv.Atoi(value)
