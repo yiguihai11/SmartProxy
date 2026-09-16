@@ -33,7 +33,8 @@
       "enabled": true,
       "url": "http://wifi.vivo.com.cn/generate_204"
     },
-    "proxies": []
+    "proxies": [],
+    "subscriptions": []
   },
   "routing": {
     "chnroute_file": "chnroute.txt",

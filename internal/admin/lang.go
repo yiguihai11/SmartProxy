@@ -135,6 +135,27 @@ var zhStrings = map[string]string{
 	"Subscription disabled": "订阅已停用",
 	"Subscription Name and URL are required": "订阅名称和订阅链接不能为空",
 	"Remaining": "剩余",
+	"No subscriptions added yet. Click \"+ Add Subscription\" to import nodes from URL.": "暂无代理订阅。点击上方“+ 添加订阅”从链接导入节点。",
+
+	// acl audit
+	"Audit Upstreams": "检查代理有效性",
+	"Missing proxy upstreams detected in ACL rules": "检测到 ACL 规则中存在失效的代理节点",
+	"Check for missing/invalid proxy upstreams in ACL rules": "检测 ACL 中是否有不存在或已删除的代理别名",
+	"Missing Upstream Proxies Detected in ACL": "⚠️ ACL 检测到失效的代理指定",
+	"The following ACL rules point to proxies that no longer exist (they may have been deleted or renamed):": "以下 ACL 规则指定的代理节点已不存在（可能已被重命名、删除或订阅已停用）。请查看规则概览并重新选择替代节点：",
+	"Reassign to:": "重新指定为：",
+	"(Keep unchanged)": "(保持原样 / 暂不修改)",
+	"Fallback to default strategy": "回落默认策略 (failover/loadbalance)",
+	"Direct connection": "直连",
+	"Available Proxies": "可用代理节点",
+	"Apply & Save to ACL": "批量替换并保存",
+	"Dismiss": "稍后处理",
+	"No invalid upstream proxies found in ACL rules.": "✅ 未发现失效的代理指定，所有 ACL 规则均有效。",
+	"Successfully updated {0} rules in ACL.": "已成功在 ACL 中替换并保存 {0} 条规则。",
+	"{0} invalid upstreams found": "发现 {0} 个失效代理",
+	"{0} rules affected": "共影响 {0} 条规则",
+	"Line {0}": "第 {0} 行",
+	"Please select a replacement node for at least one invalid alias": "请至少为一个失效节点选择替代节点",
 
 	// health banner
 	"All proxy nodes are unavailable — proxied internet is down": "所有代理节点不可用，经代理的联网已中断",

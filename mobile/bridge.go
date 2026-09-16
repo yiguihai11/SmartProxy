@@ -109,7 +109,8 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 		cfg.Listen.Port = 1080
 	}
 
-	eng, err := engine.New(cfg, "")
+	cfgDir := filepath.Dir(configPath)
+	eng, err := engine.New(cfg, cfgDir)
 	if err != nil {
 		slog.Error("[Go-Bridge] StartRouter failed to create engine", "error", err)
 		return closeFdOnErr(err)
@@ -128,13 +129,8 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 	// 纯 Go 面板机制(与 cmd/smartproxy/main.go L138-233 对齐):面板 PUT /config
 	// 写 configPath → fsnotify 监听目录 → configReload 热重载。此前移动端从未装配
 	// (SetReloadFn/SetConfigPath 缺省),/config 一律 503,面板只能走 /api/prefs 桥。
-	//
-	// 注意 cfgDir 保持空串:engine.New 对 routing 相对路径做 filepath.Join(cfgDir, p),
-	// 传 Dir(configPath) 会把 cacheDir 绝对路径接成假路径;config.json 里的 routing
-	// 路径本就绝对化(ConfigProvider.ensureConfig),resolveFile 直接透传。
 	aclPath := cfg.Routing.ACLFile
 	watcher := config.NewWatcher()
-	cfgDir := filepath.Dir(configPath)
 	watcher.AddFile("config", configPath)
 	watcher.AddFile("acl", aclPath)
 	watcher.AddFile("chnroute", cfg.Routing.ChnrouteFile)

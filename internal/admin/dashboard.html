@@ -942,6 +942,19 @@ function setProxyGroupFilter(v){
   closeAllFilterDropdowns();
   if(healthD)lhealth(healthD);
 }
+function getNodeTCPLatency(p){
+  if(!p)return 999999;
+  var stTCP=proxyTestState[p.alias+':tcp'];
+  if(stTCP){
+    if(stTCP.available&&stTCP.latency_ms>0)return stTCP.latency_ms;
+    if(!stTCP.available&&!stTCP.testing)return Infinity;
+  }
+  if(p.health){
+    if(p.health.available&&p.health.latency>0)return p.health.latency/1e6;
+    if(!p.health.available)return Infinity;
+  }
+  return 999999;
+}
 function renderProxyCard(p,i){
   var udpScheme=isUDPSupportedScheme(p);
   // Effective availability: the node is "on" if EITHER circuit can carry traffic. A udp_only
@@ -1106,6 +1119,10 @@ function lhealth(d){
   if(d&&d.health&&d.health.subscriptions!==undefined){
     renderSubscriptions(d.health.subscriptions);
     window._lastKnownSubs=d.health.subscriptions;
+  }else if(window._lastKnownSubs){
+    renderSubscriptions(window._lastKnownSubs);
+  }else{
+    renderSubscriptions([]);
   }
   var currentSubs=window._lastKnownSubs||(d&&d.health&&d.health.subscriptions)||[];
   var subsByName={};
@@ -1250,6 +1267,12 @@ function lhealth(d){
         cardsHtml='<div style="color:var(--text2);padding:24px;text-align:center;grid-column:1/-1;">'+t('No entries')+'</div>';
       }
     }else{
+      g.items.sort(function(a,b){
+        var latA=getNodeTCPLatency(a.proxy);
+        var latB=getNodeTCPLatency(b.proxy);
+        if(latA!==latB)return latA-latB;
+        return a.index-b.index;
+      });
       cardsHtml=g.items.map(function(item){
         return renderProxyCard(item.proxy,item.index);
       }).join('');
@@ -2274,19 +2297,24 @@ async function toggleLantern(enable){
 function renderSubscriptions(subs){
   var el=document.getElementById('subscriptions-container');
   if(!el)return;
-  if(!subs||subs.length===0){
-    el.innerHTML='';
-    return;
-  }
+  var list=subs||[];
   var html='<div class="card" style="margin-bottom:16px;padding:14px 16px">'+
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:10px">'+
       '<div style="font-weight:600;font-size:0.95rem;display:flex;align-items:center;gap:8px">'+
         '<span>📑</span> <span>'+t('Subscriptions')+'</span>'+
-        '<span class="badge" style="font-size:0.75rem">'+subs.length+'</span>'+
+        '<span class="badge" style="font-size:0.75rem">'+list.length+'</span>'+
       '</div>'+
-      '<button class="btn btn-sm" onclick="openSubscriptionDialog(\'\')">'+t('+ Add Subscription')+'</button>'+
-    '</div>'+
-    '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px">';
+      '<button class="btn btn-sm primary" onclick="openSubscriptionDialog(\'\')">'+t('+ Add Subscription')+'</button>'+
+    '</div>';
+
+  if(list.length===0){
+    html+='<div style="color:var(--text2);padding:24px;text-align:center;font-size:0.85rem">'+
+      t('No subscriptions added yet. Click "+ Add Subscription" to import nodes from URL.')+
+    '</div></div>';
+    el.innerHTML=html;
+    return;
+  }
+  html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px">';
 
   subs.forEach(function(s){
     var hasErr=!!s.last_error;
@@ -3211,8 +3239,268 @@ function confirmACL(){
         if(data.skipped>0)setTimeout(function(){alert(tf('{0} added, {1} skipped (duplicates)',[data.count,data.skipped]))},100);
       });
     }else{r.text().then(function(t){alert('Error: '+t)})}
-  }).catch(function(e){alert('Error: '+e.message)}).finally(function(){btn.disabled=false;btn.textContent=t('Add')});
+function parseACLLine(line){
+  var l=line.trim();
+  if(!l||l.startsWith('#'))return null;
+  var comment='';
+  var inQuote=false, quoteChar='';
+  var commentIdx=-1;
+  for(var i=0;i<l.length;i++){
+    var ch=l[i];
+    if(ch==='"'||ch==="'"){
+      if(!inQuote){inQuote=true;quoteChar=ch;}
+      else if(quoteChar===ch){inQuote=false;}
+    }else if(ch==='#'&&!inQuote){
+      commentIdx=i;
+      break;
+    }
+  }
+  var codePart=l;
+  if(commentIdx!==-1){
+    comment=l.substring(commentIdx);
+    codePart=l.substring(0,commentIdx).trim();
+  }
+  var sp1=codePart.search(/\s/);
+  if(sp1===-1)return null;
+  var action=codePart.substring(0,sp1).toLowerCase();
+  if(action!=='proxy')return null;
+  var rest1=codePart.substring(sp1).trim();
+  var sp2=rest1.search(/\s/);
+  if(sp2===-1)return null;
+  var objType=rest1.substring(0,sp2).toLowerCase();
+  var rest2=rest1.substring(sp2).trim();
+  var sp3=rest2.search(/\s/);
+  var value='', rest3='';
+  if(sp3===-1){
+    value=rest2;
+    rest3='';
+  }else{
+    value=rest2.substring(0,sp3);
+    rest3=rest2.substring(sp3).trim();
+  }
+  if(!value||!rest3)return null;
+  var alias=rest3;
+  if((alias.startsWith('"')&&alias.endsWith('"'))||(alias.startsWith("'")&&alias.endsWith("'"))){
+    alias=alias.substring(1,alias.length-1);
+  }
+  if(!alias)return null;
+  return {action:action,objType:objType,value:value,alias:alias,comment:comment};
 }
+
+function replaceRuleAlias(originalLine, oldAlias, newAlias){
+  var parsed=parseACLLine(originalLine);
+  if(!parsed||parsed.alias!==oldAlias)return originalLine;
+  var formattedAlias=(newAlias.indexOf(' ')>=0||newAlias.indexOf('\t')>=0)?('"'+newAlias+'"'):newAlias;
+  var newLine='proxy '+parsed.objType+' '+parsed.value+' '+formattedAlias;
+  if(parsed.comment){
+    newLine+=' '+parsed.comment;
+  }
+  return newLine;
+}
+
+function buildProxySelectOptions(proxies){
+  var groups={};
+  var groupOrder=[];
+  proxies.forEach(function(p){
+    var gid=getProxyGroup(p);
+    if(!groups[gid]){groups[gid]=[];groupOrder.push(gid)}
+    groups[gid].push(p);
+  });
+  groupOrder.sort(function(a,b){
+    if(a==='custom')return -1;
+    if(b==='custom')return 1;
+    if(a==='lantern')return -1;
+    if(b==='lantern')return 1;
+    return a.localeCompare(b);
+  });
+  var html='';
+  html+='<option value="__KEEP__">'+t('(Keep unchanged)')+'</option>';
+  html+='<option value="default">default ('+t('Fallback to default strategy')+')</option>';
+  html+='<option value="direct">direct ('+t('Direct connection')+')</option>';
+  if(groupOrder.length>1){
+    groupOrder.forEach(function(gid){
+      html+='<optgroup label="'+escAttr(getProxyGroupLabel(gid))+'">';
+      groups[gid].forEach(function(p){
+        var flag=(p.country_code?'['+p.country_code.toUpperCase()+'] ':'');
+        html+='<option value="'+escAttr(p.alias)+'">'+escHtml(flag+p.alias)+' ('+escHtml((p.scheme||'').toUpperCase())+')</option>';
+      });
+      html+='</optgroup>';
+    });
+  }else{
+    if(proxies.length>0){
+      html+='<optgroup label="'+escAttr(t('Available Proxies'))+'">';
+      proxies.forEach(function(p){
+        var flag=(p.country_code?'['+p.country_code.toUpperCase()+'] ':'');
+        html+='<option value="'+escAttr(p.alias)+'">'+escHtml(flag+p.alias)+' ('+escHtml((p.scheme||'').toUpperCase())+')</option>';
+      });
+      html+='</optgroup>';
+    }
+  }
+  return html;
+}
+
+async function checkACLInvalidUpstreams(manual){
+  var text=(window.cm_acl?window.cm_acl.getValue():(cfgD&&cfgD.acl))||'';
+  if(!text.trim()){
+    updateACLAuditBtn(0);
+    if(manual)showToast(t('No invalid upstream proxies found in ACL rules.'));
+    return;
+  }
+  var healthInfo=healthD&&healthD.health;
+  var proxies=(healthInfo&&healthInfo.proxies)||[];
+  if(proxies.length===0){
+    try{
+      var h=await jf('/health');
+      if(h&&h.proxies)proxies=h.proxies;
+    }catch(e){}
+  }
+  var validTargets=new Set(['direct','default','reject','block','allow']);
+  proxies.forEach(function(p){
+    if(p&&p.alias)validTargets.add(p.alias);
+    if(p&&p.name)validTargets.add(p.name);
+  });
+
+  var lines=text.split('\n');
+  var missingMap={};
+  for(var i=0;i<lines.length;i++){
+    var parsed=parseACLLine(lines[i]);
+    if(parsed&&!validTargets.has(parsed.alias)){
+      if(!missingMap[parsed.alias])missingMap[parsed.alias]=[];
+      missingMap[parsed.alias].push({
+        lineNum: i+1,
+        lineText: lines[i],
+        objType: parsed.objType,
+        value: parsed.value,
+        alias: parsed.alias
+      });
+    }
+  }
+
+  var missingKeys=Object.keys(missingMap);
+  updateACLAuditBtn(missingKeys.length);
+
+  if(missingKeys.length===0){
+    if(manual)showToast(t('No invalid upstream proxies found in ACL rules.'));
+    return;
+  }
+
+  if(!manual && window._aclAuditDismissed){
+    return;
+  }
+
+  renderACLAuditModal(missingMap, proxies);
+}
+
+function updateACLAuditBtn(missingCount){
+  var btn=document.getElementById('acl-audit-btn');
+  if(!btn)return;
+  if(missingCount>0){
+    btn.className='btn btn-sm danger';
+    btn.textContent='⚠️ '+tf('{0} invalid upstreams found',[missingCount]);
+    btn.title=t('Missing proxy upstreams detected in ACL rules');
+  }else{
+    btn.className='btn btn-sm';
+    btn.textContent='🔍 '+t('Audit Upstreams');
+    btn.title=t('Check for missing/invalid proxy upstreams in ACL rules');
+  }
+}
+
+function closeACLAuditDialog(){
+  window._aclAuditDismissed=true;
+  var overlay=document.getElementById('acl-audit-overlay');
+  if(overlay)overlay.classList.remove('show');
+}
+
+function renderACLAuditModal(missingMap, proxies){
+  var list=document.getElementById('acl-audit-list');
+  if(!list)return;
+  var title=document.getElementById('acl-audit-title');
+  if(title)title.textContent=t('Missing Upstream Proxies Detected in ACL');
+  var desc=document.getElementById('acl-audit-desc');
+  if(desc)desc.textContent=t('The following ACL rules point to proxies that no longer exist (they may have been deleted or renamed):');
+  var confirmBtn=document.getElementById('acl-audit-confirm-btn');
+  if(confirmBtn)confirmBtn.textContent=t('Apply & Save to ACL');
+  var cancelBtn=document.getElementById('acl-audit-cancel-btn');
+  if(cancelBtn)cancelBtn.textContent=t('Dismiss');
+
+  var selectOptionsHtml=buildProxySelectOptions(proxies);
+  var html='';
+  Object.keys(missingMap).forEach(function(missingAlias){
+    var items=missingMap[missingAlias];
+    html+='<div style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--bg2)">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
+        '<div style="font-weight:600;font-size:0.9rem;display:flex;align-items:center;gap:6px">'+
+          '<span>🔴</span> <span style="font-family:monospace;color:var(--danger, #ef4444)">'+escHtml(missingAlias)+'</span>'+
+          '<span class="badge" style="font-size:0.75rem">'+tf('{0} rules affected',[items.length])+'</span>'+
+        '</div>'+
+      '</div>'+
+      '<div style="font-size:0.78rem;max-height:90px;overflow-y:auto;background:var(--bg3, rgba(128,128,128,0.15));padding:6px 10px;border-radius:4px;font-family:monospace;margin-bottom:10px;display:flex;flex-direction:column;gap:3px">';
+    items.forEach(function(it){
+      html+='<div><span style="color:var(--text3)">'+tf('Line {0}',[it.lineNum])+':</span> proxy '+escHtml(it.objType)+' <span style="color:var(--primary, #3b82f6)">'+escHtml(it.value)+'</span></div>';
+    });
+    html+='</div>'+
+      '<div style="display:flex;align-items:center;gap:8px">'+
+        '<label style="font-size:0.82rem;white-space:nowrap;font-weight:500">'+t('Reassign to:')+'</label>'+
+        '<select class="dialog-input acl-audit-select" data-alias="'+escAttr(missingAlias)+'" style="flex:1;margin:0">'+
+          selectOptionsHtml+
+        '</select>'+
+      '</div>'+
+    '</div>';
+  });
+  list.innerHTML=html;
+  var overlay=document.getElementById('acl-audit-overlay');
+  if(overlay)overlay.classList.add('show');
+}
+
+async function applyACLAuditFixes(){
+  var selects=document.querySelectorAll('.acl-audit-select');
+  var replacements={};
+  selects.forEach(function(sel){
+    var oldAlias=sel.dataset.alias;
+    var newAlias=sel.value;
+    if(newAlias&&newAlias!=='__KEEP__'){
+      replacements[oldAlias]=newAlias;
+    }
+  });
+  if(Object.keys(replacements).length===0){
+    alert(t('Please select a replacement node for at least one invalid alias'));
+    return;
+  }
+  var text=(window.cm_acl?window.cm_acl.getValue():(cfgD&&cfgD.acl))||'';
+  var lines=text.split('\n');
+  var updatedCount=0;
+  for(var i=0;i<lines.length;i++){
+    var parsed=parseACLLine(lines[i]);
+    if(parsed&&replacements[parsed.alias]){
+      var newLine=replaceRuleAlias(lines[i],parsed.alias,replacements[parsed.alias]);
+      if(newLine!==lines[i]){
+        lines[i]=newLine;
+        updatedCount++;
+      }
+    }
+  }
+  var newText=lines.join('\n');
+  if(window.cm_acl)window.cm_acl.setValue(newText);
+  if(cfgD)cfgD.acl=newText;
+
+  var btn=document.getElementById('acl-audit-confirm-btn');
+  if(btn){btn.disabled=true;btn.textContent=t('Saving...');}
+  try{
+    var r=await fetch('/acl',{method:'PUT',body:newText});
+    if(!r.ok){
+      var msg=await r.text();
+      throw new Error(msg||('HTTP '+r.status));
+    }
+    closeACLAuditDialog();
+    showToast(tf('Successfully updated {0} rules in ACL.',[updatedCount]));
+    checkACLInvalidUpstreams(false);
+  }catch(e){
+    alert(tf('Save failed: {0}',[e.message]));
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent=t('Apply & Save to ACL');}
+  }
+}
+
 var cfgD={};
 async function loadConfig(){
   try{
@@ -3257,11 +3545,16 @@ function showCfg(i){
     (k==='chn'?'<button class="btn btn-sm" onclick="exportCfg(\'chn\')">Export</button>':'')+
     (k==='chn'?'<button class="btn btn-sm" onclick="uploadChn()">Upload</button>':'')+
     (k==='acl'||k==='chn'?'<button class="btn btn-sm" onclick="openFileBrowser(\''+k+'\')">Select File</button>':'')+
+    (k==='acl'?'<button class="btn btn-sm" id="acl-audit-btn" onclick="checkACLInvalidUpstreams(true)" title="'+escAttr(t('Check for missing/invalid proxy upstreams in ACL rules'))+'">🔍 '+t('Audit Upstreams')+'</button>':'')+
     '</div></div>';
   var opts={value:cfgD[k]||'',theme:effTheme()==='light'?'default':'dracula',lineNumbers:k==='cfg',lineWrapping:true,autofocus:false};
   if(k==='cfg'){opts.mode={name:'javascript',json:true};opts.indentUnit=2;opts.tabSize=2}
   else if(k==='acl'){opts.mode={name:'acl'}}
   window['cm_'+k]=CodeMirror(document.getElementById(k+'-wrap'),opts);
+  if(k==='acl'){
+    window._aclAuditDismissed=false;
+    setTimeout(function(){ checkACLInvalidUpstreams(false); }, 150);
+  }
 }
 async function sv(name){
   var map={cfg:['cfg-editor','/config','Config'],acl:['acl-editor','/acl','ACL'],chn:['chn-editor','/chnroute','Chnroute']};
@@ -3280,7 +3573,10 @@ async function sv(name){
                                   // land back in cfgD or flipping tabs resurrects the stale
                                   // pre-save content and re-saving overwrites it again.
       btn.textContent=t('Saved');
-      setTimeout(revert,2000)
+      setTimeout(revert,2000);
+      if(name==='acl'){
+        setTimeout(function(){ checkACLInvalidUpstreams(false); }, 200);
+      }
     }else{
       var detail='';try{detail=await r.text()}catch(_e){}
       alert('Save failed: '+(detail||('HTTP '+r.status)));
@@ -3811,6 +4107,21 @@ es.onmessage=function(e){
     <div class="dialog-actions">
       <button class="btn btn-sm" onclick="closeACLDialog()">Cancel</button>
       <button class="btn btn-sm primary" id="acl-confirm" onclick="confirmACL()">Add</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="acl-audit-overlay" onclick="if(event.target===this)closeACLAuditDialog()">
+  <div class="dialog" style="max-width:620px;max-height:85vh;display:flex;flex-direction:column" onclick="event.stopPropagation()">
+    <div class="dialog-title" id="acl-audit-title">Missing Upstream Proxies Detected in ACL</div>
+    <div style="font-size:0.82rem;color:var(--text2);margin-bottom:12px;line-height:1.4" id="acl-audit-desc">
+      The following ACL rules point to proxies that no longer exist (they may have been deleted or renamed):
+    </div>
+
+    <div id="acl-audit-list" style="flex:1;overflow-y:auto;max-height:50vh;margin-bottom:14px;display:flex;flex-direction:column;gap:12px"></div>
+
+    <div class="dialog-actions" style="margin-top:auto;border-top:1px solid var(--border);padding-top:12px">
+      <button class="btn btn-sm" id="acl-audit-cancel-btn" onclick="closeACLAuditDialog()">Dismiss</button>
+      <button class="btn btn-sm primary" id="acl-audit-confirm-btn" onclick="applyACLAuditFixes()">Apply &amp; Save to ACL</button>
     </div>
   </div>
 </div>
