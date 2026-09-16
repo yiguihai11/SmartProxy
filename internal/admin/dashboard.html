@@ -1982,6 +1982,26 @@ function compressRawProxyJson(){
   }
 }
 
+function onRawConfigContentInput(){
+  var aliasInput=document.getElementById('raw-config-alias');
+  if(!aliasInput||aliasInput.value.trim()!=='')return;
+  var ta=document.getElementById('raw-config-content');
+  if(!ta)return;
+  var val=ta.value.trim();
+  if(!val)return;
+  if(val.startsWith('{')){
+    try{
+      var obj=JSON.parse(val);
+      if(obj.tag)aliasInput.value=obj.tag;
+    }catch(e){}
+  }else if(val.indexOf('#')!==-1){
+    try{
+      var hash=val.substring(val.indexOf('#')+1).trim();
+      if(hash)aliasInput.value=decodeURIComponent(hash);
+    }catch(e){}
+  }
+}
+
 function copyRawConfigContent(){
   var ta=document.getElementById('raw-config-content');
   if(!ta||!ta.value)return;
@@ -3669,7 +3689,7 @@ es.onmessage=function(e){
         <button type="button" class="btn btn-sm" onclick="compressRawProxyJson()">Compress JSON</button>
       </div>
     </div>
-    <textarea class="dialog-input" id="raw-config-content" rows="11" spellcheck="false"
+    <textarea class="dialog-input" id="raw-config-content" rows="11" spellcheck="false" oninput="onRawConfigContentInput()"
       style="font-family:var(--mono);font-size:0.8rem;line-height:1.45;resize:vertical;min-height:180px;max-height:420px;white-space:pre-wrap;word-break:break-all"
       placeholder='{"type":"vless","server":"...","server_port":443,...}'></textarea>
 
