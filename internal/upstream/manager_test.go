@@ -1236,10 +1236,17 @@ func TestUDPAssociate_RuleRespectsManualDisable(t *testing.T) {
 }
 
 func TestManager_TestProxy(t *testing.T) {
+	deadLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadAddr := deadLn.Addr().String()
+	deadLn.Close()
+
 	m, err := NewManager(UpstreamConfig{
 		Proxies: []ProxyEntry{
-			{Alias: "p-socks", URL: "socks5://127.0.0.1:1080"},
-			{Alias: "p-http", URL: "http://127.0.0.1:8080"},
+			{Alias: "p-socks", URL: "socks5://" + deadAddr},
+			{Alias: "p-http", URL: "http://" + deadAddr},
 		},
 	})
 	if err != nil {

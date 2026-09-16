@@ -1101,8 +1101,9 @@ function lhealth(d){
   var proxies=(d&&d.health&&d.health.proxies)||[];
   var lanternInfo=(d&&d.health&&d.health.lantern)||null;
   var lanternEnabled=lanternInfo?!!lanternInfo.enabled:false;
-  var subs=(d&&d.health&&d.health.subscriptions)||[];
-  renderSubscriptions(subs);
+  if(d&&d.health&&d.health.subscriptions!==undefined){
+    renderSubscriptions(d.health.subscriptions);
+  }
 
   var groups={};
   var groupOrder=[];

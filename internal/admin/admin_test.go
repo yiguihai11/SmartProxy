@@ -1828,6 +1828,12 @@ func TestAdmin_Subscriptions(t *testing.T) {
 	if subs, ok := healthData["subscriptions"].([]any); !ok || len(subs) != 1 {
 		t.Errorf("expected 1 subscription in /health, got %+v", healthData["subscriptions"])
 	}
+	liveData := s.gatherLiveData()
+	if liveHealth, ok := liveData["health"].(map[string]interface{}); !ok {
+		t.Fatalf("expected health map in gatherLiveData, got %+v", liveData["health"])
+	} else if liveSubs, ok := liveHealth["subscriptions"].([]subscription.ItemState); !ok || len(liveSubs) != 1 {
+		t.Errorf("expected 1 subscription in gatherLiveData health, got %+v", liveHealth["subscriptions"])
+	}
 
 	// 2. POST /subscriptions/refresh
 	refreshResp, err := httpPost(s.sockPath, "/subscriptions/refresh?name=Sub1")

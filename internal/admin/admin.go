@@ -2170,9 +2170,10 @@ func (s *Server) gatherLiveData() map[string]interface{} {
 		"bl_total":   len(ipBL) + len(domBL),
 		"bl_reasons": blReasons,
 		"health": map[string]interface{}{
-			"strategy": s.mgr.Strategy(),
-			"proxies":  s.mgr.Proxies(),
-			"lantern":  s.getLanternStatus(),
+			"strategy":      s.mgr.Strategy(),
+			"proxies":       s.mgr.Proxies(),
+			"lantern":       s.getLanternStatus(),
+			"subscriptions": s.getSubscriptionsStatus(),
 		},
 	}
 }
