@@ -623,6 +623,12 @@ function ltraf(d){
   st('traffic-time');
 }
 var healthD={health:{proxies:[]}};
+function isUDPSupportedScheme(p){
+  if(!p)return false;
+  if(p.udp_capability&&p.udp_capability!=='none')return true;
+  var s=(typeof p==='string'?p:(p.scheme||'')).toLowerCase();
+  return /^(socks5|socks5h|ss|shadowsocks|vless|vmess|trojan|hysteria2|hy2|tuic)$/.test(s);
+}
 // Per-circuit connectivity badge: up / half (recovering) / down (circuit open) /
 // unknown (never probed yet, e.g. health check disabled) / n/a (scheme without UDP).
 // m marks a manually pinned circuit (dashed border); clicking a pinned circuit releases it.
@@ -710,7 +716,7 @@ async function testAllProxies(proto){
   var tasks=[];
   for(var i=0;i<proxies.length;i++){
     var p=proxies[i];
-    var udpScheme=/^(socks5|socks5h|ss)$/.test(p.scheme);
+    var udpScheme=isUDPSupportedScheme(p);
     if(proto==='tcping'||proto==='ping'||proto==='all'||proto==='both'){
       tasks.push({alias:p.alias,proto:'tcping'});
     }
@@ -852,7 +858,7 @@ function setProxyGroupFilter(v){
   if(healthD)lhealth(healthD);
 }
 function renderProxyCard(p,i){
-  var udpScheme=/^(socks5|socks5h|ss)$/.test(p.scheme);
+  var udpScheme=isUDPSupportedScheme(p);
   // Effective availability: the node is "on" if EITHER circuit can carry traffic. A udp_only
   // node (TCP down, UDP up) is still serving UDP, so its button must read "Disable", not
   // "Enable" — otherwise the card contradicts its own udp_only/raw badge.
@@ -1019,7 +1025,7 @@ function lhealth(d){
       groupOrder.push(gid);
     }
     groups[gid].items.push({proxy:p,index:i});
-    var udpScheme=/^(socks5|socks5h|ss)$/.test(p.scheme);
+    var udpScheme=isUDPSupportedScheme(p);
     var anyUp=p.health.available||(udpScheme&&p.udp_health&&p.udp_health.available);
     if(anyUp)groups[gid].onlineCount++;
   });
@@ -1129,7 +1135,7 @@ function updateHealthBanner(d){
   if(!b)return;
   var proxies=(d&&d.health&&d.health.proxies)||[];
   var anyUp=proxies.some(function(p){
-    var udpScheme=/^(socks5|socks5h|ss)$/.test(p.scheme);
+    var udpScheme=isUDPSupportedScheme(p);
     return (p.health&&p.health.available)||(udpScheme&&p.udp_health&&p.udp_health.available);
   });
   b.style.display=(proxies.length>0&&!anyUp)?'flex':'none';
@@ -1203,7 +1209,7 @@ async function tp(i){
   // Whole-node toggle keyed off effective availability (either circuit up → "Disable"):
   // "Disable" pins both circuits down; "Enable" releases both back to auto.
   // Re-enable one specific probe-down circuit via its TCP/UDP badge instead.
-  var udpScheme=/^(socks5|socks5h|ss)$/.test(p.scheme);
+  var udpScheme=isUDPSupportedScheme(p);
   var anyUp=p.health.available||(udpScheme&&p.udp_health&&p.udp_health.available);
   await fetch('/health/proxy?alias='+encodeURIComponent(p.alias)+'&action='+(anyUp?'disable':'auto'),{method:'POST'});
   loadHealth()
@@ -1837,7 +1843,7 @@ function openNodeDetails(i){
     }
   }
 
-  var udpScheme=/^(socks5|socks5h|ss)$/.test(p.scheme);
+  var udpScheme=isUDPSupportedScheme(p);
   var anyUp=p.health.available||(udpScheme&&p.udp_health&&p.udp_health.available);
   var statHtml='<span style="font-weight:600;color:'+(anyUp?'var(--green)':'var(--red)')+'">'+(anyUp?t('up'):t('down'))+'</span>';
   rows.push({label:t('Status'),html:statHtml});
