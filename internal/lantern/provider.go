@@ -17,11 +17,15 @@ import (
 // 2. Node fetching, in-memory connectivity testing, and dead node filtering.
 // 3. Injecting verified nodes directly into upstream.Manager as equal first-class proxies.
 type Provider struct {
-	client   *Client
-	mgr      *upstream.Manager
-	ctx      context.Context
-	cancel   context.CancelFunc
-	stopOnce sync.Once
+	client      *Client
+	mgr         *upstream.Manager
+	ctx         context.Context
+	cancel      context.CancelFunc
+	stopOnce    sync.Once
+	refreshMu   sync.Mutex
+	lastRefresh time.Time
+	lastError   string
+	nodeCount   int
 }
 
 // NewProvider creates a new Lantern Node Provider.
@@ -44,7 +48,7 @@ func NewProvider(cfg Config, mgr *upstream.Manager) (*Provider, error) {
 func (p *Provider) Start() {
 	safego.Go("lantern.provider", func() {
 		slog.Info("lantern provider started")
-		p.refreshNodes()
+		_, _ = p.Refresh(nil)
 
 		ticker := time.NewTicker(30 * time.Minute)
 		defer ticker.Stop()
@@ -55,27 +59,41 @@ func (p *Provider) Start() {
 				slog.Info("lantern provider stopped by context")
 				return
 			case <-ticker.C:
-				p.refreshNodes()
+				_, _ = p.Refresh(nil)
 			}
 		}
 	})
 }
 
-// refreshNodes fetches nodes, tests connectivity, and updates the upstream Manager.
-func (p *Provider) refreshNodes() {
-	ctx, cancel := context.WithTimeout(p.ctx, 45*time.Second)
-	defer cancel()
+// Refresh triggers node fetching, connectivity testing, and updates the upstream Manager.
+func (p *Provider) Refresh(ctx context.Context) (int, error) {
+	p.refreshMu.Lock()
+	defer p.refreshMu.Unlock()
+
+	select {
+	case <-p.ctx.Done():
+		return 0, fmt.Errorf("lantern provider is stopped")
+	default:
+	}
+
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(p.ctx, 60*time.Second)
+		defer cancel()
+	}
 
 	slog.Info("lantern provider fetching and testing nodes...")
 	nodes, err := p.client.EnsureNodes(ctx)
 	if err != nil {
+		p.lastError = err.Error()
 		slog.Warn("lantern provider failed to ensure nodes", "error", err)
-		return
+		return 0, err
 	}
 
 	if len(nodes) == 0 {
+		p.lastError = "no active nodes found"
 		slog.Warn("lantern provider returned 0 active nodes")
-		return
+		return 0, fmt.Errorf("no active nodes found")
 	}
 
 	var entries []upstream.ProxyEntry
@@ -99,7 +117,34 @@ func (p *Provider) refreshNodes() {
 	}
 
 	p.mgr.SetProviderProxies("lantern", entries)
+	p.lastRefresh = time.Now()
+	p.lastError = ""
+	p.nodeCount = len(entries)
 	slog.Info("lantern provider successfully injected nodes", "count", len(entries))
+	return len(entries), nil
+}
+
+func (p *Provider) refreshNodes() {
+	_, _ = p.Refresh(nil)
+}
+
+// Status returns provider health and statistics.
+func (p *Provider) Status() map[string]interface{} {
+	p.refreshMu.Lock()
+	defer p.refreshMu.Unlock()
+
+	res := map[string]interface{}{
+		"enabled":    true,
+		"running":    p.ctx.Err() == nil,
+		"node_count": p.nodeCount,
+	}
+	if !p.lastRefresh.IsZero() {
+		res["last_refresh"] = p.lastRefresh.Format(time.RFC3339)
+	}
+	if p.lastError != "" {
+		res["last_error"] = p.lastError
+	}
+	return res
 }
 
 // Stop terminates the provider and removes its proxies from the upstream Manager.

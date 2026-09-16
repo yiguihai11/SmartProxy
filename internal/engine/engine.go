@@ -288,6 +288,8 @@ func (e *Engine) Start(ctx context.Context) error {
 			e.adminServer.SetConfigSrc(func() *config.Config { return e.Config.Load() })
 			e.adminServer.SetConfigPath(e.configPath)
 		}
+		e.adminServer.SetRefreshLantern(e.RefreshLantern)
+		e.adminServer.SetLanternStatus(e.LanternStatus)
 		e.adminServer.SetTCPPort(lc.AdminPort)
 		e.adminServer.SetRefreshInterval(lc.AdminRefreshInterval)
 		// Extra SANs land in the auto-generated self-signed cert, so a LAN IP in
@@ -302,6 +304,34 @@ func (e *Engine) Start(ctx context.Context) error {
 
 func (e *Engine) AdminServer() *admin.Server {
 	return e.adminServer
+}
+
+// RefreshLantern triggers on-demand fetching and testing of Lantern nodes.
+func (e *Engine) RefreshLantern(ctx context.Context) (int, error) {
+	if e.lanternProvider == nil {
+		return 0, fmt.Errorf("lantern provider is not running or disabled")
+	}
+	return e.lanternProvider.Refresh(ctx)
+}
+
+// LanternStatus reports the status of the Lantern provider.
+func (e *Engine) LanternStatus() map[string]interface{} {
+	cfg := e.Config.Load()
+	if cfg == nil || !cfg.Lantern.Enabled {
+		return map[string]interface{}{
+			"enabled":    false,
+			"running":    false,
+			"node_count": 0,
+		}
+	}
+	if e.lanternProvider != nil {
+		return e.lanternProvider.Status()
+	}
+	return map[string]interface{}{
+		"enabled":    true,
+		"running":    false,
+		"node_count": 0,
+	}
 }
 
 func (e *Engine) serve(ctx context.Context) {

@@ -20,7 +20,9 @@
     "admin_https": true,
     "admin_cert_file": "",
     "admin_key_file": "",
-    "admin_cert_sans": ["smartproxy.lan"]
+    "admin_cert_sans": [
+      "smartproxy.lan"
+    ]
   },
   "tun": {
     "enabled": false,
@@ -35,7 +37,8 @@
     "output_mark": 0,
     "route_exclude_ports": [
       22
-    ]
+    ],
+    "blocked_uids": []
   },
   "upstream": {
     "default": "failover",
@@ -82,7 +85,10 @@
     "static_records": [
       {
         "host": "smartproxy.lan",
-        "ip": ["127.0.0.1", "::1"]
+        "ip": [
+          "127.0.0.1",
+          "::1"
+        ]
       }
     ]
   },
@@ -109,6 +115,7 @@
   },
   "lantern": {
     "enabled": true,
+    "data_dir": "",
     "max_accounts": 5,
     "filter_dead_nodes": true
   }

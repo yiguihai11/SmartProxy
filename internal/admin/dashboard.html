@@ -954,10 +954,43 @@ function renderProxyCard(p,i){
     }
   }
 
+  var isProvider=!!p.provider;
+  var dispUrl=p.url;
+  if(p.url&&p.url.trim().startsWith('{')){
+    try{
+      var jobj=JSON.parse(p.url);
+      var sType=(jobj.type||p.scheme||'sing-box').toUpperCase();
+      var sHost=jobj.server||p.host||'';
+      var sPort=jobj.server_port||p.port||'';
+      dispUrl=sType+' · '+sHost+(sPort?':'+sPort:'');
+    }catch(e){
+      dispUrl=(p.scheme||'node').toUpperCase()+' · '+(p.host||'')+(p.port?':'+p.port:'');
+    }
+  }
+
+  var mgmtHtml='';
+  if(isProvider){
+    mgmtHtml='<div class="mgmt-left">'+
+      '<button class="btn btn-sm primary" onclick="openNodeDetails('+i+')">'+t('Details')+'</button>'+
+      '<button class="btn btn-sm '+(anyUp?'danger':'primary')+'" onclick="tp('+i+')">'+t(anyUp?'Disable':'Enable')+'</button>'+
+      '<button class="btn btn-sm" onclick="saveAsCustomProxy('+i+')" title="'+escAttr(t('Save this shared node as a persistent custom node'))+'">'+t('Save to Custom')+'</button>'+
+      '</div>'+
+      '<div class="mgmt-right"></div>';
+  }else{
+    mgmtHtml='<div class="mgmt-left">'+
+      '<button class="btn btn-sm primary" onclick="openProxyDialog('+i+')">'+t('Edit')+'</button>'+
+      '<button class="btn btn-sm '+(anyUp?'danger':'primary')+'" onclick="tp('+i+')">'+t(anyUp?'Disable':'Enable')+'</button>'+
+      (p.scheme==='ss'?'<button class="btn btn-sm" onclick="exportSSLink('+i+')" title="'+escAttr(t('Copy the ss:// share link or show its QR code'))+'">'+t('Export')+'</button>':'')+
+      '</div>'+
+      '<div class="mgmt-right">'+
+      '<button class="btn btn-sm danger" onclick="deleteProxy('+i+')">'+t('Delete')+'</button>'+
+      '</div>';
+  }
+
   return '<div class="proxy-card '+(anyUp?'is-up':'is-down')+'"><div class="top">'+
     '<div class="node-info">'+
     '<div class="alias-row">'+flagHtml+'<span class="alias">'+dispName+'</span>'+schemeBadge+regBadgeHtml+'</div>'+
-    '<div class="url">'+p.url+aliasTxt+' · '+dispMode+capTxt+'</div>'+
+    '<div class="url">'+escHtml(dispUrl)+aliasTxt+' · '+dispMode+capTxt+'</div>'+
     '</div>'+
     '<div class="circs"><span class="circ '+(tc.c+(tc.m?' manual':''))+'" title="'+(tc.m?(p.health.available?'TCP manually up — click to restore auto':'TCP manually down — click to force up'):'Click to toggle TCP')+'"'+tcClk+'><i class="dot"></i>TCP '+t(tc.t)+'</span><span class="circ '+(uc.c+(uc.m?' manual':''))+'" title="'+(uc.m?(p.udp_health&&p.udp_health.available?'UDP manually up — click to restore auto':'UDP manually down — click to force up'):'Click to toggle UDP')+'"'+ucClk+'><i class="dot"></i>UDP '+t(uc.t)+'</span></div></div>'+
     '<div class="stats">'+exitHtml+'<span'+pingClass+'>tcping: '+pingLat+'</span><span'+latClass+'>latency: '+lat+'</span><span'+tcpFailClass+'>tcp failures: '+(p.health.manual?t('manual'):p.health.consecutive_failures)+'</span><span'+udpFailClass+'>udp failures: '+(p.udp_health?(p.udp_health.manual?t('manual'):p.udp_health.consecutive_failures):t('n/a'))+'</span></div>'+
@@ -967,22 +1000,15 @@ function renderProxyCard(p,i){
     '<button class="btn btn-sm" id="test-tcp-'+i+'" onclick="testProxy('+i+',\'tcp\')" style="'+tcpBtnStyle+'" title="'+escAttr(tcpBtnTitle)+'"'+tcpBtnDis+'>'+tcpBtnText+'</button>'+
     '<button class="btn btn-sm" id="test-udp-'+i+'" onclick="testProxy('+i+',\'udp\')" style="'+udpBtnStyle+'" title="'+escAttr(udpBtnTitle)+'"'+udpBtnDis+'>'+udpBtnText+'</button>'+
     '</div>'+
-    '<div class="card-mgmt-bar">'+
-    '<div class="mgmt-left">'+
-    '<button class="btn btn-sm primary" onclick="openProxyDialog('+i+')">Edit</button>'+
-    '<button class="btn btn-sm '+(anyUp?'danger':'primary')+'" onclick="tp('+i+')">'+(anyUp?'Disable':'Enable')+'</button>'+
-    (p.scheme==='ss'?'<button class="btn btn-sm" onclick="exportSSLink('+i+')" title="Copy the ss:// share link or show its QR code">Export</button>':'')+
-    '</div>'+
-    '<div class="mgmt-right">'+
-    '<button class="btn btn-sm danger" onclick="deleteProxy('+i+')">Delete</button>'+
-    '</div>'+
-    '</div>'+
+    '<div class="card-mgmt-bar">'+mgmtHtml+'</div>'+
     '</div></div>';
 }
 function lhealth(d){
   healthD=d;
   updateHealthBanner(d);
   var proxies=(d&&d.health&&d.health.proxies)||[];
+  var lanternInfo=(d&&d.health&&d.health.lantern)||null;
+  var lanternEnabled=lanternInfo?!!lanternInfo.enabled:false;
 
   var groups={};
   var groupOrder=[];
@@ -997,6 +1023,20 @@ function lhealth(d){
     var anyUp=p.health.available||(udpScheme&&p.udp_health&&p.udp_health.available);
     if(anyUp)groups[gid].onlineCount++;
   });
+
+  if(!groups['lantern']){
+    groups['lantern']={
+      id:'lantern',
+      label:lanternEnabled?getProxyGroupLabel('lantern'):t('Lantern Shared (Disabled)'),
+      items:[],
+      onlineCount:0,
+      disabled:!lanternEnabled
+    };
+    groupOrder.push('lantern');
+  }else if(!lanternEnabled){
+    groups['lantern'].disabled=true;
+    groups['lantern'].label=t('Lantern Shared (Disabled)');
+  }
 
   groupOrder.sort(function(a,b){
     if(a==='custom')return -1;
@@ -1023,7 +1063,7 @@ function lhealth(d){
   var container=document.getElementById('proxy-cards');
   if(!container)return;
 
-  if(proxies.length===0){
+  if(proxies.length===0&&!lanternInfo){
     container.innerHTML='<div style="color:var(--text2);padding:24px;text-align:center">'+t('No proxy nodes to test')+'</div>';
     st('health-time');
     return;
@@ -1035,11 +1075,33 @@ function lhealth(d){
     var isHidden=(proxyGroupFilter!=='all'&&proxyGroupFilter!==gid);
     var isCollapsed=!!proxyGroupsCollapsed[gid];
     var groupIcon=(gid==='lantern'?'🏮':gid==='custom'?'📌':'🌐');
-    var badgeText=tf('{0} nodes',[g.items.length])+' · '+tf('{0} online',[g.onlineCount]);
+    var badgeText=g.disabled?t('Disabled'):(tf('{0} nodes',[g.items.length])+' · '+tf('{0} online',[g.onlineCount]));
 
-    var cardsHtml=g.items.map(function(item){
-      return renderProxyCard(item.proxy,item.index);
-    }).join('');
+    var actionsHtml='';
+    if(gid==='lantern'){
+      if(lanternEnabled){
+        actionsHtml='<button class="btn btn-sm" id="btn-lantern-refresh" onclick="refreshLanternNodes(this)" title="'+escAttr(t('Refresh Lantern nodes now'))+'">🔄 '+t('Refresh')+'</button>'+
+          '<button class="btn btn-sm danger" onclick="toggleLantern(false)">'+t('Disable')+'</button>';
+      }else{
+        actionsHtml='<button class="btn btn-sm primary" onclick="toggleLantern(true)">'+t('Enable')+'</button>';
+      }
+    }
+    actionsHtml+='<button class="btn btn-sm ghost proxy-group-collapse-btn" onclick="toggleGroupCollapse(\''+gid+'\')">'+t(isCollapsed?'Expand':'Collapse')+'</button>';
+
+    var cardsHtml='';
+    if(g.items.length===0){
+      if(gid==='lantern'&&!lanternEnabled){
+        cardsHtml='<div style="color:var(--text2);padding:24px;text-align:center;grid-column:1/-1;">'+t('Lantern shared pool is disabled. Click Enable to fetch free nodes.')+'</div>';
+      }else if(gid==='lantern'&&lanternEnabled){
+        cardsHtml='<div style="color:var(--text2);padding:24px;text-align:center;grid-column:1/-1;">'+t('Fetching nodes from Lantern...')+'</div>';
+      }else{
+        cardsHtml='<div style="color:var(--text2);padding:24px;text-align:center;grid-column:1/-1;">'+t('No entries')+'</div>';
+      }
+    }else{
+      cardsHtml=g.items.map(function(item){
+        return renderProxyCard(item.proxy,item.index);
+      }).join('');
+    }
 
     sectionsHtml+='<div class="proxy-group-section '+(isCollapsed?'collapsed':'')+(isHidden?' hidden':'')+'" data-group="'+gid+'">'+
       '<div class="proxy-group-header" onclick="toggleGroupCollapse(\''+gid+'\')">'+
@@ -1049,9 +1111,7 @@ function lhealth(d){
       '<span class="proxy-group-name">'+escHtml(g.label)+'</span>'+
       '<span class="proxy-group-badge '+(g.onlineCount>0?'online':'')+'">'+badgeText+'</span>'+
       '</div>'+
-      '<div class="proxy-group-actions" onclick="event.stopPropagation()">'+
-      '<button class="btn btn-sm ghost proxy-group-collapse-btn" onclick="toggleGroupCollapse(\''+gid+'\')">'+t(isCollapsed?'Expand':'Collapse')+'</button>'+
-      '</div>'+
+      '<div class="proxy-group-actions" onclick="event.stopPropagation()">'+actionsHtml+'</div>'+
       '</div>'+
       '<div class="proxy-group-cards proxy-grid" id="group-cards-'+gid+'">'+cardsHtml+'</div>'+
       '</div>';
@@ -1568,23 +1628,37 @@ function openProxyDialog(i){
   if(p){
     if(p.udp_in_tcp)document.getElementById('proxy-udpintcp').checked=true;
     var u=null;
-    try{u=new URL(p.url)}catch(e){}
-    if(u&&u.protocol){scheme=u.protocol.slice(0,-1);document.getElementById('proxy-server').value=u.host;
-      if(scheme==='ss'){
-        // ss://method:password@host:port, ss://base64(method:password)@host:port,
-        // or ss://none@host:port (plain method without password). Decode method into
-        // the dropdown and password into the password field (mirrors backend parseSSUserinfo).
-        if(u.username){
-          var f=parseSSUserinfoFields(u.username+(u.password?':'+u.password:''));
-          if(f.method){setSSMethod(f.method);document.getElementById('proxy-pass').value=f.password}
+    if(p.url&&p.url.trim().startsWith('{')){
+      try{
+        var jobj=JSON.parse(p.url);
+        if(jobj.type==='shadowsocks'){
+          scheme='ss';
+          document.getElementById('proxy-server').value=(jobj.server||'')+(jobj.server_port?':'+jobj.server_port:'');
+          if(jobj.method)setSSMethod(jobj.method);
+          if(jobj.password)document.getElementById('proxy-pass').value=jobj.password;
+        }else{
+          scheme=(jobj.type||p.scheme||'socks5').toLowerCase();
+          document.getElementById('proxy-server').value=(jobj.server||'')+(jobj.server_port?':'+jobj.server_port:'');
+          if(jobj.password||jobj.uuid)document.getElementById('proxy-pass').value=jobj.password||jobj.uuid;
         }
-        // SIP003 plugin args: obfs-local or v2ray-plugin/xray-plugin, split back into the form
-        fillSSPluginFromQuery(u.searchParams.get('plugin')||'');
-      }else{
-        if(u.username)document.getElementById('proxy-user').value=decodeURIComponent(u.username);
-        if(u.password)document.getElementById('proxy-pass').value=decodeURIComponent(u.password);
+      }catch(e){
+        document.getElementById('proxy-server').value=p.url;
       }
-    }else{document.getElementById('proxy-server').value=p.url}
+    }else{
+      try{u=new URL(p.url)}catch(e){}
+      if(u&&u.protocol){scheme=u.protocol.slice(0,-1);document.getElementById('proxy-server').value=u.host;
+        if(scheme==='ss'){
+          if(u.username){
+            var f=parseSSUserinfoFields(u.username+(u.password?':'+u.password:''));
+            if(f.method){setSSMethod(f.method);document.getElementById('proxy-pass').value=f.password}
+          }
+          fillSSPluginFromQuery(u.searchParams.get('plugin')||'');
+        }else{
+          if(u.username)document.getElementById('proxy-user').value=decodeURIComponent(u.username);
+          if(u.password)document.getElementById('proxy-pass').value=decodeURIComponent(u.password);
+        }
+      }else{document.getElementById('proxy-server').value=p.url}
+    }
   }
   setProxyScheme(scheme);
   updateProxyPreview();
@@ -1690,6 +1764,165 @@ async function deleteProxy(i){
     loadHealth();
     if(document.querySelector('#view-config.active'))loadConfig();
   }catch(e){alert('Delete failed: '+e.message)}
+}
+function showToast(msg){
+  var el=document.getElementById('copy-toast');
+  if(el)showCopyToast(el,msg);
+}
+async function saveAsCustomProxy(i){
+  var p=(healthD&&healthD.health&&healthD.health.proxies&&healthD.health.proxies[i])||null;
+  if(!p)return;
+  var defName=(p.name||p.alias||'').replace(/^\[Lantern\]\s*/,'custom-');
+  var alias=prompt(t('Enter alias to save as custom node:'),defName);
+  if(!alias)return;
+  try{
+    await putProxyConfig(function(cfg){
+      if(!cfg.upstream)cfg.upstream={};
+      if(!cfg.upstream.proxies)cfg.upstream.proxies=[];
+      var ps=cfg.upstream.proxies;
+      for(var j=0;j<ps.length;j++){
+        if(ps[j].alias===alias){
+          alert(tf('Alias "{0}" already exists',[alias]));
+          throw new Error('dup');
+        }
+      }
+      ps.push({
+        alias:alias,
+        url:p.url,
+        udp_in_tcp:!!p.udp_in_tcp
+      });
+    });
+    showToast(tf('Saved "{0}" as custom node',[alias]));
+    loadHealth();
+    if(document.querySelector('#view-config.active'))loadConfig();
+  }catch(e){
+    if(e.message!=='dup')alert('Save failed: '+e.message);
+  }
+}
+var activeNodeDetails=null;
+function openNodeDetails(i){
+  var p=(healthD&&healthD.health&&healthD.health.proxies&&healthD.health.proxies[i])||null;
+  if(!p)return;
+  activeNodeDetails={proxy:p,index:i};
+
+  document.getElementById('node-details-title').textContent=p.name||p.alias||t('Node Details');
+
+  var jsonConfig=null;
+  if(p.url&&p.url.trim().startsWith('{')){
+    try{jsonConfig=JSON.parse(p.url)}catch(e){}
+  }
+
+  var proto=(p.scheme||(jsonConfig&&jsonConfig.type)||'node').toUpperCase();
+  var sServer=(jsonConfig&&jsonConfig.server)||p.host||'--';
+  var sPort=(jsonConfig&&jsonConfig.server_port)||p.port||'--';
+  var sProvider=p.provider?(p.provider==='lantern'?'Lantern 共享池':p.provider):t('Custom Proxies');
+
+  var rows=[
+    {label:t('Alias'),val:p.alias},
+    {label:t('Provider'),val:sProvider},
+    {label:t('Protocol'),val:proto},
+    {label:t('Server (host:port)'),val:sServer+':'+sPort}
+  ];
+
+  if(jsonConfig){
+    if(jsonConfig.method)rows.push({label:t('Method'),val:jsonConfig.method});
+    if(jsonConfig.password)rows.push({label:t('Password / Key'),val:jsonConfig.password,secret:true});
+    if(jsonConfig.uuid)rows.push({label:'UUID',val:jsonConfig.uuid});
+    if(jsonConfig.network)rows.push({label:'Network',val:jsonConfig.network});
+    if(jsonConfig.tls){
+      var tlsInfo=jsonConfig.tls.enabled?'Enabled':'Disabled';
+      if(jsonConfig.tls.server_name)tlsInfo+=' (SNI: '+jsonConfig.tls.server_name+')';
+      if(jsonConfig.tls.reality&&jsonConfig.tls.reality.enabled)tlsInfo+=' [Reality]';
+      rows.push({label:'TLS',val:tlsInfo});
+    }
+  }
+
+  var udpScheme=/^(socks5|socks5h|ss)$/.test(p.scheme);
+  var anyUp=p.health.available||(udpScheme&&p.udp_health&&p.udp_health.available);
+  var statHtml='<span style="font-weight:600;color:'+(anyUp?'var(--green)':'var(--red)')+'">'+(anyUp?t('up'):t('down'))+'</span>';
+  rows.push({label:t('Status'),html:statHtml});
+
+  var rowsHtml='<div style="background:var(--card-bg);border:1px solid var(--border);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px;font-size:0.85rem">';
+  rows.forEach(function(r){
+    var content=r.html||(r.secret?'<span style="font-family:var(--mono)">•••••••• <button class="btn btn-sm" style="padding:1px 6px;margin-left:6px" onclick="this.previousSibling.textContent=\''+escAttr(r.val)+'\';this.remove()">'+t('Show')+'</button></span>':'<span style="font-family:var(--mono);word-break:break-all">'+escHtml(r.val)+'</span>');
+    rowsHtml+='<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;border-bottom:1px solid rgba(128,128,128,0.1);padding-bottom:6px">'+
+      '<span style="color:var(--text2);flex-shrink:0">'+escHtml(r.label)+'</span>'+
+      '<span style="text-align:right">'+content+'</span>'+
+      '</div>';
+  });
+  rowsHtml+='</div>';
+
+  var rawConfigStr=p.url;
+  if(jsonConfig){
+    try{rawConfigStr=JSON.stringify(jsonConfig,null,2)}catch(e){}
+  }
+
+  var rawHtml='<div style="margin-top:8px">'+
+    '<div class="dialog-label">'+t('Raw Config')+'</div>'+
+    '<pre style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-family:var(--mono);font-size:0.75rem;max-height:160px;overflow:auto;white-space:pre-wrap;word-break:break-all;color:var(--text1)">'+
+    escHtml(rawConfigStr)+
+    '</pre>'+
+    '</div>';
+
+  document.getElementById('node-details-body').innerHTML=rowsHtml+rawHtml;
+  document.getElementById('node-details-overlay').classList.add('show');
+}
+function closeNodeDetails(){
+  var ov=document.getElementById('node-details-overlay');
+  if(ov)ov.classList.remove('show');
+  activeNodeDetails=null;
+}
+function copyNodeDetailsConfig(){
+  if(!activeNodeDetails||!activeNodeDetails.proxy)return;
+  var raw=activeNodeDetails.proxy.url;
+  try{
+    if(raw.trim().startsWith('{')){
+      raw=JSON.stringify(JSON.parse(raw),null,2);
+    }
+  }catch(e){}
+  navigator.clipboard.writeText(raw).then(function(){
+    showToast(t('Config Copied!'));
+  }).catch(function(){
+    showToast(t('Copy failed'));
+  });
+}
+function saveNodeDetailsCustom(){
+  if(!activeNodeDetails)return;
+  var idx=activeNodeDetails.index;
+  closeNodeDetails();
+  saveAsCustomProxy(idx);
+}
+async function refreshLanternNodes(btn){
+  if(!btn)btn=document.getElementById('btn-lantern-refresh');
+  var oldText=btn?btn.textContent:'';
+  if(btn){btn.disabled=true;btn.textContent='🔄 '+t('Refreshing...');}
+  try{
+    var r=await fetch('/lantern/refresh',{method:'POST'});
+    if(!r.ok){
+      var msg=await r.text();
+      throw new Error(msg||('HTTP '+r.status));
+    }
+    var res=await r.json();
+    showToast(tf('Successfully refreshed {0} Lantern nodes',[res.count||0]));
+    loadHealth();
+  }catch(e){
+    alert(tf('Refresh failed: {0}',[e.message]));
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent=oldText;}
+  }
+}
+async function toggleLantern(enable){
+  try{
+    var r=await fetch('/lantern/toggle?enable='+(enable?'true':'false'),{method:'POST'});
+    if(!r.ok){
+      var msg=await r.text();
+      throw new Error(msg||('HTTP '+r.status));
+    }
+    showToast(t(enable?'Lantern provider enabled':'Lantern provider disabled'));
+    loadHealth();
+  }catch(e){
+    alert(tf('Operation failed: {0}',[e.message]));
+  }
 }
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function escAttr(s){return escHtml(s).replace(/'/g,'&#39;')}
@@ -3237,6 +3470,17 @@ es.onmessage=function(e){
     <div class="dialog-actions">
       <button class="btn btn-sm" onclick="closeNewFileModal()">Cancel</button>
       <button class="btn btn-sm primary" id="fb-new-confirm" onclick="fbCreateFile()">Confirm</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="node-details-overlay" onclick="if(event.target===this)closeNodeDetails()">
+  <div class="dialog" style="max-width:560px" onclick="event.stopPropagation()">
+    <div class="dialog-title" id="node-details-title">Node Details</div>
+    <div id="node-details-body" style="margin-top:12px;display:flex;flex-direction:column;gap:10px"></div>
+    <div class="dialog-actions" style="margin-top:18px">
+      <button class="btn btn-sm" onclick="copyNodeDetailsConfig()">Copy Config</button>
+      <button class="btn btn-sm" id="node-details-save-btn" onclick="saveNodeDetailsCustom()">Save to Custom</button>
+      <button class="btn btn-sm primary" onclick="closeNodeDetails()">Close</button>
     </div>
   </div>
 </div>

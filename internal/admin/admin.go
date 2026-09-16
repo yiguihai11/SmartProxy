@@ -47,12 +47,14 @@ type Server struct {
 	logBuf       *logbuf.RingBuffer
 	adminAuth    atomic.Pointer[config.AdminAuthConf]
 	startTime    time.Time
-	reloadConfig func()
-	configSrc    func() *config.Config
-	configPath   string
-	refreshInt   int
-	statsMu      sync.Mutex
-	stats        cachedStats
+	reloadConfig   func()
+	configSrc      func() *config.Config
+	configPath     string
+	refreshLantern func(context.Context) (int, error)
+	lanternStatus  func() map[string]interface{}
+	refreshInt     int
+	statsMu        sync.Mutex
+	stats          cachedStats
 
 	stopCh    chan struct{}
 	listener  net.Listener
@@ -125,6 +127,35 @@ func (s *Server) SetConfigSrc(fn func() *config.Config) {
 
 func (s *Server) SetConfigPath(path string) {
 	s.configPath = path
+}
+
+func (s *Server) SetRefreshLantern(fn func(context.Context) (int, error)) {
+	s.refreshLantern = fn
+}
+
+func (s *Server) SetLanternStatus(fn func() map[string]interface{}) {
+	s.lanternStatus = fn
+}
+
+func (s *Server) getLanternStatus() map[string]interface{} {
+	if s.lanternStatus != nil {
+		return s.lanternStatus()
+	}
+	if s.configSrc != nil {
+		cfg := s.configSrc()
+		if cfg != nil {
+			return map[string]interface{}{
+				"enabled":    cfg.Lantern.Enabled,
+				"running":    false,
+				"node_count": 0,
+			}
+		}
+	}
+	return map[string]interface{}{
+		"enabled":    false,
+		"running":    false,
+		"node_count": 0,
+	}
 }
 func (s *Server) Start() error {
 	mux := s.setupMux()
@@ -318,6 +349,8 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/proxy/test", s.handleProxyTest)
 	mux.HandleFunc("/export", s.handleExport)
 	mux.HandleFunc("/config", s.handleConfig)
+	mux.HandleFunc("/lantern/refresh", s.handleLanternRefresh)
+	mux.HandleFunc("/lantern/toggle", s.handleLanternToggle)
 	mux.HandleFunc("/version", s.handleVersion)
 	mux.HandleFunc("/files", s.handleFiles)
 	mux.HandleFunc("/files/validate", s.handleFileValidate)
@@ -716,6 +749,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"strategy": s.mgr.Strategy(),
 		"proxies":  s.mgr.Proxies(),
+		"lantern":  s.getLanternStatus(),
 	})
 }
 
@@ -1112,6 +1146,54 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) handleLanternRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.refreshLantern == nil {
+		http.Error(w, "lantern is not configured or disabled", http.StatusServiceUnavailable)
+		return
+	}
+	count, err := s.refreshLantern(r.Context())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("refresh failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "ok",
+		"count":  count,
+	})
+}
+
+func (s *Server) handleLanternToggle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	enableStr := r.URL.Query().Get("enable")
+	enable := enableStr == "true" || enableStr == "1"
+
+	_, valErr, writeErr := s.saveConfig(func(c *config.Config) {
+		c.Lantern.Enabled = enable
+	})
+	if valErr != nil {
+		http.Error(w, "validation failed: "+valErr.Error(), http.StatusBadRequest)
+		return
+	}
+	if writeErr != nil {
+		http.Error(w, "write failed: "+writeErr.Error(), http.StatusInternalServerError)
+		return
+	}
+	slog.Info("admin: lantern toggled", "enabled", enable)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"enabled": enable,
+	})
 }
 
 // saveConfig copies the live config, applies mutate to the copy, validates it,
@@ -1817,6 +1899,7 @@ func (s *Server) gatherLiveData() map[string]interface{} {
 		"health": map[string]interface{}{
 			"strategy": s.mgr.Strategy(),
 			"proxies":  s.mgr.Proxies(),
+			"lantern":  s.getLanternStatus(),
 		},
 	}
 }
