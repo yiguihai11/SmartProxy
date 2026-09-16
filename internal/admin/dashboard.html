@@ -316,6 +316,7 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
   <div class="view-meta"><span class="dot"></span><span id="health-time"></span></div>
   <div class="toolbar">
     <button class="btn primary btn-sm" onclick="openProxyDialog(-1)">+ Add Proxy</button>
+    <button class="btn btn-sm" onclick="openRawConfigDialog(-1)" title="Add node via raw JSON or link">+ Raw Config</button>
     <span class="filter-wrap" id="proxy-group-filter-wrap">
       <span class="filter-trigger" id="proxy-group-filter-trigger" onclick="toggleProxyGroupFilter()">Group: All ▾</span>
       <div class="filter-dropdown" id="proxy-group-filter-dropdown">
@@ -978,13 +979,14 @@ function renderProxyCard(p,i){
   if(isProvider){
     mgmtHtml='<div class="mgmt-left">'+
       '<button class="btn btn-sm primary" onclick="openNodeDetails('+i+')">'+t('Details')+'</button>'+
+      '<button class="btn btn-sm" onclick="openRawConfigDialog('+i+')" title="'+escAttr(t('Edit and save as custom proxy'))+'">'+t('Edit Raw Config')+'</button>'+
       '<button class="btn btn-sm '+(anyUp?'danger':'primary')+'" onclick="tp('+i+')">'+t(anyUp?'Disable':'Enable')+'</button>'+
-      '<button class="btn btn-sm" onclick="saveAsCustomProxy('+i+')" title="'+escAttr(t('Save this shared node as a persistent custom node'))+'">'+t('Save to Custom')+'</button>'+
       '</div>'+
       '<div class="mgmt-right"></div>';
   }else{
     mgmtHtml='<div class="mgmt-left">'+
       '<button class="btn btn-sm primary" onclick="openProxyDialog('+i+')">'+t('Edit')+'</button>'+
+      '<button class="btn btn-sm" onclick="openRawConfigDialog('+i+')" title="'+escAttr(t('Edit raw JSON or link'))+'">'+t('Raw')+'</button>'+
       '<button class="btn btn-sm '+(anyUp?'danger':'primary')+'" onclick="tp('+i+')">'+t(anyUp?'Disable':'Enable')+'</button>'+
       (p.scheme==='ss'?'<button class="btn btn-sm" onclick="exportSSLink('+i+')" title="'+escAttr(t('Copy the ss:// share link or show its QR code'))+'">'+t('Export')+'</button>':'')+
       '</div>'+
@@ -1892,11 +1894,173 @@ function copyNodeDetailsConfig(){
     showToast(t('Copy failed'));
   });
 }
-function saveNodeDetailsCustom(){
+function openRawConfigFromDetails(){
   if(!activeNodeDetails)return;
   var idx=activeNodeDetails.index;
   closeNodeDetails();
-  saveAsCustomProxy(idx);
+  openRawConfigDialog(idx);
+}
+var rawConfigTargetIndex=-1;
+var rawConfigOriginalAlias='';
+
+function openRawConfigDialog(i){
+  rawConfigTargetIndex=i;
+  var p=(i>=0&&healthD&&healthD.health&&healthD.health.proxies&&healthD.health.proxies[i])||null;
+  var isNew=!p;
+  var isProvider=p?!!p.provider:false;
+
+  var titleEl=document.getElementById('raw-config-title');
+  var confirmBtn=document.getElementById('raw-config-confirm');
+  var aliasInput=document.getElementById('raw-config-alias');
+  var contentArea=document.getElementById('raw-config-content');
+  var udpInTcpChk=document.getElementById('raw-config-udpintcp');
+
+  if(isNew){
+    titleEl.textContent=t('Add')+' — '+t('Raw Config');
+    confirmBtn.textContent=t('Save as Custom');
+    aliasInput.value='';
+    rawConfigOriginalAlias='';
+    contentArea.value='';
+    udpInTcpChk.checked=false;
+  }else{
+    rawConfigOriginalAlias=p.alias;
+    if(isProvider){
+      titleEl.textContent=t('Edit Raw Config')+' ('+t('Provider')+')';
+      confirmBtn.textContent=t('Save as Custom');
+      var defName=(p.name||p.alias||'').replace(/^\[Lantern\]\s*/,'custom-');
+      aliasInput.value=defName;
+    }else{
+      titleEl.textContent=t('Edit Raw Config')+' — '+p.alias;
+      confirmBtn.textContent=t('Save Changes');
+      aliasInput.value=p.alias;
+    }
+
+    var text=p.url||'';
+    if(text.trim().startsWith('{')){
+      try{
+        text=JSON.stringify(JSON.parse(text),null,2);
+      }catch(e){}
+    }
+    contentArea.value=text;
+    udpInTcpChk.checked=!!p.udp_in_tcp;
+  }
+
+  document.getElementById('raw-config-overlay').classList.add('show');
+}
+
+function closeRawConfigDialog(){
+  var ov=document.getElementById('raw-config-overlay');
+  if(ov)ov.classList.remove('show');
+  rawConfigTargetIndex=-1;
+}
+
+function formatRawProxyJson(){
+  var ta=document.getElementById('raw-config-content');
+  if(!ta)return;
+  var val=ta.value.trim();
+  if(!val)return;
+  try{
+    var obj=JSON.parse(val);
+    ta.value=JSON.stringify(obj,null,2);
+    showToast(t('Formatted'));
+  }catch(e){
+    alert(t('Invalid JSON')+': '+e.message);
+  }
+}
+
+function compressRawProxyJson(){
+  var ta=document.getElementById('raw-config-content');
+  if(!ta)return;
+  var val=ta.value.trim();
+  if(!val)return;
+  try{
+    var obj=JSON.parse(val);
+    ta.value=JSON.stringify(obj);
+    showToast(t('Compressed'));
+  }catch(e){
+    alert(t('Invalid JSON')+': '+e.message);
+  }
+}
+
+function copyRawConfigContent(){
+  var ta=document.getElementById('raw-config-content');
+  if(!ta||!ta.value)return;
+  navigator.clipboard.writeText(ta.value).then(function(){
+    showToast(t('Copied!'));
+  }).catch(function(){
+    showToast(t('Copy failed'));
+  });
+}
+
+async function saveRawConfigProxy(){
+  var alias=document.getElementById('raw-config-alias').value.trim();
+  var content=document.getElementById('raw-config-content').value.trim();
+  var udpInTcp=document.getElementById('raw-config-udpintcp').checked;
+
+  if(!alias){
+    alert(t('Alias is required'));
+    return;
+  }
+  if(!content){
+    alert(t('Config content is required'));
+    return;
+  }
+
+  if(content.startsWith('{')||content.startsWith('[')){
+    try{
+      var parsed=JSON.parse(content);
+      content=JSON.stringify(parsed);
+    }catch(e){
+      alert(t('Invalid JSON')+': '+e.message);
+      return;
+    }
+  }
+
+  var p=(rawConfigTargetIndex>=0&&healthD&&healthD.health&&healthD.health.proxies&&healthD.health.proxies[rawConfigTargetIndex])||null;
+  var isProvider=p?!!p.provider:false;
+  var isNew=!p||isProvider;
+  var editingAlias=(!isNew&&rawConfigOriginalAlias)?rawConfigOriginalAlias:'';
+
+  try{
+    await putProxyConfig(function(cfg){
+      if(!cfg.upstream)cfg.upstream={};
+      if(!cfg.upstream.proxies)cfg.upstream.proxies=[];
+      var ps=cfg.upstream.proxies;
+
+      function makeEntry(){
+        return {alias:alias,url:content,udp_in_tcp:udpInTcp};
+      }
+
+      if(editingAlias){
+        var found=false;
+        for(var j=0;j<ps.length;j++){
+          if(ps[j].alias===editingAlias){
+            ps[j].alias=alias;
+            ps[j].url=content;
+            ps[j].udp_in_tcp=udpInTcp;
+            found=true;
+            break;
+          }
+        }
+        if(!found)ps.push(makeEntry());
+      }else{
+        for(var j=0;j<ps.length;j++){
+          if(ps[j].alias===alias){
+            alert(tf('Alias "{0}" already exists',[alias]));
+            throw new Error('dup');
+          }
+        }
+        ps.push(makeEntry());
+      }
+    });
+
+    closeRawConfigDialog();
+    showToast(t('Node saved successfully!'));
+    loadHealth();
+    if(document.querySelector('#view-config.active'))loadConfig();
+  }catch(e){
+    if(e.message!=='dup')alert('Save failed: '+e.message);
+  }
 }
 async function refreshLanternNodes(btn){
   if(!btn)btn=document.getElementById('btn-lantern-refresh');
@@ -3485,8 +3649,41 @@ es.onmessage=function(e){
     <div id="node-details-body" style="margin-top:12px;display:flex;flex-direction:column;gap:10px"></div>
     <div class="dialog-actions" style="margin-top:18px">
       <button class="btn btn-sm" onclick="copyNodeDetailsConfig()">Copy Config</button>
-      <button class="btn btn-sm" id="node-details-save-btn" onclick="saveNodeDetailsCustom()">Save to Custom</button>
+      <button class="btn btn-sm" id="node-details-save-btn" onclick="openRawConfigFromDetails()">Edit Raw Config</button>
       <button class="btn btn-sm primary" onclick="closeNodeDetails()">Close</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="raw-config-overlay" onclick="if(event.target===this)closeRawConfigDialog()">
+  <div class="dialog" style="max-width:640px" onclick="event.stopPropagation()">
+    <div class="dialog-title" id="raw-config-title">Edit Raw Config</div>
+    <div class="dialog-desc">Supports sing-box JSON configuration or proxy URLs (vless://, hysteria2://, ss://, etc.)</div>
+
+    <div class="dialog-label">Alias</div>
+    <input class="dialog-input" id="raw-config-alias" placeholder="custom-node-name" autocomplete="off">
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <div class="dialog-label" style="margin:0">Config Content (JSON / URL)</div>
+      <div style="display:flex;gap:6px">
+        <button type="button" class="btn btn-sm" onclick="formatRawProxyJson()">Format JSON</button>
+        <button type="button" class="btn btn-sm" onclick="compressRawProxyJson()">Compress JSON</button>
+      </div>
+    </div>
+    <textarea class="dialog-input" id="raw-config-content" rows="11" spellcheck="false"
+      style="font-family:var(--mono);font-size:0.8rem;line-height:1.45;resize:vertical;min-height:180px;max-height:420px;white-space:pre-wrap;word-break:break-all"
+      placeholder='{"type":"vless","server":"...","server_port":443,...}'></textarea>
+
+    <div style="margin-bottom:14px">
+      <label style="display:flex;align-items:center;gap:8px;font-size:0.82rem;cursor:pointer">
+        <input type="checkbox" id="raw-config-udpintcp">
+        <span>UDP in TCP <span style="color:var(--text3)">(hev-socks5-server)</span></span>
+      </label>
+    </div>
+
+    <div class="dialog-actions">
+      <button class="btn btn-sm" onclick="copyRawConfigContent()">Copy</button>
+      <button class="btn btn-sm" onclick="closeRawConfigDialog()">Cancel</button>
+      <button class="btn btn-sm primary" id="raw-config-confirm" onclick="saveRawConfigProxy()">Save as Custom</button>
     </div>
   </div>
 </div>
