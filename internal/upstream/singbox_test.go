@@ -241,3 +241,32 @@ func TestManager_SetProviderProxies_SingBoxOutbounds(t *testing.T) {
 	}
 }
 
+func TestManager_FindProxyLocked_Fallback_SingBox(t *testing.T) {
+	mgr, err := NewManager(UpstreamConfig{})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer mgr.Stop()
+
+	lanternNodes := []ProxyEntry{
+		{
+			Alias: "[Lantern] vless-reality-node-01",
+			URL:   `{"type":"vless","tag":"vless-reality-node-01","server":"1.2.3.4","server_port":443}`,
+		},
+	}
+	mgr.SetProviderProxies("lantern", lanternNodes)
+
+	// Fallback match via proxy.Name (omitting the [Lantern] prefix)
+	mgr.mu.RLock()
+	p, a := mgr.findProxyLocked("vless-reality-node-01")
+	mgr.mu.RUnlock()
+	if p == nil || a != "[Lantern] vless-reality-node-01" {
+		t.Fatalf("expected fallback match via Name, got p=%v, a=%q", p, a)
+	}
+
+	info, ok := mgr.ProxyInfo("vless-reality-node-01")
+	if !ok || info.Alias != "[Lantern] vless-reality-node-01" {
+		t.Fatalf("ProxyInfo fallback failed: ok=%v, info.Alias=%q", ok, info.Alias)
+	}
+}
+

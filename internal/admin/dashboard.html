@@ -8,8 +8,10 @@
 <script>
 (function(){
   try{
-    var m=localStorage.getItem('sr-theme');
-    document.documentElement.dataset.theme=(m==='light'||m==='dark')?m:'auto';
+    if(typeof localStorage!=='undefined'&&typeof document!=='undefined'&&document.documentElement){
+      var m=localStorage.getItem('sr-theme');
+      document.documentElement.dataset.theme=(m==='light'||m==='dark')?m:'auto';
+    }
   }catch(e){}
 })();
 </script>

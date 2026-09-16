@@ -1443,11 +1443,12 @@ func TestManager_FindProxyLocked_Fallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
 	}
+	defer mgr.Stop()
 
 	lanternNodes := []ProxyEntry{
 		{
 			Alias: "[Lantern] vless-reality-node-01",
-			URL:   `{"type":"vless","tag":"vless-reality-node-01","server":"1.2.3.4","server_port":443}`,
+			URL:   "socks5://1.2.3.4:443#vless-reality-node-01",
 		},
 	}
 	mgr.SetProviderProxies("lantern", lanternNodes)
