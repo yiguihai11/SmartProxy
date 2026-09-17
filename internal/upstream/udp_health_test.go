@@ -574,6 +574,9 @@ func TestManager_TestProxy_TripsBreakerOnError(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	defer mgr.Stop()
+	if mgr.healthChecker != nil {
+		mgr.healthChecker.Stop()
+	}
 
 	mgr.mu.Lock()
 	mgr.aliasMap["deadNode"] = p
