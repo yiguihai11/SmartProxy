@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -383,3 +384,221 @@ func TestUDPFrameRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestZeroTrust_InitialStateUnverified(t *testing.T) {
+	ph := &ProxyHealth{}
+	if !ph.IsAvailable() {
+		t.Fatal("zero value ProxyHealth should be available")
+	}
+
+	ph.SetInitialUnverified()
+	if ph.IsAvailable() {
+		t.Fatal("SetInitialUnverified should make circuit unavailable")
+	}
+	if !ph.openSince.IsZero() {
+		t.Fatal("SetInitialUnverified openSince should be zero time")
+	}
+
+	// Manual pin should be preserved
+	ph.SetManualState(true)
+	ph.SetInitialUnverified()
+	if !ph.IsAvailable() {
+		t.Fatal("SetInitialUnverified must not overwrite manual pin")
+	}
+
+	// When Manager is initialized with health checking enabled, multi-nodes start unverified
+	cfg := UpstreamConfig{
+		Default: "failover",
+		HealthCheck: config.HealthCheckConf{
+			Enabled:           true,
+			AutoDisableSingle: false,
+			Interval:          60,
+			Timeout:           5,
+		},
+		Proxies: []ProxyEntry{
+			{Alias: "p1", URL: "socks5://127.0.0.1:1080"},
+			{Alias: "p2", URL: "socks5://127.0.0.1:1081"},
+		},
+	}
+	mgr, err := NewManager(cfg)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer mgr.Stop()
+
+	mgr.mu.RLock()
+	p1 := mgr.aliasMap["p1"]
+	p2 := mgr.aliasMap["p2"]
+	mgr.mu.RUnlock()
+
+	if p1 == nil || p2 == nil {
+		t.Fatal("proxies not found in aliasMap")
+	}
+	// Before probes succeed, they must be unverified (unavailable)
+	p1.health.mu.RLock()
+	st1 := p1.health.state
+	p1.health.mu.RUnlock()
+	if st1 != StateOpen {
+		t.Errorf("expected p1 to start in StateOpen, got %v", st1)
+	}
+}
+
+func TestBoundedConcurrency_WorkerPool(t *testing.T) {
+	var activeProbes atomic.Int32
+	var maxObserved atomic.Int32
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cur := activeProbes.Add(1)
+		for {
+			old := maxObserved.Load()
+			if cur <= old || maxObserved.CompareAndSwap(old, cur) {
+				break
+			}
+		}
+		time.Sleep(30 * time.Millisecond)
+		activeProbes.Add(-1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	u, portStr, _ := net.SplitHostPort(ts.Listener.Addr().String())
+	p := parsePort(portStr)
+
+	proxies := make([]*Proxy, 32)
+	for i := range proxies {
+		proxies[i] = &Proxy{
+			Scheme: SchemeHTTP,
+			Host:   u,
+			Port:   p,
+		}
+	}
+
+	hc := NewHealthChecker(config.HealthCheckConf{
+		Enabled:           true,
+		AutoDisableSingle: false,
+		URL:               ts.URL,
+		Timeout:           2,
+		FailuresThreshold: 2,
+	}, proxies)
+
+	// ProbeAll triggers all proxies to be probed concurrently
+	hc.ProbeAll()
+
+	// Wait briefly for probes to run
+	time.Sleep(150 * time.Millisecond)
+	hc.Stop()
+
+	max := maxObserved.Load()
+	if max > 16 {
+		t.Errorf("max concurrent probes exceeded semaphore limit 16: got %d", max)
+	}
+	if max == 0 {
+		t.Error("expected probes to have executed")
+	}
+}
+
+func TestReportDNSUDPError_TripsBreaker(t *testing.T) {
+	cfg := UpstreamConfig{
+		Default: "failover",
+		HealthCheck: config.HealthCheckConf{
+			Enabled:           true,
+			FailuresThreshold: 1,
+			OpenCoolDown:      60,
+			Interval:          60,
+			Timeout:           1,
+		},
+		Proxies: []ProxyEntry{
+			{Alias: "p1", URL: "socks5://127.0.0.1:1080"},
+		},
+	}
+	mgr, err := NewManager(cfg)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer mgr.Stop()
+	if mgr.healthChecker != nil {
+		mgr.healthChecker.Stop()
+	}
+
+	mgr.mu.RLock()
+	proxy := mgr.aliasMap["p1"]
+	mgr.mu.RUnlock()
+
+	// Reset to closed so we can test the trip
+	proxy.udpHealth.SetManualState(true)
+	proxy.udpHealth.ClearManualState()
+
+	if !proxy.IsUDPAvailable() {
+		t.Fatal("expected proxy UDP to be available initially")
+	}
+
+	udpConn, _ := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9999})
+	defer udpConn.Close()
+
+	carrier := &UDPProxyConn{
+		UDPConn: udpConn,
+		proxy:   proxy,
+	}
+
+	mgr.ReportDNSUDPError(carrier, errors.New("read: connection refused"))
+
+	if proxy.IsUDPAvailable() {
+		t.Error("expected ReportDNSUDPError to trip UDP breaker to open")
+	}
+}
+
+func TestManager_TestProxy_TripsBreakerOnError(t *testing.T) {
+	deadPort := deadUDPPort(t)
+	p, err := NewProxy(fmt.Sprintf("socks5://127.0.0.1:%d", deadPort))
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+	// Initially make circuits closed
+	p.health.SetManualState(true)
+	p.health.ClearManualState()
+	p.udpHealth.SetManualState(true)
+	p.udpHealth.ClearManualState()
+
+	cfg := UpstreamConfig{
+		Default: "failover",
+		HealthCheck: config.HealthCheckConf{
+			Enabled:           true,
+			FailuresThreshold: 1,
+		},
+		Proxies: []ProxyEntry{
+			{Alias: "deadNode", URL: fmt.Sprintf("socks5://127.0.0.1:%d", deadPort)},
+		},
+	}
+	mgr, err := NewManager(cfg)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer mgr.Stop()
+
+	mgr.mu.Lock()
+	mgr.aliasMap["deadNode"] = p
+	mgr.defaultProxies = []*Proxy{p}
+	mgr.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Test UDP
+	_, udpErr := mgr.TestProxy(ctx, "deadNode", "udp")
+	if udpErr == nil {
+		t.Fatal("expected UDP test to fail on dead port")
+	}
+	if p.IsUDPAvailable() {
+		t.Error("expected TestProxy(udp) error to trip UDP breaker")
+	}
+
+	// Test TCP
+	_, tcpErr := mgr.TestProxy(ctx, "deadNode", "tcp")
+	if tcpErr == nil {
+		t.Fatal("expected TCP test to fail on dead port")
+	}
+	if p.IsAvailable() {
+		t.Error("expected TestProxy(tcp) error to trip TCP breaker")
+	}
+}
+

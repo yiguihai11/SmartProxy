@@ -262,6 +262,10 @@ func (m *Manager) rebuildLocked() map[string]json.RawMessage {
 			proxy.Provider = entry.Provider
 			proxy.UDPInTCP = entry.UDPInTCP || proxy.UDPInTCP
 			proxy.applyUDPInTCPDefaults()
+			if m.healthCheckEnabledForProxiesLocked(len(allEntries)) {
+				proxy.health.SetInitialUnverified()
+				proxy.udpHealth.SetInitialUnverified()
+			}
 		}
 
 		if proxy.CountryCode() == "" {
@@ -278,6 +282,16 @@ func (m *Manager) rebuildLocked() map[string]json.RawMessage {
 	m.aliasMap = aliasMap
 	m.defaultProxies = defaultProxies
 	return activeSB
+}
+
+func (m *Manager) healthCheckEnabledForProxiesLocked(totalProxies int) bool {
+	if !m.healthCfg.Enabled {
+		return false
+	}
+	if m.healthCfg.AutoDisableSingle && totalProxies <= 1 {
+		return false
+	}
+	return true
 }
 
 // SetProviderProxies dynamically registers or updates a set of proxies provided by an
@@ -417,6 +431,14 @@ func (m *Manager) SelectProxy(ctx context.Context, targetIP string, targetPort i
 
 func (m *Manager) ConnectDefault(ctx context.Context, host string, port int) (net.Conn, error) {
 	ll := trace.Log(ctx)
+	if m.healthChecker != nil && !m.healthChecker.HasAnyTCPAvailable() {
+		select {
+		case <-m.healthChecker.FirstProbeDone():
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(800 * time.Millisecond):
+		}
+	}
 	for _, proxy := range m.orderedProxies() {
 		if proxy.IsUDPOnly() {
 			ll.Debug("skipping udp_only proxy for TCP", "url", MaskProxyURL(proxy.URL))
@@ -571,14 +593,18 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 		if err == nil && selected.needsCapabilityClassify() {
 			selected.classifyUDPCapability(conn)
 		}
-		if m.healthChecker != nil {
-			if err != nil {
-				m.healthChecker.RecordUDPFailure(selected, err)
-			} else {
-				m.healthChecker.RecordUDPSuccess(selected, 0)
-			}
+		if m.healthChecker != nil && err != nil {
+			m.healthChecker.RecordUDPFailure(selected, err)
 		}
 		return conn, err
+	}
+	if m.healthChecker != nil && !m.healthChecker.HasAnyUDPAvailable() {
+		select {
+		case <-m.healthChecker.FirstProbeDone():
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(800 * time.Millisecond):
+		}
 	}
 	for _, proxy := range m.orderedProxies() {
 		if proxy.SupportsUDP() {
@@ -589,12 +615,8 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 			ll.Debug("UDPAssociate: trying proxy", "proxy", MaskProxyURL(proxy.URL),
 				"target", fmt.Sprintf("%s:%d", host, port))
 			conn, err := proxy.UDPAssociate(ctx, host, port)
-			if m.healthChecker != nil {
-				if err != nil {
-					m.healthChecker.RecordUDPFailure(proxy, err)
-				} else {
-					m.healthChecker.RecordUDPSuccess(proxy, 0)
-				}
+			if m.healthChecker != nil && err != nil {
+				m.healthChecker.RecordUDPFailure(proxy, err)
 			}
 			if err == nil {
 				if proxy.needsCapabilityClassify() {
@@ -621,14 +643,18 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 		if err == nil && selected.needsCapabilityClassify() {
 			selected.classifyUDPCapability(conn)
 		}
-		if m.healthChecker != nil {
-			if err != nil {
-				m.healthChecker.RecordUDPFailure(selected, err)
-			} else {
-				m.healthChecker.RecordUDPSuccess(selected, 0)
-			}
+		if m.healthChecker != nil && err != nil {
+			m.healthChecker.RecordUDPFailure(selected, err)
 		}
 		return conn, err
+	}
+	if m.healthChecker != nil && !m.healthChecker.HasAnyUDPAvailable() {
+		select {
+		case <-m.healthChecker.FirstProbeDone():
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(800 * time.Millisecond):
+		}
 	}
 	// selected == nil: fall back to orderedProxies
 	for _, proxy := range m.orderedProxies() {
@@ -640,12 +666,8 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 			ll.Debug("UDPAssociateSelected: trying proxy", "proxy", MaskProxyURL(proxy.URL),
 				"target", fmt.Sprintf("%s:%d", host, port))
 			conn, err := proxy.UDPAssociate(ctx, host, port)
-			if m.healthChecker != nil {
-				if err != nil {
-					m.healthChecker.RecordUDPFailure(proxy, err)
-				} else {
-					m.healthChecker.RecordUDPSuccess(proxy, 0)
-				}
+			if m.healthChecker != nil && err != nil {
+				m.healthChecker.RecordUDPFailure(proxy, err)
 			}
 			if err == nil {
 				if proxy.needsCapabilityClassify() {
@@ -911,6 +933,10 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 			if m.healthChecker != nil {
 				m.healthChecker.RecordSuccess(proxy, latency)
 			}
+		} else {
+			if m.healthChecker != nil {
+				m.healthChecker.RecordFailure(proxy, err)
+			}
 		}
 	case "udp":
 		if !proxy.SchemeSupportsUDP() {
@@ -927,12 +953,48 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 			if m.healthChecker != nil {
 				m.healthChecker.RecordUDPSuccess(proxy, latency)
 			}
+		} else {
+			if m.healthChecker != nil {
+				m.healthChecker.RecordUDPFailure(proxy, err)
+			}
 		}
 	default:
 		return 0, fmt.Errorf("invalid protocol %q, must be ping, tcp or udp", protocol)
 	}
 
 	return latency, err
+}
+
+// ReportDNSUDPError notifies the health checker of a real-traffic DNS failure over UDP
+// on the proxy associated with conn.
+func (m *Manager) ReportDNSUDPError(conn net.Conn, err error) {
+	if m == nil || m.healthChecker == nil || conn == nil || err == nil {
+		return
+	}
+	type proxyCarrier interface {
+		Proxy() *Proxy
+	}
+	if carrier, ok := conn.(proxyCarrier); ok {
+		if p := carrier.Proxy(); p != nil {
+			m.healthChecker.RecordUDPFailure(p, err)
+		}
+	}
+}
+
+// ReportDNSUDPSuccess notifies the health checker of a successful real-traffic DNS round-trip
+// over UDP on the proxy associated with conn.
+func (m *Manager) ReportDNSUDPSuccess(conn net.Conn, latency time.Duration) {
+	if m == nil || m.healthChecker == nil || conn == nil {
+		return
+	}
+	type proxyCarrier interface {
+		Proxy() *Proxy
+	}
+	if carrier, ok := conn.(proxyCarrier); ok {
+		if p := carrier.Proxy(); p != nil {
+			m.healthChecker.RecordUDPSuccess(p, latency)
+		}
+	}
 }
 
 // probeInitialGeo asynchronously discovers country codes and exit IPs for all proxies in the background.

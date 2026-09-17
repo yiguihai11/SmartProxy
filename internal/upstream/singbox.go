@@ -100,13 +100,18 @@ func (p *Proxy) singboxUDPAssociate(ctx context.Context, targetHost string, targ
 	if err != nil {
 		return nil, err
 	}
-	return &singboxUDPConn{pc: pc}, nil
+	return &singboxUDPConn{pc: pc, proxy: p}, nil
 }
 
 // singboxUDPConn adapts sing-box net.PacketConn to SmartProxy's upstream UDP contract
 // (net.Conn + SOCKS5 UDP framed packets).
 type singboxUDPConn struct {
-	pc net.PacketConn
+	pc    net.PacketConn
+	proxy *Proxy
+}
+
+func (c *singboxUDPConn) Proxy() *Proxy {
+	return c.proxy
 }
 
 func (c *singboxUDPConn) Write(b []byte) (int, error) {

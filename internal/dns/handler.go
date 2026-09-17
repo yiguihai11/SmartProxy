@@ -488,6 +488,9 @@ func (h *Handler) queryViaProxy(ctx context.Context, queryWire []byte, dnsHost s
 	writeStart := time.Now()
 	if _, err := udpConn.Write(packet); err != nil {
 		ll.Error("failed to write DNS query to proxy UDP", "error", err)
+		if h.upstreamMgr != nil {
+			h.upstreamMgr.ReportDNSUDPError(udpConn, err)
+		}
 		return nil, err
 	}
 	ll.Debug("DNS query written to proxy UDP", "writeLatency", time.Since(writeStart))
@@ -504,7 +507,13 @@ func (h *Handler) queryViaProxy(ctx context.Context, queryWire []byte, dnsHost s
 			"error", err,
 			"timeout", timeout,
 			"readWait", readLatency)
+		if h.upstreamMgr != nil {
+			h.upstreamMgr.ReportDNSUDPError(udpConn, err)
+		}
 		return nil, fmt.Errorf("DNS proxy read error: %w", err)
+	}
+	if h.upstreamMgr != nil {
+		h.upstreamMgr.ReportDNSUDPSuccess(udpConn, readLatency)
 	}
 	ll.Debug("DNS response received from proxy",
 		"responseLen", n, "readLatency", readLatency)

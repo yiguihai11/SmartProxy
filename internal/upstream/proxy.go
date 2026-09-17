@@ -832,7 +832,7 @@ func (p *Proxy) rawUDPAssociate(ctx context.Context, raddr *net.UDPAddr) (*UDPPr
 		return nil, err
 	}
 	trace.Log(ctx).Debug("raw UDP relay established", "proxy", p.Host, "remoteAddr", raddr)
-	return &UDPProxyConn{UDPConn: udpConn}, nil
+	return &UDPProxyConn{UDPConn: udpConn, proxy: p}, nil
 }
 
 // rawFallback tries a raw UDP relay at the upstream's own host:port after the standard
@@ -938,7 +938,7 @@ func (p *Proxy) socks5UDPAssociate(ctx context.Context, targetHost string, targe
 	}
 	trace.Log(ctx).Debug("UDP ASSOCIATE established",
 		"proxy", p.Host, "localAddr", udpConn.LocalAddr(), "remoteAddr", raddr)
-	return &UDPProxyConn{UDPConn: udpConn, tcpConn: conn}, nil
+	return &UDPProxyConn{UDPConn: udpConn, tcpConn: conn, proxy: p}, nil
 }
 
 // socks5UDPInTCP establishes a hev UDP-in-TCP relay (hev-socks5-server's private
@@ -981,7 +981,7 @@ func (p *Proxy) socks5UDPInTCP(ctx context.Context) (net.Conn, error) {
 	conn.SetDeadline(time.Time{})
 
 	trace.Log(ctx).Debug("UDP-in-TCP relay established", "proxy", p.Host)
-	return newUDPInTCPConn(conn), nil
+	return newUDPInTCPConn(conn, p), nil
 }
 
 // udpInTCPConn adapts a hev UDP-in-TCP framed byte stream to the SOCKS5 UDP packet
@@ -995,12 +995,19 @@ func (p *Proxy) socks5UDPInTCP(ctx context.Context) (net.Conn, error) {
 // drop-in swap of the 3-byte prefix (same total length). Write translates SOCKS5 UDP packet
 // → hev frame, Read translates the reverse.
 type udpInTCPConn struct {
-	conn net.Conn
+	conn  net.Conn
+	proxy *Proxy
 }
 
-func newUDPInTCPConn(conn net.Conn) *udpInTCPConn {
-	return &udpInTCPConn{conn: conn}
+func newUDPInTCPConn(conn net.Conn, p ...*Proxy) *udpInTCPConn {
+	var proxy *Proxy
+	if len(p) > 0 {
+		proxy = p[0]
+	}
+	return &udpInTCPConn{conn: conn, proxy: proxy}
 }
+
+func (u *udpInTCPConn) Proxy() *Proxy { return u.proxy }
 
 func (u *udpInTCPConn) Read(p []byte) (int, error) {
 	var hdr [3]byte
@@ -1370,6 +1377,11 @@ func resolveIPv4(ctx context.Context, host string) (net.IP, error) {
 type UDPProxyConn struct {
 	*net.UDPConn
 	tcpConn net.Conn
+	proxy   *Proxy
+}
+
+func (u *UDPProxyConn) Proxy() *Proxy {
+	return u.proxy
 }
 
 func (u *UDPProxyConn) Close() error {

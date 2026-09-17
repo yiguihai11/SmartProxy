@@ -93,6 +93,21 @@ func (ph *ProxyHealth) ClearManualState() {
 	ph.openSince = time.Time{}
 }
 
+// SetInitialUnverified sets the health state to StateOpen (unverified/closed circuit)
+// with openSince set to zero time so it is immediately eligible for probing without
+// waiting for an open cool-down period. Existing manual pins are preserved.
+func (ph *ProxyHealth) SetInitialUnverified() {
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+	if ph.manual != nil {
+		return
+	}
+	ph.state = StateOpen
+	ph.consecutiveFailures = 0
+	ph.consecutiveSuccesses = 0
+	ph.openSince = time.Time{}
+}
+
 // IsManuallyDisabled reports whether the circuit is pinned down by SetManualState(false).
 // Unlike IsAvailable (which is also false while a circuit is auto-open from probe failures),
 // this distinguishes an explicit user "Disable" — rule routing must not use such a circuit.
@@ -203,22 +218,27 @@ func (ph *ProxyHealth) Snapshot() ProxyHealthSnapshot {
 }
 
 type HealthChecker struct {
-	cfg      atomic.Pointer[config.HealthCheckConf]
-	proxies  []*Proxy
-	stopCh   chan struct{}
-	stopOnce sync.Once
-	wg       sync.WaitGroup
-	ctx      context.Context
-	cancel   context.CancelFunc
+	cfg            atomic.Pointer[config.HealthCheckConf]
+	proxies        []*Proxy
+	stopCh         chan struct{}
+	stopOnce       sync.Once
+	wg             sync.WaitGroup
+	ctx            context.Context
+	cancel         context.CancelFunc
+	probeSem       chan struct{}
+	firstProbeDone chan struct{}
+	firstProbeOnce sync.Once
 }
 
 func NewHealthChecker(cfg config.HealthCheckConf, proxies []*Proxy) *HealthChecker {
 	ctx, cancel := context.WithCancel(context.Background())
 	hc := &HealthChecker{
-		proxies: proxies,
-		stopCh:  make(chan struct{}),
-		ctx:     ctx,
-		cancel:  cancel,
+		proxies:        proxies,
+		stopCh:         make(chan struct{}),
+		ctx:            ctx,
+		cancel:         cancel,
+		probeSem:       make(chan struct{}, 16),
+		firstProbeDone: make(chan struct{}),
 	}
 	hc.cfg.Store(&cfg)
 	return hc
@@ -227,16 +247,31 @@ func NewHealthChecker(cfg config.HealthCheckConf, proxies []*Proxy) *HealthCheck
 func (hc *HealthChecker) Start() {
 	cfg := hc.cfg.Load()
 	if !cfg.Enabled {
+		hc.notifyFirstProbeDone()
 		return
 	}
 	if cfg.AutoDisableSingle && len(hc.proxies) <= 1 {
 		slog.Info("health check disabled: only one upstream proxy")
+		hc.notifyFirstProbeDone()
+		return
+	}
+	if len(hc.proxies) == 0 {
+		hc.notifyFirstProbeDone()
 		return
 	}
 
-	for _, p := range hc.proxies {
+	var initialWg sync.WaitGroup
+	initialWg.Add(len(hc.proxies))
+	safego.Go("upstream.health.initialProbeWatcher", func() {
+		initialWg.Wait()
+		hc.notifyFirstProbeDone()
+	})
+
+	for i, p := range hc.proxies {
+		idx := i
+		proxy := p
 		hc.wg.Add(1)
-		safego.Go("upstream.health.checkLoop", func() { hc.checkLoop(p) })
+		safego.Go("upstream.health.checkLoop", func() { hc.checkLoop(proxy, idx, &initialWg) })
 	}
 }
 
@@ -247,6 +282,7 @@ func (hc *HealthChecker) Start() {
 func (hc *HealthChecker) Stop() {
 	hc.cancel()
 	hc.stopOnce.Do(func() { close(hc.stopCh) })
+	hc.notifyFirstProbeDone()
 	done := make(chan struct{})
 	safego.Go("upstream.health.stopWait", func() {
 		hc.wg.Wait()
@@ -265,12 +301,86 @@ func (hc *HealthChecker) Reload(cfg config.HealthCheckConf, proxies []*Proxy) {
 	hc.proxies = proxies
 	hc.stopOnce = sync.Once{}
 	hc.stopCh = make(chan struct{})
+	hc.probeSem = make(chan struct{}, 16)
+	hc.firstProbeOnce = sync.Once{}
+	hc.firstProbeDone = make(chan struct{})
 	hc.ctx, hc.cancel = context.WithCancel(context.Background())
 	hc.Start()
 }
 
+func (hc *HealthChecker) acquireProbeSem(ctx context.Context) error {
+	if hc == nil || hc.probeSem == nil {
+		return nil
+	}
+	select {
+	case hc.probeSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-hc.stopCh:
+		return errors.New("health checker stopped")
+	}
+}
+
+func (hc *HealthChecker) releaseProbeSem() {
+	if hc == nil || hc.probeSem == nil {
+		return
+	}
+	select {
+	case <-hc.probeSem:
+	default:
+	}
+}
+
+// FirstProbeDone returns a channel that is closed as soon as at least one proxy succeeds
+// its initial probe (admitting it to the routing pool), or after all initial probes complete.
+func (hc *HealthChecker) FirstProbeDone() <-chan struct{} {
+	if hc == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	return hc.firstProbeDone
+}
+
+func (hc *HealthChecker) notifyFirstProbeDone() {
+	if hc == nil {
+		return
+	}
+	hc.firstProbeOnce.Do(func() {
+		close(hc.firstProbeDone)
+	})
+}
+
+// HasAnyTCPAvailable reports whether at least one proxy is verified available for TCP.
+func (hc *HealthChecker) HasAnyTCPAvailable() bool {
+	if hc == nil {
+		return true
+	}
+	for _, p := range hc.proxies {
+		if !p.IsUDPOnly() && p.IsAvailable() {
+			return true
+		}
+	}
+	return false
+}
+
+// HasAnyUDPAvailable reports whether at least one proxy is verified available for UDP.
+func (hc *HealthChecker) HasAnyUDPAvailable() bool {
+	if hc == nil {
+		return true
+	}
+	for _, p := range hc.proxies {
+		if p.SupportsUDP() && p.IsUDPAvailable() {
+			return true
+		}
+	}
+	return false
+}
+
 // ProbeAll immediately triggers an asynchronous probe on all proxies, bypassing open cooldowns
-// to quickly re-evaluate node health after a network change.
+// to quickly re-evaluate node health after a network change. Probing concurrency is bounded
+// by the probe worker semaphore.
 func (hc *HealthChecker) ProbeAll() {
 	if hc == nil {
 		return
@@ -290,32 +400,57 @@ func (hc *HealthChecker) ProbeAll() {
 			defer cancel()
 
 			if proxy.SchemeSupportsUDP() && !proxy.udpHealth.IsManuallyDisabled() {
-				latency, err := hc.ProbeUDP(ctx, proxy)
-				if err == nil {
-					hc.RecordUDPSuccess(proxy, latency)
-				} else {
-					hc.RecordUDPFailure(proxy, err)
+				if err := hc.acquireProbeSem(ctx); err == nil {
+					latency, err := hc.ProbeUDP(ctx, proxy)
+					hc.releaseProbeSem()
+					if err == nil {
+						hc.RecordUDPSuccess(proxy, latency)
+					} else {
+						hc.RecordUDPFailure(proxy, err)
+					}
 				}
 			}
 			if !proxy.health.IsManuallyDisabled() {
-				latency, err := hc.ProbeTCP(ctx, proxy)
-				if err == nil {
-					hc.RecordSuccess(proxy, latency)
-				} else {
-					hc.RecordFailure(proxy, err)
+				if err := hc.acquireProbeSem(ctx); err == nil {
+					latency, err := hc.ProbeTCP(ctx, proxy)
+					hc.releaseProbeSem()
+					if err == nil {
+						hc.RecordSuccess(proxy, latency)
+					} else {
+						hc.RecordFailure(proxy, err)
+					}
 				}
 			}
 		})
 	}
 }
 
-func (hc *HealthChecker) checkLoop(p *Proxy) {
+func (hc *HealthChecker) checkLoop(p *Proxy, idx int, initialWg *sync.WaitGroup) {
 	defer hc.wg.Done()
 
+	// Stagger initial delays: Proxy 0 starts at 0ms delay, 1-15 with 10ms-150ms delay,
+	// subsequent nodes staggered to bound initial load on system sockets.
+	var initialDelay time.Duration
+	if idx == 0 {
+		initialDelay = 0
+	} else if idx < 16 {
+		initialDelay = time.Duration(idx*10) * time.Millisecond
+	} else {
+		initialDelay = time.Duration(160 + (idx%20)*50) * time.Millisecond
+	}
+
 	select {
-	case <-time.After(time.Duration(time.Now().UnixNano()%2000) * time.Millisecond):
+	case <-time.After(initialDelay):
 	case <-hc.stopCh:
+		if initialWg != nil {
+			initialWg.Done()
+		}
 		return
+	}
+
+	hc.checkProxy(p)
+	if initialWg != nil {
+		initialWg.Done()
 	}
 
 	for {
@@ -325,13 +460,13 @@ func (hc *HealthChecker) checkLoop(p *Proxy) {
 			interval = 60 * time.Second
 		}
 
-		hc.checkProxy(p)
-
 		select {
 		case <-time.After(interval):
 		case <-hc.stopCh:
 			return
 		}
+
+		hc.checkProxy(p)
 	}
 }
 
@@ -482,6 +617,11 @@ func (hc *HealthChecker) checkProxyTCP(p *Proxy) {
 	ctx, cancel := context.WithTimeout(hc.ctx, timeout)
 	defer cancel()
 
+	if err := hc.acquireProbeSem(ctx); err != nil {
+		return
+	}
+	defer hc.releaseProbeSem()
+
 	latency, err := hc.ProbeTCP(ctx, p)
 	if err == nil {
 		hc.RecordSuccess(p, latency)
@@ -520,6 +660,11 @@ func (hc *HealthChecker) checkProxyUDP(p *Proxy) {
 	}
 	ctx, cancel := context.WithTimeout(hc.ctx, timeout)
 	defer cancel()
+
+	if err := hc.acquireProbeSem(ctx); err != nil {
+		return
+	}
+	defer hc.releaseProbeSem()
 
 	latency, err := hc.ProbeUDP(ctx, p)
 	if err != nil {
@@ -700,6 +845,7 @@ func (hc *HealthChecker) recordSuccess(p *Proxy, ph *ProxyHealth, circuit string
 	switch ph.state {
 	case StateClosed:
 		ph.consecutiveFailures = 0
+		hc.notifyFirstProbeDone()
 	case StateOpen:
 		// checkProxy skips probing while Open and inside the cool-down, so reaching here
 		// means the cool-down has passed and this probe succeeded — the node is recovering.
@@ -710,6 +856,7 @@ func (hc *HealthChecker) recordSuccess(p *Proxy, ph *ProxyHealth, circuit string
 		ph.state = StateHalfOpen
 		ph.consecutiveSuccesses = 1
 		slog.Info("proxy circuit half-open on probe success", "url", MaskProxyURL(p.URL), "circuit", circuit, "latency", latency)
+		hc.notifyFirstProbeDone()
 	case StateHalfOpen:
 		ph.consecutiveSuccesses++
 		if ph.consecutiveSuccesses >= cfg.SuccessesThreshold {
@@ -718,6 +865,7 @@ func (hc *HealthChecker) recordSuccess(p *Proxy, ph *ProxyHealth, circuit string
 			ph.consecutiveSuccesses = 0
 			slog.Info("proxy recovered", "url", MaskProxyURL(p.URL), "circuit", circuit, "latency", latency)
 		}
+		hc.notifyFirstProbeDone()
 	}
 }
 

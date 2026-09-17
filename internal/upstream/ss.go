@@ -424,7 +424,7 @@ func (p *Proxy) ssUDPAssociate(ctx context.Context, targetHost string, targetPor
 		return nil, err
 	}
 	trace.Log(ctx).Debug("ss UDP relay established", "proxy", MaskProxyURL(p.URL), "serverAddr", raddr)
-	return &ssUDPConn{NetPacketConn: p.ssMethod.DialPacketConn(udpConn)}, nil
+	return &ssUDPConn{NetPacketConn: p.ssMethod.DialPacketConn(udpConn), proxy: p}, nil
 }
 
 // ssUDPConn adapts sing-shadowsocks' UDP packet conn to SmartProxy's upstream UDP contract:
@@ -439,6 +439,11 @@ func (p *Proxy) ssUDPAssociate(ctx context.Context, targetHost string, targetPor
 // socket), so it can safely go into the UDP reuse pool.
 type ssUDPConn struct {
 	N.NetPacketConn
+	proxy *Proxy
+}
+
+func (u *ssUDPConn) Proxy() *Proxy {
+	return u.proxy
 }
 
 // Write input is a full SOCKS5-UDP frame; returning len(b) means the whole frame was handled.
