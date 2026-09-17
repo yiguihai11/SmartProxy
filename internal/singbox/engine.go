@@ -96,6 +96,16 @@ func (e *Engine) SetOutbounds(outbounds map[string]json.RawMessage) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	if len(outbounds) == 0 {
+		e.outbounds = make(map[string]json.RawMessage)
+		if e.instance != nil {
+			err := e.instance.Close()
+			e.instance = nil
+			return err
+		}
+		return nil
+	}
+
 	e.outbounds = make(map[string]json.RawMessage, len(outbounds))
 	for k, v := range outbounds {
 		e.outbounds[k] = v
@@ -108,6 +118,16 @@ func (e *Engine) SetOutbounds(outbounds map[string]json.RawMessage) error {
 func (e *Engine) SyncOutbounds(desired map[string]json.RawMessage) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+
+	if len(desired) == 0 {
+		e.outbounds = make(map[string]json.RawMessage)
+		if e.instance != nil {
+			err := e.instance.Close()
+			e.instance = nil
+			return err
+		}
+		return nil
+	}
 
 	if len(e.outbounds) == len(desired) && e.instance != nil {
 		identical := true
