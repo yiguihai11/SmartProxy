@@ -70,9 +70,7 @@ jobs:
 
       # Gradle 官方 Action: 自动缓存 Gradle Wrapper、依赖项与 Build Cache
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          build-root-directory: android
+        uses: gradle/actions/setup-gradle@v6
 
       # x/mobile@latest 要求 go 跟随 go.mod 的 go directive(当前 1.27),gomobile init
       # 内部又会 `go install gobind@latest`,故工具链必须跟到 1.27,且 gomobile 也用
