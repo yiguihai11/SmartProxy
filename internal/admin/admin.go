@@ -239,63 +239,64 @@ func (s *Server) Start() error {
 		}
 		tcpLn, err := net.Listen("tcp", addr)
 		if err != nil {
-			slog.Warn("admin TCP listen failed", "port", s.tcpPort, "error", err)
-		} else {
-			s.tcpLn = tcpLn
-			s.tcpExposed = exposed
-			if s.tlsEnabled {
-				tlsCfg, err := s.buildTLSConfig()
-				if err != nil {
-					// fail-closed: TLS is what protects Basic Auth on the all-interfaces
-					// bind. If the cert won't load, serving plain HTTP there broadcasts the
-					// credentials and every request to the LAN — shut the listener instead
-					// of silently downgrading. Plain-HTTP fallback is only acceptable on the
-					// loopback bind (no auth, local host only).
-					if exposed {
-						slog.Error("admin TLS setup failed with auth enabled; refusing to serve plaintext on all interfaces", "port", s.tcpPort, "error", err)
-						tcpLn.Close()
-						s.tcpLn = nil
-					} else {
-						slog.Warn("admin TLS setup failed on loopback bind, falling back to plain HTTP", "error", err)
-						s.tcpServer = newHTTPServer(tcpHandler)
-						slog.Info("admin HTTP server started", "port", s.tcpPort)
-						go s.tcpServer.Serve(tcpLn)
-					}
+			slog.Error("admin TCP listen failed", "port", s.tcpPort, "error", err)
+			return fmt.Errorf("admin TCP listen failed on %s: %w", addr, err)
+		}
+		s.tcpLn = tcpLn
+		s.tcpExposed = exposed
+		if s.tlsEnabled {
+			tlsCfg, err := s.buildTLSConfig()
+			if err != nil {
+				// fail-closed: TLS is what protects Basic Auth on the all-interfaces
+				// bind. If the cert won't load, serving plain HTTP there broadcasts the
+				// credentials and every request to the LAN — shut the listener instead
+				// of silently downgrading. Plain-HTTP fallback is only acceptable on the
+				// loopback bind (no auth, local host only).
+				if exposed {
+					slog.Error("admin TLS setup failed with auth enabled; refusing to serve plaintext on all interfaces", "port", s.tcpPort, "error", err)
+					tcpLn.Close()
+					s.tcpLn = nil
+					return fmt.Errorf("admin TLS setup failed: %w", err)
 				} else {
-					// One port, two protocols: TLS handshakes are served as HTTPS,
-					// plaintext requests are 301-redirected to https (see tls.go).
-					s.tcpServer = newHTTPServer(s.tlsDispatch(tcpHandler))
-					s.tcpServer.TLSConfig = tlsCfg
-					slog.Info("admin HTTPS server started (HTTP/2 & HTTP/1.1, HTTP redirects to https)", "port", s.tcpPort)
-					go s.tcpServer.Serve(&splitListener{Listener: tcpLn, tlsCfg: tlsCfg})
-
-					// HTTP/3 (QUIC) over UDP on the same port
-					udpLn, err := net.ListenPacket("udp", addr)
-					if err != nil {
-						slog.Warn("admin HTTP/3 (QUIC) UDP listen failed", "addr", addr, "error", err)
-					} else {
-						s.udpLn = udpLn
-						h3TLS := http3.ConfigureTLSConfig(tlsCfg.Clone())
-						s.h3Server = &http3.Server{
-							Addr:      addr,
-							Port:      s.tcpPort,
-							TLSConfig: h3TLS,
-							Handler:   tcpHandler,
-						}
-						slog.Info("admin HTTP/3 (QUIC) server started", "port", s.tcpPort)
-						safego.Go("admin.http3Server", func() {
-							if err := s.h3Server.Serve(udpLn); err != nil && err != http.ErrServerClosed {
-								slog.Debug("admin HTTP/3 server stopped", "error", err)
-							}
-						})
-					}
+					slog.Warn("admin TLS setup failed on loopback bind, falling back to plain HTTP", "error", err)
+					s.tcpServer = newHTTPServer(tcpHandler)
+					slog.Info("admin HTTP server started", "port", s.tcpPort)
+					go s.tcpServer.Serve(tcpLn)
 				}
 			} else {
-				// The TCP port requires authentication
-				s.tcpServer = newHTTPServer(tcpHandler)
-				slog.Info("admin HTTP server started", "port", s.tcpPort)
-				go s.tcpServer.Serve(tcpLn)
+				// One port, two protocols: TLS handshakes are served as HTTPS,
+				// plaintext requests are 301-redirected to https (see tls.go).
+				s.tcpServer = newHTTPServer(s.tlsDispatch(tcpHandler))
+				s.tcpServer.TLSConfig = tlsCfg
+				slog.Info("admin HTTPS server started (HTTP/2 & HTTP/1.1, HTTP redirects to https)", "port", s.tcpPort)
+				go s.tcpServer.Serve(&splitListener{Listener: tcpLn, tlsCfg: tlsCfg})
+
+				// HTTP/3 (QUIC) over UDP on the same port
+				udpLn, err := net.ListenPacket("udp", addr)
+				if err != nil {
+					slog.Warn("admin HTTP/3 (QUIC) UDP listen failed", "addr", addr, "error", err)
+				} else {
+					s.udpLn = udpLn
+					h3TLS := http3.ConfigureTLSConfig(tlsCfg.Clone())
+					s.h3Server = &http3.Server{
+						Addr:      addr,
+						Port:      s.tcpPort,
+						TLSConfig: h3TLS,
+						Handler:   tcpHandler,
+					}
+					slog.Info("admin HTTP/3 (QUIC) server started", "port", s.tcpPort)
+					safego.Go("admin.http3Server", func() {
+						if err := s.h3Server.Serve(udpLn); err != nil && err != http.ErrServerClosed {
+							slog.Debug("admin HTTP/3 server stopped", "error", err)
+						}
+					})
+				}
 			}
+		} else {
+			// The TCP port requires authentication
+			s.tcpServer = newHTTPServer(tcpHandler)
+			slog.Info("admin HTTP server started", "port", s.tcpPort)
+			go s.tcpServer.Serve(tcpLn)
 		}
 	}
 	return nil

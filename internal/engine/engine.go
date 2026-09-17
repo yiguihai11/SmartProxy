@@ -306,7 +306,8 @@ func (e *Engine) Start(ctx context.Context) error {
 		// admin_cert_sans is covered without supplying admin_cert_file/admin_key_file.
 		e.adminServer.SetTLS(lc.AdminCertFile, lc.AdminKeyFile, lc.AdminHTTPS, lc.AdminCertSANs...)
 		if err := e.adminServer.Start(); err != nil {
-			slog.Warn("admin server failed to start", "socket", sockPath, "error", err)
+			e.Stop()
+			return fmt.Errorf("failed to start admin server: %w", err)
 		}
 	}
 	return nil
