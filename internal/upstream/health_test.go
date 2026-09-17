@@ -182,6 +182,61 @@ func TestManual_ForceUpSurvivesFailures(t *testing.T) {
 	}
 }
 
+// assertGateClosed / assertGateOpen 校验按电路分闸门的状态。
+func assertGateClosed(t *testing.T, name string, ch <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-ch:
+	default:
+		t.Fatalf("%s gate should be closed", name)
+	}
+}
+
+func assertGateOpen(t *testing.T, name string, ch <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-ch:
+		t.Fatalf("%s gate should still be open", name)
+	default:
+	}
+}
+
+// TestFirstProbeDone_PerCircuitGates 回归冷启动硬失败:checkProxy 先探 UDP 后探 TCP,
+// UDP 先成功时只能关闭 UDP 闸门和聚合闸门,绝不能替 TCP 闸门放行——否则 ConnectDefault
+// 在所有 TCP 电路还是 unverified 时被放行,逐个 skip 后直接 "failed to connect via upstream"。
+func TestFirstProbeDone_PerCircuitGates(t *testing.T) {
+	hc := NewHealthChecker(config.HealthCheckConf{Enabled: true}, nil)
+	p := &Proxy{}
+	p.health.SetInitialUnverified()
+	p.udpHealth.SetInitialUnverified()
+
+	assertGateOpen(t, "tcp", hc.FirstTCPProbeDone())
+	assertGateOpen(t, "udp", hc.FirstUDPProbeDone())
+	assertGateOpen(t, "aggregate", hc.FirstProbeDone())
+
+	hc.RecordUDPSuccess(p, time.Millisecond)
+	assertGateOpen(t, "tcp after udp success", hc.FirstTCPProbeDone())
+	assertGateClosed(t, "udp after udp success", hc.FirstUDPProbeDone())
+	assertGateClosed(t, "aggregate after udp success", hc.FirstProbeDone())
+
+	hc.RecordSuccess(p, time.Millisecond)
+	assertGateClosed(t, "tcp after tcp success", hc.FirstTCPProbeDone())
+}
+
+// TestFirstProbeDone_StartDisabledOpensAll: 探测禁用/无节点/单节点时三条闸门都得放行,
+// 不能让某个转发入口永远等到 800ms 超时。
+func TestFirstProbeDone_StartDisabledOpensAll(t *testing.T) {
+	hc := NewHealthChecker(config.HealthCheckConf{Enabled: false}, []*Proxy{{}})
+	hc.Start()
+	assertGateClosed(t, "tcp", hc.FirstTCPProbeDone())
+	assertGateClosed(t, "udp", hc.FirstUDPProbeDone())
+	assertGateClosed(t, "aggregate", hc.FirstProbeDone())
+
+	// nil receiver 不拦路。
+	var nilHC *HealthChecker
+	assertGateClosed(t, "nil tcp", nilHC.FirstTCPProbeDone())
+}
+
 // TestCheckProxyTCP_SkipsManualDown: a TCP circuit pinned down (SetManualState(false)) must
 // not be probed — for a udp_in_tcp node this protects the plaintext framed carrier from
 // being exercised while TCP is disabled, and it mirrors the existing UDP-side gate.

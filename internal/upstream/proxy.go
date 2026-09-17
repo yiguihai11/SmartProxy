@@ -854,6 +854,9 @@ func (p *Proxy) rawFallback(ctx context.Context, cause error) (*UDPProxyConn, er
 	// No capability write here: a dialed raw socket is not proof the raw relay works end to
 	// end (UDP is fire-and-forget). The marker is written only by an end-to-end success —
 	// the health probe's classifyUDPCapability, or Manager on a real-traffic relay.
+	// 同样原因打上未验证标记:manager 必须拿真实 DNS 问答验过才许用,不许本地 DialUDP
+	// 成功就冒充好节点、把后面的健康候选全挡掉。
+	conn.unverifiedRaw = true
 	return conn, nil
 }
 
@@ -1378,7 +1381,14 @@ type UDPProxyConn struct {
 	*net.UDPConn
 	tcpConn net.Conn
 	proxy   *Proxy
+	// unverifiedRaw 标记这条 raw 中继是 ASSOCIATE 全流程失败后"碰运气"回落出来的
+	// (rawFallback),而不是 udp_only/已知 raw 的 fast path。本地 DialUDP 永远成功,
+	// 包发出去石沉大海也没人知道——manager 必须端到端验证(DNS 问答)后才准拿它当赢家。
+	unverifiedRaw bool
 }
+
+// IsUnverifiedRaw 报告该连接是否为未经端到端验证的 raw 回落。
+func (u *UDPProxyConn) IsUnverifiedRaw() bool { return u.unverifiedRaw }
 
 func (u *UDPProxyConn) Proxy() *Proxy {
 	return u.proxy

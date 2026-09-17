@@ -225,9 +225,19 @@ type HealthChecker struct {
 	wg             sync.WaitGroup
 	ctx            context.Context
 	cancel         context.CancelFunc
-	probeSem       chan struct{}
-	firstProbeDone chan struct{}
-	firstProbeOnce sync.Once
+	probeSem chan struct{}
+	// firstProbeDone 是"任意电路"的聚合闸门(任一探测成功或初始探测全部结束即关闭)。
+	// firstTCPProbeDone/firstUDPProbeDone 按电路分别关门:ConnectDefault 必须等 TCP 闸门,
+	// UDP ASSOCIATE 必须等 UDP 闸门。早期共用一个 firstProbeDone 时,checkProxy 先探 UDP
+	// 后探 TCP,UDP 先成功就把 TCP 入口的等待放行了——此刻所有节点的 TCP 电路还是
+	// unverified,ConnectDefault 逐个 skip 后直接 "failed to connect via upstream",开 VPN
+	// 头一秒的国外连接全部硬失败。
+	firstProbeDone    chan struct{}
+	firstProbeOnce    sync.Once
+	firstTCPProbeDone chan struct{}
+	firstTCPProbeOnce sync.Once
+	firstUDPProbeDone chan struct{}
+	firstUDPProbeOnce sync.Once
 }
 
 func NewHealthChecker(cfg config.HealthCheckConf, proxies []*Proxy) *HealthChecker {
@@ -237,8 +247,10 @@ func NewHealthChecker(cfg config.HealthCheckConf, proxies []*Proxy) *HealthCheck
 		stopCh:         make(chan struct{}),
 		ctx:            ctx,
 		cancel:         cancel,
-		probeSem:       make(chan struct{}, 16),
-		firstProbeDone: make(chan struct{}),
+		probeSem:          make(chan struct{}, 16),
+		firstProbeDone:    make(chan struct{}),
+		firstTCPProbeDone: make(chan struct{}),
+		firstUDPProbeDone: make(chan struct{}),
 	}
 	hc.cfg.Store(&cfg)
 	return hc
@@ -247,16 +259,16 @@ func NewHealthChecker(cfg config.HealthCheckConf, proxies []*Proxy) *HealthCheck
 func (hc *HealthChecker) Start() {
 	cfg := hc.cfg.Load()
 	if !cfg.Enabled {
-		hc.notifyFirstProbeDone()
+		hc.notifyAllFirstProbesDone()
 		return
 	}
 	if cfg.AutoDisableSingle && len(hc.proxies) <= 1 {
 		slog.Info("health check disabled: only one upstream proxy")
-		hc.notifyFirstProbeDone()
+		hc.notifyAllFirstProbesDone()
 		return
 	}
 	if len(hc.proxies) == 0 {
-		hc.notifyFirstProbeDone()
+		hc.notifyAllFirstProbesDone()
 		return
 	}
 
@@ -264,7 +276,9 @@ func (hc *HealthChecker) Start() {
 	initialWg.Add(len(hc.proxies))
 	safego.Go("upstream.health.initialProbeWatcher", func() {
 		initialWg.Wait()
-		hc.notifyFirstProbeDone()
+		// 所有节点的初始探测(TCP+UDP)都跑完了,三条闸门不管成败全部放行,
+		// 避免某种协议全军覆没时对应入口永远卡在 800ms 超时上。
+		hc.notifyAllFirstProbesDone()
 	})
 
 	for i, p := range hc.proxies {
@@ -282,7 +296,7 @@ func (hc *HealthChecker) Start() {
 func (hc *HealthChecker) Stop() {
 	hc.cancel()
 	hc.stopOnce.Do(func() { close(hc.stopCh) })
-	hc.notifyFirstProbeDone()
+	hc.notifyAllFirstProbesDone()
 	done := make(chan struct{})
 	safego.Go("upstream.health.stopWait", func() {
 		hc.wg.Wait()
@@ -304,6 +318,10 @@ func (hc *HealthChecker) Reload(cfg config.HealthCheckConf, proxies []*Proxy) {
 	hc.probeSem = make(chan struct{}, 16)
 	hc.firstProbeOnce = sync.Once{}
 	hc.firstProbeDone = make(chan struct{})
+	hc.firstTCPProbeOnce = sync.Once{}
+	hc.firstTCPProbeDone = make(chan struct{})
+	hc.firstUDPProbeOnce = sync.Once{}
+	hc.firstUDPProbeDone = make(chan struct{})
 	hc.ctx, hc.cancel = context.WithCancel(context.Background())
 	hc.Start()
 }
@@ -332,15 +350,37 @@ func (hc *HealthChecker) releaseProbeSem() {
 	}
 }
 
-// FirstProbeDone returns a channel that is closed as soon as at least one proxy succeeds
-// its initial probe (admitting it to the routing pool), or after all initial probes complete.
+// closedChan 给 nil receiver 的调用方返回一个已关闭通道(无 checker 时不拦流量)。
+func closedChan() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+// FirstProbeDone (聚合闸门)在任一电路首次探测成功、或全部初始探测结束后关闭。
+// 调用方需要按协议等门时用 FirstTCPProbeDone / FirstUDPProbeDone。
 func (hc *HealthChecker) FirstProbeDone() <-chan struct{} {
 	if hc == nil {
-		ch := make(chan struct{})
-		close(ch)
-		return ch
+		return closedChan()
 	}
 	return hc.firstProbeDone
+}
+
+// FirstTCPProbeDone 在至少一个节点的 TCP 电路探测成功(获准进入 TCP 转发池)、
+// 或全部初始探测结束后关闭。
+func (hc *HealthChecker) FirstTCPProbeDone() <-chan struct{} {
+	if hc == nil {
+		return closedChan()
+	}
+	return hc.firstTCPProbeDone
+}
+
+// FirstUDPProbeDone 在至少一个节点的 UDP 电路探测成功、或全部初始探测结束后关闭。
+func (hc *HealthChecker) FirstUDPProbeDone() <-chan struct{} {
+	if hc == nil {
+		return closedChan()
+	}
+	return hc.firstUDPProbeDone
 }
 
 func (hc *HealthChecker) notifyFirstProbeDone() {
@@ -350,6 +390,45 @@ func (hc *HealthChecker) notifyFirstProbeDone() {
 	hc.firstProbeOnce.Do(func() {
 		close(hc.firstProbeDone)
 	})
+}
+
+func (hc *HealthChecker) notifyFirstTCPProbeDone() {
+	if hc == nil {
+		return
+	}
+	hc.firstTCPProbeOnce.Do(func() {
+		close(hc.firstTCPProbeDone)
+	})
+}
+
+func (hc *HealthChecker) notifyFirstUDPProbeDone() {
+	if hc == nil {
+		return
+	}
+	hc.firstUDPProbeOnce.Do(func() {
+		close(hc.firstUDPProbeDone)
+	})
+}
+
+// notifyAllFirstProbesDone 在探测被禁用/停止或初始探测全部结束时调用:
+// 聚合闸门和按协议分闸门一律放行,不能有任何入口还傻等一个再也不会来的信号。
+func (hc *HealthChecker) notifyAllFirstProbesDone() {
+	if hc == nil {
+		return
+	}
+	hc.notifyFirstProbeDone()
+	hc.notifyFirstTCPProbeDone()
+	hc.notifyFirstUDPProbeDone()
+}
+
+// notifyCircuitProbeDone 按探测成功的电路关闭对应的分闸门。
+func (hc *HealthChecker) notifyCircuitProbeDone(circuit string) {
+	switch circuit {
+	case "tcp":
+		hc.notifyFirstTCPProbeDone()
+	case "udp":
+		hc.notifyFirstUDPProbeDone()
+	}
 }
 
 // HasAnyTCPAvailable reports whether at least one proxy is verified available for TCP.
@@ -710,20 +789,55 @@ func (hc *HealthChecker) probeUDP(p *Proxy, ctx context.Context) (time.Duration,
 	if err != nil {
 		return 0, nil, err
 	}
+	// timeout=0:探针调用方自己带 deadline(见 checkProxyUDP),保持历史 10s 兜底。
+	latency, err := verifyUDPRelay(ctx, conn, dnsServer, domain, 0)
+	if err != nil {
+		conn.Close()
+		return 0, nil, err
+	}
+	return latency, conn, nil
+}
+
+// verifyUDPRelay 在一条已建立的 UDP 中继上发真实 DNS A 查询并校验应答(TXID 一致、QR=1),
+// 证明中继端到端活着。标准 ASSOCIATE 的握手成功只说明服务端接受命令;raw 中继的本地
+// DialUDP 更是永远成功(fire-and-forget)——只有真实问答才算数。健康探针和真实流量路径
+// (rawFallback 碰运气回落的验证)共用这一份。
+//
+// timeout 只在 ctx 没有 deadline 时生效(0 表示 10s 兜底):真实流量路径用更紧的预算,
+// 黑洞 raw 中继必须快速失败让选路换下一个,不能占着连接干等。
+//
+// 成功时清除 conn 上的 deadline,调用方可直接把连接交给业务;失败时不关连接,由调用方关闭。
+func verifyUDPRelay(ctx context.Context, conn net.Conn, dnsServer, domain string, timeout time.Duration) (time.Duration, error) {
+	if dnsServer == "" {
+		dnsServer = "1.1.1.1:53"
+	}
+	if domain == "" {
+		domain = "dns.google"
+	}
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	host, portStr, err := net.SplitHostPort(dnsServer)
+	if err != nil {
+		return 0, fmt.Errorf("invalid udp probe dns %q: %w", dnsServer, err)
+	}
+	port := 53
+	if pp := parsePort(portStr); pp > 0 {
+		port = pp
+	}
 
 	query := new(dns.Msg)
 	query.SetQuestion(dns.Fqdn(domain), dns.TypeA)
 	packed, err := query.Pack()
 	if err != nil {
-		conn.Close()
-		return 0, nil, err
+		return 0, err
 	}
 	txid := query.Id
 
 	if deadline, ok := ctx.Deadline(); ok {
 		conn.SetDeadline(deadline)
 	} else {
-		conn.SetDeadline(time.Now().Add(10 * time.Second))
+		conn.SetDeadline(time.Now().Add(timeout))
 	}
 	stop := context.AfterFunc(ctx, func() {
 		conn.Close()
@@ -732,33 +846,28 @@ func (hc *HealthChecker) probeUDP(p *Proxy, ctx context.Context) (time.Duration,
 
 	start := time.Now()
 	if _, err := conn.Write(buildUDPFrame(host, port, packed)); err != nil {
-		conn.Close()
-		return 0, nil, err
+		return 0, err
 	}
 	buf := make([]byte, 2048)
 	n, err := conn.Read(buf)
 	if err != nil {
-		conn.Close()
-		return 0, nil, err
+		return 0, err
 	}
 	latency := time.Since(start)
 
 	payload, err := parseUDPFrame(buf[:n])
 	if err != nil {
-		conn.Close()
-		return 0, nil, err
+		return 0, err
 	}
 	var resp dns.Msg
 	if err := resp.Unpack(payload); err != nil {
-		conn.Close()
-		return 0, nil, fmt.Errorf("invalid DNS response: %w", err)
+		return 0, fmt.Errorf("invalid DNS response: %w", err)
 	}
 	if resp.Id != txid || !resp.Response {
-		conn.Close()
-		return 0, nil, fmt.Errorf("invalid DNS response (id=%d, response=%v)", resp.Id, resp.Response)
+		return 0, fmt.Errorf("invalid DNS response (id=%d, response=%v)", resp.Id, resp.Response)
 	}
 	conn.SetDeadline(time.Time{})
-	return latency, conn, nil
+	return latency, nil
 }
 
 // buildUDPFrame wraps a payload in a SOCKS5 UDP relay header (RSV=0, FRAG=0, ATYP
@@ -846,6 +955,7 @@ func (hc *HealthChecker) recordSuccess(p *Proxy, ph *ProxyHealth, circuit string
 	case StateClosed:
 		ph.consecutiveFailures = 0
 		hc.notifyFirstProbeDone()
+		hc.notifyCircuitProbeDone(circuit)
 	case StateOpen:
 		// checkProxy skips probing while Open and inside the cool-down, so reaching here
 		// means the cool-down has passed and this probe succeeded — the node is recovering.
@@ -857,6 +967,7 @@ func (hc *HealthChecker) recordSuccess(p *Proxy, ph *ProxyHealth, circuit string
 		ph.consecutiveSuccesses = 1
 		slog.Info("proxy circuit half-open on probe success", "url", MaskProxyURL(p.URL), "circuit", circuit, "latency", latency)
 		hc.notifyFirstProbeDone()
+		hc.notifyCircuitProbeDone(circuit)
 	case StateHalfOpen:
 		ph.consecutiveSuccesses++
 		if ph.consecutiveSuccesses >= cfg.SuccessesThreshold {
@@ -866,6 +977,7 @@ func (hc *HealthChecker) recordSuccess(p *Proxy, ph *ProxyHealth, circuit string
 			slog.Info("proxy recovered", "url", MaskProxyURL(p.URL), "circuit", circuit, "latency", latency)
 		}
 		hc.notifyFirstProbeDone()
+		hc.notifyCircuitProbeDone(circuit)
 	}
 }
 

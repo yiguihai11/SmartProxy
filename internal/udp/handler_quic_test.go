@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	mdns "github.com/miekg/dns"
+
 	"smartproxy/internal/route"
 	"smartproxy/internal/upstream"
 )
@@ -34,6 +36,72 @@ func deadTCPPort(t *testing.T) int {
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
 	return port
+}
+
+// stripSOCKS5UDPHeader 剥掉 SOCKS5 UDP 中继头(RSV|FRAG|ATYP|DST.ADDR|DST.PORT),
+// 返回 payload。用于测试里的裸 UDP 中继 mock 取出 DNS 查询。
+func stripSOCKS5UDPHeader(frame []byte) ([]byte, bool) {
+	if len(frame) < 4 {
+		return nil, false
+	}
+	var hdrLen int
+	switch frame[3] {
+	case 0x01:
+		hdrLen = 1 + 4 + 2
+	case 0x04:
+		hdrLen = 1 + 16 + 2
+	case 0x03:
+		if len(frame) < 5 {
+			return nil, false
+		}
+		hdrLen = 1 + 1 + int(frame[4]) + 2
+	default:
+		return nil, false
+	}
+	if len(frame) < 3+hdrLen {
+		return nil, false
+	}
+	return frame[3+hdrLen:], true
+}
+
+// startAnsweringRawUDPRelay 起一个「真的会应答」的裸 UDP 中继(模拟 shadowsocks-android
+// 的 udp_only 回落实例):按 SOCKS5 UDP 头剥出 DNS 查询,回一个同 TXID 的 DNS 响应帧。
+// 返回的端口同时用作代理节点的 host:port——那里故意不放 TCP 监听,让 SOCKS5 拨号失败、
+// 走 raw fallback;而 raw 中继会应答,所以 manager 的端到端验证能通过。
+// 旧版本靠「UDP dial fire-and-forget 必成功」拿到假成功的 conn,现在必须真应答。
+func startAnsweringRawUDPRelay(t *testing.T) (*net.UDPConn, int) {
+	t.Helper()
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, addr, err := pc.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			payload, ok := stripSOCKS5UDPHeader(buf[:n])
+			if !ok {
+				continue
+			}
+			var q mdns.Msg
+			if err := q.Unpack(payload); err != nil || len(q.Question) == 0 {
+				continue
+			}
+			resp := new(mdns.Msg)
+			resp.SetReply(&q) // 同 ID、QR=1
+			packed, err := resp.Pack()
+			if err != nil {
+				continue
+			}
+			frame := append(buildResponseHeader("1.1.1.1", 53, net.IPv4(1, 1, 1, 1)), packed...)
+			pc.WriteToUDP(frame, addr)
+		}
+	}()
+	t.Cleanup(func() { pc.Close() })
+	return pc, pc.LocalAddr().(*net.UDPAddr).Port
 }
 
 // setupQUICFlowDeadTest 搭一个最小 Handler(真实内存黑名单 Router + 注入的 upstream.Manager)
@@ -64,13 +132,14 @@ func setupQUICFlowDeadTest(t *testing.T, mgr *upstream.Manager) (*Handler, *udpS
 }
 
 // 判死后代理拨号成功:出向热切为 framed 代理、旧直连关闭、IP+SNI 写入动态黑名单。
-// 代理节点指向一个无人监听的 TCP 端口 —— SOCKS5 握手失败后 raw UDP relay fallback
-// (UDP dial fire-and-forget 必成功),据此拿到一个非 nil 代理 conn,聚焦验证 quicFlowDead
-// 本身的热切逻辑,与底层 relay 类型无关。
+// 代理节点指向一个「有裸 UDP 中继、但没有 TCP 监听」的端口:SOCKS5 拨号失败 → raw UDP
+// relay fallback → manager 在裸中继上发真实 DNS 问答验证端到端可用,验过才拿到 conn。
+// 聚焦验证 quicFlowDead 本身的热切逻辑,与底层 relay 类型无关。
 func TestQUICFlowDead_ProxyDialSucceeds_SwitchesAndBlacklists(t *testing.T) {
+	_, relayPort := startAnsweringRawUDPRelay(t)
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
 		Proxies: []upstream.ProxyEntry{
-			{Alias: "raw", URL: "socks5://127.0.0.1:" + strconv.Itoa(deadTCPPort(t))},
+			{Alias: "raw", URL: "socks5://127.0.0.1:" + strconv.Itoa(relayPort)},
 		},
 	})
 	if err != nil {

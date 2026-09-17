@@ -3,9 +3,11 @@ package upstream
 import (
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -473,6 +475,310 @@ func TestOrderedProxies_RoundRobin(t *testing.T) {
 	}
 	if firsts["a"] == 0 || firsts["b"] == 0 {
 		t.Error("round_robin should rotate through all proxies")
+	}
+}
+
+// TestOrderedProxies_RoundRobinCounterWrap 回归 rrCounter 回绕 panic:计数器加到 2^64
+// 回绕、Add 返回到 0 时,Add(1)-1 在 uint64 里下溢成 MaxUint64;旧代码先转成 int 拿到
+// -1,(start+i)%n 随即索引 [-1] 直接 panic。概率上要跑满 2^64 次才撞上,但崩点在那儿,
+// 且一旦崩整个代理进程跟着死。
+func TestOrderedProxies_RoundRobinCounterWrap(t *testing.T) {
+	hosts := []string{"a", "b", "c"}
+	entries := make([]ProxyEntry, len(hosts))
+	for i, h := range hosts {
+		entries[i] = ProxyEntry{Alias: h, URL: "socks5://" + h + ":1080"}
+	}
+	m, _ := NewManager(UpstreamConfig{Default: "round_robin", Proxies: entries})
+	n := uint64(len(hosts))
+
+	// 回绕前一拍、回绕那一拍(旧代码必 panic 的点)、回绕后一拍。
+	// 断言:不 panic、是全集的排列、首元素等于调用序号 mod n(前 2^64 次选择的轮转律)。
+	for _, c := range []uint64{math.MaxUint64 - 1, math.MaxUint64, 0} {
+		m.order[transportTCP].rr.Store(c)
+		got := m.orderedProxies()
+		if uint64(len(got)) != n {
+			t.Fatalf("counter=%d: expected %d proxies, got %d", c, n, len(got))
+		}
+		if want := hosts[c%n]; got[0].Host != want {
+			t.Errorf("counter=%d: first proxy is %s, want %s", c, got[0].Host, want)
+		}
+		seen := make(map[string]bool, n)
+		for _, p := range got {
+			if seen[p.Host] {
+				t.Errorf("counter=%d: %s appears twice in one rotation", c, p.Host)
+			}
+			seen[p.Host] = true
+		}
+		if uint64(len(seen)) != n {
+			t.Errorf("counter=%d: rotation is not a permutation: %v", c, got)
+		}
+	}
+}
+
+// TestOrderedProxies_RoundRobinCountersIndependent 回归 TCP/UDP 共用轮转指针:两个协议
+// 各自建连却推同一个计数器时会互相插队 —— 每条 UDP 关联都把 TCP 的轮转顶掉一格,反之
+// 亦然。乱成什么样取决于当时两个协议的流量配比,既不可复现,也让 round_robin 承诺的
+// "按序均摊"彻底落空。
+func TestOrderedProxies_RoundRobinCountersIndependent(t *testing.T) {
+	hosts := []string{"a", "b", "c"}
+	entries := make([]ProxyEntry, len(hosts))
+	for i, h := range hosts {
+		entries[i] = ProxyEntry{Alias: h, URL: "socks5://" + h + ":1080"}
+	}
+	m, _ := NewManager(UpstreamConfig{Default: "round_robin", Proxies: entries})
+
+	// UDP 侧先推两次(2 不是 n 的倍数,指针被顶偏),TCP 侧的轮转必须一点不受影响。
+	m.orderedProxiesUDP()
+	m.orderedProxiesUDP()
+	for i, want := range []string{"a", "b", "c", "a"} {
+		if got := m.orderedProxies()[0].Host; got != want {
+			t.Errorf("TCP selection #%d = %s, want %s (UDP traffic must not advance the TCP rotation)",
+				i, got, want)
+		}
+	}
+	// 反向:TCP 推了 4 次之后,UDP 自己那条指针应停在它的第 3 次选择上,给出 c;
+	// 若两者共用一个计数器,这里会按 (2+4)%3=0 拿到 a。
+	if got := m.orderedProxiesUDP()[0].Host; got != "c" {
+		t.Errorf("UDP selection #2 = %s, want c (TCP traffic must not advance the UDP rotation)", got)
+	}
+}
+
+// newLatencyManager 建一个 latency 策略的管理器,hosts 即配置顺序。
+func newLatencyManager(t *testing.T, hosts ...string) *Manager {
+	t.Helper()
+	entries := make([]ProxyEntry, len(hosts))
+	for i, h := range hosts {
+		entries[i] = ProxyEntry{Alias: h, URL: "socks5://" + h + ":1080"}
+	}
+	m, err := NewManager(UpstreamConfig{Default: "latency", Proxies: entries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(m.Stop)
+	// 填上 geo 信息让 probeInitialGeo 跳过这些节点:那条探测是异步的,成功时会把直连
+	// RTT 写进 health.latency(manager.go 的 probeInitialGeo),和用例注入的样本打架,
+	// 会让断言随机失败。
+	for _, h := range hosts {
+		m.aliasMap[h].SetGeoInfo("US", "203.0.113.1")
+	}
+	return m
+}
+
+// setCircuitLatency 给节点的 TCP 或 UDP 电路写入一个延迟样本,模拟健康探测的结果。
+func setCircuitLatency(m *Manager, alias string, udp bool, d time.Duration) {
+	if udp {
+		m.aliasMap[alias].udpHealth.UpdateLatency(d)
+		return
+	}
+	m.aliasMap[alias].health.UpdateLatency(d)
+}
+
+// proxyHosts 取出排序结果里的 host 序列,便于整条断言。
+func proxyHosts(proxies []*Proxy) []string {
+	out := make([]string, len(proxies))
+	for i, p := range proxies {
+		out[i] = p.Host
+	}
+	return out
+}
+
+// TestOrderedProxies_LatencyColdStart 回归冷启动:节点还没测出延迟时,旧实现一律按
+// time.Hour 处理,于是**第一个**探到延迟的节点——哪怕它自己是 3s 这种烂数字——会压过所有
+// 还没测的节点,把冷启动窗口里每条新流的流量全吸走,直到其余节点的探测落地。
+// 未测量的节点必须用"已测量延迟的中位数"占位:没数据就不站队,既不插到已证实的快节点
+// 前面,也不会被打到一个已知很慢的节点后面。
+func TestOrderedProxies_LatencyColdStart(t *testing.T) {
+	m := newLatencyManager(t, "a", "b", "c")
+	// 只有 b 有实测延迟,而且是 3s 这种烂数字。
+	setCircuitLatency(m, "b", false, 3*time.Second)
+
+	// 中位数占位后三者同分(都是 3s),全部入带;首拍轮转起点为 0,稳定排序保持配置
+	// 顺序 —— 而不是把一个已知很慢的 b 顶到最前面。
+	want := []string{"a", "b", "c"}
+	if got := proxyHosts(m.orderedProxies()); !slices.Equal(got, want) {
+		t.Errorf("order = %v, want %v (a known-slow measured node must not jump ahead of unmeasured ones)", got, want)
+	}
+
+	// 已证实的快节点仍然要排在未测量的前面:中位数只会把"没数据"摆到中间,不会让它
+	// 白捡第一。
+	setCircuitLatency(m, "c", false, 30*time.Millisecond)
+	if got := m.orderedProxies()[0].Host; got != "c" {
+		t.Errorf("first = %s, want c (a proven-fast node still wins)", got)
+	}
+}
+
+// TestOrderedProxies_LatencyBandRotation 延迟在最优 1.5 倍以内的节点组成候选带,每建一条
+// 新连接在带内轮转起点,把流量摊给所有"差不多快"的节点;带外节点按延迟沉在带后当对冲
+// 备胎,不带轮转。
+func TestOrderedProxies_LatencyBandRotation(t *testing.T) {
+	m := newLatencyManager(t, "a", "b", "c")
+	// 进入线 = 95ms + max(95/2, 20ms) ≈ 142ms:b、a 在带内,c=300ms 在带外。
+	setCircuitLatency(m, "a", false, 100*time.Millisecond)
+	setCircuitLatency(m, "b", false, 95*time.Millisecond)
+	setCircuitLatency(m, "c", false, 300*time.Millisecond)
+
+	want := [][]string{
+		{"b", "a", "c"},
+		{"a", "b", "c"},
+		{"b", "a", "c"},
+	}
+	for i := range want {
+		if got := proxyHosts(m.orderedProxies()); !slices.Equal(got, want[i]) {
+			t.Errorf("rotation call %d = %v, want %v (rotate inside the band; the out-of-band node stays tail)", i, got, want[i])
+		}
+	}
+}
+
+// TestOrderedProxies_LatencyBandEdgeHysteresis 带缘滞回:带外节点够到"进入线"(最优 1.5
+// 倍)才能入带;带内成员要烂过更宽的"退出线"(再让 best/4,地板 20ms)才被踢。不然 EWMA
+// 在带线附近抖一下,成员每拍进出,轮转集合乱跳。判定技巧:单成员带不轮转,双成员带每拍
+// 换首位——连续两拍的次序就能区分成员到底在不在带里。
+func TestOrderedProxies_LatencyBandEdgeHysteresis(t *testing.T) {
+	m := newLatencyManager(t, "a", "b", "c")
+	setCircuitLatency(m, "a", false, 100*time.Millisecond)
+	setCircuitLatency(m, "b", false, 155*time.Millisecond) // 进入线 150ms,b 带外
+	setCircuitLatency(m, "c", false, 900*time.Millisecond)
+
+	// b 在进入线外:候选带只有 a,连续两拍都是 a 领头。
+	if got := proxyHosts(m.orderedProxies()); !slices.Equal(got, []string{"a", "b", "c"}) {
+		t.Fatalf("call 1 = %v, want [a b c]", got)
+	}
+	if got := proxyHosts(m.orderedProxies()); !slices.Equal(got, []string{"a", "b", "c"}) {
+		t.Fatalf("call 2 = %v, want [a b c] (an outsider past the 1.5x line must not enter)", got)
+	}
+
+	// b 进到 145ms <= 进入线:入带,下一拍轮转把它顶到首位。
+	setCircuitLatency(m, "b", false, 145*time.Millisecond)
+	if got := proxyHosts(m.orderedProxies()); !slices.Equal(got, []string{"a", "b", "c"}) {
+		t.Fatalf("call 3 = %v, want [a b c]", got)
+	}
+	if got := proxyHosts(m.orderedProxies()); !slices.Equal(got, []string{"b", "a", "c"}) {
+		t.Fatalf("call 4 = %v, want [b a c] (b reached the enter line and joins the rotation)", got)
+	}
+
+	// b 又抖到 165ms:越过进入线但没烂过退出线(175ms),带籍保留,继续参与轮转。
+	setCircuitLatency(m, "b", false, 165*time.Millisecond)
+	if got := proxyHosts(m.orderedProxies()); !slices.Equal(got, []string{"a", "b", "c"}) {
+		t.Fatalf("call 5 = %v, want [a b c]", got)
+	}
+	if got := proxyHosts(m.orderedProxies()); !slices.Equal(got, []string{"b", "a", "c"}) {
+		t.Fatalf("call 6 = %v, want [b a c] (a wobble back across the enter line must not kick a member)", got)
+	}
+
+	// b 烂到 200ms > 退出线:出带,候选带只剩 a,不再轮转。
+	setCircuitLatency(m, "b", false, 200*time.Millisecond)
+	if got := proxyHosts(m.orderedProxies()); !slices.Equal(got, []string{"a", "b", "c"}) {
+		t.Fatalf("call 7 = %v, want [a b c]", got)
+	}
+	if got := proxyHosts(m.orderedProxies()); !slices.Equal(got, []string{"a", "b", "c"}) {
+		t.Fatalf("call 8 = %v, want [a b c] (b past the leave line drops out of the band)", got)
+	}
+}
+
+// TestOrderedProxies_LatencyBandLowLatencyFloor 低延迟区 1.5 倍的相对宽度比测量噪声还窄
+// (最优 20ms 时只有 10ms),进入线压一条 20ms 加法地板:40ms 的节点仍在带内,45ms 的
+// 出局。
+func TestOrderedProxies_LatencyBandLowLatencyFloor(t *testing.T) {
+	m := newLatencyManager(t, "a", "b", "c")
+	setCircuitLatency(m, "a", false, 20*time.Millisecond)
+	setCircuitLatency(m, "b", false, 40*time.Millisecond)
+	setCircuitLatency(m, "c", false, 45*time.Millisecond)
+
+	want := [][]string{
+		{"a", "b", "c"},
+		{"b", "a", "c"},
+	}
+	for i := range want {
+		if got := proxyHosts(m.orderedProxies()); !slices.Equal(got, want[i]) {
+			t.Errorf("call %d = %v, want %v (enter line is best+20ms in the low-latency zone)", i, got, want[i])
+		}
+	}
+}
+
+// TestOrderedProxies_LatencyBandCounterWrap 带内轮转指针在 uint64 回绕处不许 panic、不许
+// 出现负下标——和 round_robin 同一个坑,共用 rrStart 但两边都得验。
+func TestOrderedProxies_LatencyBandCounterWrap(t *testing.T) {
+	m := newLatencyManager(t, "a", "b")
+	setCircuitLatency(m, "a", false, 100*time.Millisecond)
+	setCircuitLatency(m, "b", false, 100*time.Millisecond)
+
+	cases := []struct {
+		c    uint64
+		want string
+	}{
+		{math.MaxUint64 - 1, "a"},
+		{math.MaxUint64, "b"},
+		{0, "a"},
+	}
+	for _, tc := range cases {
+		m.order[transportTCP].rr.Store(tc.c)
+		got := proxyHosts(m.orderedProxies())
+		if len(got) != 2 || (got[0] != "a" && got[0] != "b") || got[0] == got[1] {
+			t.Errorf("counter %d: order = %v, want a full 2-node permutation", tc.c, got)
+		}
+		if got[0] != tc.want {
+			t.Errorf("counter %d: first = %s, want %s", tc.c, got[0], tc.want)
+		}
+	}
+}
+
+// TestOrderedProxies_LatencyBandMemberUnavailable 带内成员掉线时必须立刻出带、沉底,不能
+// 因为滞回快照还记着它就继续摆在前面——排在第一位的是个不可用节点,选路白撞一次。
+func TestOrderedProxies_LatencyBandMemberUnavailable(t *testing.T) {
+	m := newLatencyManager(t, "a", "b")
+	setCircuitLatency(m, "a", false, 20*time.Millisecond)
+	setCircuitLatency(m, "b", false, 300*time.Millisecond)
+
+	if got := m.orderedProxies()[0].Host; got != "a" {
+		t.Fatalf("cold pick = %s, want a", got)
+	}
+
+	m.aliasMap["a"].health.SetManualState(false) // a 掉线
+	want := []string{"b", "a"}
+	if got := proxyHosts(m.orderedProxies()); !slices.Equal(got, want) {
+		t.Errorf("order = %v, want %v (an unavailable band member must be replaced and sunk to the end)", got, want)
+	}
+}
+
+// TestOrderedProxies_LatencyBandPerTransport TCP 建连和 UDP 关联各按各的电路延迟组带,
+// 轮转指针也各走各的。这里 TCP 候选带只有 a(a=20ms,b=100ms 在带外),UDP 候选带是
+// [b,a](95ms/100ms 都在带内)。共用指针的话第一拍 UDP 就会被 TCP 推进一格、错拿 a 领头,
+// 把 UDP 包发给一条更烂的 UDP 电路。
+func TestOrderedProxies_LatencyBandPerTransport(t *testing.T) {
+	m := newLatencyManager(t, "a", "b")
+	// a:TCP 快 UDP 慢;b 反过来。
+	setCircuitLatency(m, "a", false, 20*time.Millisecond)
+	setCircuitLatency(m, "a", true, 100*time.Millisecond)
+	setCircuitLatency(m, "b", false, 100*time.Millisecond)
+	setCircuitLatency(m, "b", true, 95*time.Millisecond)
+
+	wantUDP := []string{"b", "a", "b"}
+	for i := range wantUDP {
+		if got := m.orderedProxies()[0].Host; got != "a" {
+			t.Fatalf("call %d: TCP pick = %s, want a (a is the only TCP band member)", i, got)
+		}
+		if got := m.orderedProxiesUDP()[0].Host; got != wantUDP[i] {
+			t.Fatalf("call %d: UDP pick = %s, want %s (UDP band [b,a] rotates on its own counter)", i, got, wantUDP[i])
+		}
+	}
+}
+
+// TestOrderedProxies_LatencyBandUDPAvailability latency 排序的可用/不可用分区必须按路径走:
+// b 的 TCP 电路被手工关掉(模拟 udp_only),TCP 路径上它沉底;但它的 UDP 电路健康且更快,
+// UDP 路径上它必须是候选带领头,不能被 TCP 熔断器连坐。
+func TestOrderedProxies_LatencyBandUDPAvailability(t *testing.T) {
+	m := newLatencyManager(t, "a", "b")
+	setCircuitLatency(m, "a", false, 100*time.Millisecond)
+	setCircuitLatency(m, "a", true, 100*time.Millisecond)
+	setCircuitLatency(m, "b", false, 200*time.Millisecond)
+	setCircuitLatency(m, "b", true, 90*time.Millisecond)
+	m.aliasMap["b"].health.SetManualState(false) // b 的 TCP 电路关断,UDP 电路照常
+
+	if got := proxyHosts(m.orderedProxies()); !slices.Equal(got, []string{"a", "b"}) {
+		t.Fatalf("TCP order = %v, want [a b] (a TCP-down node is tail on the TCP path)", got)
+	}
+	if got := proxyHosts(m.orderedProxiesUDP()); !slices.Equal(got, []string{"b", "a"}) {
+		t.Fatalf("UDP order = %v, want [b a] (UDP path ranks on the UDP circuit, not TCP's breaker)", got)
 	}
 }
 
