@@ -136,6 +136,23 @@ func (ph *ProxyHealth) resetAutoOpened() bool {
 	return true
 }
 
+// ResetFailures resets consecutive failures and restores StateClosed if not manually disabled.
+// Unlike resetAutoOpened (which only resets if StateOpen/StateHalfOpen), ResetFailures also
+// resets consecutiveFailures back to 0 even if the circuit was currently StateClosed,
+// preventing an accumulation of handover failures from tripping the breaker right after handover.
+// Manually disabled circuits (manual != nil && !*manual) are preserved.
+func (ph *ProxyHealth) ResetFailures() {
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+	if ph.manual != nil && !*ph.manual {
+		return
+	}
+	ph.state = StateClosed
+	ph.consecutiveFailures = 0
+	ph.consecutiveSuccesses = 0
+	ph.openSince = time.Time{}
+}
+
 func (ph *ProxyHealth) IsAvailable() bool {
 	ph.mu.RLock()
 	defer ph.mu.RUnlock()
@@ -250,6 +267,46 @@ func (hc *HealthChecker) Reload(cfg config.HealthCheckConf, proxies []*Proxy) {
 	hc.stopCh = make(chan struct{})
 	hc.ctx, hc.cancel = context.WithCancel(context.Background())
 	hc.Start()
+}
+
+// ProbeAll immediately triggers an asynchronous probe on all proxies, bypassing open cooldowns
+// to quickly re-evaluate node health after a network change.
+func (hc *HealthChecker) ProbeAll() {
+	if hc == nil {
+		return
+	}
+	cfg := hc.cfg.Load()
+	if cfg == nil || !cfg.Enabled {
+		return
+	}
+	for _, p := range hc.proxies {
+		proxy := p
+		safego.Go("upstream.health.probeOnNetworkChange", func() {
+			timeout := time.Duration(cfg.Timeout) * time.Second
+			if timeout <= 0 {
+				timeout = 5 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(hc.ctx, timeout)
+			defer cancel()
+
+			if proxy.SchemeSupportsUDP() && !proxy.udpHealth.IsManuallyDisabled() {
+				latency, err := hc.ProbeUDP(ctx, proxy)
+				if err == nil {
+					hc.RecordUDPSuccess(proxy, latency)
+				} else {
+					hc.RecordUDPFailure(proxy, err)
+				}
+			}
+			if !proxy.health.IsManuallyDisabled() {
+				latency, err := hc.ProbeTCP(ctx, proxy)
+				if err == nil {
+					hc.RecordSuccess(proxy, latency)
+				} else {
+					hc.RecordFailure(proxy, err)
+				}
+			}
+		})
+	}
 }
 
 func (hc *HealthChecker) checkLoop(p *Proxy) {

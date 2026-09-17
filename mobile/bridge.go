@@ -53,6 +53,20 @@ func NotifyMemoryPressure(level int32) {
 	tun.SetMemoryPressure(int(level))
 }
 
+// NotifyNetworkChange is called by the Android VpnService when the underlying default network changes
+// (e.g. Wi-Fi <-> Mobile Data). It triggers an immediate recovery flow: purging stale UDP pools,
+// clearing dead connections, resetting circuit breakers, and probing proxies.
+func NotifyNetworkChange() {
+	slog.Info("[Go-Bridge] NotifyNetworkChange received")
+	engineMu.Lock()
+	eng := globalEngine
+	engineMu.Unlock()
+
+	if eng != nil {
+		eng.HandleNetworkChange()
+	}
+}
+
 // Android→Go 反向桥已删除(2026-08,停 VPN 后图标赖着不掉排查):configReload 曾经
 // AndroidBridge.Vpn("restart") 触发 Android 侧自动重启,但该异步重启循环存在竞态——
 // 用户显式停止后仍可能在 delayed start 把隧道拉起,状态栏图标不消失。现改为 App 侧

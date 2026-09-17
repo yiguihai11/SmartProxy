@@ -1245,3 +1245,18 @@ func TestHandleDNS_FilterAAAA(t *testing.T) {
 	}
 }
 
+func TestHandler_ClearCache(t *testing.T) {
+	cn := chnroute.New()
+	h := NewHandler(100, 60, "8.8.8.8", "", cn, nil, 3, "0.0.0.0", "::", false, PreferNone, nil, true)
+	h.cache.Set("example.com.", dns.TypeA, []byte("test"), 60*time.Second)
+	if h.cache.Len() != 1 {
+		t.Fatalf("expected cache len 1, got %d", h.cache.Len())
+	}
+
+	h.ClearCache()
+	if h.cache.Len() != 0 {
+		t.Fatalf("expected cache len 0 after ClearCache, got %d", h.cache.Len())
+	}
+}
+
+

@@ -232,3 +232,41 @@ func TestKillBlockedConnections_UDP(t *testing.T) {
 	default:
 	}
 }
+
+func TestResetActiveConnections(t *testing.T) {
+	acl := filepath.Join(t.TempDir(), "acl.txt")
+	require.NoError(t, os.WriteFile(acl, []byte(""), 0o644))
+	h := newKillHandler(t, acl)
+
+	// Add TCP connections
+	appA, _ := net.Pipe()
+	appB, _ := net.Pipe()
+	h.liveTCP.add(appA, "1.2.3.4", 443, nil)
+	h.liveTCP.add(appB, "9.9.9.9", 80, nil)
+	assert.Len(t, h.liveTCP.snapshot(), 2)
+
+	// Add UDP sessions
+	sess1 := &tunUdpSession{closeCh: make(chan struct{}), ip: "1.1.1.1"}
+	sess2 := &tunUdpSession{closeCh: make(chan struct{}), ip: "2.2.2.2"}
+	h.udpSessions.Store("s1", sess1)
+	h.udpSessions.Store("s2", sess2)
+
+	// Trigger ResetActiveConnections
+	h.ResetActiveConnections()
+
+	// All TCP connections should be removed
+	assert.Empty(t, h.liveTCP.snapshot())
+
+	// All UDP sessions should be signaled to close
+	select {
+	case <-sess1.closeCh:
+	default:
+		t.Fatal("sess1 should be closed")
+	}
+	select {
+	case <-sess2.closeCh:
+	default:
+		t.Fatal("sess2 should be closed")
+	}
+}
+

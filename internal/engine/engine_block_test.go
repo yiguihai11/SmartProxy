@@ -194,5 +194,12 @@ func TestShouldFilterAAAA(t *testing.T) {
 	assert.False(t, shouldFilterAAAA(cfg4))
 }
 
+func TestEngine_HandleNetworkChange(t *testing.T) {
+	// Verify zero-value or initialized Engine handles network change safely without panic
+	e := &Engine{}
+	e.HandleNetworkChange()
+}
+
+
 
 

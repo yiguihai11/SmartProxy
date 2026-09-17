@@ -1484,4 +1484,62 @@ func TestManager_FindProxyLocked_Fallback(t *testing.T) {
 	}
 }
 
+func TestManager_HandleNetworkChange(t *testing.T) {
+	mgr, err := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{
+			{Alias: "p1", URL: "socks5://1.2.3.4:1080"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer mgr.Stop()
+
+	p := mgr.aliasMap["p1"]
+	if p == nil {
+		t.Fatal("proxy p1 not found")
+	}
+
+	// Simulate failure on handover
+	p.health.mu.Lock()
+	p.health.state = StateOpen
+	p.health.consecutiveFailures = 4
+	p.health.mu.Unlock()
+
+	p.udpHealth.mu.Lock()
+	p.udpHealth.state = StateOpen
+	p.udpHealth.consecutiveFailures = 4
+	p.udpHealth.mu.Unlock()
+
+	// Put dummy connection in UDP pool
+	c1, c2 := net.Pipe()
+	defer c2.Close()
+	mgr.dnsUDPPool.Release(c1)
+	if mgr.dnsUDPPool.Len() != 1 {
+		t.Fatalf("expected pool len 1, got %d", mgr.dnsUDPPool.Len())
+	}
+
+	// Trigger network change
+	mgr.HandleNetworkChange()
+
+	// Check pool drained
+	if mgr.dnsUDPPool.Len() != 0 {
+		t.Fatalf("expected pool len 0, got %d", mgr.dnsUDPPool.Len())
+	}
+
+	// Check circuits reset
+	p.health.mu.RLock()
+	if p.health.state != StateClosed || p.health.consecutiveFailures != 0 {
+		t.Errorf("expected health closed with 0 failures, got state=%v, failures=%d", p.health.state, p.health.consecutiveFailures)
+	}
+	p.health.mu.RUnlock()
+
+	p.udpHealth.mu.RLock()
+	if p.udpHealth.state != StateClosed || p.udpHealth.consecutiveFailures != 0 {
+		t.Errorf("expected udpHealth closed with 0 failures, got state=%v, failures=%d", p.udpHealth.state, p.udpHealth.consecutiveFailures)
+	}
+	p.udpHealth.mu.RUnlock()
+}
+
+
 

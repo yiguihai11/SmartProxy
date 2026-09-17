@@ -838,6 +838,36 @@ func (m *Manager) ResetAutoOpenedCircuits() int {
 	return n
 }
 
+// HandleNetworkChange handles an underlying physical network handover (e.g. Wi-Fi <-> Cellular).
+// It drains stale pooled UDP sockets, resets circuit breaker failure counts on all proxies
+// (preserving explicit manual pins), and triggers an immediate health probe on the new network.
+func (m *Manager) HandleNetworkChange() {
+	m.mu.RLock()
+	allAliases := make([]*Proxy, 0, len(m.aliasMap))
+	for _, p := range m.aliasMap {
+		allAliases = append(allAliases, p)
+	}
+	hc := m.healthChecker
+	pool := m.dnsUDPPool
+	m.mu.RUnlock()
+
+	if pool != nil {
+		pool.Close()
+	}
+
+	for _, p := range allAliases {
+		if p != nil {
+			p.health.ResetFailures()
+			p.udpHealth.ResetFailures()
+		}
+	}
+
+	if hc != nil {
+		hc.ProbeAll()
+	}
+	slog.Info("upstream manager handled network change: pool drained, circuits reset, probing all nodes")
+}
+
 func (m *Manager) Strategy() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

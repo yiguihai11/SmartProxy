@@ -1,7 +1,12 @@
 package io.github.yiguihai11.smartproxy
 
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.VpnService
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.widget.Toast
@@ -145,6 +150,13 @@ class SmartProxyVpnService : VpnService() {
     /** §4.5 区分主动/被动停止:ACTION_STOP 置 true;正常启动置 false。主线程回调间切换。 */
     private var userInitiatedStop = false
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
+    private var pendingNetworkChangeRunnable: Runnable? = null
+    private var currentUnderlyingNetwork: Network? = null
+    private var hasInitialNetwork = false
+    private var hadNetworkLost = false
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         Log.i(TAG, "[onStartCommand] Called. action=$action, startId=$startId")
@@ -248,6 +260,7 @@ class SmartProxyVpnService : VpnService() {
             startedEngine = true
             _isRunning.value = true
             startedAt = System.currentTimeMillis()
+            registerDefaultNetworkListener()
             io.github.yiguihai11.smartproxy.shizuku.TetheringCoreSync.onStarted(this, ConfigProvider.readConfig(this).toString())
             // 悬浮网速计:仅 VPN 隧道模式有按 UID 统计(TUN 数据路径),SOCKS5 模式无数据可显。
             // autoShow 内部按开关 + 悬浮窗权限自门控,未开/未授权均为 no-op。
@@ -508,6 +521,98 @@ class SmartProxyVpnService : VpnService() {
         -1
     }
 
+    /** 注册底层默认物理网络变化监听 (Wi-Fi <-> 蜂窝移动数据漫游)。
+     *  动态更新 setUnderlyingNetworks 避免 Android Vpn 系统将 VPN 判定为无网络,
+     *  并向 Go 引擎发送通知以清理失效 socket 与重置熔断计数器。 */
+    private fun registerDefaultNetworkListener() {
+        if (defaultNetworkCallback != null) return
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                Log.i(TAG, "[NetworkCallback] Default network available: $network")
+                handleUnderlyingNetworkChanged(network)
+            }
+
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                val hasInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                val isValidated = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                Log.i(TAG, "[NetworkCallback] Default network capabilities changed: $network, internet=$hasInternet, validated=$isValidated")
+                if (hasInternet) {
+                    handleUnderlyingNetworkChanged(network)
+                }
+            }
+
+            override fun onLost(network: Network) {
+                Log.w(TAG, "[NetworkCallback] Default network lost: $network")
+                hadNetworkLost = true
+                try {
+                    if (tunPfd != null) {
+                        setUnderlyingNetworks(null)
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "[NetworkCallback] Failed to setUnderlyingNetworks(null): ${e.message}")
+                }
+            }
+        }
+
+        try {
+            cm.registerDefaultNetworkCallback(callback)
+            defaultNetworkCallback = callback
+            Log.i(TAG, "[NetworkCallback] Registered default network callback successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "[NetworkCallback] Failed to register default network callback", e)
+        }
+    }
+
+    private fun unregisterDefaultNetworkListener() {
+        val callback = defaultNetworkCallback ?: return
+        defaultNetworkCallback = null
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        try {
+            cm.unregisterNetworkCallback(callback)
+            Log.i(TAG, "[NetworkCallback] Unregistered default network callback successfully")
+        } catch (e: Exception) {
+            Log.w(TAG, "[NetworkCallback] Failed to unregister default network callback: ${e.message}")
+        }
+    }
+
+    private fun handleUnderlyingNetworkChanged(network: Network) {
+        val prev = currentUnderlyingNetwork
+        val isHandover = hasInitialNetwork && (network != prev || hadNetworkLost)
+        hadNetworkLost = false
+        hasInitialNetwork = true
+        currentUnderlyingNetwork = network
+
+        try {
+            if (tunPfd != null) {
+                setUnderlyingNetworks(arrayOf(network))
+                Log.i(TAG, "[NetworkCallback] setUnderlyingNetworks updated: $network (handover=$isHandover)")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "[NetworkCallback] Failed to update setUnderlyingNetworks: ${e.message}")
+        }
+
+        if (isHandover) {
+            Log.i(TAG, "[NetworkCallback] Network handover detected ($prev -> $network), scheduling Go engine notification (300ms debounce)")
+            pendingNetworkChangeRunnable?.let { mainHandler.removeCallbacks(it) }
+            val r = Runnable {
+                if (startedEngine) {
+                    Thread({
+                        try {
+                            Log.i(TAG, "[NetworkCallback] Notifying Go engine about network change...")
+                            smartproxy.mobile.Mobile.notifyNetworkChange()
+                            Log.i(TAG, "[NetworkCallback] Go engine notified successfully")
+                        } catch (t: Throwable) {
+                            Log.e(TAG, "[NetworkCallback] Failed to notify Go engine", t)
+                        }
+                    }, "SmartProxyNetworkChange").apply { isDaemon = true }.start()
+                }
+            }
+            pendingNetworkChangeRunnable = r
+            mainHandler.postDelayed(r, 300L)
+        }
+    }
+
     /** 停引擎 + 收前台服务 + 状态落 false(§4.5)。
      *
      *  ## 停止顺序:对齐 v2rayNG stopAllService(2026-08 图标赖着不掉排查)
@@ -548,6 +653,12 @@ class SmartProxyVpnService : VpnService() {
             Log.i(TAG, "[shutdown] Already torn down (tornDown=true), skipping.")
             return
         }
+        unregisterDefaultNetworkListener()
+        pendingNetworkChangeRunnable?.let { mainHandler.removeCallbacks(it) }
+        pendingNetworkChangeRunnable = null
+        currentUnderlyingNetwork = null
+        hasInitialNetwork = false
+        hadNetworkLost = false
         io.github.yiguihai11.smartproxy.shizuku.TetheringCoreSync.onStopping(this)
         Log.i(TAG, "[shutdown] Step 0: Enter shutdown(). startedEngine=$startedEngine, _isRunning=${_isRunning.value}, tunFds=${tunFdCount()}, fullTeardown=$fullTeardown")
         if (startedEngine) {
@@ -689,6 +800,9 @@ class SmartProxyVpnService : VpnService() {
     override fun onDestroy() {
         Log.i(TAG, "[onDestroy] Service onDestroy() entered.")
         restartNeeded.set(0)
+        unregisterDefaultNetworkListener()
+        pendingNetworkChangeRunnable?.let { mainHandler.removeCallbacks(it) }
+        pendingNetworkChangeRunnable = null
         // 最终拆机排队跑完后再关执行器(shutdown 不中断已排队/在跑任务);daemon 线程,
         // 不会拖住进程退出。
         enqueueEngineWork("onDestroy") { shutdown() }

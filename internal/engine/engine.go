@@ -27,6 +27,7 @@ import (
 	"smartproxy/internal/relay"
 	"smartproxy/internal/route"
 	"smartproxy/internal/rules"
+	"smartproxy/internal/singbox"
 	"smartproxy/internal/socks5"
 	"smartproxy/internal/subscription"
 	"smartproxy/internal/trace"
@@ -1114,6 +1115,37 @@ func (e *Engine) ReloadChnroute() error {
 	}
 	e.Chnroute.Pull(newTrie)
 	return nil
+}
+
+// HandleNetworkChange responds to underlying network switches (e.g. Wi-Fi <-> Cellular).
+// It resets stale connections, clears DNS caches, drains dead proxy connection pools,
+// resets circuit breaker failure counts, and rebuilds outbound engines.
+func (e *Engine) HandleNetworkChange() {
+	slog.Info("engine: processing physical network change event")
+
+	// 1. Terminate in-flight TUN connections bound to the old network
+	if e.TUNHandler != nil {
+		e.TUNHandler.ResetActiveConnections()
+	}
+
+	// 2. Clear cached DNS records (which might contain stale or failed lookups)
+	if e.DNSHandler != nil {
+		e.DNSHandler.ClearCache()
+	}
+
+	// 3. Purge UDP pool, reset proxy circuit breakers, and probe all nodes
+	if e.UpstreamMgr != nil {
+		e.UpstreamMgr.HandleNetworkChange()
+	}
+
+	// 4. Rebuild sing-box outbounds so stateful protocols (QUIC/Hysteria2/TUIC/etc.) re-bind
+	safego.Go("engine.singbox.rebuildOnNetworkChange", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := singbox.GlobalEngine().Rebuild(ctx); err != nil {
+			slog.Warn("failed to rebuild sing-box outbounds on network change", "error", err)
+		}
+	})
 }
 
 func (e *Engine) SetReloadFn(fn func()) {

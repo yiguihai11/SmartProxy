@@ -307,3 +307,45 @@ func TestParseAndSaveGeo(t *testing.T) {
 	}
 }
 
+func TestProxyHealth_ResetFailures(t *testing.T) {
+	// 1. Auto-opened circuit recovers on ResetFailures
+	ph := &ProxyHealth{
+		state:               StateOpen,
+		consecutiveFailures: 5,
+		openSince:           time.Now(),
+	}
+	ph.ResetFailures()
+	if ph.state != StateClosed {
+		t.Fatalf("expected state closed, got %v", ph.state)
+	}
+	if ph.consecutiveFailures != 0 {
+		t.Fatalf("expected 0 consecutive failures, got %d", ph.consecutiveFailures)
+	}
+
+	// 2. Manually disabled circuit remains disabled
+	phDisabled := &ProxyHealth{}
+	phDisabled.SetManualState(false)
+	phDisabled.consecutiveFailures = 3
+	phDisabled.ResetFailures()
+	if !phDisabled.IsManuallyDisabled() {
+		t.Fatal("expected manually disabled circuit to remain disabled")
+	}
+	if phDisabled.state != StateOpen {
+		t.Fatalf("expected manually disabled circuit state to remain open, got %v", phDisabled.state)
+	}
+
+	// 3. Closed circuit with consecutive failures resets failure count
+	phClosed := &ProxyHealth{
+		state:               StateClosed,
+		consecutiveFailures: 2,
+	}
+	phClosed.ResetFailures()
+	if phClosed.state != StateClosed {
+		t.Fatalf("expected state closed, got %v", phClosed.state)
+	}
+	if phClosed.consecutiveFailures != 0 {
+		t.Fatalf("expected 0 consecutive failures, got %d", phClosed.consecutiveFailures)
+	}
+}
+
+

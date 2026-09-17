@@ -123,6 +123,15 @@ func (h *Handler) FilterAAAA() bool {
 	return cfg != nil && cfg.filterAAAA
 }
 
+// ClearCache purges all cached DNS entries, ensuring stale or failed lookups
+// from a previous network interface do not linger across network handovers.
+func (h *Handler) ClearCache() {
+	if h != nil && h.cache != nil {
+		h.cache.Clear()
+		slog.Info("DNS handler cache cleared")
+	}
+}
+
 func (h *Handler) UpdateConfig(
 	foreignIPv4, foreignIPv6 string,
 	queryTimeout int, blockedIP, blockedIP6 string,

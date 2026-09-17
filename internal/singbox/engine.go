@@ -130,6 +130,15 @@ func (e *Engine) SyncOutbounds(desired map[string]json.RawMessage) error {
 	return e.rebuildLocked(context.Background())
 }
 
+// Rebuild forces a teardown and reconstruction of the sing-box instance with its current outbounds.
+// This is useful on network handover (e.g. Wi-Fi <-> Cellular) to ensure all stateful outbounds
+// (like QUIC, Hysteria2, TUIC, Shadowsocks) re-bind and reconnect cleanly across the new interface.
+func (e *Engine) Rebuild(ctx context.Context) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.rebuildLocked(ctx)
+}
+
 func (e *Engine) rebuildLocked(ctx context.Context) error {
 	var outboundList []json.RawMessage
 

@@ -194,6 +194,26 @@ func (h *TUNHandler) KillBlockedConnections() {
 	})
 }
 
+// ResetActiveConnections drops all active TCP connections and UDP sessions on the TUN interface.
+// During physical network handover (e.g. Wi-Fi <-> Cellular), sockets bound to the old physical
+// network are dead and would otherwise hang until TCP timeout (1-2 minutes).
+// Terminating them prompts client apps (browsers, streaming) to reconnect immediately over the new network.
+func (h *TUNHandler) ResetActiveConnections() {
+	if h.liveTCP != nil {
+		for _, hd := range h.liveTCP.snapshot() {
+			hd.kill()
+			h.liveTCP.remove(hd)
+		}
+	}
+	h.udpSessions.Range(func(key, value any) bool {
+		if sess, ok := value.(*tunUdpSession); ok {
+			sess.signalClose()
+		}
+		return true
+	})
+	slog.Info("TUN reset all active TCP connections and UDP sessions due to network change")
+}
+
 func (h *TUNHandler) JudgeFlow(network uint8, source netip.AddrPort, destination netip.AddrPort, firstPacket []byte) singtun.FlowVerdict {
 	return singtun.FlowVerdict{Action: singtun.ActionAccept}
 }
