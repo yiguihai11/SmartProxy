@@ -160,6 +160,15 @@ func (e *Engine) Rebuild(ctx context.Context) error {
 }
 
 func (e *Engine) rebuildLocked(ctx context.Context) error {
+	if len(e.outbounds) == 0 {
+		if e.instance != nil {
+			err := e.instance.Close()
+			e.instance = nil
+			return err
+		}
+		return nil
+	}
+
 	var outboundList []json.RawMessage
 
 	// Always provide a default direct outbound
