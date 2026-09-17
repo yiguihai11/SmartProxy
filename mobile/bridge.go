@@ -21,6 +21,7 @@ import (
 var (
 	globalEngine  *engine.Engine
 	engineMu      sync.Mutex
+	lifecycleMu   sync.Mutex
 	cancelFunc    context.CancelFunc
 	routerWatcher *config.Watcher
 	uidResolver   UIDResolver
@@ -59,8 +60,8 @@ func NotifyMemoryPressure(level int32) {
 
 func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 	slog.Info("[Go-Bridge] StartRouter called", "configPath", configPath, "tunFd", tunFd, "tunEnabled", tunEnabled)
-	engineMu.Lock()
-	defer engineMu.Unlock()
+	lifecycleMu.Lock()
+	defer lifecycleMu.Unlock()
 
 	// tunFd 经 detachFd 交给 Go 后,Kotlin 不再能关它;真正把 fd 交出去是
 	// eng.Start 建 TUN 栈那一刻。此前的任何错误返回都必须由 Go 侧关闭,
@@ -69,14 +70,19 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 		if tunFd > 0 {
 			unix.Close(tunFd)
 		}
+		engineMu.Lock()
 		uidResolver = nil
+		engineMu.Unlock()
 		return err
 	}
 
+	engineMu.Lock()
 	if globalEngine != nil {
+		engineMu.Unlock()
 		slog.Warn("[Go-Bridge] StartRouter failed: router is already running")
 		return closeFdOnErr(fmt.Errorf("router is already running"))
 	}
+	engineMu.Unlock()
 
 	// 从文件加载配置(与桌面端 config.Load 同路径):Kotlin 侧把最终 config 落到
 	// filesDir/config.json 再传路径,引擎不再收 JSON 串;config.Load 会补默认值。
@@ -200,39 +206,43 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 		}
 	}
 
+	engineMu.Lock()
 	globalEngine = eng
 	cancelFunc = cancel
+	engineMu.Unlock()
 	slog.Info("[Go-Bridge] StartRouter completed successfully")
 	return nil
 }
 
 func StopRouter() {
-	slog.Info("[Go-Bridge] StopRouter called, waiting for engineMu lock...")
-	engineMu.Lock()
-	defer engineMu.Unlock()
-	slog.Info("[Go-Bridge] Acquired engineMu lock")
-	// 先停 watcher:Stop 会等其 goroutine(含在途 configReload)退出,再停引擎,
-	// 避免 configReload 闭包引用已停止的 engine。
-	if routerWatcher != nil {
-		slog.Info("[Go-Bridge] Stopping routerWatcher...")
-		routerWatcher.Stop()
-		routerWatcher = nil
-		slog.Info("[Go-Bridge] routerWatcher stopped")
-	} else {
-		slog.Info("[Go-Bridge] routerWatcher is nil, skipping")
-	}
+	slog.Info("[Go-Bridge] StopRouter called, acquiring lifecycle lock...")
+	lifecycleMu.Lock()
+	defer lifecycleMu.Unlock()
 
-	if globalEngine != nil {
-		slog.Info("[Go-Bridge] Cancelling context & stopping globalEngine...")
-		cancelFunc()
-		globalEngine.Stop()
-		globalEngine = nil
-		cancelFunc = nil
-		slog.Info("[Go-Bridge] globalEngine stopped successfully")
-	} else {
-		slog.Info("[Go-Bridge] globalEngine is nil, skipping")
-	}
+	engineMu.Lock()
+	eng := globalEngine
+	globalEngine = nil
+	cancel := cancelFunc
+	cancelFunc = nil
+	watcher := routerWatcher
+	routerWatcher = nil
 	uidResolver = nil
+	engineMu.Unlock()
+
+	if cancel != nil {
+		slog.Info("[Go-Bridge] Cancelling engine context...")
+		cancel()
+	}
+	if watcher != nil {
+		slog.Info("[Go-Bridge] Stopping routerWatcher...")
+		watcher.Stop()
+		slog.Info("[Go-Bridge] routerWatcher stopped")
+	}
+	if eng != nil {
+		slog.Info("[Go-Bridge] Stopping globalEngine...")
+		eng.Stop()
+		slog.Info("[Go-Bridge] globalEngine stopped successfully")
+	}
 	slog.Info("[Go-Bridge] StopRouter completed")
 }
 

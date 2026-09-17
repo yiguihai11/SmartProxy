@@ -29,12 +29,18 @@ type Manager struct {
 	healthCfg       config.HealthCheckConf
 	staticProxies   []ProxyEntry
 	providerProxies map[string][]ProxyEntry
+	stopped         bool
+	ctx             context.Context
+	cancel          context.CancelFunc
 }
 
 func NewManager(cfg UpstreamConfig) (*Manager, error) {
+	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
 		dnsUDPPool:      NewUDPAssociatePool(4),
 		providerProxies: make(map[string][]ProxyEntry),
+		ctx:             ctx,
+		cancel:          cancel,
 	}
 	m.staticProxies = cfg.Proxies
 	m.healthCfg = cfg.HealthCheck
@@ -49,6 +55,10 @@ func NewManager(cfg UpstreamConfig) (*Manager, error) {
 
 func (m *Manager) Reload(cfg UpstreamConfig) {
 	m.mu.Lock()
+	if m.stopped {
+		m.mu.Unlock()
+		return
+	}
 	// Rebuild creates brand-new Proxy objects whose health is fully automatic, which would
 	// silently revert any explicit user disable/enable. Preserve the manual pins (keyed by
 	// alias) so a config hot-reload keeps the user's choice.
@@ -88,6 +98,19 @@ func (m *Manager) Reload(cfg UpstreamConfig) {
 // stop/restart (e.g. toggling the Android VPN) leaks one goroutine per proxy node (each
 // checkLoop spins on stopCh forever) plus up to four pooled UDP ASSOCIATE connections.
 func (m *Manager) Stop() {
+	m.mu.Lock()
+	if m.stopped {
+		m.mu.Unlock()
+		return
+	}
+	m.stopped = true
+	cancel := m.cancel
+	m.cancel = nil
+	m.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
 	if m.healthChecker != nil {
 		m.healthChecker.Stop()
 	}
@@ -238,6 +261,10 @@ func (m *Manager) rebuildLocked() {
 // external provider (e.g. Lantern free nodes). Passing empty entries removes that provider's proxies.
 func (m *Manager) SetProviderProxies(provider string, entries []ProxyEntry) {
 	m.mu.Lock()
+	if m.stopped {
+		m.mu.Unlock()
+		return
+	}
 	if m.providerProxies == nil {
 		m.providerProxies = make(map[string][]ProxyEntry)
 	}
@@ -280,6 +307,10 @@ func (m *Manager) RemoveProviderNodes(aliases []string) int {
 		}
 	}
 	m.mu.Lock()
+	if m.stopped {
+		m.mu.Unlock()
+		return 0
+	}
 	totalRemoved := 0
 	for pName, entries := range m.providerProxies {
 		var kept []ProxyEntry
@@ -852,11 +883,16 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 // probeInitialGeo asynchronously discovers country codes and exit IPs for all proxies in the background.
 func (m *Manager) probeInitialGeo() {
 	m.mu.RLock()
+	if m.stopped {
+		m.mu.RUnlock()
+		return
+	}
 	proxies := make([]*Proxy, len(m.defaultProxies))
 	copy(proxies, m.defaultProxies)
+	ctx := m.ctx
 	m.mu.RUnlock()
 
-	if len(proxies) == 0 {
+	if len(proxies) == 0 || ctx == nil {
 		return
 	}
 
@@ -870,9 +906,9 @@ func (m *Manager) probeInitialGeo() {
 			proxy := p
 			safego.Go("upstream.initialGeo.node", func() {
 				defer wg.Done()
-				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+				probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 				defer cancel()
-				lat, err := probeTCP(ctx, proxy, "http://cp.cloudflare.com/cdn-cgi/trace")
+				lat, err := probeTCP(probeCtx, proxy, "http://cp.cloudflare.com/cdn-cgi/trace")
 				if err == nil {
 					proxy.health.UpdateLatency(lat)
 				}

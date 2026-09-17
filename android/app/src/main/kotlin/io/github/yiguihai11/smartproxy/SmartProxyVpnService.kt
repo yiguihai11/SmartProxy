@@ -129,8 +129,8 @@ class SmartProxyVpnService : VpnService() {
         engineExecutor.execute {
             try {
                 block()
-            } catch (e: Exception) {
-                Log.e(TAG, "[engineExecutor] engine work '$action' crashed", e)
+            } catch (t: Throwable) {
+                Log.e(TAG, "[engineExecutor] engine work '$action' crashed", t)
             }
         }
     }
@@ -551,23 +551,33 @@ class SmartProxyVpnService : VpnService() {
         io.github.yiguihai11.smartproxy.shizuku.TetheringCoreSync.onStopping(this)
         Log.i(TAG, "[shutdown] Step 0: Enter shutdown(). startedEngine=$startedEngine, _isRunning=${_isRunning.value}, tunFds=${tunFdCount()}, fullTeardown=$fullTeardown")
         if (startedEngine) {
+            Log.i(TAG, "[shutdown] Step 1/6: Invoking Go Mobile.stopRouter()... (tunFds before=${tunFdCount()})")
+            val stopThread = Thread({
+                try {
+                    val t0 = System.currentTimeMillis()
+                    smartproxy.mobile.Mobile.stopRouter()
+                    val duration = System.currentTimeMillis() - t0
+                    Log.i(TAG, "[shutdown] Step 1/6: Mobile.stopRouter() completed in ${duration} ms. tunFds after=${tunFdCount()}")
+                } catch (t: Throwable) {
+                    Log.e(TAG, "[shutdown] Step 1/6: Mobile.stopRouter() threw error", t)
+                }
+            }, "SmartProxyStopRouter").apply {
+                isDaemon = true
+                start()
+            }
             try {
-                Log.i(TAG, "[shutdown] Step 1/6: Invoking Go Mobile.stopRouter()... (tunFds before=${tunFdCount()})")
-                val t0 = System.currentTimeMillis()
-                smartproxy.mobile.Mobile.stopRouter()
-                val duration = System.currentTimeMillis() - t0
-                Log.i(TAG, "[shutdown] Step 1/6: Mobile.stopRouter() completed in ${duration} ms. tunFds after=${tunFdCount()}")
-            } catch (e: Exception) {
-                Log.e(TAG, "[shutdown] Step 1/6: Mobile.stopRouter() threw exception", e)
+                stopThread.join(3000)
+                if (stopThread.isAlive) {
+                    Log.w(TAG, "[shutdown] Step 1/6: Mobile.stopRouter() timed out after 3000 ms! Forcing VPN teardown.")
+                }
+            } catch (e: InterruptedException) {
+                Log.w(TAG, "[shutdown] Step 1/6: Stop thread join interrupted", e)
             }
             startedEngine = false
-            // 注销 UID 反查回调:establish 时 setUIDResolver(UIDResolver(this)) 把持有本
-            // Service Context 的回调注册进 gomobile 全局变量,不注销就一直吊住已销毁的 Service。
-            // 重建(RESTART)时 establish 会再注册一个新的;SOCKS5 模式本就没注册,置 null 无害。
             try {
                 smartproxy.mobile.Mobile.setUIDResolver(null)
-            } catch (e: Exception) {
-                Log.w(TAG, "[shutdown] setUIDResolver(null) failed", e)
+            } catch (t: Throwable) {
+                Log.w(TAG, "[shutdown] setUIDResolver(null) failed: ${t.message}")
             }
         } else {
             Log.i(TAG, "[shutdown] Step 1/6: startedEngine is false, skipping Mobile.stopRouter().")
@@ -578,7 +588,11 @@ class SmartProxyVpnService : VpnService() {
             // (注销 NetworkAgent / 移除路由 → 活跃连接的 dst 引用释放),否则关 fd 时
             // 网络还挂着,活跃连接 hold 住 tun0 → netdev_wait_allrefs 等连接超时,图标赖着。
             Log.i(TAG, "[shutdown] Step 2/6: Calling stopSelf() to tear down VPN network BEFORE closing tun fd...")
-            stopSelf()
+            try {
+                stopSelf()
+            } catch (t: Throwable) {
+                Log.e(TAG, "[shutdown] Step 2/6: stopSelf() failed", t)
+            }
             try {
                 Thread.sleep(TEARDOWN_SETTLE_MS)
             } catch (e: InterruptedException) {
@@ -598,8 +612,8 @@ class SmartProxyVpnService : VpnService() {
                 Log.i(TAG, "[shutdown] Step 3/6: Closing tun PFD (last fd to tun device, tear down VPN)...")
                 pfd.close()
                 Log.i(TAG, "[shutdown] Step 3/6: tun PFD closed. tunFds=${tunFdCount()}")
-            } catch (e: Exception) {
-                Log.e(TAG, "[shutdown] Step 3/6: tun PFD close failed", e)
+            } catch (t: Throwable) {
+                Log.e(TAG, "[shutdown] Step 3/6: tun PFD close failed", t)
             }
             tunPfd = null
         }
@@ -608,16 +622,24 @@ class SmartProxyVpnService : VpnService() {
             // 完整拆机(用户停止 / onRevoke / onDestroy):拆保活通知 + 状态落 false。
             // 重建(fullTeardown=false)时不拆——通知保留避免闪烁,_isRunning 保持 true,
             // 隧道重建对用户无感;若重建失败,由 startInternal 失败分支负责落 false。
-            Log.i(TAG, "[shutdown] Step 4/6: Calling ServiceCompat.stopForeground(STOP_FOREGROUND_REMOVE)...")
-            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-            Log.i(TAG, "[shutdown] Step 4/6: stopForeground completed.")
+            try {
+                Log.i(TAG, "[shutdown] Step 4/6: Calling ServiceCompat.stopForeground(STOP_FOREGROUND_REMOVE)...")
+                ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                Log.i(TAG, "[shutdown] Step 4/6: stopForeground completed.")
+            } catch (t: Throwable) {
+                Log.e(TAG, "[shutdown] Step 4/6: stopForeground failed", t)
+            }
 
             Log.i(TAG, "[shutdown] Step 5/6: Updating state _isRunning.value = false...")
             _isRunning.value = false
             startedAt = 0L
             // 撤掉悬浮网速计(用户停止 / onRevoke / onDestroy 都走这里)。重建(fullTeardown=false)
             // 不动它,隧道重建期间胶囊继续显示,不闪。
-            SpeedMeterOverlay.hide()
+            try {
+                SpeedMeterOverlay.hide()
+            } catch (t: Throwable) {
+                Log.w(TAG, "[shutdown] SpeedMeterOverlay.hide failed", t)
+            }
             // 完整拆机完成,后续(如 onDestroy)的 shutdown 直接跳过。
             tornDown = true
         } else {

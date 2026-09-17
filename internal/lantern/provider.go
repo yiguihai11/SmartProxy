@@ -116,6 +116,12 @@ func (p *Provider) Refresh(ctx context.Context) (int, error) {
 		})
 	}
 
+	select {
+	case <-p.ctx.Done():
+		return 0, fmt.Errorf("lantern provider is stopped")
+	default:
+	}
+
 	p.mgr.SetProviderProxies("lantern", entries)
 	p.lastRefresh = time.Now()
 	p.lastError = ""
