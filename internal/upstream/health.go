@@ -230,7 +230,16 @@ func (hc *HealthChecker) Start() {
 func (hc *HealthChecker) Stop() {
 	hc.cancel()
 	hc.stopOnce.Do(func() { close(hc.stopCh) })
-	hc.wg.Wait()
+	done := make(chan struct{})
+	safego.Go("upstream.health.stopWait", func() {
+		hc.wg.Wait()
+		close(done)
+	})
+	select {
+	case <-done:
+	case <-time.After(800 * time.Millisecond):
+		slog.Warn("health checker stop timed out waiting for check loops to exit")
+	}
 }
 
 func (hc *HealthChecker) Reload(cfg config.HealthCheckConf, proxies []*Proxy) {
@@ -511,7 +520,13 @@ func (hc *HealthChecker) probeUDP(p *Proxy, ctx context.Context) (time.Duration,
 
 	if deadline, ok := ctx.Deadline(); ok {
 		conn.SetDeadline(deadline)
+	} else {
+		conn.SetDeadline(time.Now().Add(10 * time.Second))
 	}
+	stop := context.AfterFunc(ctx, func() {
+		conn.Close()
+	})
+	defer stop()
 
 	start := time.Now()
 	if _, err := conn.Write(buildUDPFrame(host, port, packed)); err != nil {
@@ -540,6 +555,7 @@ func (hc *HealthChecker) probeUDP(p *Proxy, ctx context.Context) (time.Duration,
 		conn.Close()
 		return 0, nil, fmt.Errorf("invalid DNS response (id=%d, response=%v)", resp.Id, resp.Response)
 	}
+	conn.SetDeadline(time.Time{})
 	return latency, conn, nil
 }
 

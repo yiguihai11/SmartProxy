@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -15,6 +16,7 @@ import (
 	"smartproxy/internal/config"
 	"smartproxy/internal/rules"
 	"smartproxy/internal/safego"
+	"smartproxy/internal/singbox"
 	"smartproxy/internal/trace"
 )
 
@@ -45,7 +47,8 @@ func NewManager(cfg UpstreamConfig) (*Manager, error) {
 	m.staticProxies = cfg.Proxies
 	m.healthCfg = cfg.HealthCheck
 	m.strategy = cfg.Default
-	m.rebuildLocked()
+	activeSB := m.rebuildLocked()
+	_ = singbox.GlobalEngine().SyncOutbounds(activeSB)
 	m.healthChecker = NewHealthChecker(cfg.HealthCheck, m.defaultProxies)
 	m.healthChecker.Start()
 	m.probeInitialGeo()
@@ -66,9 +69,11 @@ func (m *Manager) Reload(cfg UpstreamConfig) {
 	m.staticProxies = cfg.Proxies
 	m.healthCfg = cfg.HealthCheck
 	m.strategy = cfg.Default
-	m.rebuildLocked()
+	activeSB := m.rebuildLocked()
 	newProxies := m.defaultProxies
 	m.mu.Unlock()
+
+	_ = singbox.GlobalEngine().SyncOutbounds(activeSB)
 
 	if m.dnsUDPPool != nil {
 		m.dnsUDPPool.Close()
@@ -117,6 +122,7 @@ func (m *Manager) Stop() {
 	if m.dnsUDPPool != nil {
 		m.dnsUDPPool.Close()
 	}
+	_ = singbox.GlobalEngine().Close()
 }
 
 // circuitPin captures one health circuit's manual pin: whether it is pinned and, if so,
@@ -193,18 +199,27 @@ func (m *Manager) restoreManualPins(states map[string]savedNodeState) {
 }
 
 // rebuildLocked rebuilds aliasMap and defaultProxies from staticProxies + all providerProxies.
-// Caller must hold m.mu.Lock().
-func (m *Manager) rebuildLocked() {
+// Caller must hold m.mu.Lock(). Returns the map of active sing-box outbounds to sync.
+func (m *Manager) rebuildLocked() map[string]json.RawMessage {
 	aliasMap := make(map[string]*Proxy)
 	aliasMap["direct"] = nil
 	reservedAliases := map[string]bool{"direct": true}
 	var defaultProxies []*Proxy
+
+	existingByURL := make(map[string]*Proxy, len(m.aliasMap))
+	for _, p := range m.aliasMap {
+		if p != nil && p.URL != "" {
+			existingByURL[p.URL] = p
+		}
+	}
 
 	var allEntries []ProxyEntry
 	allEntries = append(allEntries, m.staticProxies...)
 	for _, pEntries := range m.providerProxies {
 		allEntries = append(allEntries, pEntries...)
 	}
+
+	activeSB := make(map[string]json.RawMessage)
 
 	for i, entry := range allEntries {
 		alias := entry.Alias
@@ -231,30 +246,38 @@ func (m *Manager) rebuildLocked() {
 				}
 			}
 		}
-		proxy, err := NewProxy(entry.URL)
-		if err != nil {
-			slog.Warn("failed to create proxy", "url", MaskProxyURL(entry.URL), "error", err)
-			continue
+
+		existing := existingByURL[entry.URL]
+		var proxy *Proxy
+		if existing != nil && existing.UDPInTCP == entry.UDPInTCP {
+			proxy = existing
+			proxy.Provider = entry.Provider
+		} else {
+			var err error
+			proxy, err = newProxyParsed(entry.URL)
+			if err != nil {
+				slog.Warn("failed to create proxy", "url", MaskProxyURL(entry.URL), "error", err)
+				continue
+			}
+			proxy.Provider = entry.Provider
+			proxy.UDPInTCP = entry.UDPInTCP || proxy.UDPInTCP
+			proxy.applyUDPInTCPDefaults()
 		}
-		proxy.Provider = entry.Provider
+
 		if proxy.CountryCode() == "" {
 			if cc := inferCountryCode(alias, proxy.Name, proxy.Host); cc != "" {
 				proxy.SetGeoInfo(cc, "")
 			}
 		}
-		// The config entry's udp_in_tcp field (the panel switch) is the primary source;
-		// an imported link may also carry ?udp_in_tcp=1, which NewProxy already parsed.
-		proxy.UDPInTCP = entry.UDPInTCP || proxy.UDPInTCP
-		// A udp_in_tcp node defaults to TCP manually down (plaintext framed carrier, GFW-
-		// fingerprintable); the user can re-enable it per circuit. restoreManualPins runs
-		// after rebuild and re-applies any saved pin, so this default only sticks on
-		// freshly-built nodes and never reverts a user's re-enable.
-		proxy.applyUDPInTCPDefaults()
 		aliasMap[alias] = proxy
 		defaultProxies = append(defaultProxies, proxy)
+		if proxy.singboxTag != "" && len(proxy.singboxRaw) > 0 {
+			activeSB[proxy.singboxTag] = proxy.singboxRaw
+		}
 	}
 	m.aliasMap = aliasMap
 	m.defaultProxies = defaultProxies
+	return activeSB
 }
 
 // SetProviderProxies dynamically registers or updates a set of proxies provided by an
@@ -281,11 +304,12 @@ func (m *Manager) SetProviderProxies(provider string, entries []ProxyEntry) {
 		m.providerProxies[provider] = copied
 	}
 	pins := m.captureManualPins()
-	m.rebuildLocked()
+	activeSB := m.rebuildLocked()
 	newProxies := m.defaultProxies
 	healthCfg := m.healthCfg
 	m.mu.Unlock()
 
+	_ = singbox.GlobalEngine().SyncOutbounds(activeSB)
 	m.restoreManualPins(pins)
 
 	if m.healthChecker != nil {
@@ -333,11 +357,12 @@ func (m *Manager) RemoveProviderNodes(aliases []string) int {
 	}
 	if totalRemoved > 0 {
 		pins := m.captureManualPins()
-		m.rebuildLocked()
+		activeSB := m.rebuildLocked()
 		newProxies := m.defaultProxies
 		healthCfg := m.healthCfg
 		m.mu.Unlock()
 
+		_ = singbox.GlobalEngine().SyncOutbounds(activeSB)
 		m.restoreManualPins(pins)
 		if m.healthChecker != nil {
 			m.healthChecker.Reload(healthCfg, newProxies)

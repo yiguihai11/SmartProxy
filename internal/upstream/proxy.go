@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -131,6 +132,7 @@ type Proxy struct {
 
 	// singboxTag is the registered outbound tag in sing-box engine for modern protocols (vless, vmess, trojan, etc.)
 	singboxTag string
+	singboxRaw json.RawMessage
 }
 
 func (p *Proxy) PingLatency() time.Duration {
@@ -581,7 +583,7 @@ func MaskProxyURL(proxyURL string) string {
 	return masked.String()
 }
 
-func NewProxy(proxyURL string) (*Proxy, error) {
+func newProxyParsed(proxyURL string) (*Proxy, error) {
 	if isSingBoxURL(proxyURL) {
 		outbound, err := singbox.ParseLink(proxyURL)
 		if err != nil {
@@ -591,15 +593,13 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 		if err := outbound.SetTag(uniqueTag); err != nil {
 			return nil, fmt.Errorf("failed to set unique tag for %q: %w", MaskProxyURL(proxyURL), err)
 		}
-		if err := singbox.GlobalEngine().RegisterOutbound(outbound.Tag, outbound.RawJSON); err != nil {
-			return nil, fmt.Errorf("failed to register sing-box outbound %q: %w", outbound.Tag, err)
-		}
 		p := &Proxy{
 			URL:           proxyURL,
 			Scheme:        ProxyScheme(outbound.Type),
 			Host:          outbound.Server,
 			Port:          outbound.Port,
 			singboxTag:    outbound.Tag,
+			singboxRaw:    outbound.RawJSON,
 			udpCapability: UDPCapStandard,
 		}
 		if strings.HasPrefix(strings.TrimSpace(proxyURL), "{") {
@@ -613,10 +613,12 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 		if cc := inferCountryCode(p.Name, p.Host); cc != "" {
 			p.SetGeoInfo(cc, "")
 		}
-		slog.Info("upstream proxy loaded (sing-box)", "url", MaskProxyURL(proxyURL), "tag", p.singboxTag, "name", p.Name)
 		return p, nil
 	}
+	return parseStandardProxy(proxyURL)
+}
 
+func parseStandardProxy(proxyURL string) (*Proxy, error) {
 	u, err := url.Parse(proxyURL)
 	if err != nil {
 		// 错误信息会进日志,URL 打码
@@ -705,6 +707,21 @@ func NewProxy(proxyURL string) (*Proxy, error) {
 			p.udpHealth.SetManualState(false)
 		}
 	}
+	return p, nil
+}
+
+func NewProxy(proxyURL string) (*Proxy, error) {
+	p, err := newProxyParsed(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	if p.singboxTag != "" && len(p.singboxRaw) > 0 {
+		if err := singbox.GlobalEngine().RegisterOutbound(p.singboxTag, p.singboxRaw); err != nil {
+			return nil, fmt.Errorf("failed to register sing-box outbound %q: %w", p.singboxTag, err)
+		}
+		slog.Info("upstream proxy loaded (sing-box)", "url", MaskProxyURL(proxyURL), "tag", p.singboxTag, "name", p.Name)
+		return p, nil
+	}
 	slog.Info("upstream proxy loaded", "url", MaskProxyURL(proxyURL), "name", p.Name)
 	return p, nil
 }
@@ -762,6 +779,16 @@ func (p *Proxy) socks5Connect(ctx context.Context, targetHost string, targetPort
 	if err != nil {
 		return nil, err
 	}
+	if dl, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(dl)
+	} else {
+		conn.SetDeadline(time.Now().Add(10 * time.Second))
+	}
+	stop := context.AfterFunc(ctx, func() {
+		conn.Close()
+	})
+	defer stop()
+
 	if err := p.socks5Handshake(conn); err != nil {
 		conn.Close()
 		return nil, err
@@ -792,6 +819,7 @@ func (p *Proxy) socks5Connect(ctx context.Context, targetHost string, targetPort
 		conn.Close()
 		return nil, err
 	}
+	conn.SetDeadline(time.Time{})
 	return conn, nil
 }
 
@@ -857,6 +885,10 @@ func (p *Proxy) socks5UDPAssociate(ctx context.Context, targetHost string, targe
 		return p.rawFallback(ctx, err)
 	}
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	stop := context.AfterFunc(ctx, func() {
+		conn.Close()
+	})
+	defer stop()
 
 	if err := p.socks5Handshake(conn); err != nil {
 		conn.Close()
@@ -1184,6 +1216,16 @@ func (p *Proxy) httpConnect(ctx context.Context, targetHost string, targetPort i
 	if err != nil {
 		return nil, err
 	}
+	if dl, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(dl)
+	} else {
+		conn.SetDeadline(time.Now().Add(10 * time.Second))
+	}
+	stop := context.AfterFunc(ctx, func() {
+		conn.Close()
+	})
+	defer stop()
+
 	if p.Scheme == SchemeHTTPS {
 		tlsCfg := &tls.Config{ServerName: p.Host}
 		tlsConn := tls.Client(conn, tlsCfg)
@@ -1234,10 +1276,12 @@ func (p *Proxy) httpConnect(ctx context.Context, targetHost string, targetPort i
 		conn.Close()
 		return nil, fmt.Errorf("HTTP proxy returned %s", parts[1])
 	}
-	// 代理可能在同一个 TCP 段里把 200 响应和已建立的隧道数据一起发过来
-	// （TLS ServerHello 等）。header 之后的多余字节必须先回放，否则会被静默丢弃、腐蚀隧道。
-	if leftover := buf[headerEnd:]; len(leftover) > 0 {
-		conn = &bufferedConn{Conn: conn, r: bytes.NewReader(leftover)}
+	conn.SetDeadline(time.Time{})
+	// 200 OK 之后若有多余字节（如代理管道预读、TLS ClientHello 提前到达），
+	// 用 bufferedConn 包起来，优先读走残留数据。
+	extra := buf[headerEnd:]
+	if len(extra) > 0 {
+		return &bufferedConn{Conn: conn, r: io.MultiReader(bytes.NewReader(extra), conn)}, nil
 	}
 	return conn, nil
 }
@@ -1258,6 +1302,16 @@ func (p *Proxy) socks4Connect(ctx context.Context, targetHost string, targetPort
 	if err != nil {
 		return nil, err
 	}
+	if dl, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(dl)
+	} else {
+		conn.SetDeadline(time.Now().Add(10 * time.Second))
+	}
+	stop := context.AfterFunc(ctx, func() {
+		conn.Close()
+	})
+	defer stop()
+
 	targetIP, err := resolveIPv4(ctx, targetHost)
 	if err != nil {
 		conn.Close()
@@ -1285,6 +1339,7 @@ func (p *Proxy) socks4Connect(ctx context.Context, targetHost string, targetPort
 		conn.Close()
 		return nil, fmt.Errorf("SOCKS4 connect failed: code=%d", resp[1])
 	}
+	conn.SetDeadline(time.Time{})
 	return conn, nil
 }
 

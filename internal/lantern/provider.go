@@ -23,6 +23,8 @@ type Provider struct {
 	cancel      context.CancelFunc
 	stopOnce    sync.Once
 	refreshMu   sync.Mutex
+	stateMu     sync.RWMutex
+	refreshing  bool
 	lastRefresh time.Time
 	lastError   string
 	nodeCount   int
@@ -76,6 +78,15 @@ func (p *Provider) Refresh(ctx context.Context) (int, error) {
 	default:
 	}
 
+	p.stateMu.Lock()
+	p.refreshing = true
+	p.stateMu.Unlock()
+	defer func() {
+		p.stateMu.Lock()
+		p.refreshing = false
+		p.stateMu.Unlock()
+	}()
+
 	if ctx == nil {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(p.ctx, 60*time.Second)
@@ -85,13 +96,17 @@ func (p *Provider) Refresh(ctx context.Context) (int, error) {
 	slog.Info("lantern provider fetching and testing nodes...")
 	nodes, err := p.client.EnsureNodes(ctx)
 	if err != nil {
+		p.stateMu.Lock()
 		p.lastError = err.Error()
+		p.stateMu.Unlock()
 		slog.Warn("lantern provider failed to ensure nodes", "error", err)
 		return 0, err
 	}
 
 	if len(nodes) == 0 {
+		p.stateMu.Lock()
 		p.lastError = "no active nodes found"
+		p.stateMu.Unlock()
 		slog.Warn("lantern provider returned 0 active nodes")
 		return 0, fmt.Errorf("no active nodes found")
 	}
@@ -122,10 +137,14 @@ func (p *Provider) Refresh(ctx context.Context) (int, error) {
 	default:
 	}
 
-	p.mgr.SetProviderProxies("lantern", entries)
+	if p.mgr != nil {
+		p.mgr.SetProviderProxies("lantern", entries)
+	}
+	p.stateMu.Lock()
 	p.lastRefresh = time.Now()
 	p.lastError = ""
 	p.nodeCount = len(entries)
+	p.stateMu.Unlock()
 	slog.Info("lantern provider successfully injected nodes", "count", len(entries))
 	return len(entries), nil
 }
@@ -134,14 +153,15 @@ func (p *Provider) refreshNodes() {
 	_, _ = p.Refresh(nil)
 }
 
-// Status returns provider health and statistics.
+// Status returns provider health and statistics without blocking on Refresh.
 func (p *Provider) Status() map[string]interface{} {
-	p.refreshMu.Lock()
-	defer p.refreshMu.Unlock()
+	p.stateMu.RLock()
+	defer p.stateMu.RUnlock()
 
 	res := map[string]interface{}{
 		"enabled":    true,
 		"running":    p.ctx.Err() == nil,
+		"refreshing": p.refreshing,
 		"node_count": p.nodeCount,
 	}
 	if !p.lastRefresh.IsZero() {
@@ -157,7 +177,9 @@ func (p *Provider) Status() map[string]interface{} {
 func (p *Provider) Stop() {
 	p.stopOnce.Do(func() {
 		p.cancel()
-		p.mgr.SetProviderProxies("lantern", nil)
+		if p.mgr != nil {
+			p.mgr.SetProviderProxies("lantern", nil)
+		}
 		slog.Info("lantern provider stopped and nodes removed from pool")
 	})
 }

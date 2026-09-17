@@ -559,10 +559,16 @@ function fmtNum(n){
   return n+' B'
 }
 function ts2t(s){var d=new Date(s*1000);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")+" "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")+":"+String(d.getSeconds()).padStart(2,"0")}
-async function jf(u){
-  var r=await fetch(u);
-  if(!r.ok)throw new Error(r.status);
-  return r.json()
+async function jf(u, opt){
+  var c = new AbortController();
+  var to = setTimeout(function(){ c.abort(); }, (opt && opt.timeout) || 10000);
+  try {
+    var r = await fetch(u, Object.assign({}, opt, { signal: c.signal }));
+    if(!r.ok) throw new Error(r.status);
+    return await r.json();
+  } finally {
+    clearTimeout(to);
+  }
 }
 function toggleDrawer(){
   var s=document.querySelector('.sidebar'),sc=document.getElementById('scrim'),hb=document.getElementById('hamburger');
@@ -1422,7 +1428,16 @@ async function loadTraffic(){
   }catch(e){document.getElementById('traffic-time').textContent='Error: '+e.message}
 }
 async function loadHealth(){
-  try{var h=await jf('/health');lhealth({health:h});st('health-time')}catch(e){document.getElementById('health-time').textContent='Error: '+e.message}
+  if(healthD&&healthD.health){try{lhealth(healthD)}catch(_){}}
+  try{
+    var h=await jf('/health');
+    lhealth({health:h});
+    st('health-time');
+  }catch(e){
+    if(!healthD||!healthD.health){
+      document.getElementById('health-time').textContent='Error: '+e.message;
+    }
+  }
 }
 async function tp(i){
   var p=healthD.health.proxies[i];

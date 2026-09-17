@@ -908,6 +908,11 @@ func (e *Engine) Stop() {
 			slog.Info("[Go-Engine] Closing DNSHandler...")
 			e.DNSHandler.Close()
 		}
+		if e.UpstreamMgr != nil {
+			slog.Info("[Go-Engine] Stopping upstream manager...")
+			e.UpstreamMgr.Stop()
+			slog.Info("[Go-Engine] upstream manager stopped")
+		}
 		if e.lanternProvider != nil {
 			slog.Info("[Go-Engine] Stopping lantern provider...")
 			e.lanternProvider.Stop()
@@ -917,11 +922,6 @@ func (e *Engine) Stop() {
 			slog.Info("[Go-Engine] Stopping subscription manager...")
 			e.subscriptionMgr.Stop()
 			slog.Info("[Go-Engine] subscription manager stopped")
-		}
-		if e.UpstreamMgr != nil {
-			slog.Info("[Go-Engine] Stopping upstream manager...")
-			e.UpstreamMgr.Stop()
-			slog.Info("[Go-Engine] upstream manager stopped")
 		}
 		if e.adminServer != nil {
 			slog.Info("[Go-Engine] Stopping adminServer...")

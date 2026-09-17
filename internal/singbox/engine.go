@@ -103,6 +103,33 @@ func (e *Engine) SetOutbounds(outbounds map[string]json.RawMessage) error {
 	return e.rebuildLocked(context.Background())
 }
 
+// SyncOutbounds reconciles registered outbounds to match the desired map.
+// If the desired outbounds are identical to the currently running set, it returns immediately without rebuilding.
+func (e *Engine) SyncOutbounds(desired map[string]json.RawMessage) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if len(e.outbounds) == len(desired) && e.instance != nil {
+		identical := true
+		for k, v := range desired {
+			old, exists := e.outbounds[k]
+			if !exists || !bytes.Equal(old, v) {
+				identical = false
+				break
+			}
+		}
+		if identical {
+			return nil
+		}
+	}
+
+	e.outbounds = make(map[string]json.RawMessage, len(desired))
+	for k, v := range desired {
+		e.outbounds[k] = v
+	}
+	return e.rebuildLocked(context.Background())
+}
+
 func (e *Engine) rebuildLocked(ctx context.Context) error {
 	var outboundList []json.RawMessage
 
