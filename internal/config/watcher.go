@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"smartproxy/internal/safego"
 
@@ -108,6 +109,16 @@ func (w *Watcher) loop() {
 	}
 	w.mu.Unlock()
 
+	debounceTimers := make(map[string]*time.Timer)
+	var timerMu sync.Mutex
+	defer func() {
+		timerMu.Lock()
+		for _, t := range debounceTimers {
+			t.Stop()
+		}
+		timerMu.Unlock()
+	}()
+
 	for {
 		select {
 		case event, ok := <-watcher.Events:
@@ -127,8 +138,16 @@ func (w *Watcher) loop() {
 
 			if nameMatched != "" {
 				if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
-					slog.Info("detected file change, reloading", "path", event.Name, "name", nameMatched)
-					w.trigger(nameMatched)
+					targetName := nameMatched
+					timerMu.Lock()
+					if t, exists := debounceTimers[targetName]; exists {
+						t.Stop()
+					}
+					debounceTimers[targetName] = time.AfterFunc(150*time.Millisecond, func() {
+						slog.Info("debounced file change, reloading", "name", targetName)
+						w.trigger(targetName)
+					})
+					timerMu.Unlock()
 				}
 			}
 

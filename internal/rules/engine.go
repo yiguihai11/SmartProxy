@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"smartproxy/internal/chnroute"
@@ -629,13 +630,18 @@ func (t *proxyCidrTrie) lookup(ipStr string) (proxyTarget, bool) {
 	return proxyTarget{}, false
 }
 
+var aclFileMu sync.Mutex
+
 // AppendProxyRule appends a `proxy domain <domain> <alias>` or `proxy ip <host> <alias>`
 // rule to the ACL file at aclPath if not already present. It safely trims and canonicalizes
-// the target before deduplication.
+// the target before deduplication. It is thread-safe across concurrent callers.
 func AppendProxyRule(aclPath, host, domain, alias string) error {
 	if aclPath == "" {
 		return nil
 	}
+	aclFileMu.Lock()
+	defer aclFileMu.Unlock()
+
 	if alias == "" {
 		alias = "default"
 	}
