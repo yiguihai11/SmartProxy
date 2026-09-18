@@ -225,6 +225,41 @@ func TestRouter_AddToBlacklists_NoDomain(t *testing.T) {
 	}
 }
 
+func TestRouter_AddToBlacklists_LANAndBenchmark(t *testing.T) {
+	r := newRouter()
+	r.addToBlacklists("198.18.3.243", 443, "browseract.vivo.com.cn", "i/o timeout")
+	if r.ipBlacklist.IsBlacklisted("198.18.3.243", 443) {
+		t.Error("fake-ip 198.18.3.243 should never be blacklisted")
+	}
+	if r.domainBlacklist.IsBlacklisted("browseract.vivo.com.cn", 443) {
+		t.Error("domain browseract.vivo.com.cn should never be blacklisted on fake-ip timeout")
+	}
+
+	r.addToBlacklists("192.168.1.1", 80, "router.local", "i/o timeout")
+	if r.ipBlacklist.IsBlacklisted("192.168.1.1", 80) {
+		t.Error("LAN IP 192.168.1.1 should never be blacklisted")
+	}
+	if r.domainBlacklist.IsBlacklisted("router.local", 80) {
+		t.Error("LAN domain router.local should never be blacklisted")
+	}
+
+	r.addToBlacklists("fc00::18:1", 443, "ipv6.fakeip.local", "i/o timeout")
+	if r.ipBlacklist.IsBlacklisted("fc00::18:1", 443) {
+		t.Error("IPv6 fake-ip fc00::18:1 should never be blacklisted")
+	}
+	if r.domainBlacklist.IsBlacklisted("ipv6.fakeip.local", 443) {
+		t.Error("IPv6 fake-ip domain should never be blacklisted")
+	}
+
+	r.addToBlacklists("2001:2::1", 443, "ipv6.bench.local", "i/o timeout")
+	if r.ipBlacklist.IsBlacklisted("2001:2::1", 443) {
+		t.Error("IPv6 benchmark 2001:2::1 should never be blacklisted")
+	}
+	if r.domainBlacklist.IsBlacklisted("ipv6.bench.local", 443) {
+		t.Error("IPv6 benchmark domain should never be blacklisted")
+	}
+}
+
 func TestRouter_UpdateConfig(t *testing.T) {
 	cn := chnroute.New()
 	mgr, _ := upstream.NewManager(upstream.UpstreamConfig{Default: "failover"})

@@ -521,6 +521,9 @@ func isTLSClientHello(pkt []byte) bool {
 }
 
 func (r *Router) addToBlacklists(host string, port int, domain, reason string) {
+	if netutil.IsLAN(host) {
+		return
+	}
 	cfg := r.cfg.Load()
 
 	r.ipBlacklist.Add(host, port, cfg.blacklistTTL, reason)
