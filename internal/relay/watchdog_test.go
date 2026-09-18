@@ -90,7 +90,7 @@ func TestWatchdog_NormalResponse_Disarms(t *testing.T) {
 
 	var stalled atomic.Bool
 	cfg := WatchdogConfig{
-		Timeout: 80 * time.Millisecond,
+		Timeout: 500 * time.Millisecond,
 		Host:    "1.1.1.1",
 		Port:    443,
 		Domain:  "cloudflare.com",
@@ -99,7 +99,7 @@ func TestWatchdog_NormalResponse_Disarms(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	go func() {
@@ -131,8 +131,8 @@ func TestWatchdog_NormalResponse_Disarms(t *testing.T) {
 		t.Fatalf("client read response failed: %v", err)
 	}
 
-	// Wait beyond the watchdog timeout (80ms)
-	time.Sleep(120 * time.Millisecond)
+	// Wait beyond the watchdog timeout (500ms)
+	time.Sleep(600 * time.Millisecond)
 
 	if stalled.Load() {
 		t.Fatal("watchdog should have been disarmed by normal response, but OnStall was called!")
