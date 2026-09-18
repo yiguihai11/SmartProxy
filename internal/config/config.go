@@ -240,12 +240,13 @@ type DNSForeign struct {
 }
 
 type SmartProxyConf struct {
-	Enabled      bool               `json:"enabled"`
-	Timeout      int                `json:"timeout"`
-	TimeoutMs    int                `json:"timeout_ms,omitempty"`
-	Ports        []int              `json:"ports"`
-	BlacklistTTL int                `json:"blacklist_ttl"`
-	Quic         SmartProxyQuicConf `json:"quic"`
+	Enabled           bool               `json:"enabled"`
+	Timeout           int                `json:"timeout"`
+	TimeoutMs         int                `json:"timeout_ms,omitempty"`
+	Ports             []int              `json:"ports"`
+	BlacklistTTL      int                `json:"blacklist_ttl"`
+	WatchdogTimeoutMs int                `json:"watchdog_timeout_ms,omitempty"`
+	Quic              SmartProxyQuicConf `json:"quic"`
 }
 
 // SmartTimeout returns the effective timeout for smart proxy direct connection verification.
@@ -259,6 +260,15 @@ func (s SmartProxyConf) SmartTimeout() time.Duration {
 		return time.Duration(s.Timeout) * time.Second
 	}
 	return 2 * time.Second
+}
+
+// WatchdogTimeout returns the timeout for detecting silent GFW drops/blackholes on
+// direct connections. Defaults to 5 seconds if not explicitly configured.
+func (s SmartProxyConf) WatchdogTimeout() time.Duration {
+	if s.WatchdogTimeoutMs > 0 {
+		return time.Duration(s.WatchdogTimeoutMs) * time.Millisecond
+	}
+	return 5 * time.Second
 }
 
 // SmartProxyQuicConf 配置 UDP/443 QUIC(HTTP/3)被动 SNI 识别与 GFW 黑洞自愈。
@@ -397,6 +407,9 @@ func (c *Config) Validate() error {
 	}
 	if c.SmartProxy.BlacklistTTL <= 0 {
 		errs = append(errs, "smart_proxy.blacklist_ttl must be positive")
+	}
+	if c.SmartProxy.WatchdogTimeoutMs < 0 {
+		errs = append(errs, "smart_proxy.watchdog_timeout_ms must not be negative")
 	}
 	if q := c.SmartProxy.Quic; q.Enabled {
 		if len(q.Ports) == 0 {

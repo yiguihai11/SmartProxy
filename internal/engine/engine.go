@@ -94,7 +94,7 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 
 	smartTimeout := cfg.SmartProxy.SmartTimeout()
 	blacklistTTL := time.Duration(cfg.SmartProxy.BlacklistTTL) * time.Second
-	router := route.New(cn, upstreamMgr, cfg.Routing.BypassLAN, smartTimeout, cfg.SmartProxy.Ports, blacklistTTL)
+	router := route.New(cn, upstreamMgr, cfg.Routing.BypassLAN, smartTimeout, cfg.SmartProxy.Ports, blacklistTTL, cfg.SmartProxy.WatchdogTimeout())
 	router.StartCleanup(60 * time.Second)
 
 	preferMode, preferPorts := dns.ParseSpeedCheckMode(cfg.DNS.SpeedCheckMode)
@@ -582,7 +582,19 @@ func (e *Engine) handleConnect(ctx context.Context, conn net.Conn, req *socks5.R
 	}
 	defer remote.Close()
 	ll.Info("smart connection established", "host", host, "port", port, "domain", domain)
-	e.relayTCP(ctx, conn, remote, isProxy, prefix)
+	var relayOpts []relay.RelayOption
+	if !isProxy {
+		relayOpts = append(relayOpts, relay.WithWatchdog(relay.WatchdogConfig{
+			Timeout: e.Router.WatchdogTimeout(),
+			Host:    host,
+			Port:    port,
+			Domain:  domain,
+			OnStall: func(hStr string, p int, d, reason string) {
+				e.Router.AddToBlacklist(hStr, p, d, reason)
+			},
+		}))
+	}
+	e.relayTCP(ctx, conn, remote, isProxy, prefix, relayOpts...)
 }
 
 func getOutboundIPv4() net.IP {
@@ -932,9 +944,9 @@ func (e *Engine) Stop() {
 		slog.Info("[Go-Engine] Engine.Stop() completed")
 	})
 }
-func (e *Engine) relayTCP(ctx context.Context, client, remote net.Conn, isProxy bool, prefix []byte) {
+func (e *Engine) relayTCP(ctx context.Context, client, remote net.Conn, isProxy bool, prefix []byte, opts ...relay.RelayOption) {
 	// ActiveConns 由 relay.TCPRelay 内部统一结算(与 TUN 入口共用同一实现)。
-	relay.TCPRelay(ctx, client, remote, isProxy, prefix)
+	relay.TCPRelay(ctx, client, remote, isProxy, prefix, opts...)
 }
 
 // ReloadConfig validates newCfg and applies all hot-reloadable runtime components.
@@ -1015,6 +1027,7 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 	smartTimeout := newCfg.SmartProxy.SmartTimeout()
 	blacklistTTL := time.Duration(newCfg.SmartProxy.BlacklistTTL) * time.Second
 	e.Router.UpdateConfig(smartTimeout, blacklistTTL, newCfg.Routing.BypassLAN)
+	e.Router.SetWatchdogTimeout(newCfg.SmartProxy.WatchdogTimeout())
 
 	preferMode, preferPorts := dns.ParseSpeedCheckMode(newCfg.DNS.SpeedCheckMode)
 	e.DNSHandler.UpdateConfig(

@@ -944,6 +944,20 @@ func TestSmartProxy_TimeoutMs(t *testing.T) {
 		if err := cfg.Validate(); err != nil {
 			t.Errorf("expected validation to pass with timeout_ms > 0, got %v", err)
 		}
+
+		// Watchdog timeout tests
+		if got := cfg.SmartProxy.WatchdogTimeout(); got != 5*time.Second {
+			t.Errorf("expected default watchdog timeout 5s, got %v", got)
+		}
+		cfg.SmartProxy.WatchdogTimeoutMs = 3500
+		if got := cfg.SmartProxy.WatchdogTimeout(); got != 3500*time.Millisecond {
+			t.Errorf("expected configured watchdog timeout 3500ms, got %v", got)
+		}
+		cfg.SmartProxy.WatchdogTimeoutMs = -1
+		if err := cfg.Validate(); err == nil {
+			t.Error("expected validation error when watchdog_timeout_ms < 0")
+		}
 	})
 }
+
 

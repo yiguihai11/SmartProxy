@@ -608,5 +608,57 @@ func TestSmartConnectWithFallback_ProxyDefault(t *testing.T) {
 	}
 }
 
+func TestRouter_AddToBlacklistAndWatchdogTimeout(t *testing.T) {
+	cn := chnroute.New()
+	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
+		Default: "failover",
+		Proxies: []upstream.ProxyEntry{
+			{Alias: "p1", URL: "socks5://127.0.0.1:1080"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Stop()
+
+	// 1. Test WatchdogTimeout default & optional constructor parameter
+	rDefault := New(cn, mgr, false, 2*time.Second, nil, 3600*time.Second)
+	if got := rDefault.WatchdogTimeout(); got != 5*time.Second {
+		t.Errorf("expected default 5s watchdog timeout, got %v", got)
+	}
+
+	rCustom := New(cn, mgr, false, 2*time.Second, nil, 3600*time.Second, 4*time.Second)
+	if got := rCustom.WatchdogTimeout(); got != 4*time.Second {
+		t.Errorf("expected 4s watchdog timeout, got %v", got)
+	}
+
+	rCustom.SetWatchdogTimeout(3 * time.Second)
+	if got := rCustom.WatchdogTimeout(); got != 3*time.Second {
+		t.Errorf("expected 3s watchdog timeout after SetWatchdogTimeout, got %v", got)
+	}
+
+	// 2. Test AddToBlacklist
+	host := "140.82.116.4"
+	port := 443
+	domain := "github.com"
+
+	if rDefault.IsDomainBlacklisted(domain, port) {
+		t.Fatalf("domain should not be blacklisted initially")
+	}
+	if rDefault.IsIPBlacklisted(host, port) {
+		t.Fatalf("ip should not be blacklisted initially")
+	}
+
+	rDefault.AddToBlacklist(host, port, domain, "gfw_silent_drop_watchdog")
+
+	if !rDefault.IsDomainBlacklisted(domain, port) {
+		t.Errorf("expected domain %s:%d to be blacklisted after AddToBlacklist", domain, port)
+	}
+	if !rDefault.IsIPBlacklisted(host, port) {
+		t.Errorf("expected ip %s:%d to be blacklisted after AddToBlacklist", host, port)
+	}
+}
+
+
 
 

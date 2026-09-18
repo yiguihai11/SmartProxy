@@ -383,7 +383,20 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 	defer remote.Close()
 	hd.setRemote(remote)
 	ll.Info("TUN smart connection established", "host", host, "port", port, "domain", domain)
-	relay.TCPRelay(ctx, conn, remote, isProxy, prefix)
+
+	var relayOpts []relay.RelayOption
+	if !isProxy {
+		relayOpts = append(relayOpts, relay.WithWatchdog(relay.WatchdogConfig{
+			Timeout: h.router.WatchdogTimeout(),
+			Host:    host,
+			Port:    port,
+			Domain:  domain,
+			OnStall: func(hStr string, p int, d, reason string) {
+				h.router.AddToBlacklist(hStr, p, d, reason)
+			},
+		}))
+	}
+	relay.TCPRelay(ctx, conn, remote, isProxy, prefix, relayOpts...)
 }
 
 func (h *TUNHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {

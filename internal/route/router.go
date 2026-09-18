@@ -24,9 +24,10 @@ import (
 )
 
 type routerConfig struct {
-	smartTimeout time.Duration
-	blacklistTTL time.Duration
-	bypassLAN    bool
+	smartTimeout    time.Duration
+	blacklistTTL    time.Duration
+	bypassLAN       bool
+	watchdogTimeout time.Duration
 }
 
 type Router struct {
@@ -43,7 +44,13 @@ type Router struct {
 
 func New(cn *chnroute.Trie, mgr *upstream.Manager,
 	bypassLAN bool, smartTimeout time.Duration,
-	_ []int, blacklistTTL time.Duration) *Router {
+	_ []int, blacklistTTL time.Duration,
+	watchdogTimeout ...time.Duration) *Router {
+
+	wt := 5 * time.Second
+	if len(watchdogTimeout) > 0 && watchdogTimeout[0] > 0 {
+		wt = watchdogTimeout[0]
+	}
 
 	r := &Router{
 		chnroute:        cn,
@@ -52,26 +59,59 @@ func New(cn *chnroute.Trie, mgr *upstream.Manager,
 		ipBlacklist:     NewBlacklist("ip"),
 	}
 	r.cfg.Store(&routerConfig{
-		smartTimeout: smartTimeout,
-		blacklistTTL: blacklistTTL,
-		bypassLAN:    bypassLAN,
+		smartTimeout:    smartTimeout,
+		blacklistTTL:    blacklistTTL,
+		bypassLAN:       bypassLAN,
+		watchdogTimeout: wt,
 	})
 	return r
 }
 
 func (r *Router) UpdateConfig(smartTimeout, blacklistTTL time.Duration, bypassLAN ...bool) {
 	bLAN := false
-	if len(bypassLAN) > 0 {
-		bLAN = bypassLAN[0]
-	} else if cur := r.cfg.Load(); cur != nil {
+	cur := r.cfg.Load()
+	wt := 5 * time.Second
+	if cur != nil {
+		if cur.watchdogTimeout > 0 {
+			wt = cur.watchdogTimeout
+		}
 		bLAN = cur.bypassLAN
 	}
+	if len(bypassLAN) > 0 {
+		bLAN = bypassLAN[0]
+	}
 	r.cfg.Store(&routerConfig{
-		smartTimeout: smartTimeout,
-		blacklistTTL: blacklistTTL,
-		bypassLAN:    bLAN,
+		smartTimeout:    smartTimeout,
+		blacklistTTL:    blacklistTTL,
+		bypassLAN:       bLAN,
+		watchdogTimeout: wt,
 	})
-	slog.Info("router config updated", "smartTimeout", smartTimeout, "blacklistTTL", blacklistTTL, "bypassLAN", bLAN)
+	slog.Info("router config updated", "smartTimeout", smartTimeout, "blacklistTTL", blacklistTTL, "bypassLAN", bLAN, "watchdogTimeout", wt)
+}
+
+func (r *Router) SetWatchdogTimeout(d time.Duration) {
+	if d <= 0 {
+		d = 5 * time.Second
+	}
+	for {
+		cur := r.cfg.Load()
+		if cur == nil {
+			return
+		}
+		next := *cur
+		next.watchdogTimeout = d
+		if r.cfg.CompareAndSwap(cur, &next) {
+			slog.Info("router watchdog timeout updated", "watchdogTimeout", d)
+			break
+		}
+	}
+}
+
+func (r *Router) WatchdogTimeout() time.Duration {
+	if cfg := r.cfg.Load(); cfg != nil && cfg.watchdogTimeout > 0 {
+		return cfg.watchdogTimeout
+	}
+	return 5 * time.Second
 }
 
 func (r *Router) BypassLAN() bool {
@@ -479,6 +519,11 @@ func (r *Router) addToBlacklists(host string, port int, domain, reason string) {
 	if domain != "" {
 		r.domainBlacklist.Add(domain, port, cfg.blacklistTTL, reason)
 	}
+}
+
+// AddToBlacklist adds host and (if non-empty) domain to the dynamic blacklist.
+func (r *Router) AddToBlacklist(host string, port int, domain, reason string) {
+	r.addToBlacklists(host, port, domain, reason)
 }
 
 func (r *Router) BlacklistSnapshot() (ipEntries, domainEntries []BlacklistEntry) {
