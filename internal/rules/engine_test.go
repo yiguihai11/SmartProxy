@@ -1062,4 +1062,71 @@ func TestAppendProxyRule(t *testing.T) {
 	}
 }
 
+func TestIsSpecialOrDomesticIP(t *testing.T) {
+	// Special / Domestic IPs (Fake-IP, CGNAT, Alibaba Cloud China 8.128/10, Private IPs)
+	specialIPs := []string{
+		"192.168.1.1",
+		"10.0.0.1",
+		"172.16.0.1",
+		"198.18.3.223", // fake-IP
+		"198.19.0.1",   // fake-IP
+		"100.64.0.1",   // CGNAT
+		"8.132.237.151", // Alibaba Cloud Shanghai
+	}
+	for _, ip := range specialIPs {
+		if !IsSpecialOrDomesticIP(ip) {
+			t.Errorf("IsSpecialOrDomesticIP(%q) = false, want true", ip)
+		}
+	}
+
+	// Normal foreign public IPs
+	normalForeign := []string{
+		"140.82.112.4",
+		"1.1.1.1",
+		"8.8.8.8",
+		"104.16.132.229",
+	}
+	for _, ip := range normalForeign {
+		if IsSpecialOrDomesticIP(ip) {
+			t.Errorf("IsSpecialOrDomesticIP(%q) = true, want false", ip)
+		}
+	}
+}
+
+func TestAppendProxyRule_DomesticSafeguard(t *testing.T) {
+	dir := t.TempDir()
+	aclPath := filepath.Join(dir, "acl.txt")
+
+	// 1. Attempt to append fake-ip / special ip / loopback - should be rejected
+	if err := AppendProxyRule(aclPath, "127.0.0.1", "", "default"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := AppendProxyRule(aclPath, "198.18.3.223", "", "default"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := AppendProxyRule(aclPath, "8.132.237.151", "", "default"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// File should not exist or be empty of proxy rules
+	if content, err := os.ReadFile(aclPath); err == nil {
+		text := string(content)
+		if strings.Contains(text, "198.18") || strings.Contains(text, "8.132") || strings.Contains(text, "127.0.0.1") {
+			t.Errorf("special target should not be written to acl, got:\n%s", text)
+		}
+	}
+
+	// 2. Append legitimate foreign domain - should succeed
+	if err := AppendProxyRule(aclPath, "", "github.com", "default"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	content, err := os.ReadFile(aclPath)
+	if err != nil {
+		t.Fatalf("failed to read file: %v", err)
+	}
+	if !strings.Contains(string(content), "proxy domain github.com default") {
+		t.Errorf("foreign domain should be written, got:\n%s", string(content))
+	}
+}
+
 

@@ -396,6 +396,10 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 			Port:    port,
 			Domain:  domain,
 			OnStall: func(hStr string, p int, d, reason string) {
+				if hStr != "" && (h.router.IsDomesticByIP(hStr) || rules.IsSpecialOrDomesticIP(hStr)) {
+					ll.Info("ignoring watchdog stall for domestic IP", "host", hStr)
+					return
+				}
 				h.router.AddToBlacklist(hStr, p, d, reason)
 				if aclFile != "" {
 					if err := rules.AppendProxyRule(aclFile, hStr, d, "default"); err != nil {

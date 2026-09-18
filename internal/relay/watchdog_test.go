@@ -139,6 +139,101 @@ func TestWatchdog_NormalResponse_Disarms(t *testing.T) {
 	}
 }
 
+func TestWatchdog_PreConnectIdle_DoesNotTrigger(t *testing.T) {
+	clientR, clientW := net.Pipe()
+	remoteR, remoteW := net.Pipe()
+	defer clientR.Close()
+	defer clientW.Close()
+	defer remoteR.Close()
+	defer remoteW.Close()
+
+	var stalled atomic.Bool
+	cfg := WatchdogConfig{
+		Timeout: 100 * time.Millisecond,
+		Host:    "1.1.1.1",
+		Port:    443,
+		Domain:  "beacon-api.aliyuncs.com",
+		OnStall: func(h string, p int, d, reason string) {
+			stalled.Store(true)
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	go func() {
+		TCPRelay(ctx, clientR, remoteR, false, nil, WithWatchdog(cfg))
+	}()
+
+	// Client opens connection (speculative connection pool pre-connect) but does not write any request yet.
+	// Wait well beyond the 100ms watchdog timeout:
+	time.Sleep(250 * time.Millisecond)
+
+	if stalled.Load() {
+		t.Fatal("watchdog should not trigger on idle pre-connected connections where no request is in flight!")
+	}
+}
+
+func TestWatchdog_KeepAliveIdle_DoesNotTrigger(t *testing.T) {
+	clientR, clientW := net.Pipe()
+	remoteR, remoteW := net.Pipe()
+	defer clientR.Close()
+	defer clientW.Close()
+	defer remoteR.Close()
+	defer remoteW.Close()
+
+	var stalled atomic.Bool
+	cfg := WatchdogConfig{
+		Timeout: 500 * time.Millisecond,
+		Host:    "1.1.1.1",
+		Port:    443,
+		Domain:  "api-normal-m.amemv.com",
+		OnStall: func(h string, p int, d, reason string) {
+			t.Logf("OnStall called: reason=%s", reason)
+			stalled.Store(true)
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		TCPRelay(ctx, clientR, remoteR, false, nil, WithWatchdog(cfg))
+	}()
+
+	// 1. Client writes small request
+	go func() {
+		clientW.Write([]byte("GET /ping HTTP/1.1\r\n\r\n"))
+	}()
+
+	// 2. Remote reads request
+	buf := make([]byte, 1024)
+	n, err := remoteW.Read(buf)
+	if err != nil || n == 0 {
+		t.Fatalf("remote read failed: %v", err)
+	}
+
+	// 3. Remote writes small response (<1KB, less than 16KB threshold)
+	_, err = remoteW.Write([]byte("HTTP/1.1 200 OK\r\n\r\npong"))
+	if err != nil {
+		t.Fatalf("remote write failed: %v", err)
+	}
+
+	// 4. Client reads response
+	respBuf := make([]byte, 1024)
+	rn, err := clientW.Read(respBuf)
+	if err != nil || rn == 0 {
+		t.Fatalf("client read response failed: %v", err)
+	}
+
+	// 5. Connection enters Keep-Alive idle state! Client sits idle for 600ms (watchdog timeout is 500ms)
+	time.Sleep(600 * time.Millisecond)
+
+	if stalled.Load() {
+		t.Fatal("watchdog falsely triggered on idle Keep-Alive connection after response was received!")
+	}
+}
+
 func TestWatchdog_EarlyReset_Triggers(t *testing.T) {
 	clientR, clientW := net.Pipe()
 	defer clientR.Close()

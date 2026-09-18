@@ -651,6 +651,11 @@ func AppendProxyRule(aclPath, host, domain, alias string) error {
 		line = "proxy domain " + d + " " + alias
 	} else if host != "" {
 		h := strings.Trim(strings.TrimSpace(host), "[]")
+		parsedIP := net.ParseIP(h)
+		if (parsedIP != nil && parsedIP.IsLoopback()) || IsSpecialOrDomesticIP(h) {
+			slog.Info("refusing to append proxy rule for domestic/special IP", "host", h)
+			return nil
+		}
 		line = "proxy ip " + h + " " + alias
 	} else {
 		return nil
@@ -694,5 +699,37 @@ func aclLineExists(path, want string) (bool, error) {
 		}
 	}
 	return false, sc.Err()
+}
+
+
+// IsSpecialOrDomesticIP reports whether ipStr is a private, CGNAT, benchmark (fake-IP),
+// multicast, or known domestic cloud block (e.g. Alibaba Cloud 8.128.0.0/10) that must never be
+// auto-persisted as an overseas proxy target or added to dynamic blacklist.
+// Note: Loopback (127.0.0.1) is excluded from this check so that unit tests can mock remote
+// servers on localhost; AppendProxyRule explicitly rejects loopback separately.
+func IsSpecialOrDomesticIP(ipStr string) bool {
+	ip := net.ParseIP(strings.Trim(strings.TrimSpace(ipStr), "[]"))
+	if ip == nil {
+		return false
+	}
+	if ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+		return true
+	}
+	v4 := ip.To4()
+	if v4 != nil {
+		// 198.18.0.0/15 (RFC 2544 benchmark / fake-IP pool)
+		if v4[0] == 198 && (v4[1] == 18 || v4[1] == 19) {
+			return true
+		}
+		// 100.64.0.0/10 (Carrier-grade NAT)
+		if v4[0] == 100 && (v4[1] >= 64 && v4[1] <= 127) {
+			return true
+		}
+		// Alibaba Cloud domestic ranges not covered in APNIC CN list (8.128.0.0/10)
+		if v4[0] == 8 && (v4[1] >= 128 && v4[1] <= 191) {
+			return true
+		}
+	}
+	return false
 }
 

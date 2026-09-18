@@ -62,6 +62,7 @@ type watchdogConn struct {
 	timer   *time.Timer
 	timerMu sync.Mutex
 
+	inFlight      atomic.Bool // true only while a client request is awaiting remote response
 	clientWritten atomic.Bool
 	totalRemote   atomic.Int64
 	triggerOnce   sync.Once
@@ -77,13 +78,9 @@ func newWatchdogConn(client, remote net.Conn, cfg WatchdogConfig) *watchdogConn 
 		cfg:    cfg,
 	}
 	w.state.Store(int32(watchdogArmed))
-
-	w.timerMu.Lock()
-	w.timer = time.AfterFunc(cfg.Timeout, func() {
-		w.trigger("gfw_silent_drop_watchdog")
-	})
-	w.timerMu.Unlock()
-
+	// Do NOT unconditionally start the timer on creation. An established connection
+	// sitting idle (e.g. Keep-Alive connection pool, speculative pre-connect) is NOT
+	// a stall. The timer is armed only when client writes request data awaiting a response.
 	return w
 }
 
@@ -95,8 +92,9 @@ func (w *watchdogConn) Write(p []byte) (int, error) {
 	}
 	if n > 0 && w.state.Load() == int32(watchdogArmed) {
 		w.clientWritten.Store(true)
-		// Reset the timer: client just uploaded request data, remote has cfg.Timeout to respond!
-		w.resetTimer(w.cfg.Timeout)
+		w.inFlight.Store(true)
+		// Arm or reset the watchdog timer: client just sent request data, remote must respond within Timeout!
+		w.armTimer(w.cfg.Timeout)
 	}
 	return n, nil
 }
@@ -108,11 +106,13 @@ func (w *watchdogConn) Read(p []byte) (int, error) {
 		return n, err
 	}
 	if n > 0 && w.state.Load() == int32(watchdogArmed) {
+		// Remote returned response data! Cancel the watchdog timer immediately.
+		w.inFlight.Store(false)
+		w.stopTimer()
+
 		total := w.totalRemote.Add(int64(n))
-		// Disarm condition:
-		// 1) Remote returned response data AFTER client wrote request data!
-		// 2) OR total data received from remote exceeded 32KB (definitely healthy data stream).
-		if w.clientWritten.Load() || total > 32*1024 {
+		// If total response data exceeds 16KB, stream is proven healthy and fully disarmed.
+		if total > 16*1024 {
 			w.disarm()
 		}
 	}
@@ -121,6 +121,7 @@ func (w *watchdogConn) Read(p []byte) (int, error) {
 
 func (w *watchdogConn) disarm() {
 	if w.state.CompareAndSwap(int32(watchdogArmed), int32(watchdogDisarmed)) {
+		w.inFlight.Store(false)
 		w.stopTimer()
 	}
 }
@@ -133,14 +134,22 @@ func (w *watchdogConn) stopTimer() {
 	}
 }
 
-func (w *watchdogConn) resetTimer(d time.Duration) {
+func (w *watchdogConn) armTimer(d time.Duration) {
 	w.timerMu.Lock()
 	defer w.timerMu.Unlock()
-	if w.state.Load() != int32(watchdogArmed) || w.timer == nil {
+	if w.state.Load() != int32(watchdogArmed) {
 		return
 	}
-	w.timer.Stop()
-	w.timer.Reset(d)
+	if w.timer == nil {
+		w.timer = time.AfterFunc(d, func() {
+			if w.inFlight.Load() {
+				w.trigger("gfw_silent_drop_watchdog")
+			}
+		})
+	} else {
+		w.timer.Stop()
+		w.timer.Reset(d)
+	}
 }
 
 func (w *watchdogConn) trigger(reason string) {
