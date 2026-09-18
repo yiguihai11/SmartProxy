@@ -85,16 +85,19 @@ func newWatchdogConn(client, remote net.Conn, cfg WatchdogConfig) *watchdogConn 
 }
 
 func (w *watchdogConn) Write(p []byte) (int, error) {
-	n, err := w.Conn.Write(p)
-	if err != nil {
-		w.handleError("write", err)
-		return n, err
-	}
-	if n > 0 && w.state.Load() == int32(watchdogArmed) {
+	if len(p) > 0 && w.state.Load() == int32(watchdogArmed) {
 		w.clientWritten.Store(true)
 		w.inFlight.Store(true)
-		// Arm or reset the watchdog timer: client just sent request data, remote must respond within Timeout!
+		// Arm or reset the watchdog timer before writing, so that an immediate
+		// remote response (e.g. on fast links or pipes) does not race with inFlight.
 		w.armTimer(w.cfg.Timeout)
+	}
+	n, err := w.Conn.Write(p)
+	if err != nil {
+		w.inFlight.Store(false)
+		w.stopTimer()
+		w.handleError("write", err)
+		return n, err
 	}
 	return n, nil
 }
