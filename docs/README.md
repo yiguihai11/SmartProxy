@@ -10,6 +10,7 @@ SOCKS5 Smart Router（下称"本工程"）是一个基于 Go 的智能分流路�
 | [tun.md](tun.md) | TUN 模块专题：sing-tun 集成、gvisor 栈回调、连接处理、缓冲池、UDP 会话、fd 模式、坑点、接口对照表 | TUN / 网络栈开发者 |
 | [rules-engine.md](rules-engine.md) | ACL 规则引擎：allow/block/proxy 语法、COW 快照、无锁读 | 规则维护者、分流策略开发者 |
 | [smart-routing.md](smart-routing.md) | 智能分流：80/443 先直连失败回退代理、动态黑名单、IP 优选 | 分流策略开发者 |
+| [anti-gfw-smart-routing.md](anti-gfw-smart-routing.md) | GFW 干扰对抗与自适应分流架构：旁路分光深度分析、首字节探测假通根因、TLS 全握手窥探、Happy Eyeballs 对冲双拨与中继早衰闭环反馈 | 架构师、分流策略开发者 |
 | [socks5.md](socks5.md) | SOCKS5 服务器：握手、CONNECT、UDP ASSOCIATE 协议实现 | 协议 / 服务端开发者 |
 | [dns.md](dns.md) | DNS 模块：污染检测、缓存、IP 优选、singleflight、代理 DNS | DNS / 网络开发者 |
 | [upstream.md](upstream.md) | 上游代理：健康检查、选择策略（failover/round_robin/random/latency）、UDP 池；内置 SS 与 obfs，含「SS 地址头须与首块数据合成一次写以过 GFW」的实测坑点 | 代理链路开发者 |
