@@ -263,12 +263,12 @@ func (s SmartProxyConf) SmartTimeout() time.Duration {
 }
 
 // WatchdogTimeout returns the timeout for detecting silent GFW drops/blackholes on
-// direct connections. Defaults to 5 seconds if not explicitly configured.
+// direct connections. Defaults to 2 seconds if not explicitly configured.
 func (s SmartProxyConf) WatchdogTimeout() time.Duration {
 	if s.WatchdogTimeoutMs > 0 {
 		return time.Duration(s.WatchdogTimeoutMs) * time.Millisecond
 	}
-	return 5 * time.Second
+	return 2 * time.Second
 }
 
 // SmartProxyQuicConf 配置 UDP/443 QUIC(HTTP/3)被动 SNI 识别与 GFW 黑洞自愈。

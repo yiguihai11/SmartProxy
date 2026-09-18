@@ -1011,3 +1011,55 @@ proxy domain case.example.com My-Custom-Case-Alias
 	}
 }
 
+func TestAppendProxyRule(t *testing.T) {
+	dir := t.TempDir()
+	aclPath := filepath.Join(dir, "acl.txt")
+
+	// 1. Append domain rule
+	if err := AppendProxyRule(aclPath, "140.82.116.4", "github.com", "default"); err != nil {
+		t.Fatalf("unexpected error appending domain rule: %v", err)
+	}
+
+	// 2. Append duplicate domain rule (should be no-op)
+	if err := AppendProxyRule(aclPath, "140.82.116.4", "github.com", "default"); err != nil {
+		t.Fatalf("unexpected error appending duplicate domain rule: %v", err)
+	}
+
+	// 3. Append IP rule
+	if err := AppendProxyRule(aclPath, "1.2.3.4", "", "default"); err != nil {
+		t.Fatalf("unexpected error appending ip rule: %v", err)
+	}
+
+	// Read file contents
+	content, err := os.ReadFile(aclPath)
+	if err != nil {
+		t.Fatalf("failed to read acl file: %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "proxy domain github.com default") {
+		t.Errorf("expected file to contain domain rule, got:\n%s", text)
+	}
+	if strings.Count(text, "proxy domain github.com default") != 1 {
+		t.Errorf("expected exactly 1 instance of domain rule (deduplication), got count %d", strings.Count(text, "proxy domain github.com default"))
+	}
+	if !strings.Contains(text, "proxy ip 1.2.3.4 default") {
+		t.Errorf("expected file to contain ip rule, got:\n%s", text)
+	}
+
+	// 4. Verify rule engine loads and matches the persisted rules
+	eng, err := New(aclPath)
+	if err != nil {
+		t.Fatalf("failed to create engine from acl file: %v", err)
+	}
+	alias, matched := eng.MatchProxyRule("", 0, "github.com")
+	if !matched || alias != "default" {
+		t.Errorf("expected github.com to match default proxy, got matched=%v alias=%s", matched, alias)
+	}
+	alias, matched = eng.MatchProxyRule("1.2.3.4", 0, "")
+	if !matched || alias != "default" {
+		t.Errorf("expected 1.2.3.4 to match default proxy, got matched=%v alias=%s", matched, alias)
+	}
+}
+
+

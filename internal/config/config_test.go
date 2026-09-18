@@ -946,8 +946,8 @@ func TestSmartProxy_TimeoutMs(t *testing.T) {
 		}
 
 		// Watchdog timeout tests
-		if got := cfg.SmartProxy.WatchdogTimeout(); got != 5*time.Second {
-			t.Errorf("expected default watchdog timeout 5s, got %v", got)
+		if got := cfg.SmartProxy.WatchdogTimeout(); got != 2*time.Second {
+			t.Errorf("expected default watchdog timeout 2s, got %v", got)
 		}
 		cfg.SmartProxy.WatchdogTimeoutMs = 3500
 		if got := cfg.SmartProxy.WatchdogTimeout(); got != 3500*time.Millisecond {

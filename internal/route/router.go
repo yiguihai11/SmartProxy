@@ -47,7 +47,7 @@ func New(cn *chnroute.Trie, mgr *upstream.Manager,
 	_ []int, blacklistTTL time.Duration,
 	watchdogTimeout ...time.Duration) *Router {
 
-	wt := 5 * time.Second
+	wt := 2 * time.Second
 	if len(watchdogTimeout) > 0 && watchdogTimeout[0] > 0 {
 		wt = watchdogTimeout[0]
 	}
@@ -70,7 +70,7 @@ func New(cn *chnroute.Trie, mgr *upstream.Manager,
 func (r *Router) UpdateConfig(smartTimeout, blacklistTTL time.Duration, bypassLAN ...bool) {
 	bLAN := false
 	cur := r.cfg.Load()
-	wt := 5 * time.Second
+	wt := 2 * time.Second
 	if cur != nil {
 		if cur.watchdogTimeout > 0 {
 			wt = cur.watchdogTimeout
@@ -91,7 +91,7 @@ func (r *Router) UpdateConfig(smartTimeout, blacklistTTL time.Duration, bypassLA
 
 func (r *Router) SetWatchdogTimeout(d time.Duration) {
 	if d <= 0 {
-		d = 5 * time.Second
+		d = 2 * time.Second
 	}
 	for {
 		cur := r.cfg.Load()
@@ -111,7 +111,7 @@ func (r *Router) WatchdogTimeout() time.Duration {
 	if cfg := r.cfg.Load(); cfg != nil && cfg.watchdogTimeout > 0 {
 		return cfg.watchdogTimeout
 	}
-	return 5 * time.Second
+	return 2 * time.Second
 }
 
 func (r *Router) BypassLAN() bool {

@@ -69,7 +69,7 @@ type watchdogConn struct {
 
 func newWatchdogConn(client, remote net.Conn, cfg WatchdogConfig) *watchdogConn {
 	if cfg.Timeout <= 0 {
-		cfg.Timeout = 5 * time.Second
+		cfg.Timeout = 2 * time.Second
 	}
 	w := &watchdogConn{
 		Conn:   remote,

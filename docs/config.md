@@ -116,7 +116,7 @@
 | `TimeoutMs` | `timeout_ms` | 可选（默认 2000ms） | 建连探测超时（毫秒），支持 1100 等亚秒级粒度 |
 | `Ports` | `ports` | `[80, 443]` | 智能代理目标端口 |
 | `BlacklistTTL` | `blacklist_ttl` | `300` | 失败黑名单 TTL（秒） |
-| `WatchdogTimeoutMs` | `watchdog_timeout_ms` | 可选（默认 5000ms） | 智能直连看门狗超时（毫秒）：检测 GFW 静默黑洞丢包并快速发送 TCP RST 掐断阻断连接 |
+| `WatchdogTimeoutMs` | `watchdog_timeout_ms` | 可选（默认 2000ms） | 智能直连看门狗超时（毫秒）：检测 GFW 静默黑洞丢包，超时后快速发送 TCP RST 掐断连接并固化至 ACL 规则文件 |
 | `Quic` | `quic` | 见下（默认 `enabled=false`） | UDP/443 QUIC(HTTP/3) 被动 SNI 嗅探 + GFW 黑洞自愈子结构，字段见下表 |
 
 `smart_proxy.quic` 子结构：`Enabled=false`（默认）时全部 QUIC 逻辑不激活，UDP 路径与历史行为逐字节一致；端口默认 `{443,8443,853}`。有状态短窗只影响 QUIC 候选流的首数据报，非 QUIC 流零延迟放行；`dummy` 仅在直连路径转发真 Initial 前生效；`timeout_ms` 是"直连建好无服务器回包即判 GFW 黑洞"的窗口。

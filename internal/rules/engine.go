@@ -628,3 +628,65 @@ func (t *proxyCidrTrie) lookup(ipStr string) (proxyTarget, bool) {
 	}
 	return proxyTarget{}, false
 }
+
+// AppendProxyRule appends a `proxy domain <domain> <alias>` or `proxy ip <host> <alias>`
+// rule to the ACL file at aclPath if not already present. It safely trims and canonicalizes
+// the target before deduplication.
+func AppendProxyRule(aclPath, host, domain, alias string) error {
+	if aclPath == "" {
+		return nil
+	}
+	if alias == "" {
+		alias = "default"
+	}
+	var line string
+	if domain != "" {
+		d := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
+		line = "proxy domain " + d + " " + alias
+	} else if host != "" {
+		h := strings.Trim(strings.TrimSpace(host), "[]")
+		line = "proxy ip " + h + " " + alias
+	} else {
+		return nil
+	}
+
+	exist, err := aclLineExists(aclPath, line)
+	if err != nil {
+		return err
+	}
+	if exist {
+		slog.Debug("ACL proxy rule already exists in file", "line", line)
+		return nil
+	}
+
+	f, err := os.OpenFile(aclPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString("\n" + line + "\n"); err != nil {
+		return err
+	}
+	slog.Info("persisted proxy rule to ACL file", "path", aclPath, "line", line)
+	return nil
+}
+
+func aclLineExists(path, want string) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		if strings.TrimSpace(sc.Text()) == want {
+			return true, nil
+		}
+	}
+	return false, sc.Err()
+}
+

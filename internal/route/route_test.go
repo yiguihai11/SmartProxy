@@ -623,8 +623,8 @@ func TestRouter_AddToBlacklistAndWatchdogTimeout(t *testing.T) {
 
 	// 1. Test WatchdogTimeout default & optional constructor parameter
 	rDefault := New(cn, mgr, false, 2*time.Second, nil, 3600*time.Second)
-	if got := rDefault.WatchdogTimeout(); got != 5*time.Second {
-		t.Errorf("expected default 5s watchdog timeout, got %v", got)
+	if got := rDefault.WatchdogTimeout(); got != 2*time.Second {
+		t.Errorf("expected default 2s watchdog timeout, got %v", got)
 	}
 
 	rCustom := New(cn, mgr, false, 2*time.Second, nil, 3600*time.Second, 4*time.Second)

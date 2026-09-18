@@ -584,6 +584,10 @@ func (e *Engine) handleConnect(ctx context.Context, conn net.Conn, req *socks5.R
 	ll.Info("smart connection established", "host", host, "port", port, "domain", domain)
 	var relayOpts []relay.RelayOption
 	if !isProxy {
+		aclFile := ""
+		if cfg := e.Config.Load(); cfg != nil {
+			aclFile = cfg.Routing.ACLFile
+		}
 		relayOpts = append(relayOpts, relay.WithWatchdog(relay.WatchdogConfig{
 			Timeout: e.Router.WatchdogTimeout(),
 			Host:    host,
@@ -591,6 +595,11 @@ func (e *Engine) handleConnect(ctx context.Context, conn net.Conn, req *socks5.R
 			Domain:  domain,
 			OnStall: func(hStr string, p int, d, reason string) {
 				e.Router.AddToBlacklist(hStr, p, d, reason)
+				if aclFile != "" {
+					if err := rules.AppendProxyRule(aclFile, hStr, d, "default"); err != nil {
+						ll.Warn("failed to persist proxy rule to acl file", "error", err, "path", aclFile)
+					}
+				}
 			},
 		}))
 	}
