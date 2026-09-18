@@ -133,6 +133,9 @@ func (r *Router) isDomestic(ip string) bool {
 }
 
 func (r *Router) IsDomesticByIP(ipStr string) bool {
+	if rules.IsSpecialOrDomesticIP(ipStr) && !rules.IsFakeIP(ipStr) {
+		return true
+	}
 	if r == nil || r.chnroute == nil {
 		return false
 	}
@@ -144,6 +147,9 @@ func (r *Router) IsDomesticByIP(ipStr string) bool {
 }
 
 func (r *Router) isDomesticHost(host string) bool {
+	if rules.IsSpecialOrDomesticIP(host) && !rules.IsFakeIP(host) {
+		return true
+	}
 	if r == nil || r.chnroute == nil {
 		return false
 	}

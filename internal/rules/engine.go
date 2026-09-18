@@ -707,6 +707,21 @@ func aclLineExists(path, want string) (bool, error) {
 // auto-persisted as an overseas proxy target or added to dynamic blacklist.
 // Note: Loopback (127.0.0.1) is excluded from this check so that unit tests can mock remote
 // servers on localhost; AppendProxyRule explicitly rejects loopback separately.
+// IsFakeIP reports whether ipStr belongs to the 198.18.0.0/15 (RFC 2544 benchmark / fake-IP) pool.
+func IsFakeIP(ipStr string) bool {
+	ip := net.ParseIP(strings.Trim(strings.TrimSpace(ipStr), "[]"))
+	if ip == nil {
+		return false
+	}
+	v4 := ip.To4()
+	return v4 != nil && v4[0] == 198 && (v4[1] == 18 || v4[1] == 19)
+}
+
+// IsSpecialOrDomesticIP reports whether ipStr is a private, CGNAT, benchmark (fake-IP),
+// multicast, or known domestic cloud/CDN block (Alibaba Cloud 8.128.0.0/10, Taobao/ByteDance 155.102.0.0/16, 163.181.0.0/16)
+// that must never be auto-persisted as an overseas proxy target or added to dynamic blacklist.
+// Note: Loopback (127.0.0.1) is excluded from this check so that unit tests can mock remote
+// servers on localhost; AppendProxyRule explicitly rejects loopback separately.
 func IsSpecialOrDomesticIP(ipStr string) bool {
 	ip := net.ParseIP(strings.Trim(strings.TrimSpace(ipStr), "[]"))
 	if ip == nil {
@@ -727,6 +742,13 @@ func IsSpecialOrDomesticIP(ipStr string) bool {
 		}
 		// Alibaba Cloud domestic ranges not covered in APNIC CN list (8.128.0.0/10)
 		if v4[0] == 8 && (v4[1] >= 128 && v4[1] <= 191) {
+			return true
+		}
+		// Zhejiang Taobao / Alibaba / ByteDance CDN domestic ranges (155.102.0.0/16, 163.181.0.0/16)
+		if v4[0] == 155 && v4[1] == 102 {
+			return true
+		}
+		if v4[0] == 163 && v4[1] == 181 {
 			return true
 		}
 	}

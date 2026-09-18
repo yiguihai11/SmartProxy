@@ -1063,15 +1063,17 @@ func TestAppendProxyRule(t *testing.T) {
 }
 
 func TestIsSpecialOrDomesticIP(t *testing.T) {
-	// Special / Domestic IPs (Fake-IP, CGNAT, Alibaba Cloud China 8.128/10, Private IPs)
+	// Special / Domestic IPs (Fake-IP, CGNAT, Alibaba Cloud China 8.128/10, Taobao/ByteDance 155.102/16, 163.181/16, Private IPs)
 	specialIPs := []string{
 		"192.168.1.1",
 		"10.0.0.1",
 		"172.16.0.1",
-		"198.18.3.223", // fake-IP
-		"198.19.0.1",   // fake-IP
-		"100.64.0.1",   // CGNAT
+		"198.18.3.223",  // fake-IP
+		"198.19.0.1",    // fake-IP
+		"100.64.0.1",    // CGNAT
 		"8.132.237.151", // Alibaba Cloud Shanghai
+		"155.102.54.133", // Taobao/ByteDance CDN
+		"163.181.60.207", // Taobao/ByteDance CDN
 	}
 	for _, ip := range specialIPs {
 		if !IsSpecialOrDomesticIP(ip) {
@@ -1107,11 +1109,17 @@ func TestAppendProxyRule_DomesticSafeguard(t *testing.T) {
 	if err := AppendProxyRule(aclPath, "8.132.237.151", "", "default"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if err := AppendProxyRule(aclPath, "155.102.54.133", "", "default"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := AppendProxyRule(aclPath, "163.181.60.207", "", "default"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// File should not exist or be empty of proxy rules
 	if content, err := os.ReadFile(aclPath); err == nil {
 		text := string(content)
-		if strings.Contains(text, "198.18") || strings.Contains(text, "8.132") || strings.Contains(text, "127.0.0.1") {
+		if strings.Contains(text, "198.18") || strings.Contains(text, "8.132") || strings.Contains(text, "155.102") || strings.Contains(text, "163.181") || strings.Contains(text, "127.0.0.1") {
 			t.Errorf("special target should not be written to acl, got:\n%s", text)
 		}
 	}
