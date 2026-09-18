@@ -594,10 +594,6 @@ func (e *Engine) handleConnect(ctx context.Context, conn net.Conn, req *socks5.R
 			Port:    port,
 			Domain:  domain,
 			OnStall: func(hStr string, p int, d, reason string) {
-				if hStr != "" && (e.Router.IsDomesticByIP(hStr) || rules.IsSpecialOrDomesticIP(hStr)) {
-					ll.Info("ignoring watchdog stall for domestic IP", "host", hStr)
-					return
-				}
 				e.Router.AddToBlacklist(hStr, p, d, reason)
 				if aclFile != "" {
 					if err := rules.AppendProxyRule(aclFile, hStr, d, "default"); err != nil {

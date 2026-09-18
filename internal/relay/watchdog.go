@@ -114,8 +114,8 @@ func (w *watchdogConn) Read(p []byte) (int, error) {
 		w.stopTimer()
 
 		total := w.totalRemote.Add(int64(n))
-		// If total response data exceeds 16KB, stream is proven healthy and fully disarmed.
-		if total > 16*1024 {
+		// If total response data exceeds 8KB, stream is proven healthy and fully disarmed.
+		if total > 8*1024 {
 			w.disarm()
 		}
 	}

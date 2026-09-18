@@ -133,9 +133,6 @@ func (r *Router) isDomestic(ip string) bool {
 }
 
 func (r *Router) IsDomesticByIP(ipStr string) bool {
-	if rules.IsSpecialOrDomesticIP(ipStr) && !rules.IsFakeIP(ipStr) {
-		return true
-	}
 	if r == nil || r.chnroute == nil {
 		return false
 	}
@@ -147,9 +144,6 @@ func (r *Router) IsDomesticByIP(ipStr string) bool {
 }
 
 func (r *Router) isDomesticHost(host string) bool {
-	if rules.IsSpecialOrDomesticIP(host) && !rules.IsFakeIP(host) {
-		return true
-	}
 	if r == nil || r.chnroute == nil {
 		return false
 	}
@@ -529,9 +523,7 @@ func isTLSClientHello(pkt []byte) bool {
 func (r *Router) addToBlacklists(host string, port int, domain, reason string) {
 	cfg := r.cfg.Load()
 
-	if host != "" && !rules.IsSpecialOrDomesticIP(host) && !r.IsDomesticByIP(host) {
-		r.ipBlacklist.Add(host, port, cfg.blacklistTTL, reason)
-	}
+	r.ipBlacklist.Add(host, port, cfg.blacklistTTL, reason)
 
 	if domain != "" {
 		r.domainBlacklist.Add(domain, port, cfg.blacklistTTL, reason)
@@ -563,9 +555,6 @@ func (r *Router) IsDomainBlacklisted(domain string, port int) bool {
 // BlacklistIP 把目标 IP 加入动态黑名单(QUIC 判死回调 / 其它"直连判死"后调用),
 // 生存期取 blacklist_ttl。之后该 IP 的 TCP smart 直连与 UDP 路由都会改走代理。
 func (r *Router) BlacklistIP(ip string, port int, reason string) {
-	if ip == "" || rules.IsSpecialOrDomesticIP(ip) || r.IsDomesticByIP(ip) {
-		return
-	}
 	cfg := r.cfg.Load()
 	r.ipBlacklist.Add(ip, port, cfg.blacklistTTL, reason)
 	slog.Info("blacklisted ip (UDP smart)", "ip", ip, "port", port, "reason", reason)
@@ -573,9 +562,6 @@ func (r *Router) BlacklistIP(ip string, port int, reason string) {
 
 // BlacklistDomain 把目标域名加入动态黑名单(UDP 域名型目标判死时按 SNI/ATYP 域名写)。
 func (r *Router) BlacklistDomain(domain string, port int, reason string) {
-	if domain == "" {
-		return
-	}
 	cfg := r.cfg.Load()
 	r.domainBlacklist.Add(domain, port, cfg.blacklistTTL, reason)
 	slog.Info("blacklisted domain (UDP smart)", "domain", domain, "port", port, "reason", reason)
