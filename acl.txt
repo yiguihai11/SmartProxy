@@ -70,6 +70,31 @@ block domain contentstatic.vivo.com.cn
 #proxy port 22 direct                   # SSH 端口强制直连
 
 
+# 常用境外代码托管与开发服务走默认代理，防止直连探测首包被误判导致 GFW 干扰挂起
+proxy domain *.github.com default
+proxy domain github.com default
+proxy domain *.githubusercontent.com default
+proxy domain githubusercontent.com default
+proxy domain *.githubassets.com default
+proxy domain githubassets.com default
+proxy domain *.github.io default
+proxy domain *.githubcopilot.com default
+proxy domain *.google.com default
+proxy domain google.com default
+proxy domain *.googlevideo.com default
+proxy domain *.youtube.com default
+proxy domain youtube.com default
+proxy domain *.ytimg.com default
+proxy domain *.twitter.com default
+proxy domain twitter.com default
+proxy domain *.x.com default
+proxy domain x.com default
+proxy domain *.t.co default
+proxy domain t.co default
+proxy domain *.telegram.org default
+proxy domain *.openai.com default
+proxy domain openai.com default
+
 proxy domain api.tripdata.app ss-local
 
 block domain cdn.wwads.cn

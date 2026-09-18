@@ -233,6 +233,13 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 		return cached
 	}
 
+	isProxyDomain := false
+	if engine != nil {
+		if pAlias, matched := engine.MatchProxyRule(targetIP, targetPort, qname); matched && !strings.EqualFold(pAlias, "direct") {
+			isProxyDomain = true
+		}
+	}
+
 	// Coalesce concurrent queries: same domain|type AND same target DNS server requested
 	// simultaneously → query once. targetIP/targetPort must be part of the key: the query
 	// branch (private-direct / domestic / foreign) and the answer both depend on which DNS
@@ -279,6 +286,30 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 		}
 
 		isDomestic := h.IsDomestic(targetIP)
+
+		// If this domain is explicitly assigned to a proxy by rules, route its DNS
+		// resolution directly through foreign DNS via proxy, bypassing domestic DNS.
+		// This prevents domestic DNS pollution, eliminates 30-50ms redundant lookup latency,
+		// and prevents domain lookup leaks to the domestic resolver.
+		if isProxyDomain {
+			fll.Debug("querying foreign DNS via proxy for proxy-rule domain", "qname", qname)
+			foreignHost := cfg.foreignIPv4
+			foreignPort := cfg.foreignIPv4Port
+			if !isDomestic {
+				foreignHost = targetIP
+				foreignPort = targetPort
+			} else if strings.Contains(targetIP, ":") {
+				foreignHost = cfg.foreignIPv6
+				foreignPort = cfg.foreignIPv6Port
+			}
+			resp, rerr := h.queryForeignDNSWithRetry(fctx, queryWire, foreignHost, foreignPort)
+			if rerr != nil {
+				fll.Error("foreign DNS query failed for proxy domain, answering SERVFAIL", "qname", qname, "error", rerr)
+				return h.buildSERVFAIL(queryWire), nil
+			}
+			h.cache.Set(qname, qtype, resp, 0)
+			return resp, nil
+		}
 
 		var resp []byte
 		var rerr error
@@ -402,7 +433,11 @@ func (h *Handler) queryForeignDNSWithRetry(ctx context.Context, queryWire []byte
 	defer cancel()
 	var lastErr error
 	for i := 0; i < attempts; i++ {
-		resp, err := h.queryViaProxyVerifyID(budgetCtx, queryWire, host, port, perAttempt)
+		timeout := perAttempt
+		if i == 0 && cfg.queryTimeout >= 2*time.Second && timeout > 1000*time.Millisecond {
+			timeout = 1000 * time.Millisecond
+		}
+		resp, err := h.queryViaProxyVerifyID(budgetCtx, queryWire, host, port, timeout)
 		if err == nil {
 			return resp, nil
 		}

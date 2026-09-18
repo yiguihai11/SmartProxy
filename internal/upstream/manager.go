@@ -484,6 +484,9 @@ func (m *Manager) SelectProxy(ctx context.Context, targetIP string, targetPort i
 			if strings.EqualFold(alias, "direct") {
 				return "direct", nil
 			}
+			if strings.EqualFold(alias, "default") {
+				return "proxy_default", nil
+			}
 			proxy, _ := m.findProxyLocked(alias)
 			if proxy != nil {
 				return "", proxy

@@ -116,7 +116,7 @@ func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 		conn, err := dialTCP(ctx, host, port, 10*time.Second)
 		return conn, false, err
 	case result == "proxy_default":
-		ll.Warn("proxy rule matched but alias not found, forcing default proxy", "host", host, "port", port, "domain", domain)
+		ll.Info("proxy rule matched, using default proxy", "host", host, "port", port, "domain", domain)
 		conn, err := r.upstreamMgr.ConnectDefault(ctx, host, port)
 		if err != nil {
 			return nil, false, errors.New("failed to connect via default upstream proxy")
@@ -215,7 +215,7 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 		}
 		return conn, nil, false, nil
 	case result == "proxy_default":
-		ll.Warn("proxy rule matched but alias not found, forcing default proxy", "host", host, "port", port, "domain", domain)
+		ll.Info("proxy rule matched, using default proxy", "host", host, "port", port, "domain", domain)
 		conn, err := r.upstreamMgr.ConnectDefault(ctx, host, port)
 		if err != nil {
 			return nil, nil, false, err

@@ -672,6 +672,53 @@ func TestHandleDNS_ForeignFailureAnswersSERVFAIL(t *testing.T) {
 	}
 }
 
+func TestHandleDNS_ProxyRuleRoutesToForeign(t *testing.T) {
+	cn := chnroute.New()
+	prefix, err := netip.ParsePrefix("223.5.5.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cn.Insert(prefix)
+
+	// Dead proxy so foreign query fails fast and answers SERVFAIL.
+	deadLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadAddr := deadLn.Addr().String()
+	deadLn.Close()
+
+	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
+		Default: "failover",
+		Proxies: []upstream.ProxyEntry{
+			{Alias: "dead", URL: "socks5://" + deadAddr},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	h := NewHandler(100, 60, "8.8.8.8", "", cn, mgr, 1, "0.0.0.0", "::", false, PreferNone, nil, true)
+
+	// Rule: proxy domain github.com default
+	eng := makeEngine(t, "proxy domain github.com default\n")
+
+	query := buildTestDNSQuery("github.com", dns.TypeA)
+	// Target is 223.5.5.5:53 (domestic). Without proxy rule, domestic query to 223.5.5.5
+	// would be attempted. With proxy rule, it routes directly to foreign DNS via proxy.
+	resp := h.HandleDNS(context.Background(), query, "223.5.5.5", 53, eng)
+	if resp == nil {
+		t.Fatal("expected SERVFAIL response, got nil")
+	}
+	msg := new(dns.Msg)
+	if err := msg.Unpack(resp); err != nil {
+		t.Fatalf("unpack: %v", err)
+	}
+	if msg.Rcode != dns.RcodeServerFailure {
+		t.Errorf("expected SERVFAIL because proxy domain routed to foreign proxy, got rcode %d", msg.Rcode)
+	}
+}
+
 // startBarrierDNSServer is a UDP DNS server that holds each query in flight (blocking
 // until release is closed) after signaling on got, so a test can prove two concurrent
 // HandleDNS calls genuinely overlap. stop cancels a pending hold so a failing test never

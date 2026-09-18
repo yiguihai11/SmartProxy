@@ -399,6 +399,23 @@ func TestSelectProxy_AliasNotFound(t *testing.T) {
 	}
 }
 
+func TestSelectProxy_DefaultAlias(t *testing.T) {
+	m, _ := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{
+			{Alias: "p1", URL: "socks5://127.0.0.1:1080"},
+		},
+	})
+	eng := newEngineWithRules("proxy domain github.com default\n")
+	result, proxy := m.SelectProxy(context.Background(), "", 0, "github.com", eng)
+	if result != "proxy_default" {
+		t.Errorf("expected proxy_default for 'default' alias, got %s", result)
+	}
+	if proxy != nil {
+		t.Error("proxy should be nil for 'default' alias")
+	}
+}
+
+
 func TestReload_RefreshGeoOnURLEdit(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
 		Proxies: []ProxyEntry{
