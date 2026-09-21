@@ -1043,9 +1043,11 @@ function renderProxyCard(p,i){
   var ccUpper=cc.toUpperCase();
   var regName='';
   if(ccUpper){
-    regName=(window.SP_LANG==='zh'&&countryNamesZh[ccUpper])?countryNamesZh[ccUpper]:ccUpper;
+    var zhName=(window.SP_LANG==='zh'&&countryNamesZh[ccUpper])?countryNamesZh[ccUpper]:'';
+    regName=zhName?(zhName+' '+ccUpper):ccUpper;
   }
-  var flagHtml=cc?'<span class="fi fi-'+cc+' node-flag" title="'+escAttr(regName)+'"></span>':'<span class="node-flag node-flag-empty" title="Unknown">🌐</span>';
+  var flagTitle=ccUpper?(countryNamesZh[ccUpper]?countryNamesZh[ccUpper]+' ('+ccUpper+')':ccUpper):'Unknown';
+  var flagHtml=cc?'<span class="fi fi-'+cc+' node-flag" title="'+escAttr(flagTitle)+'"></span>':'<span class="node-flag node-flag-empty" title="Unknown">🌐</span>';
   var regBadgeHtml=regName?'<span class="node-badge">'+escAttr(regName)+'</span>':'';
   var schemeBadge='<span class="node-scheme-badge">'+escAttr((p.scheme||'').toUpperCase())+'</span>';
   var exitHtml=p.exit_ip?'<span class="stat-exit">exit: '+p.exit_ip+'</span>':'';
@@ -3242,6 +3244,17 @@ function closeConfirm(){
   var el=document.getElementById('confirm-overlay');
   if(el)el.classList.remove('show');
 }
+function formatProxyOptionLabel(p){
+  var flag='';
+  if(p.country_code){
+    var cu=p.country_code.toUpperCase();
+    var zh=(window.SP_LANG==='zh'&&countryNamesZh[cu])?(' '+countryNamesZh[cu]):'';
+    flag='['+cu+zh+'] ';
+  }
+  var scheme=(p.scheme||'').toUpperCase();
+  var schemeTxt=scheme?(' ('+scheme+')'):'';
+  return flag+p.alias+schemeTxt;
+}
 function loadACLUpstreams(){
   fetch('/health').then(function(r){return r.json()}).then(function(d){
     var sel=document.getElementById('acl-upstream');
@@ -3265,13 +3278,13 @@ function loadACLUpstreams(){
       groupOrder.forEach(function(gid){
         html+='<optgroup label="'+escAttr(getProxyGroupLabel(gid))+'">';
         groups[gid].forEach(function(p){
-          html+='<option value="'+escAttr(p.alias)+'">'+escHtml(p.alias)+'</option>';
+          html+='<option value="'+escAttr(p.alias)+'">'+escHtml(formatProxyOptionLabel(p))+'</option>';
         });
         html+='</optgroup>';
       });
     }else{
       proxies.forEach(function(p){
-        html+='<option value="'+escAttr(p.alias)+'">'+escHtml(p.alias)+'</option>';
+        html+='<option value="'+escAttr(p.alias)+'">'+escHtml(formatProxyOptionLabel(p))+'</option>';
       });
     }
     sel.innerHTML=html;
@@ -3391,8 +3404,7 @@ function buildProxySelectOptions(proxies){
     groupOrder.forEach(function(gid){
       html+='<optgroup label="'+escAttr(getProxyGroupLabel(gid))+'">';
       groups[gid].forEach(function(p){
-        var flag=(p.country_code?'['+p.country_code.toUpperCase()+'] ':'');
-        html+='<option value="'+escAttr(p.alias)+'">'+escHtml(flag+p.alias)+' ('+escHtml((p.scheme||'').toUpperCase())+')</option>';
+        html+='<option value="'+escAttr(p.alias)+'">'+escHtml(formatProxyOptionLabel(p))+'</option>';
       });
       html+='</optgroup>';
     });
@@ -3400,8 +3412,7 @@ function buildProxySelectOptions(proxies){
     if(proxies.length>0){
       html+='<optgroup label="'+escAttr(t('Available Proxies'))+'">';
       proxies.forEach(function(p){
-        var flag=(p.country_code?'['+p.country_code.toUpperCase()+'] ':'');
-        html+='<option value="'+escAttr(p.alias)+'">'+escHtml(flag+p.alias)+' ('+escHtml((p.scheme||'').toUpperCase())+')</option>';
+        html+='<option value="'+escAttr(p.alias)+'">'+escHtml(formatProxyOptionLabel(p))+'</option>';
       });
       html+='</optgroup>';
     }
