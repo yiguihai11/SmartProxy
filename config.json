@@ -115,6 +115,7 @@
       443
     ],
     "blacklist_ttl": 3600,
+    "disable_ip_blacklist": true,
     "quic": {
       "enabled": false,
       "ports": [

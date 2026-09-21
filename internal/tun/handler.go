@@ -1236,6 +1236,18 @@ var clientHelloBufPool = sync.Pool{
 	},
 }
 
+// isHTTPMethod checks if the buffer begins with a standard HTTP method.
+func isHTTPMethod(b []byte) bool {
+	if len(b) < 4 {
+		return false
+	}
+	switch string(b[:4]) {
+	case "GET ", "POST", "HEAD", "PUT ", "DELE", "OPTI", "CONN", "PATC", "TRAC", "PRI ":
+		return true
+	}
+	return false
+}
+
 func ReadClientHello(conn net.Conn, timeout time.Duration) ([]byte, error) {
 	conn.SetReadDeadline(time.Now().Add(timeout))
 	defer conn.SetReadDeadline(time.Time{})
@@ -1261,22 +1273,38 @@ func ReadClientHello(conn net.Conn, timeout time.Duration) ([]byte, error) {
 			copy(out[5:], payload)
 			return out, nil
 		}
-		if _, err := io.ReadFull(conn, buf[5:5+recordLen]); err != nil {
-			return nil, err
+		if _, ioErr := io.ReadFull(conn, buf[5:5+recordLen]); ioErr != nil {
+			return nil, ioErr
 		}
 		out := make([]byte, 5+recordLen)
 		copy(out, buf[:5+recordLen])
 		return out, nil
 	}
 
+	// If not standard HTTP verb prefix, it's non-TLS non-HTTP traffic (e.g. Tencent GVoice, game binary protocols).
+	// No SNI/Host header can be extracted. Drain any already-arrived bytes from the kernel socket buffer
+	// with a short deadline (10ms) and return immediately without stalling for 4096 bytes or full timeout.
+	if !isHTTPMethod(buf[:5]) {
+		conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
+		n := 5
+		if nn, _ := conn.Read(buf[5:]); nn > 0 {
+			n += nn
+		}
+		out := make([]byte, n)
+		copy(out, buf[:n])
+		return out, nil
+	}
+
+	// Standard HTTP request: read until "\r\n\r\n" or short bounded deadline.
+	conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 	n := 5
 	for n < len(buf) {
+		if bytes.Contains(buf[:n], []byte("\r\n\r\n")) {
+			break
+		}
 		nn, err := conn.Read(buf[n:])
 		n += nn
 		if err != nil {
-			break
-		}
-		if bytes.Contains(buf[:n], []byte("\r\n\r\n")) {
 			break
 		}
 	}

@@ -225,6 +225,40 @@ func TestRouter_AddToBlacklists_NoDomain(t *testing.T) {
 	}
 }
 
+func TestRouter_AddToBlacklists_DisableIPBlacklist(t *testing.T) {
+	r := newRouter()
+	if r.DisableIPBlacklist() {
+		t.Error("disableIPBlacklist should be false by default")
+	}
+
+	r.SetDisableIPBlacklist(true)
+	if !r.DisableIPBlacklist() {
+		t.Error("disableIPBlacklist should be true after SetDisableIPBlacklist(true)")
+	}
+
+	// 1. With domain: only domain should be blacklisted, IP must NOT be blacklisted (protect CDN IP)
+	r.addToBlacklists("104.21.5.6", 443, "blocked.com", "tls_timeout")
+	if !r.domainBlacklist.IsBlacklisted("blocked.com", 443) {
+		t.Error("domain should be blacklisted")
+	}
+	if r.ipBlacklist.IsBlacklisted("104.21.5.6", 443) {
+		t.Error("ip should NOT be blacklisted when disableIPBlacklist is true")
+	}
+
+	// 2. BlacklistIP should also be ignored
+	r.BlacklistIP("104.21.5.6", 443, "quic_timeout")
+	if r.ipBlacklist.IsBlacklisted("104.21.5.6", 443) {
+		t.Error("BlacklistIP should be ignored when disableIPBlacklist is true")
+	}
+
+	// 3. Toggle back to false: IP blacklisting resumes
+	r.SetDisableIPBlacklist(false)
+	r.addToBlacklists("104.21.5.6", 443, "blocked2.com", "tls_timeout")
+	if !r.ipBlacklist.IsBlacklisted("104.21.5.6", 443) {
+		t.Error("ip should be blacklisted after disabling disableIPBlacklist")
+	}
+}
+
 func TestRouter_AddToBlacklists_LANAndBenchmark(t *testing.T) {
 	r := newRouter()
 	r.addToBlacklists("198.18.3.243", 443, "browseract.vivo.com.cn", "i/o timeout")

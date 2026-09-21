@@ -95,6 +95,7 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 	smartTimeout := cfg.SmartProxy.SmartTimeout()
 	blacklistTTL := time.Duration(cfg.SmartProxy.BlacklistTTL) * time.Second
 	router := route.New(cn, upstreamMgr, cfg.Routing.BypassLAN, smartTimeout, cfg.SmartProxy.Ports, blacklistTTL, cfg.SmartProxy.WatchdogTimeout())
+	router.SetDisableIPBlacklist(cfg.SmartProxy.DisableIPBlacklist)
 	router.StartCleanup(60 * time.Second)
 
 	preferMode, preferPorts := dns.ParseSpeedCheckMode(cfg.DNS.SpeedCheckMode)
@@ -1037,6 +1038,7 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 	blacklistTTL := time.Duration(newCfg.SmartProxy.BlacklistTTL) * time.Second
 	e.Router.UpdateConfig(smartTimeout, blacklistTTL, newCfg.Routing.BypassLAN)
 	e.Router.SetWatchdogTimeout(newCfg.SmartProxy.WatchdogTimeout())
+	e.Router.SetDisableIPBlacklist(newCfg.SmartProxy.DisableIPBlacklist)
 
 	preferMode, preferPorts := dns.ParseSpeedCheckMode(newCfg.DNS.SpeedCheckMode)
 	e.DNSHandler.UpdateConfig(

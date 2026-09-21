@@ -960,4 +960,36 @@ func TestSmartProxy_TimeoutMs(t *testing.T) {
 	})
 }
 
+func TestSmartProxy_DisableIPBlacklist(t *testing.T) {
+	t.Run("default is false", func(t *testing.T) {
+		cfg := DefaultConfig()
+		if cfg.SmartProxy.DisableIPBlacklist {
+			t.Error("expected default DisableIPBlacklist to be false")
+		}
+	})
+
+	t.Run("json loading", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		content := `{
+			"upstream": { "default": "direct" },
+			"smart_proxy": {
+				"enabled": true,
+				"timeout": 2,
+				"disable_ip_blacklist": true
+			}
+		}`
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !cfg.SmartProxy.DisableIPBlacklist {
+			t.Error("expected DisableIPBlacklist to be true when configured in JSON")
+		}
+	})
+}
+
 

@@ -240,13 +240,14 @@ type DNSForeign struct {
 }
 
 type SmartProxyConf struct {
-	Enabled           bool               `json:"enabled"`
-	Timeout           int                `json:"timeout"`
-	TimeoutMs         int                `json:"timeout_ms,omitempty"`
-	Ports             []int              `json:"ports"`
-	BlacklistTTL      int                `json:"blacklist_ttl"`
-	WatchdogTimeoutMs int                `json:"watchdog_timeout_ms,omitempty"`
-	Quic              SmartProxyQuicConf `json:"quic"`
+	Enabled            bool               `json:"enabled"`
+	Timeout            int                `json:"timeout"`
+	TimeoutMs          int                `json:"timeout_ms,omitempty"`
+	Ports              []int              `json:"ports"`
+	BlacklistTTL       int                `json:"blacklist_ttl"`
+	DisableIPBlacklist bool               `json:"disable_ip_blacklist,omitempty"`
+	WatchdogTimeoutMs  int                `json:"watchdog_timeout_ms,omitempty"`
+	Quic               SmartProxyQuicConf `json:"quic"`
 }
 
 // SmartTimeout returns the effective timeout for smart proxy direct connection verification.
@@ -721,10 +722,11 @@ func DefaultConfig() *Config {
 			},
 		},
 		SmartProxy: SmartProxyConf{
-			Enabled:      true,
-			Timeout:      2,
-			Ports:        []int{80, 443},
-			BlacklistTTL: 300,
+			Enabled:            true,
+			Timeout:            2,
+			Ports:              []int{80, 443},
+			BlacklistTTL:       300,
+			DisableIPBlacklist: false,
 		},
 		Lantern: LanternConf{
 			Enabled:         false,

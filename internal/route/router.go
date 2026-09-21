@@ -24,10 +24,11 @@ import (
 )
 
 type routerConfig struct {
-	smartTimeout    time.Duration
-	blacklistTTL    time.Duration
-	bypassLAN       bool
-	watchdogTimeout time.Duration
+	smartTimeout       time.Duration
+	blacklistTTL       time.Duration
+	bypassLAN          bool
+	watchdogTimeout    time.Duration
+	disableIPBlacklist bool
 }
 
 type Router struct {
@@ -71,22 +72,25 @@ func (r *Router) UpdateConfig(smartTimeout, blacklistTTL time.Duration, bypassLA
 	bLAN := false
 	cur := r.cfg.Load()
 	wt := 2 * time.Second
+	disIP := false
 	if cur != nil {
 		if cur.watchdogTimeout > 0 {
 			wt = cur.watchdogTimeout
 		}
 		bLAN = cur.bypassLAN
+		disIP = cur.disableIPBlacklist
 	}
 	if len(bypassLAN) > 0 {
 		bLAN = bypassLAN[0]
 	}
 	r.cfg.Store(&routerConfig{
-		smartTimeout:    smartTimeout,
-		blacklistTTL:    blacklistTTL,
-		bypassLAN:       bLAN,
-		watchdogTimeout: wt,
+		smartTimeout:       smartTimeout,
+		blacklistTTL:       blacklistTTL,
+		bypassLAN:          bLAN,
+		watchdogTimeout:    wt,
+		disableIPBlacklist: disIP,
 	})
-	slog.Info("router config updated", "smartTimeout", smartTimeout, "blacklistTTL", blacklistTTL, "bypassLAN", bLAN, "watchdogTimeout", wt)
+	slog.Info("router config updated", "smartTimeout", smartTimeout, "blacklistTTL", blacklistTTL, "bypassLAN", bLAN, "watchdogTimeout", wt, "disableIPBlacklist", disIP)
 }
 
 func (r *Router) SetWatchdogTimeout(d time.Duration) {
@@ -105,6 +109,26 @@ func (r *Router) SetWatchdogTimeout(d time.Duration) {
 			break
 		}
 	}
+}
+
+func (r *Router) SetDisableIPBlacklist(disable bool) {
+	for {
+		cur := r.cfg.Load()
+		if cur == nil {
+			return
+		}
+		next := *cur
+		next.disableIPBlacklist = disable
+		if r.cfg.CompareAndSwap(cur, &next) {
+			slog.Info("router disable_ip_blacklist updated", "disableIPBlacklist", disable)
+			break
+		}
+	}
+}
+
+func (r *Router) DisableIPBlacklist() bool {
+	cfg := r.cfg.Load()
+	return cfg != nil && cfg.disableIPBlacklist
 }
 
 func (r *Router) WatchdogTimeout() time.Duration {
@@ -526,10 +550,14 @@ func (r *Router) addToBlacklists(host string, port int, domain, reason string) {
 	}
 	cfg := r.cfg.Load()
 
-	r.ipBlacklist.Add(host, port, cfg.blacklistTTL, reason)
-
 	if domain != "" {
 		r.domainBlacklist.Add(domain, port, cfg.blacklistTTL, reason)
+	}
+
+	if cfg == nil || !cfg.disableIPBlacklist {
+		r.ipBlacklist.Add(host, port, cfg.blacklistTTL, reason)
+	} else {
+		slog.Debug("skipping ip blacklist addition (disable_ip_blacklist enabled)", "ip", host, "port", port, "domain", domain)
 	}
 }
 
@@ -559,6 +587,10 @@ func (r *Router) IsDomainBlacklisted(domain string, port int) bool {
 // 生存期取 blacklist_ttl。之后该 IP 的 TCP smart 直连与 UDP 路由都会改走代理。
 func (r *Router) BlacklistIP(ip string, port int, reason string) {
 	cfg := r.cfg.Load()
+	if cfg != nil && cfg.disableIPBlacklist {
+		slog.Debug("skipping BlacklistIP (disable_ip_blacklist enabled)", "ip", ip, "port", port, "reason", reason)
+		return
+	}
 	r.ipBlacklist.Add(ip, port, cfg.blacklistTTL, reason)
 	slog.Info("blacklisted ip (UDP smart)", "ip", ip, "port", port, "reason", reason)
 }

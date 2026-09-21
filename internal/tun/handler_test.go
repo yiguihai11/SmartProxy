@@ -829,6 +829,32 @@ func TestReadClientHello_ReturnedBufferIsCallerOwned(t *testing.T) {
 	}
 }
 
+func TestReadClientHello_NonTLS_NonHTTP(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	// Simulate binary game payload like Tencent GVoice on 443
+	payload := []byte{0x01, 0x00, 0x5a, 0xa5, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc}
+	go func() {
+		server.Write(payload)
+		server.Close()
+	}()
+
+	start := time.Now()
+	got, err := ReadClientHello(client, 2*time.Second)
+	duration := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Errorf("Non-TLS Non-HTTP: got %v, want %v", got, payload)
+	}
+	if duration > 500*time.Millisecond {
+		t.Errorf("ReadClientHello took too long for non-TLS: %v (expected < 500ms)", duration)
+	}
+}
+
 // TestRemoteUDPReader_WritesNonEmptyPayload is a regression test for buf.As/buf.With.
 // remoteUDPReader / handleDNS must wrap existing data with buf.As when writing it to the TUN:
 // buf.With does not set end, so Bytes() returns an empty slice, which would write UDP replies / DNS responses as empty datagrams.
