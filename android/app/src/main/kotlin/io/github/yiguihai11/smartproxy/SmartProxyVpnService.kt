@@ -8,12 +8,13 @@ import android.net.VpnService
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
-import android.util.Log
 import android.widget.Toast
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.util.concurrent.Executors
+
+private val Log = AppLog
 
 /**
  * VPN 入口服务(§4 / §4.5 / §4.6):

@@ -2,4 +2,5 @@
 <!-- FileProvider 可暴露路径:仅 cacheDir/shared_logs(日志分享导出临时文件用)。 -->
 <paths>
     <cache-path name="shared_logs" path="shared_logs/" />
+    <cache-path name="logs" path="logs/" />
 </paths>

@@ -45,6 +45,20 @@ class SmartProxyApp : Application() {
             preloadAppList()
             subscribePackageChanges()
         }
+        // 初始化融合日志文件记录器(按天轮转,保留3天,落盘于 cacheDir/logs)
+        runCatching {
+            val logDir = java.io.File(cacheDir, "logs").apply { mkdirs() }
+            smartproxy.mobile.Mobile.initFileLogger(logDir.absolutePath, 3)
+            AppLog.i("SmartProxyApp", "Unified file logger initialized at ${logDir.absolutePath}")
+        }
+
+        // 全局未捕获异常统一记入融合日志，便于排查崩溃
+        val defaultUncaughtHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            AppLog.e("Crash", "Uncaught exception in thread ${thread.name}", throwable)
+            defaultUncaughtHandler?.uncaughtException(thread, throwable)
+        }
+
         // Android 14+ 受保护共享恢复兜底:Shizuku 的 replacement-Binder 通知可能被系统推迟到
         // 进程回前台,这里挂全局生命周期回调在每次 resume 时请求替换 Binder。register 内部只在
         // SDK≥34 且主进程注册(SharedProcess 与 shell UserService 进程都不该挂)。

@@ -156,7 +156,7 @@
     <string name="cd_copy_all">Copy all</string>
     <string name="cd_clear">Clear</string>
     <string name="logcat_tab_android">Android</string>
-    <string name="logcat_tab_go">Go engine</string>
+    <string name="logcat_tab_go">Unified logs</string>
     <string name="logcat_auto_refresh">Auto refresh</string>
     <string name="logcat_level">Log level</string>
     <string name="logcat_count">%1$d lines</string>

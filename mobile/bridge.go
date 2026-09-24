@@ -358,9 +358,55 @@ func GetGoLogs() string {
 	return string(data)
 }
 
-// ClearGoLogs 清空 Go 日志环形缓冲(对应控制面板 POST /logs/clear)。
+// ClearGoLogs 清空 Go 日志环形缓冲与今日文件日志(对应控制面板 POST /logs/clear)。
 func ClearGoLogs() {
 	logbuf.Default.Clear()
+}
+
+// ClearLogs 与 ClearGoLogs 同义，清空内存环形缓冲并截断当天的日志文件。
+func ClearLogs() {
+	logbuf.Default.Clear()
+}
+
+// InitFileLogger 初始化融合日志文件记录器:保存至 dir(Android 侧为 context.cacheDir/logs),
+// 按天轮转 smartproxy_yyyy-MM-dd.log,保留 retentionDays 天(默认 3 天)。
+func InitFileLogger(dir string, retentionDays int) error {
+	return logbuf.InitFileLogger(dir, retentionDays)
+}
+
+// LogAndroid 供 Android Kotlin 层写入应用事件/崩溃日志至融合日志管线(内存缓冲+按天文件)。
+// source 会以 [source] 形式前置在消息头(若 source 为空则默认 Android)。
+func LogAndroid(level string, source string, message string) {
+	if source == "" {
+		source = "Android"
+	}
+	logbuf.AddExternalLog(source, level, message)
+}
+
+// GetLogFiles 返回现存的所有按天日志文件名称列表(JSON 数组格式: ["smartproxy_2026-09-24.log", ...])。
+func GetLogFiles() string {
+	files := logbuf.ListLogFiles()
+	if files == nil {
+		files = []string{}
+	}
+	data, err := json.Marshal(files)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+// ReadLogFile 读取指定按天日志文件的内容(最多 maxLines 条),返回 JSON 字符串。
+func ReadLogFile(filename string, maxLines int) string {
+	entries, err := logbuf.ReadLogFile(filename, maxLines)
+	if err != nil || entries == nil {
+		return "[]"
+	}
+	data, err := json.Marshal(entries)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
 }
 
 // applyLogLevel 重设全局 slog logger 的级别:输出同时进 logbuf.Default 环形缓冲(供纯 Go

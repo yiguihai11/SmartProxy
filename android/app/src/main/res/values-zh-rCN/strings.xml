@@ -156,7 +156,7 @@
     <string name="cd_copy_all">复制全部</string>
     <string name="cd_clear">清空</string>
     <string name="logcat_tab_android">Android</string>
-    <string name="logcat_tab_go">Go 引擎</string>
+    <string name="logcat_tab_go">融合日志</string>
     <string name="logcat_auto_refresh">自动刷新</string>
     <string name="logcat_level">日志等级</string>
     <string name="logcat_count">%1$d 行</string>

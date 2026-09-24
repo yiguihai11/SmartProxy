@@ -106,14 +106,14 @@ import java.util.Locale
  *
  * 通用:自动刷新默认开(2s 一次,仅轮询当前 tab,切走不空转);手动刷新为右下角 FAB;
  * 搜索为顶栏内存关键字过滤;复制全部(长按单行复制该行);分享导出 txt 走 FileProvider;
- * 清空按 tab 分流(logcat -c / 清 Go logbuf)。行数上限 2000,超出丢最旧;底部跟随
+ * 清空按 tab 分流(logcat -b all -c / 清 Go logbuf 及当天日志)。行数上限 10000,超出丢最旧;底部跟随
  * (用户上翻时暂停跟随)。
  */
 class LogcatActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "SmartProxyVpn"
-        private const val MAX_LINES = 2000
+        private const val MAX_LINES = 10000
         private const val REFRESH_MS = 2000L
         const val TAB_ANDROID = 0
         const val TAB_GO = 1
@@ -350,11 +350,11 @@ class LogcatActivity : ComponentActivity() {
             .onFailure { e -> error = e.message }
     }
 
-    /** Android tab 清空:logcat -c 清系统缓冲,并清空本页。 */
+    /** Android tab 清空:logcat -b all -c 清空所有缓冲(main/system/radio/events/crash/kernel),并清空本页。 */
     private suspend fun clearLogcat() {
         withContext(Dispatchers.IO) {
             runCatching {
-                val p = Runtime.getRuntime().exec(arrayOf("logcat", "-c"))
+                val p = Runtime.getRuntime().exec(arrayOf("logcat", "-b", "all", "-c"))
                 try {
                     p.waitFor()
                 } finally {
@@ -366,9 +366,9 @@ class LogcatActivity : ComponentActivity() {
         error = null
     }
 
-    /** Go tab 清空:清 Go logbuf 环形缓冲(对应面板 POST /logs/clear)。 */
+    /** Go tab 清空:清 Go logbuf 环形缓冲及今日按天日志文件(对应面板 POST /logs/clear)。 */
     private suspend fun clearGoLogs() {
-        withContext(Dispatchers.IO) { runCatching { smartproxy.mobile.Mobile.clearGoLogs() } }
+        withContext(Dispatchers.IO) { runCatching { smartproxy.mobile.Mobile.clearLogs() } }
         goEntries = emptyList()
         error = null
     }

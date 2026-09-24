@@ -25,11 +25,9 @@ type RingBuffer struct {
 	seq      uint64
 }
 
-// DefaultCapacity 是默认环形日志缓冲容量(条)。控制面板 GET /logs 与 Android「Go 日志」
-// tab 都读 Default;环形满了覆盖最旧。定 2000 与 App 日志页显示上限(LogcatActivity
-// MAX_LINES=2000)对齐——否则 App 列表想留 2000 行,引擎缓冲只囤 1000,Go tab 永远被
-// 1000 封顶、翻不到更深历史。每条仅几行文本,2000 条内存约 1MB 量级,可忽略。
-const DefaultCapacity = 2000
+// DefaultCapacity 是默认环形日志缓冲容量(条)。控制面板 GET /logs 与 Android「融合日志」
+// tab 都读 Default;环形满了覆盖最旧。提高至 10000 条保证高并发下不丢历史，内存仅需数 MB。
+const DefaultCapacity = 10000
 
 func NewRingBuffer(capacity int) *RingBuffer {
 	if capacity <= 0 {
@@ -45,13 +43,23 @@ var Default = NewRingBuffer(DefaultCapacity)
 
 func (r *RingBuffer) Add(entry LogEntry) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.seq++
 	entry.ID = r.seq
 	r.entries[r.head] = entry
 	r.head = (r.head + 1) % r.capacity
 	if r.count < r.capacity {
 		r.count++
+	}
+	r.mu.Unlock()
+
+	// 融合日志:若写入的是默认缓冲且开启了文件日志，同步落盘
+	if r == Default {
+		fileLoggerMu.RLock()
+		fl := defaultFileLogger
+		fileLoggerMu.RUnlock()
+		if fl != nil {
+			_ = fl.WriteEntry(entry)
+		}
 	}
 }
 
@@ -81,11 +89,15 @@ func (r *RingBuffer) GetSince(sinceID uint64) []LogEntry {
 
 func (r *RingBuffer) Clear() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.head = 0
 	r.count = 0
 	r.seq = 0
 	r.entries = make([]LogEntry, r.capacity)
+	r.mu.Unlock()
+
+	if r == Default {
+		_ = ClearToday()
+	}
 }
 
 func (r *RingBuffer) Len() int {
