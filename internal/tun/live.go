@@ -48,7 +48,7 @@ func (hd *tcpHandle) hostValue() string {
 	return ""
 }
 
-// kill 主动掐断:outbound 发 RST(真 RST),应用侧关闭,统计记录即时移除。
+// kill 主动掐断:outbound 与应用侧均发送 TCP RST,统计记录即时移除。
 // closeOnce 保证并发掐断只执行一次;注册表移除由 KillBlockedConnections 立即完成,
 // relay 返回后的 defer remove 幂等。
 func (hd *tcpHandle) kill() {
@@ -56,7 +56,9 @@ func (hd *tcpHandle) kill() {
 		if r := hd.remote.Load(); r != nil {
 			netutil.ResetConn(*r)
 		}
-		hd.app.Close()
+		if hd.app != nil {
+			netutil.ResetConn(hd.app)
+		}
 		if hd.rec != nil && hd.stats != nil {
 			hd.stats.Remove(hd.rec)
 		}

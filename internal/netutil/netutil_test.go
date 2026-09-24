@@ -1,6 +1,9 @@
 package netutil
 
-import "testing"
+import (
+	"net"
+	"testing"
+)
 
 func TestParseHostPort(t *testing.T) {
 	tests := []struct {
@@ -181,3 +184,40 @@ func TestIsUnroutableDestination(t *testing.T) {
 		}
 	}
 }
+
+type mockLingerConn struct {
+	net.Conn
+	lingerSec int
+	closed    bool
+}
+
+func (m *mockLingerConn) SetLinger(sec int) error {
+	m.lingerSec = sec
+	return nil
+}
+
+func (m *mockLingerConn) Close() error {
+	m.closed = true
+	return nil
+}
+
+func TestResetConn(t *testing.T) {
+	// 1. Nil conn safe
+	ResetConn(nil)
+
+	// 2. Mock conn with SetLinger
+	mc := &mockLingerConn{lingerSec: -1}
+	ResetConn(mc)
+	if mc.lingerSec != 0 {
+		t.Errorf("expected lingerSec 0, got %d", mc.lingerSec)
+	}
+	if !mc.closed {
+		t.Error("expected closed true")
+	}
+
+	// 3. net.Pipe fallback
+	c1, c2 := net.Pipe()
+	defer c2.Close()
+	ResetConn(c1)
+}
+

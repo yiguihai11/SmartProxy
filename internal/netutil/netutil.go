@@ -4,7 +4,11 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"reflect"
 	"strings"
+	"unsafe"
+
+	"github.com/sagernet/gvisor/pkg/tcpip"
 )
 
 func ParseHostPort(address string, defaultPort int) (string, int) {
@@ -49,36 +53,102 @@ func ContainsInt(s []int, v int) bool {
 }
 
 func SendEnhancedBlock(conn net.Conn, port int) {
+	if conn == nil {
+		return
+	}
 	if port == 80 || port == 443 {
-		if tcp, ok := getTCPConn(conn); ok {
-			tcp.SetLinger(0)
-		}
+		SetLingerZero(conn)
 	}
 	conn.Close()
 }
 
-// ResetConn 以 RST 语义强制关闭连接(任意端口,区别于 SendEnhancedBlock 仅 80/443):
-// 真实内核 socket / 代理连接(getTCPConn 可解包)先 SetLinger(0) 让对端收到 RST,
-// 其余类型(如 gVisor 应用侧连接)退化为普通 Close。用于「联网状态」页的主动掐断。
-func ResetConn(conn net.Conn) {
-	if tcp, ok := getTCPConn(conn); ok {
-		tcp.SetLinger(0)
+// SetLingerZero attempts to configure SO_LINGER {enabled: true, timeout: 0} on conn.
+// It supports:
+// 1. *net.TCPConn (and any types implementing SetLinger(int) error)
+// 2. Wrapped connections implementing UnderlyingConn() net.Conn
+// 3. gVisor netstack connections (gLazyConn, gTCPConn, and Endpoint)
+func SetLingerZero(conn any) {
+	if conn == nil {
+		return
 	}
-	conn.Close()
-}
 
-func getTCPConn(conn net.Conn) (*net.TCPConn, bool) {
-	if tcp, ok := conn.(*net.TCPConn); ok {
-		return tcp, true
+	if s, ok := conn.(interface{ SetLinger(int) error }); ok {
+		_ = s.SetLinger(0)
+		return
 	}
 
 	type internalConn interface {
 		UnderlyingConn() net.Conn
 	}
 	if ic, ok := conn.(internalConn); ok {
-		return getTCPConn(ic.UnderlyingConn())
+		SetLingerZero(ic.UnderlyingConn())
+		return
 	}
-	return nil, false
+
+	setGVisorLingerZero(conn)
+}
+
+// setGVisorLingerZero traverses struct wrappers (such as sing-tun's gLazyConn and gTCPConn)
+// to locate the underlying tcpip.Endpoint and configure LingerOption{Enabled: true, Timeout: 0},
+// causing the gVisor stack to emit an immediate TCP RST segment on Close().
+func setGVisorLingerZero(conn any) {
+	type socketOptionsGetter interface {
+		SocketOptions() *tcpip.SocketOptions
+	}
+	if gso, ok := conn.(socketOptionsGetter); ok && gso != nil {
+		gso.SocketOptions().SetLinger(tcpip.LingerOption{
+			Enabled: true,
+			Timeout: 0,
+		})
+		return
+	}
+
+	val := reflect.ValueOf(conn)
+	for val.Kind() == reflect.Pointer || val.Kind() == reflect.Interface {
+		if val.IsNil() {
+			return
+		}
+		val = val.Elem()
+	}
+
+	if val.Kind() != reflect.Struct {
+		return
+	}
+
+	// 1. If wrapped in gLazyConn with unexported `tcpConn *gTCPConn`
+	tcpConnField := val.FieldByName("tcpConn")
+	if tcpConnField.IsValid() && tcpConnField.Kind() == reflect.Pointer && !tcpConnField.IsNil() {
+		ptr := *(*unsafe.Pointer)(unsafe.Pointer(tcpConnField.UnsafeAddr()))
+		if ptr != nil {
+			inner := reflect.NewAt(tcpConnField.Type().Elem(), ptr).Interface()
+			setGVisorLingerZero(inner)
+			return
+		}
+	}
+
+	// 2. If wrapped in gTCPConn with unexported `ep tcpip.Endpoint`
+	epField := val.FieldByName("ep")
+	if epField.IsValid() {
+		ep := *(*tcpip.Endpoint)(unsafe.Pointer(epField.UnsafeAddr()))
+		if ep != nil {
+			ep.SocketOptions().SetLinger(tcpip.LingerOption{
+				Enabled: true,
+				Timeout: 0,
+			})
+			return
+		}
+	}
+}
+
+// ResetConn 以 RST 语义强制关闭连接:
+// 真实内核 socket、代理连接及 gVisor 协议栈应用侧连接均配置 Linger(0) 让对端立即收到 TCP RST,
+// 促使客户端即刻检测到断连并重建新流,避免悬挂超时。
+func ResetConn(conn net.Conn) {
+	if conn == nil {
+		return
+	}
+	SetLingerZero(conn)
+	conn.Close()
 }
 
 // specialPrefixes contains standard non-public, reserved, multicast, broadcast,

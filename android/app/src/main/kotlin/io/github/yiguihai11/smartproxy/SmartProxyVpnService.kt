@@ -594,7 +594,7 @@ class SmartProxyVpnService : VpnService() {
         }
 
         if (isHandover) {
-            Log.i(TAG, "[NetworkCallback] Network handover detected ($prev -> $network), scheduling Go engine notification (300ms debounce)")
+            Log.i(TAG, "[NetworkCallback] Network handover detected ($prev -> $network), scheduling Go engine notification (50ms debounce)")
             pendingNetworkChangeRunnable?.let { mainHandler.removeCallbacks(it) }
             val r = Runnable {
                 if (startedEngine) {
@@ -610,7 +610,7 @@ class SmartProxyVpnService : VpnService() {
                 }
             }
             pendingNetworkChangeRunnable = r
-            mainHandler.postDelayed(r, 300L)
+            mainHandler.postDelayed(r, 50L)
         }
     }
 

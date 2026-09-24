@@ -310,7 +310,7 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 			// 成功路径的 remove 在 relay goroutine 的 defer 里;失败分支不建 goroutine,
 			// 必须在这里手动摘表,否则代理故障时每个失败连接漏一个句柄,liveTCP 只增不减。
 			h.liveTCP.remove(hd)
-			conn.Close()
+			netutil.ResetConn(conn)
 			if onClose != nil {
 				onClose(err)
 			}
@@ -369,6 +369,7 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 		remote, isProxy, err := h.router.EstablishConnection(ctx, host, port, domain, h.ruleEng)
 		if err != nil {
 			ll.Error("TUN failed to establish domestic connection", "host", host, "port", port, "domain", domain, "error", err)
+			netutil.ResetConn(conn)
 			return
 		}
 		defer remote.Close()
@@ -376,6 +377,7 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 		if len(firstPkt) > 0 {
 			if _, err := remote.Write(firstPkt); err != nil {
 				ll.Debug("TUN error forwarding first packet", "error", err)
+				netutil.ResetConn(conn)
 				return
 			}
 		}
@@ -387,6 +389,7 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 	remote, prefix, isProxy, err := h.router.SmartConnectWithFallback(ctx, host, port, domain, firstPkt, h.ruleEng)
 	if err != nil {
 		ll.Error("TUN smart connect failed", "host", host, "port", port, "domain", domain, "error", err)
+		netutil.ResetConn(conn)
 		return
 	}
 	defer remote.Close()
