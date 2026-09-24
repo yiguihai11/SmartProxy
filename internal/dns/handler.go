@@ -286,6 +286,7 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 		}
 
 		isDomestic := h.IsDomestic(targetIP)
+		filterLAN := !isPrivateIP(targetIP)
 
 		// If this domain is explicitly assigned to a proxy by rules, route its DNS
 		// resolution directly through foreign DNS via proxy, bypassing domestic DNS.
@@ -307,6 +308,7 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 				fll.Error("foreign DNS query failed for proxy domain, answering SERVFAIL", "qname", qname, "error", rerr)
 				return h.buildSERVFAIL(queryWire), nil
 			}
+			resp = sanitizeResponse(resp, cfg.filterAAAA, filterLAN)
 			h.cache.Set(qname, qtype, resp, 0)
 			return resp, nil
 		}
@@ -331,6 +333,7 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 					fll.Error("foreign DNS fallback also failed, answering SERVFAIL", "qname", qname, "error", rerr)
 					return h.buildSERVFAIL(queryWire), nil
 				}
+				resp = sanitizeResponse(resp, cfg.filterAAAA, filterLAN)
 				h.cache.Set(qname, qtype, resp, 0)
 				return resp, nil
 			}
@@ -346,7 +349,7 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 		if isDomestic {
 			// A single parse performs both the pollution check and IP preference selection (avoiding unpacking the response twice)
 			if preferred, cached, clean := h.isDNSCleanAndPrefer(fctx, resp, qname); clean {
-				resp = preferred
+				resp = sanitizeResponse(preferred, cfg.filterAAAA, filterLAN)
 				if cached {
 					h.cache.Set(qname, qtype, resp, 0)
 				}
@@ -366,11 +369,12 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 						"error", ferr, "queryLen", len(queryWire))
 					return h.buildSERVFAIL(queryWire), nil
 				}
-				resp = fallback
+				resp = sanitizeResponse(fallback, cfg.filterAAAA, filterLAN)
 				h.cache.Set(qname, qtype, resp, 0)
 				return resp, nil
 			}
 		} else {
+			resp = sanitizeResponse(resp, cfg.filterAAAA, filterLAN)
 			h.cache.Set(qname, qtype, resp, 0)
 			return resp, nil
 		}
@@ -381,7 +385,7 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 
 	// Share the result and fix the DNS transaction ID for the current caller
 	resp := result.([]byte)
-	resp = sanitizeResponse(resp, cfg.filterAAAA)
+	resp = sanitizeResponse(resp, cfg.filterAAAA, !isPrivateIP(targetIP))
 	if len(resp) >= 2 && (resp[0] != queryWire[0] || resp[1] != queryWire[1]) {
 		respCopy := make([]byte, len(resp))
 		copy(respCopy, resp)
@@ -695,10 +699,12 @@ func (h *Handler) StaticRecordAnswer(queryWire []byte) ([]byte, bool) {
 	return buildStaticResponse(msg, ips, filterAAAA)
 }
 
-// buildNODATAResponse returns a standard empty answer with NOERROR (NODATA)
-// for filtered query types such as AAAA when IPv6 is disabled.
 func buildNODATAResponse(msg *dns.Msg) []byte {
-	resp := msg.SetReply(msg)
+	resp := new(dns.Msg)
+	resp.SetReply(msg)
+	resp.Answer = nil
+	resp.Ns = nil
+	resp.Extra = nil
 	resp.Rcode = dns.RcodeSuccess
 	resp.Authoritative = false
 	resp.RecursionAvailable = true
@@ -709,31 +715,57 @@ func buildNODATAResponse(msg *dns.Msg) []byte {
 	return wire
 }
 
-// sanitizeResponse strips AAAA records from the DNS answer when filterAAAA is enabled.
-func sanitizeResponse(wire []byte, filterAAAA bool) []byte {
-	if !filterAAAA || len(wire) == 0 {
+// sanitizeResponse strips AAAA records (when filterAAAA is enabled) and unrequested Bogon/LAN
+// addresses (RFC 1122 0.0.0.0/8, RFC 1918 private, loopback, etc.) from public DNS answers.
+// When all answers are stripped, it returns a standard empty NODATA (NOERROR, 0 answer) response.
+func sanitizeResponse(wire []byte, filterAAAA bool, filterLAN bool) []byte {
+	if len(wire) == 0 || (!filterAAAA && !filterLAN) {
 		return wire
 	}
 	msg := new(dns.Msg)
 	if err := msg.Unpack(wire); err != nil {
 		return wire
 	}
-	hasAAAA := false
-	for _, rr := range msg.Answer {
-		if rr.Header().Rrtype == dns.TypeAAAA {
-			hasAAAA = true
-			break
-		}
-	}
-	if !hasAAAA {
+	if len(msg.Answer) == 0 {
 		return wire
 	}
-	filtered := make([]dns.RR, 0, len(msg.Answer))
+
+	needsFilter := false
 	for _, rr := range msg.Answer {
-		if rr.Header().Rrtype != dns.TypeAAAA {
-			filtered = append(filtered, rr)
+		if filterAAAA && rr.Header().Rrtype == dns.TypeAAAA {
+			needsFilter = true
+			break
+		}
+		if filterLAN && (rr.Header().Rrtype == dns.TypeA || rr.Header().Rrtype == dns.TypeAAAA) {
+			ip := extractIP(rr)
+			if ip != "" && netutil.IsLAN(ip) {
+				needsFilter = true
+				break
+			}
 		}
 	}
+	if !needsFilter {
+		return wire
+	}
+
+	filtered := make([]dns.RR, 0, len(msg.Answer))
+	for _, rr := range msg.Answer {
+		if filterAAAA && rr.Header().Rrtype == dns.TypeAAAA {
+			continue
+		}
+		if filterLAN && (rr.Header().Rrtype == dns.TypeA || rr.Header().Rrtype == dns.TypeAAAA) {
+			ip := extractIP(rr)
+			if ip != "" && netutil.IsLAN(ip) {
+				continue
+			}
+		}
+		filtered = append(filtered, rr)
+	}
+
+	if len(filtered) == 0 {
+		return buildNODATAResponse(msg)
+	}
+
 	msg.Answer = filtered
 	newWire, err := msg.Pack()
 	if err != nil {

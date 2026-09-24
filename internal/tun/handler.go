@@ -242,6 +242,15 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 		return
 	}
 
+	if netutil.IsUnroutableDestination(host) {
+		ll.Warn("TUN dropping connection to unroutable destination", "host", host, "port", port)
+		netutil.SendEnhancedBlock(conn, port)
+		if onClose != nil {
+			onClose(nil)
+		}
+		return
+	}
+
 	if h.ruleEng.IsPortBlocked(port) {
 		ll.Info("TUN blocked port by rule", "port", port)
 		if port == 80 || port == 443 {
@@ -423,6 +432,15 @@ func (h *TUNHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketCon
 		conn.Close()
 		if onClose != nil {
 			onClose(fmt.Errorf("handler not initialized"))
+		}
+		return
+	}
+
+	if netutil.IsUnroutableDestination(host) {
+		ll.Debug("TUN dropping packet to unroutable destination", "host", host, "port", port)
+		conn.Close()
+		if onClose != nil {
+			onClose(nil)
 		}
 		return
 	}

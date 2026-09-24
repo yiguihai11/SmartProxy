@@ -1306,4 +1306,77 @@ func TestHandler_ClearCache(t *testing.T) {
 	}
 }
 
+func TestSanitizeResponse_FilterBogonLAN(t *testing.T) {
+	// 1. All answers are Bogon/LAN IPs (e.g. gvoice.qq.com -> 0.0.0.1)
+	// Must return a valid NODATA response (NOERROR, 0 answer).
+	msgBogon := new(dns.Msg)
+	msgBogon.SetQuestion("gvoice.qq.com.", dns.TypeA)
+	msgBogon.Answer = []dns.RR{
+		&dns.A{
+			Hdr: dns.RR_Header{Name: "gvoice.qq.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+			A:   net.ParseIP("0.0.0.1"),
+		},
+	}
+	wireBogon, err := msgBogon.Pack()
+	if err != nil {
+		t.Fatalf("pack: %v", err)
+	}
+
+	sanitized := sanitizeResponse(wireBogon, false, true)
+	resMsg := new(dns.Msg)
+	if err := resMsg.Unpack(sanitized); err != nil {
+		t.Fatalf("unpack sanitized: %v", err)
+	}
+	if resMsg.Rcode != dns.RcodeSuccess {
+		t.Errorf("expected RcodeSuccess (NODATA), got %v", resMsg.Rcode)
+	}
+	if len(resMsg.Answer) != 0 {
+		t.Errorf("expected 0 answers (NODATA), got %d answers: %v", len(resMsg.Answer), resMsg.Answer)
+	}
+
+	// 2. Mixed response: one valid public IP, one LAN IP, one loopback
+	msgMixed := new(dns.Msg)
+	msgMixed.SetQuestion("example.com.", dns.TypeA)
+	msgMixed.Answer = []dns.RR{
+		&dns.A{
+			Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+			A:   net.ParseIP("182.50.13.100"), // Valid public IP
+		},
+		&dns.A{
+			Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+			A:   net.ParseIP("0.0.0.1"), // Bogon
+		},
+		&dns.A{
+			Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+			A:   net.ParseIP("127.0.0.1"), // Loopback
+		},
+	}
+	wireMixed, err := msgMixed.Pack()
+	if err != nil {
+		t.Fatalf("pack: %v", err)
+	}
+
+	sanitizedMixed := sanitizeResponse(wireMixed, false, true)
+	resMixed := new(dns.Msg)
+	if err := resMixed.Unpack(sanitizedMixed); err != nil {
+		t.Fatalf("unpack sanitizedMixed: %v", err)
+	}
+	if len(resMixed.Answer) != 1 {
+		t.Fatalf("expected exactly 1 clean answer, got %d", len(resMixed.Answer))
+	}
+	if a, ok := resMixed.Answer[0].(*dns.A); !ok || a.A.String() != "182.50.13.100" {
+		t.Errorf("expected public IP 182.50.13.100, got %v", resMixed.Answer[0])
+	}
+
+	// 3. filterLAN=false (e.g. private DNS target) must preserve private IPs
+	preservedWire := sanitizeResponse(wireBogon, false, false)
+	preservedMsg := new(dns.Msg)
+	if err := preservedMsg.Unpack(preservedWire); err != nil {
+		t.Fatalf("unpack preservedMsg: %v", err)
+	}
+	if len(preservedMsg.Answer) != 1 {
+		t.Errorf("expected 1 answer preserved when filterLAN=false, got %d", len(preservedMsg.Answer))
+	}
+}
+
 

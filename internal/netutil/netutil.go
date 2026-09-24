@@ -143,3 +143,49 @@ func IsLAN(host string) bool {
 	}
 	return false
 }
+
+// unroutablePrefixes contains prefixes that are fundamentally unroutable as outbound
+// destinations (RFC 1122 0.0.0.0/8, RFC 1112 multicast/reserved, RFC 919 broadcast, etc.).
+// Outbound connections to these destinations cannot succeed on any public or private network
+// and should fail immediately (e.g. TCP RST) rather than hanging until timeout.
+var unroutablePrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),          // RFC 1122 This host on this network
+	netip.MustParsePrefix("224.0.0.0/4"),        // RFC 1112 Multicast (224.0.0.0 - 239.255.255.255)
+	netip.MustParsePrefix("240.0.0.0/4"),        // RFC 1112 Reserved for future use / Class E
+	netip.MustParsePrefix("255.255.255.255/32"), // RFC 919 Limited broadcast
+	netip.MustParsePrefix("100::/64"),           // RFC 6666 Discard prefix
+	netip.MustParsePrefix("ff00::/8"),           // RFC 4291 IPv6 Multicast
+}
+
+// IsUnroutableDestinationAddr reports whether addr is an unroutable destination IP address.
+func IsUnroutableDestinationAddr(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	if addr.IsMulticast() || addr.IsUnspecified() {
+		return true
+	}
+	for _, p := range unroutablePrefixes {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsUnroutableDestination reports whether host (IP or host:port) is an unroutable destination.
+// Returns false if host is a domain name.
+func IsUnroutableDestination(host string) bool {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return false
+	}
+	trimmed := strings.Trim(host, "[]")
+	if addr, err := netip.ParseAddr(trimmed); err == nil {
+		return IsUnroutableDestinationAddr(addr)
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		if addr, err := netip.ParseAddr(strings.Trim(h, "[]")); err == nil {
+			return IsUnroutableDestinationAddr(addr)
+		}
+	}
+	return false
+}

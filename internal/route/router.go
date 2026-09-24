@@ -178,6 +178,11 @@ func (r *Router) isDomesticHost(host string) bool {
 	return false
 }
 
+// defaultDirectTimeout is the dial timeout for non-smart direct connections (rule-forced direct,
+// LAN bypass, and domestic IP direct). Set to 5s (reduced from 10s) to avoid stalling applications
+// when an address is unreachable or blackholed.
+const defaultDirectTimeout = 5 * time.Second
+
 func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 	domain string, engine *rules.Engine) (net.Conn, bool, error) {
 
@@ -186,7 +191,7 @@ func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 	switch {
 	case result == "direct":
 		ll.Info("proxy rule forces direct connection", "host", host, "port", port, "domain", domain)
-		conn, err := dialTCP(ctx, host, port, 10*time.Second)
+		conn, err := dialTCP(ctx, host, port, defaultDirectTimeout)
 		return conn, false, err
 	case result == "proxy_default":
 		ll.Info("proxy rule matched, using default proxy", "host", host, "port", port, "domain", domain)
@@ -208,13 +213,13 @@ func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 	cfg := r.cfg.Load()
 	if cfg != nil && cfg.bypassLAN && netutil.IsLAN(host) {
 		ll.Info("using direct connection (LAN bypass)", "host", host, "port", port, "domain", domain)
-		conn, err := dialTCP(ctx, host, port, 10*time.Second)
+		conn, err := dialTCP(ctx, host, port, defaultDirectTimeout)
 		return conn, false, err
 	}
 
 	if r.isDomesticHost(host) {
 		ll.Info("using direct connection (domestic)", "host", host, "port", port, "domain", domain)
-		conn, err := dialTCP(ctx, host, port, 10*time.Second)
+		conn, err := dialTCP(ctx, host, port, defaultDirectTimeout)
 		return conn, false, err
 	}
 

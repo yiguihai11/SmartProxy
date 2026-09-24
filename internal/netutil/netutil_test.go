@@ -126,3 +126,58 @@ func TestIsLAN(t *testing.T) {
 		}
 	}
 }
+
+func TestIsUnroutableDestination(t *testing.T) {
+	tests := []struct {
+		host string
+		want bool
+	}{
+		// RFC 1122 0.0.0.0/8 (This host on this network / Tencent GCloudVoice cluster IDs)
+		{"0.0.0.0", true},
+		{"0.0.0.1", true},
+		{"0.45.242.128", true},
+		{"0.45.242.128:443", true},
+		{"0.46.18.36", true},
+		{"0.46.18.36:443", true},
+		{"0.46.138.216", true},
+		{"0.255.255.255", true},
+
+		// Multicast & Broadcast (RFC 1112, RFC 919)
+		{"224.0.0.1", true},
+		{"239.255.255.250:1900", true},
+		{"240.0.0.1", true},
+		{"255.255.255.255", true},
+		{"255.255.255.255:80", true},
+
+		// IPv6 Discard & Multicast
+		{"100::1", true},
+		{"[ff02::1]:80", true},
+
+		// Routable LAN/Private addresses (should NOT be marked unroutable; they can be reached via LAN)
+		{"127.0.0.1", false},
+		{"192.168.1.1", false},
+		{"192.168.1.1:80", false},
+		{"10.0.0.1", false},
+		{"172.16.0.1", false},
+		{"100.64.0.1", false}, // CGNAT
+
+		// Public IPs
+		{"8.8.8.8", false},
+		{"1.1.1.1:53", false},
+		{"114.114.114.114", false},
+		{"182.50.13.100:443", false},
+		{"2001:4860:4860::8888", false},
+
+		// Domains & empty
+		{"example.com", false},
+		{"localhost", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		got := IsUnroutableDestination(tt.host)
+		if got != tt.want {
+			t.Errorf("IsUnroutableDestination(%q) = %v, want %v", tt.host, got, tt.want)
+		}
+	}
+}
