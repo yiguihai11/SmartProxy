@@ -204,10 +204,12 @@ type circuitPin struct {
 }
 
 type savedNodeState struct {
-	url         string
-	pins        [2]circuitPin
-	countryCode string
-	exitIP      string
+	url            string
+	pins           [2]circuitPin
+	countryCode    string
+	exitIP         string
+	ipv6Capability IPv6Capability
+	ipv6Pinned     *bool
 }
 
 // captureManualPins records each proxy's manual circuit pins and resolved geo info keyed by alias.
@@ -226,8 +228,10 @@ func (m *Manager) captureManualPins() map[string]savedNodeState {
 				{pinned: tpinned, up: tup, defaultDriven: p.tcpDefaultDriven()},
 				{pinned: upinned, up: uup, defaultDriven: p.udpDefaultDriven()},
 			},
-			countryCode: p.CountryCode(),
-			exitIP:      p.ExitIP(),
+			countryCode:    p.CountryCode(),
+			exitIP:         p.ExitIP(),
+			ipv6Capability: p.IPv6Capability(),
+			ipv6Pinned:     p.IPv6Pin(),
 		}
 	}
 	return states
@@ -244,8 +248,15 @@ func (m *Manager) restoreManualPins(states map[string]savedNodeState) {
 		}
 		// If the node's URL changed, discard stale geo info so the freshly inferred
 		// country code and a subsequent probe trace take effect.
-		if p.URL == state.url && (state.countryCode != "" || state.exitIP != "") {
-			p.SetGeoInfo(state.countryCode, state.exitIP)
+		if p.URL == state.url {
+			if state.countryCode != "" || state.exitIP != "" {
+				p.SetGeoInfo(state.countryCode, state.exitIP)
+			}
+			if state.ipv6Pinned != nil {
+				p.PinIPv6(*state.ipv6Pinned)
+			} else if state.ipv6Capability != "" && state.ipv6Capability != IPv6CapUnknown {
+				p.SetIPv6Capability(state.ipv6Capability)
+			}
 		}
 		restore := func(ph *ProxyHealth, cp circuitPin, nowDefaultDriven bool) {
 			// Flag just toggled on (was not default-driven, now is): keep the construction
@@ -332,6 +343,10 @@ func (m *Manager) rebuildLocked() map[string]json.RawMessage {
 				proxy.health.SetInitialUnverified()
 				proxy.udpHealth.SetInitialUnverified()
 			}
+		}
+
+		if entry.IPv6 != nil {
+			proxy.PinIPv6(*entry.IPv6)
 		}
 
 		if proxy.CountryCode() == "" {
@@ -462,12 +477,13 @@ type UpstreamConfig struct {
 }
 
 type ProxyEntry struct {
-	Alias string
-	URL   string
+	Alias    string
+	URL      string
 	// UDPInTCP carries the node's udp_in_tcp switch from the config entry (see
 	// Proxy.UDPInTCP). It is OR-ed with whatever the URL's ?udp_in_tcp=1 query set.
 	UDPInTCP bool
 	Provider string
+	IPv6     *bool
 }
 
 func (m *Manager) SelectProxy(ctx context.Context, targetIP string, targetPort int, domain string, engine *rules.Engine) (string, *Proxy) {
@@ -511,6 +527,14 @@ const (
 	defaultUDPVerifyTimeout = 3 * time.Second
 )
 
+// isIPv6Address reports whether host is an IPv6 literal address (with or without brackets).
+func isIPv6Address(host string) bool {
+	host = strings.TrimPrefix(host, "[")
+	host = strings.TrimSuffix(host, "]")
+	ip := net.ParseIP(host)
+	return ip != nil && ip.To4() == nil
+}
+
 func (m *Manager) ConnectDefault(ctx context.Context, host string, port int) (net.Conn, error) {
 	ll := trace.Log(ctx)
 	if m.healthChecker != nil && !m.healthChecker.HasAnyTCPAvailable() {
@@ -523,6 +547,8 @@ func (m *Manager) ConnectDefault(ctx context.Context, host string, port int) (ne
 		case <-time.After(800 * time.Millisecond):
 		}
 	}
+
+	isV6Target := isIPv6Address(host)
 	candidates := make([]*Proxy, 0, len(m.defaultProxies))
 	for _, proxy := range m.orderedProxies() {
 		if proxy.IsUDPOnly() {
@@ -533,9 +559,16 @@ func (m *Manager) ConnectDefault(ctx context.Context, host string, port int) (ne
 			ll.Debug("skipping unhealthy proxy", "url", MaskProxyURL(proxy.URL))
 			continue
 		}
+		if isV6Target && !proxy.SupportsIPv6() {
+			ll.Debug("skipping proxy without IPv6 support for IPv6 target", "url", MaskProxyURL(proxy.URL))
+			continue
+		}
 		candidates = append(candidates, proxy)
 	}
 	if len(candidates) == 0 {
+		if isV6Target {
+			return nil, fmt.Errorf("all default upstream proxies failed to connect to %s:%d: no IPv6 capable proxy available", host, port)
+		}
 		return nil, fmt.Errorf("all default upstream proxies failed to connect to %s:%d", host, port)
 	}
 	if len(candidates) == 1 {
@@ -545,8 +578,20 @@ func (m *Manager) ConnectDefault(ctx context.Context, host string, port int) (ne
 	var onWin func(*Proxy)
 	var onFail func(*Proxy, error)
 	if m.healthChecker != nil {
-		onWin = func(p *Proxy) { m.healthChecker.RecordSuccess(p, 0) }
-		onFail = func(p *Proxy, err error) { m.healthChecker.RecordFailure(p, err) }
+		onWin = func(p *Proxy) {
+			if isV6Target {
+				p.SetIPv6Capability(IPv6CapSupported)
+			}
+			m.healthChecker.RecordSuccess(p, 0)
+		}
+		onFail = func(p *Proxy, err error) {
+			if isV6Target {
+				p.SetIPv6Capability(IPv6CapUnsupported)
+				ll.Warn("proxy failed on IPv6 destination, marking IPv6 unsupported", "url", MaskProxyURL(p.URL), "error", err)
+				return
+			}
+			m.healthChecker.RecordFailure(p, err)
+		}
 	}
 	return m.hedgedDial(ctx, ll, candidates, "default proxy",
 		fmt.Sprintf("all default upstream proxies failed to connect to %s:%d", host, port),
@@ -563,12 +608,18 @@ func (m *Manager) connectOne(ctx context.Context, ll *slog.Logger, proxy *Proxy,
 	conn, err := proxy.Connect(ctx, host, port)
 	if err != nil {
 		ll.Warn("default proxy failed", "url", MaskProxyURL(proxy.URL), "error", err)
-		if m.healthChecker != nil {
+		if isIPv6Address(host) {
+			proxy.SetIPv6Capability(IPv6CapUnsupported)
+			ll.Warn("proxy failed on IPv6 destination, marking IPv6 unsupported", "url", MaskProxyURL(proxy.URL), "error", err)
+		} else if m.healthChecker != nil {
 			m.healthChecker.RecordFailure(proxy, err)
 		}
 		return nil, err
 	}
 	ll.Info("connected via", "url", MaskProxyURL(proxy.URL))
+	if isIPv6Address(host) {
+		proxy.SetIPv6Capability(IPv6CapSupported)
+	}
 	if m.healthChecker != nil {
 		m.healthChecker.RecordSuccess(proxy, 0)
 	}
@@ -921,6 +972,14 @@ func (m *Manager) Connect(ctx context.Context, host string, port int, domain str
 		ll.Warn("rule selected a udp_only proxy for TCP, connection failed", "url", MaskProxyURL(selected.URL))
 		return nil, "failed"
 	}
+	if isIPv6Address(host) && !selected.SupportsIPv6() {
+		ll.Warn("rule selected an ipv4-only proxy for IPv6 target, falling back to default IPv6 proxy", "url", MaskProxyURL(selected.URL), "target", host)
+		conn, err := m.ConnectDefault(ctx, host, port)
+		if err != nil {
+			return nil, "failed"
+		}
+		return conn, "proxy"
+	}
 	// An explicit manual "Disable" is honored even by rule routing: a disabled node must
 	// never carry traffic, whatever the rule says. Auto-opened circuits (probe failures)
 	// are still tried — rules are explicit intent and a live recovery may succeed.
@@ -934,10 +993,16 @@ func (m *Manager) Connect(ctx context.Context, host string, port int, domain str
 	conn, err := selected.Connect(ctx, host, port)
 	if err != nil {
 		ll.Error("proxy connect failed", "url", MaskProxyURL(selected.URL), "error", err)
-		if m.healthChecker != nil {
+		if isIPv6Address(host) {
+			selected.SetIPv6Capability(IPv6CapUnsupported)
+			ll.Warn("proxy failed on IPv6 destination, marking IPv6 unsupported", "url", MaskProxyURL(selected.URL), "error", err)
+		} else if m.healthChecker != nil {
 			m.healthChecker.RecordFailure(selected, err)
 		}
 		return nil, "failed"
+	}
+	if isIPv6Address(host) {
+		selected.SetIPv6Capability(IPv6CapSupported)
 	}
 	if m.healthChecker != nil {
 		m.healthChecker.RecordSuccess(selected, 0)
@@ -1051,6 +1116,8 @@ func (m *Manager) defaultUDPAssociate(ctx context.Context, ll *slog.Logger, host
 		case <-time.After(800 * time.Millisecond):
 		}
 	}
+
+	isV6Target := isIPv6Address(host)
 	candidates := make([]*Proxy, 0)
 	for _, proxy := range m.orderedProxiesUDP() {
 		if !proxy.SupportsUDP() {
@@ -1060,9 +1127,16 @@ func (m *Manager) defaultUDPAssociate(ctx context.Context, ll *slog.Logger, host
 			ll.Debug("UDPAssociate: skipping unhealthy proxy", "proxy", MaskProxyURL(proxy.URL))
 			continue
 		}
+		if isV6Target && !proxy.SupportsIPv6() {
+			ll.Debug("UDPAssociate: skipping proxy without IPv6 support for IPv6 target", "proxy", MaskProxyURL(proxy.URL))
+			continue
+		}
 		candidates = append(candidates, proxy)
 	}
 	if len(candidates) == 0 {
+		if isV6Target {
+			return nil, fmt.Errorf("no default UDP proxy available supporting IPv6 for %s:%d", host, port)
+		}
 		return nil, fmt.Errorf("no default UDP proxy available")
 	}
 	dial := func(ctx context.Context, p *Proxy) (net.Conn, error) {
@@ -1076,10 +1150,16 @@ func (m *Manager) defaultUDPAssociate(ctx context.Context, ll *slog.Logger, host
 		conn, err := dial(ctx, p)
 		if err != nil {
 			ll.Warn("UDP proxy failed", "url", MaskProxyURL(p.URL), "error", err)
-			if m.healthChecker != nil {
+			if isV6Target {
+				p.SetIPv6Capability(IPv6CapUnsupported)
+				ll.Warn("UDP proxy failed on IPv6 destination, marking IPv6 unsupported", "url", MaskProxyURL(p.URL), "error", err)
+			} else if m.healthChecker != nil {
 				m.healthChecker.RecordUDPFailure(p, err)
 			}
 			return nil, fmt.Errorf("no default UDP proxy available: %w", err)
+		}
+		if isV6Target {
+			p.SetIPv6Capability(IPv6CapSupported)
 		}
 		ll.Debug("UDPAssociate: proxy succeeded", "proxy", MaskProxyURL(p.URL))
 		return conn, nil
@@ -1087,11 +1167,24 @@ func (m *Manager) defaultUDPAssociate(ctx context.Context, ll *slog.Logger, host
 	// 真实流量的关联"成功"不喂熔断器(ASSOCIATE 成功或 fast-path raw 都不证明中继活,
 	// raw 的证据由 establishUDPRelay 内的 DNS 问答保证);真实失败由 onFail 记账——赢家
 	// 产生后陪跑候选的取消走不进这里,不会污染熔断状态。
+	var onWin func(*Proxy)
+	if isV6Target {
+		onWin = func(p *Proxy) {
+			p.SetIPv6Capability(IPv6CapSupported)
+		}
+	}
 	var onFail func(*Proxy, error)
 	if m.healthChecker != nil {
-		onFail = func(p *Proxy, err error) { m.healthChecker.RecordUDPFailure(p, err) }
+		onFail = func(p *Proxy, err error) {
+			if isV6Target {
+				p.SetIPv6Capability(IPv6CapUnsupported)
+				ll.Warn("UDP proxy failed on IPv6 destination, marking IPv6 unsupported", "url", MaskProxyURL(p.URL), "error", err)
+				return
+			}
+			m.healthChecker.RecordUDPFailure(p, err)
+		}
 	}
-	return m.hedgedDial(ctx, ll, candidates, "UDP proxy", "no default UDP proxy available", dial, nil, onFail)
+	return m.hedgedDial(ctx, ll, candidates, "UDP proxy", "no default UDP proxy available", dial, onWin, onFail)
 }
 
 type ProxyInfo struct {
@@ -1112,13 +1205,15 @@ type ProxyInfo struct {
 	// UDPCapability is how this node's UDP relay works, auto-detected from probing and real
 	// traffic (unknown/standard/raw/none, see Proxy.UDPCapability). unknown means not yet
 	// detected — e.g. health check disabled or a non-UDP scheme that is never probed.
-	UDPCapability string              `json:"udp_capability"`
-	Health        ProxyHealthSnapshot `json:"health"`
-	UDPHealth     ProxyHealthSnapshot `json:"udp_health"`
-	PingLatency   time.Duration       `json:"ping_latency,omitempty"`
-	CountryCode   string              `json:"country_code,omitempty"`
-	ExitIP        string              `json:"exit_ip,omitempty"`
-	Provider      string              `json:"provider,omitempty"`
+	UDPCapability  string              `json:"udp_capability"`
+	IPv6Capability string              `json:"ipv6_capability"`
+	SupportsIPv6   bool                `json:"supports_ipv6"`
+	Health         ProxyHealthSnapshot `json:"health"`
+	UDPHealth      ProxyHealthSnapshot `json:"udp_health"`
+	PingLatency    time.Duration       `json:"ping_latency,omitempty"`
+	CountryCode    string              `json:"country_code,omitempty"`
+	ExitIP         string              `json:"exit_ip,omitempty"`
+	Provider       string              `json:"provider,omitempty"`
 }
 
 func (m *Manager) Proxies() []ProxyInfo {
@@ -1136,21 +1231,23 @@ func (m *Manager) Proxies() []ProxyInfo {
 	for _, proxy := range m.defaultProxies {
 		alias := reverseMap[proxy]
 		infos = append(infos, ProxyInfo{
-			Alias:         alias,
-			URL:           proxy.URL,
-			Name:          proxy.Name,
-			Host:          proxy.Host,
-			Port:          proxy.Port,
-			Scheme:        string(proxy.Scheme),
-			UDPInTCP:      proxy.UDPInTCP,
-			Mode:          proxy.EffectiveMode(),
-			UDPCapability: string(proxy.UDPCapability()),
-			Health:        proxy.health.Snapshot(),
-			UDPHealth:     proxy.udpHealth.Snapshot(),
-			PingLatency:   proxy.PingLatency(),
-			CountryCode:   proxy.CountryCode(),
-			ExitIP:        proxy.ExitIP(),
-			Provider:      proxy.Provider,
+			Alias:          alias,
+			URL:            proxy.URL,
+			Name:           proxy.Name,
+			Host:           proxy.Host,
+			Port:           proxy.Port,
+			Scheme:         string(proxy.Scheme),
+			UDPInTCP:       proxy.UDPInTCP,
+			Mode:           proxy.EffectiveMode(),
+			UDPCapability:  string(proxy.UDPCapability()),
+			IPv6Capability: string(proxy.IPv6Capability()),
+			SupportsIPv6:   proxy.SupportsIPv6(),
+			Health:         proxy.health.Snapshot(),
+			UDPHealth:      proxy.udpHealth.Snapshot(),
+			PingLatency:    proxy.PingLatency(),
+			CountryCode:    proxy.CountryCode(),
+			ExitIP:         proxy.ExitIP(),
+			Provider:       proxy.Provider,
 		})
 	}
 	return infos
@@ -1427,7 +1524,12 @@ func (m *Manager) probeInitialGeo() {
 	safego.Go("upstream.initialGeo", func() {
 		var wg sync.WaitGroup
 		for _, p := range proxies {
-			if p == nil || (p.ExitIP() != "" && p.CountryCode() != "") {
+			if p == nil {
+				continue
+			}
+			needsGeo := p.ExitIP() == "" || p.CountryCode() == ""
+			needsIPv6 := !p.IsIPv6Pinned() && p.IPv6Capability() == IPv6CapUnknown
+			if !needsGeo && !needsIPv6 {
 				continue
 			}
 			wg.Add(1)
@@ -1436,10 +1538,25 @@ func (m *Manager) probeInitialGeo() {
 				defer wg.Done()
 				probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 				defer cancel()
-				lat, err := probeTCP(probeCtx, proxy, "http://cp.cloudflare.com/cdn-cgi/trace")
-				if err == nil {
-					proxy.health.UpdateLatency(lat)
+				var innerWg sync.WaitGroup
+				if needsGeo {
+					innerWg.Add(1)
+					safego.Go("upstream.initialGeo.trace", func() {
+						defer innerWg.Done()
+						lat, err := probeTCP(probeCtx, proxy, "http://cp.cloudflare.com/cdn-cgi/trace")
+						if err == nil {
+							proxy.health.UpdateLatency(lat)
+						}
+					})
 				}
+				if needsIPv6 {
+					innerWg.Add(1)
+					safego.Go("upstream.initialGeo.ipv6", func() {
+						defer innerWg.Done()
+						_, _ = probeIPv6(probeCtx, proxy)
+					})
+				}
+				innerWg.Wait()
 			})
 		}
 		wg.Wait()

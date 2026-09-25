@@ -70,6 +70,16 @@ const (
 	UDPCapNone     UDPCapability = "none"     // no working UDP relay (ASSOCIATE and raw both failed)
 )
 
+// IPv6Capability describes whether a node can route traffic to IPv6 destinations,
+// auto-detected from probing and actual traffic, or explicitly pinned.
+type IPv6Capability string
+
+const (
+	IPv6CapUnknown     IPv6Capability = "unknown"     // not yet detected
+	IPv6CapSupported   IPv6Capability = "supported"   // verified to reach IPv6 destinations
+	IPv6CapUnsupported IPv6Capability = "unsupported" // verified or configured unable to reach IPv6
+)
+
 // rawRecheckInterval is how often a node detected as raw may re-attempt the standard
 // ASSOCIATE path, so it can upgrade raw → standard if the upstream later starts supporting
 // ASSOCIATE. The raw routing fast path keeps skipping the doomed handshake between rechecks.
@@ -119,6 +129,11 @@ type Proxy struct {
 	// relay (the udp_only use case) and a dead UDP path does not disable TCP routing.
 	udpHealth ProxyHealth
 
+	// ipv6Capability records whether this node can route IPv6 outbound.
+	ipv6Capability atomic.Pointer[string]
+	// ipv6Pinned is non-nil if IPv6 capability is manually pinned by config or URL query parameter.
+	ipv6Pinned atomic.Pointer[bool]
+
 	// pingLatency records the last measured direct TCP connect RTT (nanoseconds), stored atomically.
 	pingLatency atomic.Int64
 
@@ -164,6 +179,9 @@ func (p *Proxy) SetGeoInfo(countryCode, exitIP string) {
 	}
 	if exitIP != "" {
 		p.exitIP.Store(&exitIP)
+		if strings.Contains(exitIP, ":") {
+			p.SetIPv6Capability(IPv6CapSupported)
+		}
 	}
 }
 
@@ -401,6 +419,71 @@ func (p *Proxy) SupportsUDP() bool {
 	return p.SchemeSupportsUDP()
 }
 
+// IPv6Capability returns the IPv6 capability marker (unknown/supported/unsupported).
+func (p *Proxy) IPv6Capability() IPv6Capability {
+	if ptr := p.ipv6Capability.Load(); ptr != nil {
+		return IPv6Capability(*ptr)
+	}
+	return IPv6CapUnknown
+}
+
+// SetIPv6Capability updates the IPv6 capability if not manually pinned.
+func (p *Proxy) SetIPv6Capability(cap IPv6Capability) {
+	if p.ipv6Pinned.Load() != nil {
+		return
+	}
+	s := string(cap)
+	p.ipv6Capability.Store(&s)
+}
+
+// PinIPv6 manually forces IPv6 capability (persists across probes and reloads).
+func (p *Proxy) PinIPv6(supported bool) {
+	b := supported
+	p.ipv6Pinned.Store(&b)
+	var s string
+	if supported {
+		s = string(IPv6CapSupported)
+	} else {
+		s = string(IPv6CapUnsupported)
+	}
+	p.ipv6Capability.Store(&s)
+}
+
+// ClearIPv6Pin clears any manual pin, returning the node to auto-detection.
+func (p *Proxy) ClearIPv6Pin() {
+	p.ipv6Pinned.Store(nil)
+}
+
+// IsIPv6Pinned reports whether IPv6 capability was manually pinned.
+func (p *Proxy) IsIPv6Pinned() bool {
+	return p.ipv6Pinned.Load() != nil
+}
+
+// IPv6Pin returns a copy of the manual pin value, or nil if unpinned.
+func (p *Proxy) IPv6Pin() *bool {
+	if ptr := p.ipv6Pinned.Load(); ptr != nil {
+		b := *ptr
+		return &b
+	}
+	return nil
+}
+
+// SupportsIPv6 reports whether the node can route traffic to IPv6 destinations.
+// An explicit pin honors the pin. Otherwise, only confirmed supported nodes (auto-probed
+// or detected via IPv6 exit IP) return true. By default, all unverified nodes return false.
+func (p *Proxy) SupportsIPv6() bool {
+	if ptr := p.ipv6Pinned.Load(); ptr != nil {
+		return *ptr
+	}
+	if p.IPv6Capability() == IPv6CapSupported {
+		return true
+	}
+	if exitIP := p.ExitIP(); exitIP != "" && strings.Contains(exitIP, ":") {
+		return true
+	}
+	return false
+}
+
 // UDPCapability returns the last-known-good UDP capability marker (unknown before any
 // successful relay; standard/raw after a working path is found; none only when a fresh
 // node's UDP failed end to end). A zero value is normalized to unknown.
@@ -549,6 +632,26 @@ func boolFromRawQuery(rawQuery, key string) bool {
 	return false
 }
 
+// parseBoolPtrFromRawQuery parses a tri-state boolean query parameter (?key=1/true or ?key=0/false).
+// Returns nil if key is absent or not a recognized boolean value.
+func parseBoolPtrFromRawQuery(rawQuery, key string) *bool {
+	for _, kv := range strings.Split(rawQuery, "&") {
+		k, v, _ := strings.Cut(kv, "=")
+		if k != key {
+			continue
+		}
+		switch strings.ToLower(v) {
+		case "1", "true", "yes", "on":
+			t := true
+			return &t
+		case "0", "false", "no", "off":
+			f := false
+			return &f
+		}
+	}
+	return nil
+}
+
 // MaskPassword 是日志输出时替换真实密码的哨兵。API/面板回显真实配置(用户明确要求
 // 只在日志里隐藏,不做全链路脱敏);日志打印 URL 时必须显式走 MaskProxyURL。
 const MaskPassword = "******"
@@ -606,6 +709,9 @@ func newProxyParsed(proxyURL string) (*Proxy, error) {
 			p.Name = outbound.Tag
 		} else if u, err := url.Parse(proxyURL); err == nil {
 			p.Name = strings.TrimSpace(u.Fragment)
+			if ipv6Pinned := parseBoolPtrFromRawQuery(u.RawQuery, "ipv6"); ipv6Pinned != nil {
+				p.PinIPv6(*ipv6Pinned)
+			}
 		}
 		if p.Name == "" {
 			p.Name = outbound.Tag
@@ -653,6 +759,9 @@ func parseStandardProxy(proxyURL string) (*Proxy, error) {
 	p.Name = strings.TrimSpace(u.Fragment)
 	if cc := inferCountryCode(p.Name, p.Host); cc != "" {
 		p.SetGeoInfo(cc, "")
+	}
+	if ipv6Pinned := parseBoolPtrFromRawQuery(u.RawQuery, "ipv6"); ipv6Pinned != nil {
+		p.PinIPv6(*ipv6Pinned)
 	}
 	// udp_in_tcp selects the hev UDP-in-TCP relay for a socks5/socks5h node. Parsed
 	// from the URL query so an imported link can carry it; the config entry's udp_in_tcp

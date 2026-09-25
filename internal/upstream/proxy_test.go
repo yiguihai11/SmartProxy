@@ -2520,3 +2520,78 @@ func TestInferCountryCode(t *testing.T) {
 	}
 }
 
+func TestProxy_IPv6Capability(t *testing.T) {
+	p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: 1080}
+	if p.IPv6Capability() != IPv6CapUnknown {
+		t.Fatalf("fresh proxy capability = %v, want unknown", p.IPv6Capability())
+	}
+	if p.SupportsIPv6() {
+		t.Fatalf("fresh unknown proxy SupportsIPv6 = true, want false")
+	}
+
+	// Update capability to supported
+	p.SetIPv6Capability(IPv6CapSupported)
+	if !p.SupportsIPv6() {
+		t.Fatalf("supported proxy SupportsIPv6 = false, want true")
+	}
+
+	// ExitIP with IPv6 auto-sets supported
+	p2 := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: 1080}
+	p2.SetGeoInfo("US", "2607:f130::1")
+	if !p2.SupportsIPv6() {
+		t.Fatalf("proxy with IPv6 exitIP SupportsIPv6 = false, want true")
+	}
+	if p2.IPv6Capability() != IPv6CapSupported {
+		t.Fatalf("proxy with IPv6 exitIP capability = %v, want supported", p2.IPv6Capability())
+	}
+
+	// Lantern provider defaults to unsupported
+	pLantern := &Proxy{Scheme: SchemeVMess, Host: "127.0.0.1", Port: 1080, Provider: "lantern"}
+	if pLantern.SupportsIPv6() {
+		t.Fatalf("lantern proxy SupportsIPv6 = true, want false")
+	}
+
+	// Explicit Pin overrides auto-detection
+	p3 := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: 1080}
+	p3.PinIPv6(false)
+	if p3.SupportsIPv6() {
+		t.Fatalf("pinned false proxy SupportsIPv6 = true, want false")
+	}
+	// Calling SetIPv6Capability does not override pin
+	p3.SetIPv6Capability(IPv6CapSupported)
+	if p3.SupportsIPv6() {
+		t.Fatalf("pinned false proxy changed after SetIPv6Capability")
+	}
+	// Clear pin
+	p3.ClearIPv6Pin()
+	p3.SetIPv6Capability(IPv6CapSupported)
+	if !p3.SupportsIPv6() {
+		t.Fatalf("unpinned proxy SupportsIPv6 = false after SetIPv6Capability")
+	}
+}
+
+func TestProxy_IPv6URLQuery(t *testing.T) {
+	p1, err := newProxyParsed("socks5://127.0.0.1:1080?ipv6=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p1.SupportsIPv6() {
+		t.Errorf("p1(?ipv6=1) SupportsIPv6 = false, want true")
+	}
+	if !p1.IsIPv6Pinned() {
+		t.Errorf("p1(?ipv6=1) IsIPv6Pinned = false, want true")
+	}
+
+	p2, err := newProxyParsed("socks5://127.0.0.1:1080?ipv6=0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p2.SupportsIPv6() {
+		t.Errorf("p2(?ipv6=0) SupportsIPv6 = true, want false")
+	}
+	if !p2.IsIPv6Pinned() {
+		t.Errorf("p2(?ipv6=0) IsIPv6Pinned = false, want true")
+	}
+}
+
+

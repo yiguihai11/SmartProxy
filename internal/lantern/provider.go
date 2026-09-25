@@ -126,8 +126,9 @@ func (p *Provider) Refresh(ctx context.Context) (int, error) {
 
 		alias := fmt.Sprintf("[Lantern] %s", tag)
 		entries = append(entries, upstream.ProxyEntry{
-			Alias: alias,
-			URL:   string(raw),
+			Alias:    alias,
+			URL:      string(raw),
+			Provider: "lantern",
 		})
 	}
 

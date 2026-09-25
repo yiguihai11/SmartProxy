@@ -559,6 +559,62 @@ func (hc *HealthChecker) checkProxy(p *Proxy) {
 		hc.checkProxyUDP(p)
 	}
 	hc.checkProxyTCP(p)
+	hc.checkProxyIPv6(p)
+}
+
+// IPv6ProbeDefaultTarget is the default Anycast IPv6 probe target (Cloudflare public DNS IPv6).
+const IPv6ProbeDefaultTarget = "2606:4700:4700::1111"
+
+// probeIPv6 actively probes whether proxy p can connect to an IPv6 destination.
+// It connects to IPv6ProbeDefaultTarget:80 and sends a minimal HTTP request.
+// An error or timeout sets IPv6CapUnsupported; a valid response sets IPv6CapSupported.
+func probeIPv6(ctx context.Context, p *Proxy) (time.Duration, error) {
+	if p == nil {
+		return 0, errors.New("nil proxy")
+	}
+	if p.IsIPv6Pinned() {
+		return 0, nil
+	}
+	start := time.Now()
+	conn, err := p.Connect(ctx, IPv6ProbeDefaultTarget, 80)
+	if err != nil {
+		p.SetIPv6Capability(IPv6CapUnsupported)
+		return 0, err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	req := "GET /generate_204 HTTP/1.1\r\nHost: [" + IPv6ProbeDefaultTarget + "]\r\nUser-Agent: SmartProxy/1.0\r\nConnection: close\r\n\r\n"
+	if _, err := conn.Write([]byte(req)); err != nil {
+		p.SetIPv6Capability(IPv6CapUnsupported)
+		return 0, err
+	}
+	buf := make([]byte, 64)
+	n, err := conn.Read(buf)
+	if err != nil && n == 0 {
+		p.SetIPv6Capability(IPv6CapUnsupported)
+		return 0, err
+	}
+	lat := time.Since(start)
+	p.SetIPv6Capability(IPv6CapSupported)
+	return lat, nil
+}
+
+func (hc *HealthChecker) checkProxyIPv6(p *Proxy) {
+	if p == nil || p.IsIPv6Pinned() {
+		return
+	}
+	// Skip probing if the node's general TCP circuit is down or manually disabled.
+	if p.health.IsManuallyDisabled() || !p.health.IsAvailable() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(hc.ctx, 5*time.Second)
+	defer cancel()
+	_, _ = probeIPv6(ctx, p)
+}
+
+// ProbeIPv6 actively tests whether a proxy can route IPv6 traffic.
+func (hc *HealthChecker) ProbeIPv6(ctx context.Context, p *Proxy) (time.Duration, error) {
+	return probeIPv6(ctx, p)
 }
 
 // probeTCP executes an HTTP GET probe through proxy p to targetURL and returns the round-trip latency.

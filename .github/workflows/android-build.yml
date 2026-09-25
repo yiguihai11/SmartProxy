@@ -17,6 +17,7 @@ on:
       - 'go.sum'
       - 'mobile/**'
       - 'android/**'
+      - 'internal/**'
   workflow_dispatch:
     inputs:
       version:

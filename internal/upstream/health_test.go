@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"context"
 	"errors"
 	"net"
 	"strconv"
@@ -402,5 +403,120 @@ func TestProxyHealth_ResetFailures(t *testing.T) {
 		t.Fatalf("expected 0 consecutive failures, got %d", phClosed.consecutiveFailures)
 	}
 }
+
+func startIPv6MockSOCKS5(t *testing.T, succeed bool) (string, func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 256)
+				n, err := c.Read(buf)
+				if err != nil || n < 3 {
+					return
+				}
+				// Reply auth OK
+				c.Write([]byte{0x05, 0x00})
+				n, err = c.Read(buf)
+				if err != nil || n < 4 {
+					return
+				}
+				if !succeed {
+					// SOCKS5 reply General failure (0x01)
+					c.Write([]byte{0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+					return
+				}
+				// SOCKS5 reply Success (0x00)
+				c.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+				// Read HTTP request and reply HTTP/1.1 204 No Content
+				n, err = c.Read(buf)
+				if err == nil && n > 0 {
+					c.Write([]byte("HTTP/1.1 204 No Content\r\n\r\n"))
+				}
+			}(conn)
+		}
+	}()
+	return ln.Addr().String(), func() {
+		ln.Close()
+	}
+}
+
+func TestHealthChecker_ProbeIPv6(t *testing.T) {
+	// 1. Success case: unverified node is probed and upgraded to IPv6CapSupported
+	addrSuccess, doneSuccess := startIPv6MockSOCKS5(t, true)
+	defer doneSuccess()
+
+	host, portStr, _ := net.SplitHostPort(addrSuccess)
+	port := parsePort(portStr)
+
+	pSuccess := &Proxy{
+		Scheme: SchemeSOCKS5,
+		Host:   host,
+		Port:   port,
+	}
+
+	// Strictly unverified by default:
+	if pSuccess.IPv6Capability() != IPv6CapUnknown {
+		t.Fatalf("expected initial capability to be unknown, got %v", pSuccess.IPv6Capability())
+	}
+	if pSuccess.SupportsIPv6() {
+		t.Fatalf("expected SupportsIPv6() to be false by default for unverified node")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := probeIPv6(ctx, pSuccess)
+	if err != nil {
+		t.Fatalf("expected probeIPv6 to succeed, got %v", err)
+	}
+	if pSuccess.IPv6Capability() != IPv6CapSupported {
+		t.Fatalf("expected capability to become supported, got %v", pSuccess.IPv6Capability())
+	}
+	if !pSuccess.SupportsIPv6() {
+		t.Fatalf("expected SupportsIPv6() to be true after successful probe")
+	}
+
+	// 2. Failure case: node that fails IPv6 probe is marked IPv6CapUnsupported
+	// and its IPv4 TCP health circuit breaker is NOT tripped.
+	addrFail, doneFail := startIPv6MockSOCKS5(t, false)
+	defer doneFail()
+
+	hostFail, portStrFail, _ := net.SplitHostPort(addrFail)
+	portFail := parsePort(portStrFail)
+
+	pFail := &Proxy{
+		Scheme: SchemeSOCKS5,
+		Host:   hostFail,
+		Port:   portFail,
+	}
+
+	if pFail.SupportsIPv6() {
+		t.Fatalf("expected SupportsIPv6() to be false initially")
+	}
+
+	_, err = probeIPv6(ctx, pFail)
+	if err == nil {
+		t.Fatalf("expected probeIPv6 to fail on failing mock")
+	}
+	if pFail.IPv6Capability() != IPv6CapUnsupported {
+		t.Fatalf("expected capability to become unsupported, got %v", pFail.IPv6Capability())
+	}
+	if pFail.SupportsIPv6() {
+		t.Fatalf("expected SupportsIPv6() to remain false")
+	}
+	if pFail.health.consecutiveFailures != 0 {
+		t.Fatalf("expected IPv4 health failures to be 0 (isolated), got %d", pFail.health.consecutiveFailures)
+	}
+}
+
 
 

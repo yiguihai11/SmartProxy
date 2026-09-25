@@ -171,7 +171,10 @@ type ProxyEntry struct {
 	// UDPInTCP selects the hev UDP-in-TCP relay (socks5/socks5h only, see
 	// upstream.Proxy.UDPInTCP): UDP is framed over the node's TCP connection, so the
 	// node needs no UDP listener. Edited from the panel's Add/Edit Proxy checkbox.
-	UDPInTCP bool `json:"udp_in_tcp,omitempty"`
+	UDPInTCP bool  `json:"udp_in_tcp,omitempty"`
+	// IPv6 allows manually forcing IPv6 outbound capability (true = force enable, false = force disable).
+	// If omitted or nil, SmartProxy automatically probes and discovers whether the node can reach IPv6 targets.
+	IPv6     *bool `json:"ipv6,omitempty"`
 }
 
 type RoutingConf struct {

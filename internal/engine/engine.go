@@ -85,6 +85,7 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 			Alias:    p.Alias,
 			URL:      p.URL,
 			UDPInTCP: p.UDPInTCP,
+			IPv6:     p.IPv6,
 		})
 	}
 	upstreamMgr, err := upstream.NewManager(upstreamCfg)
@@ -1026,6 +1027,7 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 			Alias:    p.Alias,
 			URL:      p.URL,
 			UDPInTCP: p.UDPInTCP,
+			IPv6:     p.IPv6,
 		})
 	}
 	e.UpstreamMgr.Reload(upstreamCfg)

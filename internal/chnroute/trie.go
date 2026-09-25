@@ -11,7 +11,8 @@ type Trie struct {
 }
 
 type trieData struct {
-	root    *node
+	v4Root  *node
+	v6Root  *node
 	isEmpty bool
 }
 
@@ -30,24 +31,33 @@ const (
 
 func New() *Trie {
 	t := &Trie{}
-	t.root.Store(&trieData{root: &node{bitPos: rootPos}, isEmpty: true})
+	t.root.Store(&trieData{
+		v4Root:  &node{bitPos: rootPos},
+		v6Root:  &node{bitPos: rootPos},
+		isEmpty: true,
+	})
 	return t
 }
 
 func (t *Trie) Insert(prefix netip.Prefix) {
 	data := t.root.Load()
-	newRoot := cloneNode(data.root)
+	v4Root := cloneNode(data.v4Root)
+	v6Root := cloneNode(data.v6Root)
 	addr, plen := prefix.Addr(), prefix.Bits()
-	if plen == 0 {
-		newRoot.plen = 1
-	} else {
-		maxBits := 128
-		if addr.Is4() {
-			maxBits = 32
+	if addr.Is4() {
+		if plen == 0 {
+			v4Root.plen = 1
+		} else {
+			v4Root.left = insert(v4Root.left, addr, plen, 32)
 		}
-		newRoot.left = insert(newRoot.left, addr, plen, maxBits)
+	} else {
+		if plen == 0 {
+			v6Root.plen = 1
+		} else {
+			v6Root.left = insert(v6Root.left, addr, plen, 128)
+		}
 	}
-	t.root.Store(&trieData{root: newRoot, isEmpty: false})
+	t.root.Store(&trieData{v4Root: v4Root, v6Root: v6Root, isEmpty: false})
 }
 
 func (t *Trie) InsertBatch(prefixes []netip.Prefix) {
@@ -55,20 +65,25 @@ func (t *Trie) InsertBatch(prefixes []netip.Prefix) {
 		return
 	}
 	data := t.root.Load()
-	root := cloneNode(data.root)
+	v4Root := cloneNode(data.v4Root)
+	v6Root := cloneNode(data.v6Root)
 	for _, p := range prefixes {
 		addr, plen := p.Addr(), p.Bits()
-		if plen == 0 {
-			root.plen = 1
-		} else {
-			maxBits := 128
-			if addr.Is4() {
-				maxBits = 32
+		if addr.Is4() {
+			if plen == 0 {
+				v4Root.plen = 1
+			} else {
+				v4Root.left = insert(v4Root.left, addr, plen, 32)
 			}
-			root.left = insert(root.left, addr, plen, maxBits)
+		} else {
+			if plen == 0 {
+				v6Root.plen = 1
+			} else {
+				v6Root.left = insert(v6Root.left, addr, plen, 128)
+			}
 		}
 	}
-	t.root.Store(&trieData{root: root, isEmpty: false})
+	t.root.Store(&trieData{v4Root: v4Root, v6Root: v6Root, isEmpty: false})
 }
 
 func insert(n *node, addr netip.Addr, plen, maxBits int) *node {
@@ -194,19 +209,26 @@ func (t *Trie) Contains(ip net.IP) bool {
 	if ip == nil {
 		return false
 	}
-	if ip4 := ip.To4(); ip4 != nil {
-		ip = ip4
-	}
 	data := t.root.Load()
-	switch {
-	case data.isEmpty:
-		return false
-	case data.root.plen > 0:
-		return true
-	case data.root.left == nil:
+	if data.isEmpty {
 		return false
 	}
-	return trieSearch(data.root.left, ip)
+	if ip4 := ip.To4(); ip4 != nil {
+		if data.v4Root.plen > 0 {
+			return true
+		}
+		if data.v4Root.left == nil {
+			return false
+		}
+		return trieSearch(data.v4Root.left, ip4)
+	}
+	if data.v6Root.plen > 0 {
+		return true
+	}
+	if data.v6Root.left == nil {
+		return false
+	}
+	return trieSearch(data.v6Root.left, ip)
 }
 
 func trieSearch(n *node, ip net.IP) bool {
@@ -230,6 +252,9 @@ func trieSearch(n *node, ip net.IP) bool {
 }
 
 func matchKey(ip net.IP, key netip.Addr, plen int) bool {
+	if key.Is4() != (len(ip) == 4) {
+		return false
+	}
 	if plen == 0 {
 		return true
 	}
@@ -244,7 +269,18 @@ func matchKey(ip net.IP, key netip.Addr, plen int) bool {
 
 func (t *Trie) IsEmpty() bool { return t.root.Load().isEmpty }
 
-func (t *Trie) Count() int { return countNodes(t.root.Load().root) }
+func (t *Trie) Count() int {
+	data := t.root.Load()
+	return countNodes(data.v4Root) + countNodes(data.v6Root)
+}
+
+func (t *Trie) CountV4() int {
+	return countNodes(t.root.Load().v4Root)
+}
+
+func (t *Trie) CountV6() int {
+	return countNodes(t.root.Load().v6Root)
+}
 
 func countNodes(n *node) int {
 	if n == nil {
@@ -255,30 +291,6 @@ func countNodes(n *node) int {
 		c = 1
 	}
 	return c + countNodes(n.left) + countNodes(n.right)
-}
-
-// CountV4 and CountV6 report the stored prefixes of each family: every trie node
-// carrying a prefix (n.plen > 0) whose key is an IPv4 / IPv6 address — terminal
-// leaves AND aggregate ancestors alike — so CountV4()+CountV6() always equals
-// Count() and each badge matches how many v4/v6 prefixes were actually loaded.
-//
-// (Counting only terminal leaves would silently drop aggregate prefixes that sit
-// above a longer, nested prefix of either family in the shared trie — e.g. a v4
-// 10.0.0.0/8 above 10.1.0.0/16, or a v4 36.0.16.0/20 above an IPv6 entry whose
-// bit path it shares — leaving the family split not adding up to the total.)
-func (t *Trie) CountV4() int { return countPrefixNodesByFamily(t.root.Load().root, true) }
-
-func (t *Trie) CountV6() int { return countPrefixNodesByFamily(t.root.Load().root, false) }
-
-func countPrefixNodesByFamily(n *node, v4 bool) int {
-	if n == nil {
-		return 0
-	}
-	c := 0
-	if n.plen > 0 && n.key.Is4() == v4 {
-		c = 1
-	}
-	return c + countPrefixNodesByFamily(n.left, v4) + countPrefixNodesByFamily(n.right, v4)
 }
 
 func (t *Trie) Pull(other *Trie) {

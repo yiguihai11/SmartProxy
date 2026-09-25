@@ -304,6 +304,26 @@ func TestTrieMixedAddressFamily(t *testing.T) {
 	}
 }
 
+func TestTrie_CrossFamilyPrefixCollision(t *testing.T) {
+	// Regression test: IPv4 36.0.0.0/8 (0x24) must never match IPv6 2404:6800:: (0x24) or 2400::/8.
+	tr := New()
+	tr.Insert(netip.MustParsePrefix("36.0.0.0/8"))
+	tr.Insert(netip.MustParsePrefix("2408:8000::/20")) // China Unicom IPv6
+
+	if !tr.Contains(net.ParseIP("36.1.2.3")) {
+		t.Error("IPv4 36.1.2.3 should match 36.0.0.0/8")
+	}
+	if !tr.Contains(net.ParseIP("2408:8459:3c20::1")) {
+		t.Error("IPv6 2408:8459:3c20::1 should match 2408:8000::/20")
+	}
+	if tr.Contains(net.ParseIP("2404:6800:4012:2::200e")) {
+		t.Error("Foreign Google IPv6 2404:6800:... must NOT match IPv4 36.0.0.0/8")
+	}
+	if tr.Contains(net.ParseIP("2400:8905::2000:6bff:fe22:d426")) {
+		t.Error("Foreign Linode IPv6 2400:8905:... must NOT match IPv4 36.0.0.0/8")
+	}
+}
+
 func TestTrieDuplicateInsert(t *testing.T) {
 	tr := New()
 	p := netip.MustParsePrefix("10.0.0.0/8")

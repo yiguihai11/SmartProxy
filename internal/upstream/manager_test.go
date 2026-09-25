@@ -3,11 +3,13 @@ package upstream
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
 	"net"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1863,6 +1865,78 @@ func TestManager_HandleNetworkChange(t *testing.T) {
 	}
 	p.udpHealth.mu.RUnlock()
 }
+
+func TestManager_IPv6Selection(t *testing.T) {
+	m, err := NewManager(UpstreamConfig{
+		Default: "latency",
+		Proxies: []ProxyEntry{
+			{Alias: "ss-node", URL: "socks5://127.0.0.1:1080"},
+			{Alias: "lantern-node", URL: "socks5://127.0.0.2:1080", Provider: "lantern"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	ssNode := m.aliasMap["ss-node"]
+	lanternNode := m.aliasMap["lantern-node"]
+
+	// Set ss-node to higher latency (100ms) and confirm IPv6 capability
+	setCircuitLatency(m, "ss-node", false, 100*time.Millisecond)
+	ssNode.SetIPv6Capability(IPv6CapSupported)
+
+	// Set lantern-node to lower latency (10ms). Its provider is "lantern", so SupportsIPv6 is false.
+	setCircuitLatency(m, "lantern-node", false, 10*time.Millisecond)
+
+	if ssNode.SupportsIPv6() != true {
+		t.Fatalf("expected ssNode.SupportsIPv6() == true")
+	}
+	if lanternNode.SupportsIPv6() != false {
+		t.Fatalf("expected lanternNode.SupportsIPv6() == false")
+	}
+
+	// Verify orderedProxies puts lantern-node first due to lower latency (10ms vs 100ms)
+	ordered := m.orderedProxies()
+	if len(ordered) < 2 || ordered[0].Host != "127.0.0.2" {
+		t.Fatalf("expected lantern-node (127.0.0.2) to be first for TCP latency, got %v", ordered[0].Host)
+	}
+
+	// 1. Dialing IPv6 destination when only lantern is available: must fail immediately
+	mLanternOnly, err := NewManager(UpstreamConfig{
+		Default: "latency",
+		Proxies: []ProxyEntry{
+			{Alias: "lantern-node", URL: "socks5://127.0.0.2:1080", Provider: "lantern"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mLanternOnly.Stop()
+
+	_, err = mLanternOnly.ConnectDefault(context.Background(), "2400:8905::1", 80)
+	if err == nil || !strings.Contains(err.Error(), "no IPv6 capable proxy available") {
+		t.Fatalf("expected 'no IPv6 capable proxy available' error, got %v", err)
+	}
+
+	// 2. Dialing IPv6 UDP when only lantern is available: must fail immediately
+	_, err = mLanternOnly.defaultUDPAssociate(context.Background(), slog.Default(), "2400:8905::1", 53)
+	if err == nil || !strings.Contains(err.Error(), "no default UDP proxy available supporting IPv6") {
+		t.Fatalf("expected 'no default UDP proxy available supporting IPv6' error, got %v", err)
+	}
+
+	// 3. Dialing IPv6 destination with pool [ss-node, lantern-node]:
+	// Candidates filter skips lantern-node, selects ss-node.
+	// When ss-node dial fails, it marks IPv6 unsupported but isolates TCP circuit breaker.
+	_, _ = m.ConnectDefault(context.Background(), "2400:8905::1", 80)
+	if ssNode.IPv6Capability() != IPv6CapUnsupported {
+		t.Fatalf("expected ssNode to become IPv6CapUnsupported after IPv6 dial failure, got %v", ssNode.IPv6Capability())
+	}
+	if ssNode.health.consecutiveFailures != 0 {
+		t.Fatalf("expected ssNode TCP health failures == 0, got %d", ssNode.health.consecutiveFailures)
+	}
+}
+
 
 
 
