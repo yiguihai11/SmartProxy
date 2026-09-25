@@ -777,6 +777,8 @@ async function testProxy(i,proto){
   }
 }
 var _batchTestingGroups={};
+// 测速触发的临时展开:只在本次页面会话有效,不写入 localStorage,所以重开页面会回到默认折叠。
+var _forceOpenGroups={};
 async function testGroupProxies(gid, proto, btn){
   if(_batchTestingGroups[gid])return;
   var allProxies=(healthD&&healthD.health&&healthD.health.proxies)||[];
@@ -804,10 +806,9 @@ async function testGroupProxies(gid, proto, btn){
     return;
   }
   _batchTestingGroups[gid]=true;
-  if(proxyGroupsCollapsed[gid] !== false){
-    proxyGroupsCollapsed[gid]=false;
-    saveProxyGroupsCollapsed();
-  }
+  // 测速时临时展开好看到结果,但不持久化:否则测过一次该组就被永远记成展开,
+  // 每次打开面板都展开,把"默认折叠"给覆盖了。
+  _forceOpenGroups[gid]=true;
   for(var j=0;j<tasks.length;j++){
     proxyTestState[tasks[j].alias+':'+tasks[j].proto]={testing:true};
   }
@@ -950,12 +951,12 @@ var countryNamesZh={
 var proxyGroupFilter='all';
 var proxyGroupsCollapsed=(function(){
   try{
-    var s=localStorage.getItem('sp_proxy_groups_collapsed');
+    var s=localStorage.getItem('sp_proxy_groups_collapsed_v2');
     return s?JSON.parse(s):{};
   }catch(_){return {};}
 })();
 function saveProxyGroupsCollapsed(){
-  try{localStorage.setItem('sp_proxy_groups_collapsed',JSON.stringify(proxyGroupsCollapsed))}catch(_){}
+  try{localStorage.setItem('sp_proxy_groups_collapsed_v2',JSON.stringify(proxyGroupsCollapsed))}catch(_){}
 }
 function getProxyGroup(p){
   var prov=(p.provider||'').toLowerCase();
@@ -974,8 +975,11 @@ function getProxyGroupLabel(gid){
   return gid.charAt(0).toUpperCase()+gid.slice(1);
 }
 function toggleGroupCollapse(gid){
-  var cur = proxyGroupsCollapsed[gid] !== undefined ? !!proxyGroupsCollapsed[gid] : true;
-  proxyGroupsCollapsed[gid] = !cur;
+  // 基于当前"视觉"折叠状态取反:测速的临时展开(_forceOpenGroups)也要算进去,
+  // 否则临时展开时点一下会被误判。手动选择显式持久化,并清掉临时展开。
+  var visuallyCollapsed=_forceOpenGroups[gid]?false:(proxyGroupsCollapsed[gid]!==undefined?!!proxyGroupsCollapsed[gid]:true);
+  delete _forceOpenGroups[gid];
+  proxyGroupsCollapsed[gid]=!visuallyCollapsed;
   saveProxyGroupsCollapsed();
   var sec=document.querySelector('.proxy-group-section[data-group="'+gid+'"]');
   if(sec){
@@ -1279,7 +1283,7 @@ function lhealth(d){
   groupOrder.forEach(function(gid){
     var g=groups[gid];
     var isHidden=(proxyGroupFilter!=='all'&&proxyGroupFilter!==gid);
-    var isCollapsed=proxyGroupsCollapsed[gid]!==undefined?!!proxyGroupsCollapsed[gid]:true;
+    var isCollapsed=_forceOpenGroups[gid]?false:(proxyGroupsCollapsed[gid]!==undefined?!!proxyGroupsCollapsed[gid]:true);
     var groupIcon=(gid==='lantern'?'🏮':gid==='custom'?'📌':gid.indexOf('sub:')===0?'📑':'🌐');
     var badgeText=g.disabled?t('Disabled'):(tf('{0} nodes',[g.items.length])+' · '+tf('{0} online',[g.onlineCount]));
 
