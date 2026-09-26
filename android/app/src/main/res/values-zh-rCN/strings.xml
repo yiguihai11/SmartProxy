@@ -102,6 +102,14 @@
     <string name="dialog_exclude_help">留空 = 不排除任何网段(纯真空);灰色 127.0.0.1/8 只是回环默认提示,\n需要本机服务(SOCKS/面板)直连时手动填入。修改后需重启 VPN 生效。</string>
     <string name="cd_choose_service_mode">选择服务模式</string>
     <string name="dialog_service_help">VPN 隧道:接管系统流量智能分流(默认)。\n仅代理:不启动 VPN 模式,仅运行引擎 SOCKS5 代理(:1080,局域网可访问)。\n运行中切换将自动重启生效。</string>
+    <string name="service_stack_title">网络协议栈 (TUN Stack)</string>
+    <string name="cd_choose_tun_stack">选择网络协议栈</string>
+    <string name="stack_gvisor">gVisor (推荐 / 免 Root)</string>
+    <string name="stack_system">System (需 Root 权限)</string>
+    <string name="stack_mixed">Mixed (需 Root 权限)</string>
+    <string name="stack_need_root_sub">需要 Root 权限</string>
+    <string name="stack_non_root_hint">当前设备未检测到 Root 权限，仅可使用 gVisor 协议栈</string>
+    <string name="toast_stack_need_root">该协议栈需要 Root 权限，当前设备未 Root 仅可使用 gVisor</string>
 
     <!-- Toasts / platform dialogs -->
     <string name="toast_no_upstream">未配置上游代理节点,流量无法转发,请到管理面板配置</string>

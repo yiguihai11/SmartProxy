@@ -127,6 +127,14 @@ object ConfigProvider {
         writeConfig(context, json)
     }
 
+    /** 设置 TUN 协议栈 (gvisor / system / mixed)。 */
+    fun setTunStack(context: Context, stack: String) {
+        val json = readConfig(context)
+        val tun = json.optJSONObject("tun") ?: JSONObject().also { json.put("tun", it) }
+        tun.put("stack", stack)
+        writeConfig(context, json)
+    }
+
     /** 上游代理节点是否已配置:upstream.proxies 非空(面板经 /config 写它)。首页开启前
      *  检查,无节点时引擎能起但所有流量报 "no default proxy available"(§8 提示去面板配置)。 */
     fun hasUpstreamProxy(context: Context): Boolean {
@@ -194,9 +202,7 @@ object ConfigProvider {
         // eng.Config.TUN.Enabled 撒谎(ReloadConfig 只 Store 不读,暂时无害,但是脏的)。
         tun.put("enabled", AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN)
         tun.put("auto_route", false)
-        if (!tun.has("stack") || tun.optString("stack").isBlank() || tun.optString("stack") == "go") {
-            tun.put("stack", "gvisor")
-        }
+        tun.put("stack", AppPrefs.tunStack(context))
 
         // 统一字段平滑迁移:若缺少 address 但存在旧 inet4_address / inet6_address,归一化写入 address
         if (!tun.has("address") && (tun.has("inet4_address") || tun.has("inet6_address"))) {

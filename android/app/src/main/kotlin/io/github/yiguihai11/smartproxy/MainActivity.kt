@@ -382,6 +382,12 @@ private fun serviceModeLabel(context: Context, mode: String): String = when (mod
     else -> context.getString(R.string.mode_vpn_tunnel)
 }
 
+private fun tunStackLabel(context: Context, stack: String): String = when (stack) {
+    AppPrefs.STACK_SYSTEM -> context.getString(R.string.stack_system)
+    AppPrefs.STACK_MIXED -> context.getString(R.string.stack_mixed)
+    else -> context.getString(R.string.stack_gvisor)
+}
+
 /** 主题切换图标(§7):auto = 自动(brightness-auto 半亮半暗),light = 太阳,dark = 月亮。
  *  图标随模式变化,标题栏右上钮一眼可见当前主题。 */
 private fun themeIcon(mode: String): ImageVector = when (mode) {
@@ -433,6 +439,19 @@ private fun rememberServiceMode(): String {
         onDispose { unregister() }
     }
     return serviceMode
+}
+
+@Composable
+private fun rememberTunStack(): String {
+    val context = LocalContext.current
+    var tunStack by remember { mutableStateOf(AppPrefs.tunStack(context)) }
+    DisposableEffect(context) {
+        val unregister = AppPrefs.observeServiceMode(context) {
+            tunStack = AppPrefs.tunStack(context)
+        }
+        onDispose { unregister() }
+    }
+    return tunStack
 }
 
 @Composable
@@ -557,12 +576,20 @@ private fun HomeScreen(
     }
     if (showServiceModeDialog) {
         ServiceModeDialog(
-            initial = AppPrefs.serviceMode(context),
+            initialMode = AppPrefs.serviceMode(context),
+            initialStack = AppPrefs.tunStack(context),
+            isRooted = RootUtils.isDeviceRooted,
             onDismiss = { showServiceModeDialog = false },
-            onSave = { mode ->
+            onSave = { mode, stack ->
                 showServiceModeDialog = false
+                val modeChanged = mode != AppPrefs.serviceMode(context)
+                val stackChanged = stack != AppPrefs.tunStack(context)
                 AppPrefs.setServiceMode(context, mode)
-                applyVpnSettings()
+                AppPrefs.setTunStack(context, stack)
+                ConfigProvider.setTunStack(context, stack)
+                if (modeChanged || stackChanged) {
+                    applyVpnSettings()
+                }
             }
         )
     }
@@ -602,6 +629,7 @@ private fun AppDrawerContent(
     // 服务模式做成可观察 state(见 rememberServiceMode):切模式后抽屉菜单/副标题实时刷新,
     // 否则 drawerContent 被 Compose 跳过(skipping),隐藏菜单不恢复、副标题不更新(§8)。
     val serviceMode = rememberServiceMode()
+    val tunStack = rememberTunStack()
     // 联网状态门控 = VPN 运行中 && 仅绕过(黑名单)模式:仅绕过下应用分流行为与「联网状态」
     // 的按应用维度展示最相关;白名单模式隐藏入口(设计定稿 §6.1)。
     val vpnRunning by SmartProxyVpnService.isRunning.collectAsState()
@@ -687,10 +715,15 @@ private fun AppDrawerContent(
                 )
             }
 
-            // 侧边栏菜单项：服务模式(VPN 隧道 / 仅代理 SOCKS5,§8)。副标题实时显示当前模式。
+            // 侧边栏菜单项：服务模式(VPN 隧道 / 仅代理 SOCKS5,§8)。副标题实时显示当前模式及协议栈。
+            val modeSub = if (serviceMode == AppPrefs.MODE_VPN) {
+                "${serviceModeLabel(context, serviceMode)} (${tunStackLabel(context, tunStack)})"
+            } else {
+                serviceModeLabel(context, serviceMode)
+            }
             DrawerMenuItem(
                 title = stringResource(R.string.drawer_service_mode),
-                subtitle = stringResource(R.string.drawer_service_mode_subtitle, serviceModeLabel(context, serviceMode)),
+                subtitle = stringResource(R.string.drawer_service_mode_subtitle, modeSub),
                 onClick = onOpenServiceMode
             )
 
@@ -1283,30 +1316,39 @@ private fun ExcludeRoutesDialog(
     )
 }
 
-/** 服务模式设置对话框(§8):模态下拉选 VPN 隧道 / 仅代理(SOCKS5)。仅代理 = 不启动
- *  VPN 模式,仅用引擎 SOCKS5(:1080,全接口双栈,局域网可访问)。改动由调用方落盘,
- *  运行中切换自动重启生效。 */
+/** 服务模式与协议栈设置对话框(§8):模态下拉选 VPN 隧道 / 仅代理(SOCKS5)以及 TUN 协议栈。
+ *  改动由调用方落盘,运行中切换自动重启生效。未 Root 设备仅支持 gVisor。 */
 @Composable
 private fun ServiceModeDialog(
-    initial: String,
+    initialMode: String,
+    initialStack: String,
+    isRooted: Boolean,
     onDismiss: () -> Unit,
-    onSave: (String) -> Unit
+    onSave: (String, String) -> Unit
 ) {
-    var selected by remember { mutableStateOf(initial) }
-    var expanded by remember { mutableStateOf(false) }
+    var selectedMode by remember { mutableStateOf(initialMode) }
+    var selectedStack by remember { mutableStateOf(if (!isRooted) AppPrefs.STACK_GVISOR else initialStack) }
+    var modeExpanded by remember { mutableStateOf(false) }
+    var stackExpanded by remember { mutableStateOf(false) }
     val context = LocalContext.current
-    val options = listOf(AppPrefs.MODE_VPN, AppPrefs.MODE_SOCKS5)
+    val modeOptions = listOf(AppPrefs.MODE_VPN, AppPrefs.MODE_SOCKS5)
+    val stackOptions = listOf(AppPrefs.STACK_GVISOR, AppPrefs.STACK_SYSTEM, AppPrefs.STACK_MIXED)
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.drawer_service_mode)) },
         text = {
             Column {
-                // 下拉:点击 Surface 展开稳定版 DropdownMenu。不用 ExposedDropdownMenuBox——
-                // 其 ExposedDropdownMenuAnchorType 在低版本 material3 没有(CI 实测 BOM 解析
-                // 的版本即缺),稳定版 DropdownMenu 全版本兼容。
+                Text(
+                    text = stringResource(R.string.drawer_service_mode),
+                    fontSize = 12.sp,
+                    color = GreyText,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+                // 服务模式下拉
                 Box {
                     Surface(
-                        onClick = { expanded = !expanded },
+                        onClick = { modeExpanded = !modeExpanded },
                         shape = RoundedCornerShape(14.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         border = BorderStroke(1.dp, DividerLine),
@@ -1317,7 +1359,7 @@ private fun ServiceModeDialog(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                serviceModeLabel(context, selected),
+                                serviceModeLabel(context, selectedMode),
                                 fontSize = 14.sp,
                                 color = PurpleDark,
                                 modifier = Modifier.weight(1f)
@@ -1330,18 +1372,97 @@ private fun ServiceModeDialog(
                             )
                         }
                     }
-                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                        options.forEach { mode ->
+                    DropdownMenu(expanded = modeExpanded, onDismissRequest = { modeExpanded = false }) {
+                        modeOptions.forEach { mode ->
                             DropdownMenuItem(
                                 text = { Text(serviceModeLabel(context, mode)) },
                                 onClick = {
-                                    selected = mode
-                                    expanded = false
+                                    selectedMode = mode
+                                    modeExpanded = false
                                 }
                             )
                         }
                     }
                 }
+
+                Spacer(Modifier.height(14.dp))
+
+                // 协议栈选择 (TUN Stack):仅在 VPN 隧道模式可用
+                val isVpn = selectedMode == AppPrefs.MODE_VPN
+                Text(
+                    text = stringResource(R.string.service_stack_title),
+                    fontSize = 12.sp,
+                    color = if (isVpn) GreyText else GreyText.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+                Box {
+                    Surface(
+                        onClick = { if (isVpn) stackExpanded = !stackExpanded },
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (isVpn) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        border = BorderStroke(1.dp, DividerLine),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                tunStackLabel(context, selectedStack),
+                                fontSize = 14.sp,
+                                color = if (isVpn) PurpleDark else GreyText,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Icon(
+                                Icons.Filled.KeyboardArrowDown,
+                                contentDescription = stringResource(R.string.cd_choose_tun_stack),
+                                tint = if (isVpn) PurpleSoft else GreyText,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                    DropdownMenu(expanded = stackExpanded && isVpn, onDismissRequest = { stackExpanded = false }) {
+                        stackOptions.forEach { stack ->
+                            val canSelect = stack == AppPrefs.STACK_GVISOR || isRooted
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(
+                                            tunStackLabel(context, stack),
+                                            color = if (canSelect) Color.Unspecified else GreyText.copy(alpha = 0.6f)
+                                        )
+                                        if (!canSelect) {
+                                            Text(
+                                                stringResource(R.string.stack_need_root_sub),
+                                                fontSize = 11.sp,
+                                                color = GreyText.copy(alpha = 0.6f)
+                                            )
+                                        }
+                                    }
+                                },
+                                enabled = canSelect,
+                                onClick = {
+                                    if (canSelect) {
+                                        selectedStack = stack
+                                        stackExpanded = false
+                                    } else {
+                                        Toast.makeText(context, context.getString(R.string.toast_stack_need_root), Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+
+                if (!isRooted && isVpn) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = stringResource(R.string.stack_non_root_hint),
+                        fontSize = 11.sp,
+                        color = GreyText
+                    )
+                }
+
                 Spacer(Modifier.height(10.dp))
                 Text(
                     text = stringResource(R.string.dialog_service_help),
@@ -1350,8 +1471,16 @@ private fun ServiceModeDialog(
                 )
             }
         },
-        confirmButton = { TextButton(onClick = { onSave(selected) }) { Text(stringResource(R.string.btn_save)) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.btn_cancel)) } }
+        confirmButton = {
+            TextButton(onClick = { onSave(selectedMode, selectedStack) }) {
+                Text(stringResource(R.string.btn_save))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.btn_cancel))
+            }
+        }
     )
 }
 

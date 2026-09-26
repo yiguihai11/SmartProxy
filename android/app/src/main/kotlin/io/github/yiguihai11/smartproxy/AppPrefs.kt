@@ -154,6 +154,26 @@ object AppPrefs {
     const val MODE_VPN = "vpn"
     const val MODE_SOCKS5 = "socks5"
 
+    /** 协议栈:gvisor = 默认(免 Root,纯用户态);system = 系统内核栈(需 Root);mixed = 混合栈(需 Root)。 */
+    const val STACK_GVISOR = "gvisor"
+    const val STACK_SYSTEM = "system"
+    const val STACK_MIXED = "mixed"
+
+    private const val KEY_TUN_STACK = "tun_stack"
+
+    fun tunStack(context: Context): String {
+        val s = sp(context).getString(KEY_TUN_STACK, STACK_GVISOR) ?: STACK_GVISOR
+        if (!RootUtils.isDeviceRooted && s != STACK_GVISOR) {
+            return STACK_GVISOR
+        }
+        return s
+    }
+
+    fun setTunStack(context: Context, stack: String) {
+        val s = if (!RootUtils.isDeviceRooted) STACK_GVISOR else stack
+        sp(context).edit().putString(KEY_TUN_STACK, s).apply()
+    }
+
     fun serviceMode(context: Context): String =
         sp(context).getString(KEY_SERVICE_MODE, MODE_VPN) ?: MODE_VPN
 
@@ -162,14 +182,14 @@ object AppPrefs {
     }
 
     /**
-     * 注册 serviceMode 变化回调(UI 把 SharedPreferences 变化接成 Compose state,§8):
-     * 侧边栏菜单显示条件、监听开关副标题等直接读 serviceMode 的 UI 依赖它,否则切模式后
+     * 注册 serviceMode / tunStack 变化回调(UI 把 SharedPreferences 变化接成 Compose state,§8):
+     * 侧边栏菜单显示条件、监听开关副标题等直接读 serviceMode/tunStack 的 UI 依赖它,否则切模式后
      * Compose 不重组,隐藏菜单不恢复、副标题不刷新。返回 () -> Unit 注销函数,配 DisposableEffect。
      */
     fun observeServiceMode(context: Context, onChange: () -> Unit): () -> Unit {
         val sp = sp(context)
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == KEY_SERVICE_MODE) onChange()
+            if (key == KEY_SERVICE_MODE || key == KEY_TUN_STACK) onChange()
         }
         sp.registerOnSharedPreferenceChangeListener(listener)
         return { sp.unregisterOnSharedPreferenceChangeListener(listener) }

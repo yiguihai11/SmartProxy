@@ -102,6 +102,14 @@
     <string name="dialog_exclude_help">Leave blank to exclude nothing; the grey 127.0.0.1/8 is a loopback hint —\nadd it only to keep local services (SOCKS/admin) off the tunnel.\nRestart VPN to apply.</string>
     <string name="cd_choose_service_mode">Choose service mode</string>
     <string name="dialog_service_help">VPN tunnel: takes over system traffic for smart routing (default).\nProxy only: no VPN mode; runs the engine\'s SOCKS5 proxy (:1080, LAN-accessible).\nSwitching while running auto-restarts.</string>
+    <string name="service_stack_title">Network Stack (TUN Stack)</string>
+    <string name="cd_choose_tun_stack">Choose network stack</string>
+    <string name="stack_gvisor">gVisor (Recommended / Non-root)</string>
+    <string name="stack_system">System (Requires Root)</string>
+    <string name="stack_mixed">Mixed (Requires Root)</string>
+    <string name="stack_need_root_sub">Requires Root permission</string>
+    <string name="stack_non_root_hint">No Root permission detected; only gVisor stack is available</string>
+    <string name="toast_stack_need_root">This stack requires Root permission; non-root devices can only use gVisor</string>
 
     <!-- Toasts / platform dialogs -->
     <string name="toast_no_upstream">No upstream proxy configured. Traffic cannot be forwarded — configure one in the admin panel.</string>
