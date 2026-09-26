@@ -992,4 +992,38 @@ func TestSmartProxy_DisableIPBlacklist(t *testing.T) {
 	})
 }
 
+func TestSubscriptionConf_UsesProxy(t *testing.T) {
+	// 字段缺省(nil, 如旧配置文件)应默认走代理。
+	var nilSub SubscriptionConf
+	if !nilSub.UsesProxy() {
+		t.Error("expected UsesProxy()=true when UseProxy is nil")
+	}
 
+	trueVal := true
+	falseVal := false
+	cases := []struct {
+		name string
+		p    *bool
+		want bool
+	}{
+		{"explicit true", &trueVal, true},
+		{"explicit false", &falseVal, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sub := SubscriptionConf{UseProxy: tc.p}
+			if got := sub.UsesProxy(); got != tc.want {
+				t.Errorf("UsesProxy()=%v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	// JSON 缺字段时应解析为 nil 并默认开启。
+	var parsed SubscriptionConf
+	if err := json.Unmarshal([]byte(`{"name":"s","url":"http://x"}`), &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if parsed.UseProxy != nil || !parsed.UsesProxy() {
+		t.Fatalf("expected missing use_proxy to default on, got ptr=%v", parsed.UseProxy)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"smartproxy/internal/config"
@@ -61,6 +62,7 @@ func TestManager_LifecycleAndCache(t *testing.T) {
 			Type:           "auto",
 			UpdateInterval: "1h",
 			Enabled:        true,
+			UseProxy:       boolPtr(false), // 本地测试服务器,直连
 		},
 	}
 
@@ -175,9 +177,10 @@ func TestManager_DuplicateAliases(t *testing.T) {
 
 	subsConf := []config.SubscriptionConf{
 		{
-			Name:    "TestAirport",
-			URL:     server.URL,
-			Enabled: true,
+			Name:     "TestAirport",
+			URL:      server.URL,
+			Enabled:  true,
+			UseProxy: boolPtr(false), // 本地测试服务器,直连
 		},
 	}
 
@@ -210,3 +213,81 @@ func TestManager_DuplicateAliases(t *testing.T) {
 	}
 }
 
+func boolPtr(b bool) *bool { return &b }
+
+// TestManager_UseProxyResolution 验证缺省/显式开关在 NewManager 与 Reload 下
+// 都被正确解析为运行时 ItemState.UseProxy。
+func TestManager_UseProxyResolution(t *testing.T) {
+	tempDir := t.TempDir()
+	upMgr, _ := upstream.NewManager(upstream.UpstreamConfig{Default: "failover"})
+
+	// nil → 默认 true;显式 false → false。
+	subs := []config.SubscriptionConf{
+		{Name: "DefaultOn", URL: "http://127.0.0.1:1", Enabled: true},
+		{Name: "ExplicitOff", URL: "http://127.0.0.1:2", Enabled: true, UseProxy: boolPtr(false)},
+	}
+	mgr := NewManager(tempDir, subs, upMgr)
+	defer mgr.Stop()
+
+	st := mgr.Status()
+	got := map[string]bool{}
+	for _, s := range st {
+		got[s.Name] = s.UseProxy
+	}
+	if !got["DefaultOn"] {
+		t.Error("expected missing use_proxy to resolve to true")
+	}
+	if got["ExplicitOff"] {
+		t.Error("expected explicit use_proxy=false to resolve to false")
+	}
+
+	// Reload 把 DefaultOn 显式关掉,应同步为 false。
+	subs[0].UseProxy = boolPtr(false)
+	mgr.Reload(subs)
+	if it := mgr.findState("DefaultOn"); it == nil || it.UseProxy {
+		t.Errorf("expected Reload to set UseProxy=false, got %+v", it)
+	}
+}
+
+// TestManager_RefreshClientSelection 验证 Refresh 按开关选择直连/代理客户端:
+// 关闭时直连本地服务器成功;开启但无可用节点时收到代理连接错误。
+func TestManager_RefreshClientSelection(t *testing.T) {
+	tempDir := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b64 := base64.StdEncoding.EncodeToString([]byte("ss://YWVzLTEyOC1nY206cGFzczE@1.1.1.1:8388#N1\n"))
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(b64))
+	}))
+	defer server.Close()
+
+	upMgr, _ := upstream.NewManager(upstream.UpstreamConfig{Default: "failover"})
+
+	// 直连:成功。
+	direct := NewManager(tempDir, []config.SubscriptionConf{
+		{Name: "direct", URL: server.URL, Enabled: true, UseProxy: boolPtr(false)},
+	}, upMgr)
+	defer direct.Stop()
+	if n, err := direct.Refresh(context.Background(), "direct"); err != nil || n != 1 {
+		t.Fatalf("expected direct refresh to succeed, got n=%d err=%v", n, err)
+	}
+
+	// 走代理但无节点:用独立的空 upstream manager,应立即失败且 LastError
+	// 指向代理出口,证明选择了代理客户端。
+	emptyUpMgr, _ := upstream.NewManager(upstream.UpstreamConfig{Default: "failover"})
+	viaproxy := NewManager(t.TempDir(), []config.SubscriptionConf{
+		{Name: "viaproxy", URL: server.URL, Enabled: true, UseProxy: boolPtr(true)},
+	}, emptyUpMgr)
+	defer viaproxy.Stop()
+	if _, err := viaproxy.Refresh(context.Background(), "viaproxy"); err == nil {
+		t.Fatal("expected proxy refresh to fail when no node is available")
+	}
+	if it := viaproxy.findState("viaproxy"); it == nil || !strings.Contains(it.LastError, "default upstream proxies") {
+		t.Fatalf("expected LastError about default upstream proxies, got %+v", it)
+	}
+}
+
+func (m *Manager) findState(name string) *ItemState {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.subs[name]
+}

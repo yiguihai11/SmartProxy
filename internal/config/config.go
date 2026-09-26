@@ -146,6 +146,13 @@ type SubscriptionConf struct {
 	Type           string `json:"type,omitempty"`            // "auto", "sip008", "base64", "clash", "sing-box"
 	UpdateInterval string `json:"update_interval,omitempty"` // e.g. "12h", "24h"
 	Enabled        bool   `json:"enabled"`
+	// UseProxy 为指针以区分「旧配置缺字段(nil)」与「显式关闭」:nil 视为默认走代理。
+	UseProxy *bool `json:"use_proxy,omitempty"`
+}
+
+// UsesProxy 返回该订阅是否通过现有节点代理拉取;字段缺省(nil)时默认开启。
+func (s SubscriptionConf) UsesProxy() bool {
+	return s.UseProxy == nil || *s.UseProxy
 }
 
 type HealthCheckConf struct {
@@ -171,10 +178,10 @@ type ProxyEntry struct {
 	// UDPInTCP selects the hev UDP-in-TCP relay (socks5/socks5h only, see
 	// upstream.Proxy.UDPInTCP): UDP is framed over the node's TCP connection, so the
 	// node needs no UDP listener. Edited from the panel's Add/Edit Proxy checkbox.
-	UDPInTCP bool  `json:"udp_in_tcp,omitempty"`
+	UDPInTCP bool `json:"udp_in_tcp,omitempty"`
 	// IPv6 allows manually forcing IPv6 outbound capability (true = force enable, false = force disable).
 	// If omitted or nil, SmartProxy automatically probes and discovers whether the node can reach IPv6 targets.
-	IPv6     *bool `json:"ipv6,omitempty"`
+	IPv6 *bool `json:"ipv6,omitempty"`
 }
 
 type RoutingConf struct {

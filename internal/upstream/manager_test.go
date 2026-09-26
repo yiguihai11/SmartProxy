@@ -417,7 +417,6 @@ func TestSelectProxy_DefaultAlias(t *testing.T) {
 	}
 }
 
-
 func TestReload_RefreshGeoOnURLEdit(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
 		Proxies: []ProxyEntry{
@@ -1886,7 +1885,7 @@ func TestManager_IPv6Selection(t *testing.T) {
 	setCircuitLatency(m, "ss-node", false, 100*time.Millisecond)
 	ssNode.SetIPv6Capability(IPv6CapSupported)
 
-	// Set lantern-node to lower latency (10ms). Its provider is "lantern", so SupportsIPv6 is false.
+	// Set lantern-node to lower latency (10ms). It has not been verified for IPv6, so SupportsIPv6 is false by default.
 	setCircuitLatency(m, "lantern-node", false, 10*time.Millisecond)
 
 	if ssNode.SupportsIPv6() != true {
@@ -1936,7 +1935,3 @@ func TestManager_IPv6Selection(t *testing.T) {
 		t.Fatalf("expected ssNode TCP health failures == 0, got %d", ssNode.health.consecutiveFailures)
 	}
 }
-
-
-
-

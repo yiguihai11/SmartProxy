@@ -2452,6 +2452,7 @@ function openSubscriptionDialog(name){
   var typeInput=document.getElementById('sub-type');
   var intervalInput=document.getElementById('sub-interval');
   var enabledInput=document.getElementById('sub-enabled');
+  var useProxyInput=document.getElementById('sub-use-proxy');
 
   if(name){
     title.textContent=t('Edit Subscription');
@@ -2466,6 +2467,7 @@ function openSubscriptionDialog(name){
       typeInput.value=sub.type||'';
       intervalInput.value=sub.update_interval||'12h';
       enabledInput.checked=!!sub.enabled;
+      useProxyInput.checked=(sub.use_proxy===undefined)?true:!!sub.use_proxy;
     }
   }else{
     title.textContent=t('Add Subscription');
@@ -2475,6 +2477,7 @@ function openSubscriptionDialog(name){
     typeInput.value='';
     intervalInput.value='12h';
     enabledInput.checked=true;
+    useProxyInput.checked=true;
   }
   document.getElementById('sub-overlay').classList.add('show');
 }
@@ -2487,6 +2490,7 @@ async function saveSubscriptionBtn(){
   var type=document.getElementById('sub-type').value.trim();
   var interval=document.getElementById('sub-interval').value.trim()||'12h';
   var enabled=document.getElementById('sub-enabled').checked;
+  var useProxy=document.getElementById('sub-use-proxy').checked;
 
   if(!name||!url){
     alert(t('Subscription Name and URL are required'));
@@ -2500,7 +2504,8 @@ async function saveSubscriptionBtn(){
       url: url,
       type: type,
       update_interval: interval,
-      enabled: enabled
+      enabled: enabled,
+      use_proxy: useProxy
     };
     var r=await fetch('/subscriptions/save',{
       method:'POST',
@@ -4525,10 +4530,14 @@ es.onmessage=function(e){
       </div>
     </div>
 
-    <div style="margin-top:10px;margin-bottom:16px">
+    <div style="margin-top:10px;margin-bottom:16px;display:flex;flex-direction:column;gap:8px">
       <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;cursor:pointer">
         <input type="checkbox" id="sub-enabled" checked>
         <span>Enabled</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;cursor:pointer">
+        <input type="checkbox" id="sub-use-proxy" checked>
+        <span>Fetch via proxy node (remote DNS)</span>
       </label>
     </div>
 

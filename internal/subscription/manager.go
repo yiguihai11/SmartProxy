@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +36,7 @@ type ItemState struct {
 	Type           string                `json:"type,omitempty"`
 	UpdateInterval string                `json:"update_interval,omitempty"`
 	Enabled        bool                  `json:"enabled"`
+	UseProxy       bool                  `json:"use_proxy"`
 	LastUpdate     time.Time             `json:"last_update,omitempty"`
 	LastError      string                `json:"last_error,omitempty"`
 	NodeCount      int                   `json:"node_count"`
@@ -46,15 +49,16 @@ type ItemState struct {
 
 // Manager coordinates fetching, caching, and auto-refresh of upstream subscriptions.
 type Manager struct {
-	mu          sync.RWMutex
-	cfgDir      string
-	upstreamMgr *upstream.Manager
-	subs        map[string]*ItemState
-	subsOrder   []string
-	httpClient  *http.Client
-	ctx         context.Context
-	cancel      context.CancelFunc
-	stopOnce    sync.Once
+	mu            sync.RWMutex
+	cfgDir        string
+	upstreamMgr   *upstream.Manager
+	subs          map[string]*ItemState
+	subsOrder     []string
+	httpClient    *http.Client
+	proxiedClient *http.Client
+	ctx           context.Context
+	cancel        context.CancelFunc
+	stopOnce      sync.Once
 }
 
 // NewManager creates a Subscription Manager.
@@ -69,6 +73,28 @@ func NewManager(cfgDir string, configs []config.SubscriptionConf, upstreamMgr *u
 		},
 		ctx:    ctx,
 		cancel: cancel,
+	}
+	// 走节点代理的客户端:DialContext 经 ConnectDefault 选最快可用节点转发,
+	// 主机名透传到远端解析(等价 curl --socks5h);TLS 在隧道连接外本地完成。
+	proxiedTransport := http.DefaultTransport.(*http.Transport).Clone()
+	proxiedTransport.Proxy = nil
+	proxiedTransport.DialContext = func(dialCtx context.Context, _, addr string) (net.Conn, error) {
+		host, portStr, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid subscription target address %q: %w", addr, err)
+		}
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid subscription target port %q: %w", portStr, err)
+		}
+		if m.upstreamMgr == nil {
+			return nil, errors.New("no upstream manager available")
+		}
+		return m.upstreamMgr.ConnectDefault(dialCtx, host, port)
+	}
+	m.proxiedClient = &http.Client{
+		Transport: proxiedTransport,
+		Timeout:   httpTimeout,
 	}
 
 	// 1. Initialize states from config
@@ -87,6 +113,7 @@ func NewManager(cfgDir string, configs []config.SubscriptionConf, upstreamMgr *u
 			Type:           stringsTrim(c.Type),
 			UpdateInterval: interval,
 			Enabled:        c.Enabled,
+			UseProxy:       c.UsesProxy(),
 		}
 		m.subs[name] = item
 		m.subsOrder = append(m.subsOrder, name)
@@ -175,6 +202,7 @@ func (m *Manager) Refresh(ctx context.Context, name string) (int, error) {
 	}
 	subURL := item.URL
 	subType := item.Type
+	useProxy := item.UseProxy
 	m.mu.RUnlock()
 
 	if subURL == "" {
@@ -196,7 +224,11 @@ func (m *Manager) Refresh(ctx context.Context, name string) (int, error) {
 	req.Header.Set("User-Agent", "SmartProxy/1.0 (clash.meta; sing-box)")
 	req.Header.Set("Accept", "*/*")
 
-	resp, err := m.httpClient.Do(req)
+	client := m.httpClient
+	if useProxy {
+		client = m.proxiedClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		m.recordError(name, err.Error())
 		return 0, fmt.Errorf("HTTP request failed: %w", err)
@@ -326,6 +358,7 @@ func (m *Manager) Reload(configs []config.SubscriptionConf) {
 				Type:           stringsTrim(c.Type),
 				UpdateInterval: interval,
 				Enabled:        c.Enabled,
+				UseProxy:       c.UsesProxy(),
 			}
 			m.subs[name] = item
 			slog.Info("added subscription", "name", name, "url", item.URL)
@@ -338,6 +371,7 @@ func (m *Manager) Reload(configs []config.SubscriptionConf) {
 			item.Type = stringsTrim(c.Type)
 			item.UpdateInterval = interval
 			item.Enabled = c.Enabled
+			item.UseProxy = c.UsesProxy()
 
 			if enabledChanged && !item.Enabled {
 				if m.upstreamMgr != nil {
