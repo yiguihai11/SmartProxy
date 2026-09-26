@@ -100,6 +100,10 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);display:flex
 @media(max-width:768px){.cards-ov{grid-template-columns:repeat(2,1fr);gap:10px}}
 @media(max-width:480px){.cards-ov{grid-template-columns:repeat(2,1fr);gap:8px}.cards-ov .card-wide{grid-column:span 2}}
 @media(max-width:340px){.cards-ov{grid-template-columns:1fr}.cards-ov .card-wide{grid-column:span 1}}
+.card-cleanip{grid-column:1/-1;padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;transition:border-color .18s,box-shadow .18s}
+.card-cleanip:hover{border-color:var(--border2);box-shadow:0 4px 16px rgba(0,0,0,.06)}
+.card-cleanip a{display:block;width:100%;max-width:480px;margin:0 auto;text-decoration:none}
+.card-cleanip img{width:100%;height:auto;display:block;border-radius:var(--radius-sm)}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;min-width:0;overflow:hidden;transition:border-color .18s,box-shadow .18s;display:flex;flex-direction:column;justify-content:space-between}
 .card:hover{border-color:var(--border2);box-shadow:0 4px 16px rgba(0,0,0,.06)}
 .card-link{cursor:pointer}
@@ -330,7 +334,14 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
 <div class="view active" id="view-dashboard">
   <div class="view-title">Overview</div>
   <div class="view-meta"><span class="dot"></span>Live <span id="dash-time"></span><span class="proto-badge unknown" id="dash-proto-badge" onclick="showProtoModal()" style="margin-left:auto" title="Click to view protocol & upgrade guide"><span class="proto-dot"></span><span class="proto-label">Detecting...</span></span></div>
-  <div class="cards-ov" id="dash-cards"></div>
+  <div class="cards-ov" id="dash-cards">
+    <div class="card card-cleanip" id="card-cleanip">
+      <a href="https://cleanip.io" target="_blank" rel="noopener noreferrer">
+        <img src="https://cleanip.io/c/MzLR.svg" alt="CleanIP Card" loading="lazy">
+      </a>
+    </div>
+    <div id="dash-metric-cards" style="display:contents"></div>
+  </div>
   <div id="dash-cards2" style="display:none"></div>
 </div>
 <div class="view" id="view-traffic">
@@ -603,7 +614,8 @@ function ldash(d){
   var ca=(d.cache&&d.cache.entries!=null)?d.cache.entries:(document.getElementById('cache-ov')?document.getElementById('cache-ov').textContent:'0');
   var gcPause=s.gc_pause||'0s',gcCount=s.gc_count!=null?s.gc_count:0;
   var rEntries=r&&r.entries!=null?r.entries:0,rV4=r&&r.v4!=null?r.v4:0,rV6=r&&r.v6!=null?r.v6:0;
-  document.getElementById('dash-cards').innerHTML=
+  var target=document.getElementById('dash-metric-cards')||document.getElementById('dash-cards');
+  target.innerHTML=
     '<div class="card"><div class="card-label">Uptime</div><div class="card-value accent">'+s.uptime+'</div></div>'+
     '<div class="card"><div class="card-label">Goroutines</div><div class="card-value">'+s.goroutines+'</div></div>'+
     '<div class="card"><div class="card-label">Memory</div><div class="card-value green">'+(s.alloc_mb||'0')+' MB</div></div>'+
