@@ -86,6 +86,7 @@ var zhStrings = map[string]string{
 	"Access Timed Out":                                          "连通超时",
 	"Access Denied":                                             "访问受限",
 	"Timed Out":                                                 "超时",
+	"More Tools:":                                               "更多工具：",
 	"{0} nodes":                                                 "{0} 个节点",
 	"{0} online":                                                "{0} 个在线",
 	"Details":                                                   "详情",
