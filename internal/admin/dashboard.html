@@ -104,6 +104,39 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);display:flex
 .card-cleanip:hover{border-color:var(--border2);box-shadow:0 4px 16px rgba(0,0,0,.06)}
 .card-cleanip a{display:block;width:100%;max-width:480px;margin:0 auto;text-decoration:none}
 .card-cleanip img{width:100%;height:auto;display:block;border-radius:var(--radius-sm)}
+.myip-card{margin-bottom:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;transition:border-color .18s,box-shadow .18s}
+.myip-card:hover{border-color:var(--border2);box-shadow:0 4px 16px rgba(0,0,0,.06)}
+.myip-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;cursor:pointer;user-select:none;background:var(--surface);gap:8px;flex-wrap:wrap}
+.myip-title{display:flex;align-items:center;gap:8px;font-weight:600;font-size:.95rem;color:var(--text)}
+.myip-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.myip-body{padding:14px 16px;border-top:1px solid var(--border);display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;background:var(--surface);transition:all .2s ease}
+.myip-section{display:flex;flex-direction:column;gap:10px}
+.myip-section-title{font-size:.78rem;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;display:flex;align-items:center;gap:6px;margin-bottom:2px}
+.myip-list{display:flex;flex-direction:column;gap:8px}
+.myip-item{display:flex;flex-direction:column;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);gap:4px}
+.myip-item-header{display:flex;align-items:center;justify-content:space-between;font-size:.82rem;gap:8px}
+.myip-label{font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px}
+.myip-addr{font-family:monospace;font-size:.84rem;color:var(--accent);font-weight:600}
+.myip-geo{font-size:.74rem;color:var(--text2);min-height:16px;word-break:break-all}
+.myip-check-item{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);gap:8px}
+.myip-check-left{display:flex;align-items:center;gap:8px;font-size:.82rem;font-weight:500;color:var(--text)}
+.myip-check-right{display:flex;align-items:center;gap:8px}
+.myip-latency{font-family:monospace;font-size:.82rem;font-weight:600;min-width:32px;text-align:right}
+.myip-latency.fast{color:var(--green)}
+.myip-latency.mid{color:var(--yellow)}
+.myip-latency.slow{color:var(--red)}
+.myip-latency.error{color:var(--text3)}
+.myip-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.myip-dot.fast{background:var(--green)}
+.myip-dot.mid{background:var(--yellow)}
+.myip-dot.slow{background:var(--red)}
+.myip-dot.error{background:var(--red)}
+.myip-dot.testing{background:var(--text3);animation:myip-pulse 1.2s infinite ease-in-out}
+@keyframes myip-pulse{0%,100%{opacity:.3;transform:scale(.8)}50%{opacity:1;transform:scale(1.2)}}
+.myip-spark{width:76px;height:20px;display:flex;align-items:center;justify-content:center}
+.myip-spark-err{font-size:.68rem;color:var(--text3)}
+.myip-spin{display:inline-block;animation:myip-rotate .8s linear infinite}
+@keyframes myip-rotate{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;min-width:0;overflow:hidden;transition:border-color .18s,box-shadow .18s;display:flex;flex-direction:column;justify-content:space-between}
 .card:hover{border-color:var(--border2);box-shadow:0 4px 16px rgba(0,0,0,.06)}
 .card-link{cursor:pointer}
@@ -368,6 +401,102 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
     <span class="page-info" id="health-info">Edits upstream.proxies in config</span>
   </div>
   <div id="subscriptions-container"></div>
+  <div class="card myip-card" id="myip-panel-card">
+    <div class="myip-header" onclick="toggleMyIPCard()">
+      <div class="myip-title">
+        <span>🌐</span> <span>IP Address &amp; Access Check</span>
+      </div>
+      <div class="myip-actions" onclick="event.stopPropagation()">
+        <button class="btn btn-sm" id="myip-privacy-btn" onclick="toggleMyIPPrivacy()" title="Hide IP">👁️ <span id="myip-privacy-label">Hide IP</span></button>
+        <button class="btn btn-sm" id="myip-refresh-btn" onclick="refreshMyIP()" title="Refresh">🔄 <span id="myip-refresh-label">Refresh</span></button>
+        <button class="btn btn-sm" id="myip-toggle-btn" onclick="toggleMyIPCard()">Collapse</button>
+      </div>
+    </div>
+    <div class="myip-body" id="myip-panel-body">
+      <div class="myip-section">
+        <div class="myip-section-title">
+          <span>📍</span> <span>IP Address</span>
+        </div>
+        <div class="myip-list">
+          <div class="myip-item">
+            <div class="myip-item-header">
+              <span class="myip-label">PConline (Domestic)</span>
+              <span class="myip-addr" id="myip-pcol-ip">Testing...</span>
+            </div>
+            <div class="myip-geo" id="myip-pcol-geo"></div>
+          </div>
+          <div class="myip-item">
+            <div class="myip-item-header">
+              <span class="myip-label">IPIP.NET (Domestic)</span>
+              <span class="myip-addr" id="myip-ipip-ip">Testing...</span>
+            </div>
+            <div class="myip-geo" id="myip-ipip-geo"></div>
+          </div>
+          <div class="myip-item">
+            <div class="myip-item-header">
+              <span class="myip-label">IP.SB (Overseas)</span>
+              <span class="myip-addr" id="myip-ipsb-ip">Testing...</span>
+            </div>
+            <div class="myip-geo" id="myip-ipsb-geo"></div>
+          </div>
+          <div class="myip-item">
+            <div class="myip-item-header">
+              <span class="myip-label">IPIFY (Overseas)</span>
+              <span class="myip-addr" id="myip-ipify-ip">Testing...</span>
+            </div>
+            <div class="myip-geo" id="myip-ipify-geo"></div>
+          </div>
+        </div>
+      </div>
+      <div class="myip-section">
+        <div class="myip-section-title">
+          <span>⚡</span> <span>Access Check</span>
+        </div>
+        <div class="myip-list">
+          <div class="myip-check-item">
+            <div class="myip-check-left">
+              <span>🇨🇳</span> <span>Baidu Search</span>
+            </div>
+            <div class="myip-check-right">
+              <div class="myip-spark" id="myip-spark-baidu"></div>
+              <span class="myip-latency" id="myip-latency-baidu">--</span> <span style="font-size:0.72rem;color:var(--text3)">ms</span>
+              <div class="myip-dot testing" id="myip-dot-baidu"></div>
+            </div>
+          </div>
+          <div class="myip-check-item">
+            <div class="myip-check-left">
+              <span>🎵</span> <span>NetEase Music</span>
+            </div>
+            <div class="myip-check-right">
+              <div class="myip-spark" id="myip-spark-netease"></div>
+              <span class="myip-latency" id="myip-latency-netease">--</span> <span style="font-size:0.72rem;color:var(--text3)">ms</span>
+              <div class="myip-dot testing" id="myip-dot-netease"></div>
+            </div>
+          </div>
+          <div class="myip-check-item">
+            <div class="myip-check-left">
+              <span>🐙</span> <span>GitHub</span>
+            </div>
+            <div class="myip-check-right">
+              <div class="myip-spark" id="myip-spark-github"></div>
+              <span class="myip-latency" id="myip-latency-github">--</span> <span style="font-size:0.72rem;color:var(--text3)">ms</span>
+              <div class="myip-dot testing" id="myip-dot-github"></div>
+            </div>
+          </div>
+          <div class="myip-check-item">
+            <div class="myip-check-left">
+              <span>▶️</span> <span>YouTube</span>
+            </div>
+            <div class="myip-check-right">
+              <div class="myip-spark" id="myip-spark-youtube"></div>
+              <span class="myip-latency" id="myip-latency-youtube">--</span> <span style="font-size:0.72rem;color:var(--text3)">ms</span>
+              <div class="myip-dot testing" id="myip-dot-youtube"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
   <div id="proxy-cards"></div>
 </div>
 <div class="view" id="view-blacklist">
@@ -1446,6 +1575,7 @@ async function loadTraffic(){
   }catch(e){document.getElementById('traffic-time').textContent='Error: '+e.message}
 }
 async function loadHealth(){
+  maybeRunMyIPChecks();
   if(healthD&&healthD.health){try{lhealth(healthD)}catch(_){}}
   try{
     var h=await jf('/health');
@@ -2586,6 +2716,279 @@ async function deleteSub(name){
     alert(tf('Delete failed: {0}',[e.message]));
   }
 }
+var myipData={pcol:{ip:'',geo:''},ipip:{ip:'',geo:''},ipsb:{ip:'',geo:''},ipify:{ip:'',geo:''}};
+var myipHistory={baidu:[],netease:[],github:[],youtube:[]};
+var myipPrivacy=false;
+
+function maskMyIP(ip){
+  if(!ip)return '';
+  var parts=ip.split('.');
+  if(parts.length===4){
+    return parts[0]+'.xx.xx.'+parts[3];
+  }
+  var colons=ip.split(':');
+  if(colons.length>2){
+    return colons[0]+':'+colons[1]+':****:****';
+  }
+  return ip.replace(/\d/g,'*');
+}
+
+function renderMyIPItem(key){
+  var elIp=document.getElementById('myip-'+key+'-ip');
+  var elGeo=document.getElementById('myip-'+key+'-geo');
+  var item=myipData[key];
+  if(!elIp)return;
+  if(item&&item.ip){
+    elIp.textContent=myipPrivacy?maskMyIP(item.ip):item.ip;
+    if(elGeo&&item.geo)elGeo.textContent=item.geo;
+  }
+}
+
+function renderAllMyIP(){
+  ['pcol','ipip','ipsb','ipify'].forEach(renderMyIPItem);
+}
+
+function toggleMyIPPrivacy(){
+  myipPrivacy=!myipPrivacy;
+  try{localStorage.setItem('myip_privacy',myipPrivacy?'1':'0');}catch(e){}
+  updateMyIPPrivacyUI();
+  renderAllMyIP();
+}
+
+function updateMyIPPrivacyUI(){
+  var lbl=document.getElementById('myip-privacy-label');
+  var btn=document.getElementById('myip-privacy-btn');
+  if(!btn)return;
+  if(myipPrivacy){
+    if(lbl)lbl.textContent=t('Show IP');
+    btn.setAttribute('title',t('Show IP'));
+  }else{
+    if(lbl)lbl.textContent=t('Hide IP');
+    btn.setAttribute('title',t('Hide IP'));
+  }
+}
+
+function toggleMyIPCard(){
+  var body=document.getElementById('myip-panel-body');
+  var btn=document.getElementById('myip-toggle-btn');
+  if(!body||!btn)return;
+  var isHidden=body.style.display==='none';
+  if(isHidden){
+    body.style.display='grid';
+    btn.textContent=t('Collapse');
+    try{localStorage.setItem('myip_collapsed','0');}catch(e){}
+    runMyIPChecks();
+  }else{
+    body.style.display='none';
+    btn.textContent=t('Expand');
+    try{localStorage.setItem('myip_collapsed','1');}catch(e){}
+  }
+}
+
+function renderSparkline(svc, el){
+  if(!el)return;
+  var pts=myipHistory[svc];
+  if(!pts||pts.length===0)return;
+  var w=76,h=20,pad=3;
+  if(pts.length===1){
+    var color=pts[0]<=300?'#22c55e':(pts[0]<=800?'#eab308':'#ef4444');
+    el.innerHTML='<svg viewBox="0 0 '+w+' '+h+'" style="width:'+w+'px;height:'+h+'px;display:block"><line x1="'+pad+'" y1="'+(h/2)+'" x2="'+(w-pad)+'" y2="'+(h/2)+'" stroke="'+color+'" stroke-width="1.8" stroke-dasharray="3 3"/><circle cx="'+(w-pad)+'" cy="'+(h/2)+'" r="2.5" fill="'+color+'"/></svg>';
+    return;
+  }
+  var max=Math.max.apply(null,pts);
+  var min=Math.min.apply(null,pts);
+  var range=(max-min)||1;
+  var stepX=(w-pad*2)/(pts.length-1);
+  var lastVal=pts[pts.length-1];
+  var strokeColor=lastVal<=300?'#22c55e':(lastVal<=800?'#eab308':'#ef4444');
+  var d=[];
+  var lastX=0,lastY=0;
+  for(var i=0;i<pts.length;i++){
+    var x=(pad+i*stepX).toFixed(1);
+    var y=(h-pad-((pts[i]-min)/range)*(h-pad*2)).toFixed(1);
+    d.push((i===0?'M':'L')+x+','+y);
+    if(i===pts.length-1){lastX=x;lastY=y;}
+  }
+  el.innerHTML='<svg viewBox="0 0 '+w+' '+h+'" style="width:'+w+'px;height:'+h+'px;display:block"><path d="'+d.join(' ')+'" fill="none" stroke="'+strokeColor+'" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="'+lastX+'" cy="'+lastY+'" r="2.5" fill="'+strokeColor+'"/></svg>';
+}
+
+function updateAccessResult(svc, status, latency){
+  var elLat=document.getElementById('myip-latency-'+svc);
+  var elDot=document.getElementById('myip-dot-'+svc);
+  var elSpark=document.getElementById('myip-spark-'+svc);
+  if(!elLat||!elDot)return;
+  if(status==='ok'){
+    elLat.textContent=latency;
+    var colorClass=latency<=300?'fast':(latency<=800?'mid':'slow');
+    elDot.className='myip-dot '+colorClass;
+    elDot.title=t('Access Normal')+' ('+latency+'ms)';
+    elLat.className='myip-latency '+colorClass;
+    myipHistory[svc].push(latency);
+    if(myipHistory[svc].length>10)myipHistory[svc].shift();
+    renderSparkline(svc, elSpark);
+  }else{
+    elLat.textContent='--';
+    elLat.className='myip-latency error';
+    elDot.className='myip-dot error';
+    elDot.title=status==='timeout'?t('Access Timed Out'):t('Access Denied');
+    if(elSpark)elSpark.innerHTML='<span class="myip-spark-err">'+(status==='timeout'?t('Timed Out'):t('Failed'))+'</span>';
+  }
+}
+
+function checkAccess(svc, domain){
+  var elLat=document.getElementById('myip-latency-'+svc);
+  var elDot=document.getElementById('myip-dot-'+svc);
+  if(elDot){elDot.className='myip-dot testing';elDot.title=t('Testing...');}
+  if(elLat){elLat.textContent='--';elLat.className='myip-latency';}
+  var img=new Image();
+  var startTime=Date.now();
+  var finished=false;
+  var timer=setTimeout(function(){
+    if(finished)return;
+    finished=true;
+    img.src='';
+    img.onerror=img.onload=null;
+    updateAccessResult(svc,'timeout',0);
+  },6000);
+  img.onload=function(){
+    if(finished)return;
+    finished=true;
+    clearTimeout(timer);
+    updateAccessResult(svc,'ok',Date.now()-startTime);
+  };
+  img.onerror=function(){
+    if(finished)return;
+    finished=true;
+    clearTimeout(timer);
+    updateAccessResult(svc,'error',0);
+  };
+  img.src='https://'+domain+'/favicon.ico?t='+Date.now();
+}
+
+function runMyIPChecks(){
+  var body=document.getElementById('myip-panel-body');
+  if(body&&body.style.display==='none')return;
+  var refBtn=document.getElementById('myip-refresh-btn');
+  if(refBtn)refBtn.classList.add('myip-spin');
+
+  // 1. PConline
+  var pcolEl=document.getElementById('myip-pcol-ip');
+  if(pcolEl)pcolEl.textContent=t('Testing...');
+  var old=document.getElementById('myip-pcol-script');
+  if(old&&old.parentNode)old.parentNode.removeChild(old);
+  window.IPCallBack=function(data){
+    if(data&&data.ip){
+      myipData.pcol={ip:data.ip,geo:[data.pro,data.city,data.addr].filter(Boolean).join(' ')};
+      renderMyIPItem('pcol');
+    }
+  };
+  var s=document.createElement('script');
+  s.id='myip-pcol-script';
+  s.charset='gbk';
+  s.src='https://whois.pconline.com.cn/ipJson.jsp?callback=IPCallBack&z='+Date.now();
+  s.onerror=function(){var el=document.getElementById('myip-pcol-ip');if(el&&el.textContent===t('Testing...'))el.textContent=t('Failed');};
+  document.head.appendChild(s);
+  setTimeout(function(){var el=document.getElementById('myip-pcol-ip');if(el&&el.textContent===t('Testing...'))el.textContent=t('Failed');},6000);
+
+  // 2. IPIP.NET
+  var ipipEl=document.getElementById('myip-ipip-ip');
+  if(ipipEl)ipipEl.textContent=t('Testing...');
+  fetch('https://myip.ipip.net?z='+Date.now(),{cache:'no-cache'})
+    .then(function(r){return r.text();})
+    .then(function(txt){
+      var ipm=txt.match(/当前 IP：([0-9A-Fa-f:.]+)/);
+      var gm=txt.match(/来自于：(.+)/);
+      if(ipm){
+        myipData.ipip={ip:ipm[1].trim(),geo:gm?gm[1].trim():''};
+        renderMyIPItem('ipip');
+      }else{
+        var el=document.getElementById('myip-ipip-ip');if(el)el.textContent=t('Failed');
+      }
+    })
+    .catch(function(){var el=document.getElementById('myip-ipip-ip');if(el)el.textContent=t('Failed');});
+
+  // 3. IP.SB
+  var ipsbEl=document.getElementById('myip-ipsb-ip');
+  if(ipsbEl)ipsbEl.textContent=t('Testing...');
+  fetch('https://api.ip.sb/geoip?z='+Date.now(),{cache:'no-cache'})
+    .then(function(r){return r.json();})
+    .then(function(data){
+      if(data&&data.ip){
+        var geo=[data.country,data.city,data.isp].filter(Boolean).join(' ');
+        myipData.ipsb={ip:data.ip,geo:geo};
+        renderMyIPItem('ipsb');
+      }else{
+        var el=document.getElementById('myip-ipsb-ip');if(el)el.textContent=t('Failed');
+      }
+    })
+    .catch(function(){var el=document.getElementById('myip-ipsb-ip');if(el)el.textContent=t('Failed');});
+
+  // 4. IPIFY
+  var ipifyEl=document.getElementById('myip-ipify-ip');
+  if(ipifyEl)ipifyEl.textContent=t('Testing...');
+  fetch('https://api.ipify.org/?format=json&z='+Date.now(),{cache:'no-cache'})
+    .then(function(r){return r.json();})
+    .then(function(data){
+      if(data&&data.ip){
+        myipData.ipify={ip:data.ip,geo:''};
+        renderMyIPItem('ipify');
+        fetch('https://ipwho.is/'+encodeURIComponent(data.ip),{cache:'no-cache'})
+          .then(function(gr){return gr.json();})
+          .then(function(gdata){
+            if(gdata&&gdata.country){
+              var geo=[gdata.country,gdata.city,(gdata.connection&&gdata.connection.isp)||''].filter(Boolean).join(' ');
+              if(myipData.ipify){myipData.ipify.geo=geo;renderMyIPItem('ipify');}
+            }
+          }).catch(function(){});
+      }else{
+        var el=document.getElementById('myip-ipify-ip');if(el)el.textContent=t('Failed');
+      }
+    })
+    .catch(function(){var el=document.getElementById('myip-ipify-ip');if(el)el.textContent=t('Failed');});
+
+  // Access Checks
+  checkAccess('baidu','www.baidu.com');
+  checkAccess('netease','s1.music.126.net/style');
+  checkAccess('github','github.com');
+  checkAccess('youtube','www.youtube.com');
+
+  setTimeout(function(){
+    var refBtn=document.getElementById('myip-refresh-btn');
+    if(refBtn)refBtn.classList.remove('myip-spin');
+  },1000);
+}
+
+function refreshMyIP(){
+  runMyIPChecks();
+}
+
+function maybeRunMyIPChecks(){
+  var body=document.getElementById('myip-panel-body');
+  if(body&&body.style.display==='none')return;
+  if(!myipData.pcol.ip&&!myipData.ipip.ip&&!myipData.ipsb.ip&&!myipData.ipify.ip){
+    runMyIPChecks();
+  }
+}
+
+function initMyIPCard(){
+  try{
+    if(localStorage.getItem('myip_privacy')==='1'){
+      myipPrivacy=true;
+    }
+  }catch(e){}
+  updateMyIPPrivacyUI();
+
+  try{
+    if(localStorage.getItem('myip_collapsed')==='1'){
+      var body=document.getElementById('myip-panel-body');
+      var btn=document.getElementById('myip-toggle-btn');
+      if(body)body.style.display='none';
+      if(btn)btn.textContent=t('Expand');
+    }
+  }catch(e){}
+}
+initMyIPCard();
+
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function escAttr(s){return escHtml(s).replace(/'/g,'&#39;')}
 var fbTarget='',fbCwd='';
