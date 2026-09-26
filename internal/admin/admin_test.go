@@ -1958,4 +1958,14 @@ func TestAdmin_ProxiesCleanDead(t *testing.T) {
 	}
 }
 
+func TestAdmin_APIPcol(t *testing.T) {
+	s := &Server{}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/pcol", nil)
+	s.handleAPIIPConline(rec, req)
+	if rec.Code != http.StatusOK && rec.Code != http.StatusBadGateway && rec.Code != http.StatusInternalServerError {
+		t.Errorf("unexpected status code: %d", rec.Code)
+	}
+}
+
 

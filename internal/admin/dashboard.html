@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" id="theme-color" content="#0b0d14">
+<meta name="referrer" content="no-referrer">
 <script>
 (function(){
   try{
@@ -2874,10 +2875,32 @@ function runMyIPChecks(){
   // 1. PConline
   var pcolEl=document.getElementById('myip-pcol-ip');
   if(pcolEl)pcolEl.textContent=t('Testing...');
+  var pcolLoaded=false;
+
+  function fallbackPcol(){
+    if(pcolLoaded)return;
+    fetch('/api/pcol',{cache:'no-cache'})
+      .then(function(r){return r.json();})
+      .then(function(data){
+        if(pcolLoaded)return;
+        if(data&&data.ip){
+          pcolLoaded=true;
+          myipData.pcol={ip:data.ip,geo:[data.pro,data.city,data.addr].filter(Boolean).join(' ')};
+          renderMyIPItem('pcol');
+        }else{
+          var el=document.getElementById('myip-pcol-ip');if(el&&!pcolLoaded)el.textContent=t('Failed');
+        }
+      })
+      .catch(function(){
+        var el=document.getElementById('myip-pcol-ip');if(el&&!pcolLoaded)el.textContent=t('Failed');
+      });
+  }
+
   var old=document.getElementById('myip-pcol-script');
   if(old&&old.parentNode)old.parentNode.removeChild(old);
   window.IPCallBack=function(data){
     if(data&&data.ip){
+      pcolLoaded=true;
       myipData.pcol={ip:data.ip,geo:[data.pro,data.city,data.addr].filter(Boolean).join(' ')};
       renderMyIPItem('pcol');
     }
@@ -2885,10 +2908,12 @@ function runMyIPChecks(){
   var s=document.createElement('script');
   s.id='myip-pcol-script';
   s.charset='gbk';
-  s.src='https://whois.pconline.com.cn/ipJson.jsp?callback=IPCallBack&z='+Date.now();
-  s.onerror=function(){var el=document.getElementById('myip-pcol-ip');if(el&&el.textContent===t('Testing...'))el.textContent=t('Failed');};
+  s.referrerPolicy='no-referrer';
+  s.setAttribute('referrerpolicy','no-referrer');
+  s.src='https://whois.pconline.com.cn/ipJson.jsp?z='+Date.now();
+  s.onerror=function(){fallbackPcol();};
   document.head.appendChild(s);
-  setTimeout(function(){var el=document.getElementById('myip-pcol-ip');if(el&&el.textContent===t('Testing...'))el.textContent=t('Failed');},6000);
+  setTimeout(function(){if(!pcolLoaded)fallbackPcol();},3000);
 
   // 2. IPIP.NET
   var ipipEl=document.getElementById('myip-ipip-ip');

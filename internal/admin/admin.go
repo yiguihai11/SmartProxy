@@ -23,6 +23,7 @@ import (
 
 	mdns "github.com/miekg/dns"
 	"github.com/quic-go/quic-go/http3"
+	"golang.org/x/text/encoding/simplifiedchinese"
 	"smartproxy/internal/chnroute"
 
 	"smartproxy/internal/config"
@@ -404,6 +405,7 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/favicon.ico", s.handleLogo)
 	mux.HandleFunc("/", s.handleRoot)
 	mux.HandleFunc("/events", s.handleEvents)
+	mux.HandleFunc("/api/pcol", s.handleAPIIPConline)
 
 	return mux
 }
@@ -2277,4 +2279,35 @@ func (s *Server) handleTerminalClear(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleAPIIPConline(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://whois.pconline.com.cn/ipJson.jsp?json=true", nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	utf8Reader := simplifiedchinese.GBK.NewDecoder().Reader(resp.Body)
+	body, err := io.ReadAll(utf8Reader)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write(body)
 }
