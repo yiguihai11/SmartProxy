@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"smartproxy/internal/safego"
@@ -191,7 +192,7 @@ func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 	switch {
 	case result == "direct":
 		ll.Info("proxy rule forces direct connection", "host", host, "port", port, "domain", domain)
-		conn, err := dialTCP(ctx, host, port, defaultDirectTimeout)
+		conn, err := dialDirectTCP(ctx, host, port, domain, defaultDirectTimeout)
 		return conn, false, err
 	case result == "proxy_default":
 		ll.Info("proxy rule matched, using default proxy", "host", host, "port", port, "domain", domain)
@@ -217,13 +218,13 @@ func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 	cfg := r.cfg.Load()
 	if cfg != nil && cfg.bypassLAN && netutil.IsLAN(host) {
 		ll.Info("using direct connection (LAN bypass)", "host", host, "port", port, "domain", domain)
-		conn, err := dialTCP(ctx, host, port, defaultDirectTimeout)
+		conn, err := dialDirectTCP(ctx, host, port, domain, defaultDirectTimeout)
 		return conn, false, err
 	}
 
 	if r.isDomesticHost(host) {
 		ll.Info("using direct connection (domestic)", "host", host, "port", port, "domain", domain)
-		conn, err := dialTCP(ctx, host, port, defaultDirectTimeout)
+		conn, err := dialDirectTCP(ctx, host, port, domain, defaultDirectTimeout)
 		return conn, false, err
 	}
 
@@ -287,7 +288,7 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 	switch {
 	case result == "direct":
 		ll.Info("proxy rule forces direct connection", "host", host, "port", port, "domain", domain)
-		conn, err := dialTCP(ctx, host, port, cfg.smartTimeout)
+		conn, err := dialDirectTCP(ctx, host, port, domain, cfg.smartTimeout)
 		if err != nil {
 			return nil, nil, false, err
 		}
@@ -334,7 +335,7 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 
 	if cfg != nil && cfg.bypassLAN && netutil.IsLAN(host) {
 		ll.Info("using direct connection (LAN bypass)", "host", host, "port", port, "domain", domain)
-		conn, err := dialTCP(ctx, host, port, cfg.smartTimeout)
+		conn, err := dialDirectTCP(ctx, host, port, domain, cfg.smartTimeout)
 		if err != nil {
 			return nil, nil, false, err
 		}
@@ -360,7 +361,7 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 
 	start := time.Now()
 	ll.Info("attempting smart proxy direct connection", "host", host, "port", port, "domain", domain, "timeout_ms", cfg.smartTimeout.Milliseconds())
-	conn, err := dialTCP(ctx, host, port, cfg.smartTimeout)
+	conn, err := dialDirectTCP(ctx, host, port, domain, cfg.smartTimeout)
 	if err != nil {
 		shortReason := simplifyError(err, host, port)
 		ll.Warn("direct connection failed, falling back to proxy", "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds(), "reason", shortReason)
@@ -661,6 +662,33 @@ func (r *Router) StopCleanup() {
 	r.cleanupWg.Wait()
 }
 
+func isNetworkUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "network is unreachable") ||
+		strings.Contains(msg, "no route to host")
+}
+
+// dialDirectTCP dials host:port with timeout. If the dial fails due to the local network
+// being unreachable (e.g. host is an IPv6 address but the underlying physical network only
+// supports IPv4) and a distinct SNI domain is available, it automatically falls back to dialing
+// domain:port (which allows Go's dual-stack Happy Eyeballs dialer to connect over IPv4).
+func dialDirectTCP(ctx context.Context, host string, port int, domain string, timeout time.Duration) (net.Conn, error) {
+	conn, err := dialTCP(ctx, host, port, timeout)
+	if err != nil && domain != "" && domain != host && isNetworkUnreachable(err) {
+		ll := trace.Log(ctx)
+		ll.Warn("direct dial to host failed with network unreachable, falling back to domain",
+			"host", host, "domain", domain, "port", port, "error", err)
+		conn, err = dialTCP(ctx, domain, port, timeout)
+	}
+	return conn, err
+}
+
 func dialTCP(ctx context.Context, host string, port int, timeout time.Duration) (net.Conn, error) {
 	d := net.Dialer{Timeout: timeout, Control: fwmark.Control}
 	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, fmt.Sprintf("%d", port)))
@@ -677,3 +705,4 @@ func dialTCP(ctx context.Context, host string, port int, timeout time.Duration) 
 	}
 	return conn, nil
 }
+

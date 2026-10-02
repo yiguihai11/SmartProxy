@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -823,6 +824,60 @@ func TestSmartConnectWithFallback_UDPOnlyFallback(t *testing.T) {
 		t.Fatal("timed out waiting for fallback default proxy connection")
 	}
 }
+
+func TestIsNetworkUnreachable(t *testing.T) {
+	if !isNetworkUnreachable(syscall.ENETUNREACH) {
+		t.Error("expected ENETUNREACH to be recognized as unreachable")
+	}
+	if !isNetworkUnreachable(syscall.EHOSTUNREACH) {
+		t.Error("expected EHOSTUNREACH to be recognized as unreachable")
+	}
+	if !isNetworkUnreachable(errors.New("dial tcp [2408::1]:443: connect: network is unreachable")) {
+		t.Error("expected network is unreachable string to be recognized")
+	}
+	if !isNetworkUnreachable(errors.New("dial tcp: no route to host")) {
+		t.Error("expected no route to host string to be recognized")
+	}
+	if isNetworkUnreachable(errors.New("connection reset by peer")) {
+		t.Error("connection reset should not be unreachable")
+	}
+	if isNetworkUnreachable(nil) {
+		t.Error("nil error should not be unreachable")
+	}
+}
+
+func TestDialDirectTCP_Fallback(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+
+	ctx := context.Background()
+	_, dialErr := dialTCP(ctx, "2001:db8::1", port, 100*time.Millisecond)
+	if dialErr != nil && isNetworkUnreachable(dialErr) {
+		conn, err := dialDirectTCP(ctx, "2001:db8::1", port, "127.0.0.1", 300*time.Millisecond)
+		if err != nil {
+			t.Fatalf("expected fallback to domain 127.0.0.1 to succeed, got %v", err)
+		}
+		if conn != nil {
+			conn.Close()
+		}
+	}
+}
+
 
 
 
