@@ -731,7 +731,9 @@ func TestEngine_UDP_Deadlines(t *testing.T) {
 		Mask:    net.IPv4(255, 255, 255, 0),
 		Gateway: net.IPv4(10, 0, 0, 1),
 		OutputFn: func(packet []byte) {
-			outPkts <- packet
+			p := make([]byte, len(packet))
+			copy(p, packet)
+			outPkts <- p
 		},
 		UDPHandler: func(conn *PacketConn) {
 			udpChan <- conn

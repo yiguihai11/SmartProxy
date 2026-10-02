@@ -336,6 +336,27 @@ func (c *countingConn) SetLinger(sec int) error {
 	return nil
 }
 
+func (c *countingConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
+func (c *countingConn) CloseRead() error {
+	if cr, ok := c.Conn.(interface{ CloseRead() error }); ok {
+		return cr.CloseRead()
+	}
+	return nil
+}
+
+func (c *countingConn) SetNoDelay(noDelay bool) error {
+	if nd, ok := c.Conn.(interface{ SetNoDelay(bool) error }); ok {
+		return nd.SetNoDelay(noDelay)
+	}
+	return nil
+}
+
 // countingPacketConn 包 N.PacketConn 计字节:ReadPacket(app 发)= 上行,
 // WritePacket(回给 app)= 下行。
 type countingPacketConn struct {

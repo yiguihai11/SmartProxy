@@ -20,7 +20,9 @@ func goPacketOutput(data *C.uint8_t, length C.uint32_t, ctxID C.uint64_t) {
 	if e == nil || data == nil || length == 0 {
 		return
 	}
-	pkt := C.GoBytes(unsafe.Pointer(data), C.int(length))
+	// OutputFn synchronously writes the IP packet to the TUN device via tun.Write(packet),
+	// so unsafe.Slice avoids allocating a fresh Go heap slice per outgoing packet.
+	pkt := unsafe.Slice((*byte)(unsafe.Pointer(data)), int(length))
 	e.onPacketOutput(pkt)
 }
 
