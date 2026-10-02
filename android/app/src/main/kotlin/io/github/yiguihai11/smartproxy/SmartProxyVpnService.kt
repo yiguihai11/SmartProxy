@@ -326,7 +326,6 @@ class SmartProxyVpnService : VpnService() {
                     .addDnsServer(effectiveDnsV4)
                 Log.i(TAG, "[establishVpn] IPv4 address=${inet4.ip}/${inet4.prefix}, route=0.0.0.0/0, DNS=$effectiveDnsV4")
             }
-            val inet6 = tun.inet6
             val customDnsV6 = AppPrefs.dnsV6(this)
             val effectiveDnsV6 = if (customDnsV6.isNotBlank()) customDnsV6 else DEFAULT_DNS_V6
             if (inet6 != null) {
