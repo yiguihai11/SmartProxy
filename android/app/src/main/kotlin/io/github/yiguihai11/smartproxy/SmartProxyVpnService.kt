@@ -348,22 +348,10 @@ class SmartProxyVpnService : VpnService() {
             }
 
             // 排除路由 (excludeRoute, API 33+ 特性, minSdk 33 原生支持)
-            // 若 routing.bypass_lan 开启，自动在内核路由层排除热点与常见局域网网段（10.0.0.0/8, 192.168.0.0/16）：
-            // 确保热点下游网段在系统内核路由层直接从物理/虚拟网卡转发，绝不进入 tun0。
-            val bypassLan = configJson.optJSONObject("routing")?.optBoolean("bypass_lan", true) ?: true
-            if (bypassLan) {
-                listOf("10.0.0.0/8", "192.168.0.0/16").forEach { cidrStr ->
-                    runCatching {
-                        val cidr = TunConfig.parseCidr(cidrStr)
-                        val inetAddr = java.net.InetAddress.getByName(cidr.ip)
-                        builder.excludeRoute(android.net.IpPrefix(inetAddr, cidr.prefix))
-                        Log.i(TAG, "[establishVpn] Excluded LAN route (bypass_lan): ${cidr.ip}/${cidr.prefix}")
-                    }.onFailure { e ->
-                        Log.w(TAG, "[establishVpn] Failed to exclude LAN route '$cidrStr': ${e.message}")
-                    }
-                }
-            }
-
+            // 注意：绝不可在此盲目排除 192.168.0.0/16 或 10.0.0.0/8！
+            // 因为当手机 Wi-Fi 网关为 192.168.x.1 时，系统/应用发往网关 192.168.x.1:53 的 DNS 查询会被一并直连，
+            // 导致 DNS 污染且无法走 SmartProxy 智能防污染分流；热点 DHCP 只需要通过下方的 SYSTEM_DISALLOWED_PACKAGES
+            // 排除 NetworkStack (UID 1073) 即可完美解决。
             val excluded = AppPrefs.excludedRoutes(this)
             if (excluded.isNotEmpty()) {
                 Log.i(TAG, "[establishVpn] Applying ${excluded.size} excludeRoute rules...")
