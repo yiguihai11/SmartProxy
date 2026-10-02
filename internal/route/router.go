@@ -179,9 +179,9 @@ func (r *Router) isDomesticHost(host string) bool {
 }
 
 // defaultDirectTimeout is the dial timeout for non-smart direct connections (rule-forced direct,
-// LAN bypass, and domestic IP direct). Set to 2s to comfortably tolerate normal cellular/Wi-Fi
+// LAN bypass, and domestic IP direct). Set to 1s to tolerate normal cellular/Wi-Fi
 // latency and packet jitter without premature resets on domestic services (e.g. QQ, WeChat, game auth).
-const defaultDirectTimeout = 2 * time.Second
+const defaultDirectTimeout = 1 * time.Second
 
 func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 	domain string, engine *rules.Engine) (net.Conn, bool, error) {
