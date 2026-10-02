@@ -98,6 +98,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -230,6 +231,11 @@ class MainActivity : ComponentActivity() {
         if (currentRunning) {
             android.util.Log.i("SmartProxyVpn", "[MainActivity] User requested STOP. Calling SmartProxyVpnService.stop(this)...")
             SmartProxyVpnService.stop(this)
+            return
+        }
+        val netStatus = NetworkUtils.checkPhysicalNetworkAddresses(this)
+        if (!netStatus.isAnyAvailable) {
+            Toast.makeText(this, getString(R.string.toast_no_network_start), Toast.LENGTH_SHORT).show()
             return
         }
         // 仅代理(SOCKS5)模式(§8 服务模式)不建 VpnService,无需系统授权。
@@ -839,14 +845,70 @@ private fun HomeLauncher(
     // 仅代理(SOCKS5) = 监听(AppPrefs.socksListen → listen.host,首页与面板同源)。
     // remember 以 socksMode 为 key:切换服务模式时重新读真源,不残留旧模式的显示态。
     val socksMode = serviceMode == AppPrefs.MODE_SOCKS5
+    val vpnIntercept = !socksMode
+
+    var networkStatus by remember { mutableStateOf(NetworkUtils.checkPhysicalNetworkAddresses(context)) }
+
+    DisposableEffect(context) {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                networkStatus = NetworkUtils.checkPhysicalNetworkAddresses(context)
+            }
+            override fun onLost(network: Network) {
+                networkStatus = NetworkUtils.checkPhysicalNetworkAddresses(context)
+            }
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                networkStatus = NetworkUtils.checkPhysicalNetworkAddresses(context)
+            }
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                networkStatus = NetworkUtils.checkPhysicalNetworkAddresses(context)
+            }
+        }
+        runCatching { cm?.registerDefaultNetworkCallback(cb) }
+        onDispose { runCatching { cm?.unregisterNetworkCallback(cb) } }
+    }
+
     var ipv4 by remember(socksMode) { mutableStateOf(
-        if (socksMode) AppPrefs.socksListen(context) != AppPrefs.SOCKS_LISTEN_V6
+        if (!networkStatus.hasV4) false
+        else if (socksMode) AppPrefs.socksListen(context) != AppPrefs.SOCKS_LISTEN_V6
         else ConfigProvider.ipv4(context)
     ) }
     var ipv6 by remember(socksMode) { mutableStateOf(
-        if (socksMode) AppPrefs.socksListen(context) != AppPrefs.SOCKS_LISTEN_V4
+        if (!networkStatus.hasV6) false
+        else if (socksMode) AppPrefs.socksListen(context) != AppPrefs.SOCKS_LISTEN_V4
         else ConfigProvider.ipv6(context)
     ) }
+
+    // 当底层物理网络未分配 v4 或 v6 地址时自动关闭对应开关并同步落盘
+    LaunchedEffect(networkStatus, socksMode) {
+        if (!networkStatus.hasV6 && ipv6) {
+            ipv6 = false
+            if (vpnIntercept) {
+                ConfigProvider.setIpv6(context, false)
+            } else {
+                AppPrefs.setSocksListen(context, AppPrefs.SOCKS_LISTEN_V4)
+                val json = ConfigProvider.readConfig(context)
+                val dns = json.optJSONObject("dns") ?: org.json.JSONObject().also { json.put("dns", it) }
+                dns.put("filter_aaaa", true)
+                ConfigProvider.writeConfig(context, json)
+            }
+            if (running) {
+                SmartProxyVpnService.restart(context)
+            }
+        }
+        if (!networkStatus.hasV4 && ipv4) {
+            ipv4 = false
+            if (vpnIntercept) {
+                ConfigProvider.setIpv4(context, false)
+            } else {
+                AppPrefs.setSocksListen(context, AppPrefs.SOCKS_LISTEN_V6)
+            }
+            if (running) {
+                SmartProxyVpnService.restart(context)
+            }
+        }
+    }
     var bootAuto by remember { mutableStateOf(AppPrefs.bootAutoStart(context)) }
 
     // 悬浮网速计开关(首页右侧半卡,与开机自启各占半宽):仅 VPN 隧道模式有意义 —— 按应用
@@ -964,11 +1026,16 @@ private fun HomeLauncher(
             // ── 大圆环 + 中心状态区 ──────────────────────────────
             // 未连接:中心电源球体;连接中/已连接:状态点+文字+时长。状态显示并入
             // 圆环中心(§效果图),不再单独状态行。点按整环启停。
+            val startEnabled = running || networkStatus.isAnyAvailable
             ConnectOrb(
                 running = running,
                 connecting = connecting,
                 sweep = sweep.value,
                 elapsedMs = elapsedMs,
+                enabled = startEnabled,
+                onDisabledClick = {
+                    Toast.makeText(context, context.getString(R.string.toast_no_network_start), Toast.LENGTH_SHORT).show()
+                },
                 onToggleVpn = onToggleVpn
             )
             Spacer(Modifier.height(30.dp))
@@ -981,12 +1048,19 @@ private fun HomeLauncher(
             // 否则 establish() 抛 IllegalArgumentException;仅代理也要有监听地址。
             // 运行中改都走显式重建(Go watcher 自动重启已删除);restart() 自带 isRunning
             // 守卫,未在跑只落盘。拦在开关这一层,checked 是受控 state,不更新即回弹。
-            val vpnIntercept = !socksMode
             Row(modifier = Modifier.fillMaxWidth()) {
                 SwitchCard(
                     title = if (vpnIntercept) stringResource(R.string.home_ipv4_intercept) else stringResource(R.string.home_ipv4_listen),
-                    subtitle = if (vpnIntercept) stringResource(R.string.home_ipv4_intercept_sub) else stringResource(R.string.home_ipv4_listen_sub),
-                    checked = ipv4,
+                    subtitle = when {
+                        !networkStatus.hasV4 -> stringResource(R.string.home_ipv4_no_address)
+                        vpnIntercept -> stringResource(R.string.home_ipv4_intercept_sub)
+                        else -> stringResource(R.string.home_ipv4_listen_sub)
+                    },
+                    checked = ipv4 && networkStatus.hasV4,
+                    enabled = networkStatus.hasV4,
+                    onDisabledClick = {
+                        Toast.makeText(context, context.getString(R.string.toast_no_ipv4_address), Toast.LENGTH_SHORT).show()
+                    },
                     onCheckedChange = { v ->
                         if (!v && !ipv6) {
                             Toast.makeText(context, context.getString(R.string.toast_need_ipv46), Toast.LENGTH_SHORT).show()
@@ -1010,8 +1084,16 @@ private fun HomeLauncher(
                 Spacer(Modifier.width(8.dp))
                 SwitchCard(
                     title = if (vpnIntercept) stringResource(R.string.home_ipv6_intercept) else stringResource(R.string.home_ipv6_listen),
-                    subtitle = if (vpnIntercept) stringResource(R.string.home_ipv6_intercept_sub) else stringResource(R.string.home_ipv6_listen_sub),
-                    checked = ipv6,
+                    subtitle = when {
+                        !networkStatus.hasV6 -> stringResource(R.string.home_ipv6_no_address)
+                        vpnIntercept -> stringResource(R.string.home_ipv6_intercept_sub)
+                        else -> stringResource(R.string.home_ipv6_listen_sub)
+                    },
+                    checked = ipv6 && networkStatus.hasV6,
+                    enabled = networkStatus.hasV6,
+                    onDisabledClick = {
+                        Toast.makeText(context, context.getString(R.string.toast_no_ipv6_address), Toast.LENGTH_SHORT).show()
+                    },
                     onCheckedChange = { v ->
                         if (!v && !ipv4) {
                             Toast.makeText(context, context.getString(R.string.toast_need_ipv46), Toast.LENGTH_SHORT).show()
@@ -1518,13 +1600,22 @@ private fun ConnectOrb(
     connecting: Boolean,
     sweep: Float,
     elapsedMs: Long,
+    enabled: Boolean = true,
+    onDisabledClick: (() -> Unit)? = null,
     onToggleVpn: () -> Unit
 ) {
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .size(214.dp)
-            .clickable { onToggleVpn() }
+            .clickable {
+                if (!enabled && !running) {
+                    onDisabledClick?.invoke()
+                } else {
+                    onToggleVpn()
+                }
+            }
+            .alpha(if (!enabled && !running) 0.45f else 1f)
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val stroke = 12.dp.toPx()

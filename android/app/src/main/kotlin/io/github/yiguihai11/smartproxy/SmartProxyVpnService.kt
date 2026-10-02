@@ -293,11 +293,21 @@ class SmartProxyVpnService : VpnService() {
             val tun = TunConfig.parse(configJson)
             Log.i(TAG, "[establishVpn] Parsed TUN config: mtu=${tun.mtu}, inet4=${tun.inet4}, inet6=${tun.inet6}")
 
-            // 兜底:至少一个 IP 族启用。VpnService.Builder 没调过 addAddress 就 establish()
-            // 会抛 IllegalArgumentException;首页开关层已阻止双关,但 Go 面板或直接编辑
-            // config.json 仍可能把 inet4/6_address 都写成空,这里明确判失败而非让异常冒泡。
-            if (tun.inet4 == null && tun.inet6 == null) {
-                Log.e(TAG, "[establishVpn] Neither IPv4 nor IPv6 enabled in config (tun.inet4/6_address both empty); cannot establish VPN.")
+            // 检查底层物理网络 v4/v6 地址可用性:若某族无地址,即使配置开启也跳过该族路由注入,防断网
+            val netStatus = NetworkUtils.checkPhysicalNetworkAddresses(this)
+            val inet4 = if (netStatus.hasV4) tun.inet4 else null
+            val inet6 = if (netStatus.hasV6) tun.inet6 else null
+            if (tun.inet4 != null && !netStatus.hasV4) {
+                Log.w(TAG, "[establishVpn] tun.inet4 enabled in config, but physical network lacks IPv4; omitting IPv4 route")
+            }
+            if (tun.inet6 != null && !netStatus.hasV6) {
+                Log.w(TAG, "[establishVpn] tun.inet6 enabled in config, but physical network lacks IPv6; omitting IPv6 route")
+            }
+
+            // 兜底:至少一个 IP 族启用且底层物理网络支持。VpnService.Builder 没调过 addAddress 就 establish()
+            // 会抛 IllegalArgumentException;这里明确判失败而非让异常冒泡。
+            if (inet4 == null && inet6 == null) {
+                Log.e(TAG, "[establishVpn] Neither IPv4 nor IPv6 available (inet4=$inet4, inet6=$inet6, physical=$netStatus); cannot establish VPN.")
                 return false
             }
 
@@ -308,7 +318,6 @@ class SmartProxyVpnService : VpnService() {
             // IPv4/IPv6 拦截 = tun.inet4/6_address 存在(首页开关读写同一字段);
             // DNS 只走 AppPrefs(§6 应用内设置):config.json 已无 tun.dns_servers
             // (2026-08 删死配置),缺省回退硬编码默认。
-            val inet4 = tun.inet4
             val customDnsV4 = AppPrefs.dnsV4(this)
             val effectiveDnsV4 = if (customDnsV4.isNotBlank()) customDnsV4 else DEFAULT_DNS_V4
             if (inet4 != null) {

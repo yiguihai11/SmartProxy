@@ -49,6 +49,11 @@
     <string name="home_ipv6_listen">IPv6 监听</string>
     <string name="home_ipv6_intercept_sub">接管 IPv6 流量</string>
     <string name="home_ipv6_listen_sub">SOCKS5 监听 IPv6</string>
+    <string name="home_ipv4_no_address">当前网络未分配 IPv4</string>
+    <string name="home_ipv6_no_address">当前网络未分配 IPv6</string>
+    <string name="toast_no_ipv4_address">当前网络未分配 IPv4 地址，已自动禁用</string>
+    <string name="toast_no_ipv6_address">当前网络未分配 IPv6 地址，已自动禁用</string>
+    <string name="toast_no_network_start">当前无可用网络（无 IPv4/IPv6 地址），无法启动</string>
     <string name="toast_need_ipv46">至少需开启 IPv4 或 IPv6 其中一个</string>
     <string name="home_boot_autostart">开机自启</string>
     <string name="home_boot_autostart_sub_vpn">开机后自动启动 VPN(需已授权)</string>

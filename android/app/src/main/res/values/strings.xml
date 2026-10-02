@@ -49,6 +49,11 @@
     <string name="home_ipv6_listen">IPv6 listening</string>
     <string name="home_ipv6_intercept_sub">Intercept IPv6 traffic</string>
     <string name="home_ipv6_listen_sub">SOCKS5 listening on IPv6</string>
+    <string name="home_ipv4_no_address">No IPv4 on network</string>
+    <string name="home_ipv6_no_address">No IPv6 on network</string>
+    <string name="toast_no_ipv4_address">No IPv4 address on current network, disabled</string>
+    <string name="toast_no_ipv6_address">No IPv6 address on current network, disabled</string>
+    <string name="toast_no_network_start">No available network (no IPv4/IPv6 address), cannot start</string>
     <string name="toast_need_ipv46">Enable at least IPv4 or IPv6</string>
     <string name="home_boot_autostart">Start on boot</string>
     <string name="home_boot_autostart_sub_vpn">Auto-start VPN after boot (needs authorization)</string>
