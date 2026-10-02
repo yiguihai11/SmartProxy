@@ -3,7 +3,7 @@
 package lwip
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/c -I${SRCDIR}/c/arch -I${SRCDIR}/../../../third_party/lwip/src/include -DLWIP_NOASSERT -D_POSIX_C_SOURCE=200809L
+#cgo CFLAGS: -I${SRCDIR}/c -I${SRCDIR}/c/arch -I${SRCDIR}/../../../third_party/lwip/src/include -DLWIP_NOASSERT -D_POSIX_C_SOURCE=200809L -Wno-tautological-constant-out-of-range-compare
 #include <stdint.h>
 #include "c/lwip_adapter.h"
 */

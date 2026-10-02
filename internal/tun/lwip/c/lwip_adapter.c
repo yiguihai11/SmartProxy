@@ -364,6 +364,14 @@ int sp_lwip_init(struct sp_lwip *lw, const ip4_addr_t *ip, const ip4_addr_t *mas
     return 0;
 }
 
+void sp_lwip_set_mtu(struct sp_lwip *lw, uint16_t mtu) {
+    if (!lw || mtu == 0) return;
+    lw->netif.mtu = mtu;
+#if LWIP_IPV6
+    lw->netif.mtu6 = mtu;
+#endif
+}
+
 struct sp_lwip *sp_lwip_new(void) {
     return (struct sp_lwip *)calloc(1, sizeof(struct sp_lwip));
 }

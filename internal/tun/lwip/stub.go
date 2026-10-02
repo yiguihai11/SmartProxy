@@ -25,6 +25,7 @@ type Config struct {
 	IPv4       net.IP
 	Mask       net.IP
 	Gateway    net.IP
+	MTU        uint16
 	OutputFn   func(packet []byte)
 	TCPHandler func(conn net.Conn)
 	UDPHandler func(conn *PacketConn)

@@ -73,6 +73,7 @@ func (s *LWIPStack) Start() error {
 		IPv4:    ip4,
 		Mask:    mask4,
 		Gateway: gw4,
+		MTU:     uint16(s.tunOptions.MTU),
 		OutputFn: func(packet []byte) {
 			if s.closed.Load() {
 				return

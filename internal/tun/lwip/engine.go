@@ -3,7 +3,7 @@
 package lwip
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/c -I${SRCDIR}/c/arch -I${SRCDIR}/../../../third_party/lwip/src/include -DLWIP_NOASSERT -D_POSIX_C_SOURCE=200809L
+#cgo CFLAGS: -I${SRCDIR}/c -I${SRCDIR}/c/arch -I${SRCDIR}/../../../third_party/lwip/src/include -DLWIP_NOASSERT -D_POSIX_C_SOURCE=200809L -Wno-tautological-constant-out-of-range-compare
 #include <stdint.h>
 #include "c/lwip_adapter.h"
 */
@@ -47,6 +47,7 @@ type Config struct {
 	IPv4       net.IP
 	Mask       net.IP
 	Gateway    net.IP
+	MTU        uint16
 	OutputFn   func(packet []byte)
 	TCPHandler func(conn net.Conn)
 	UDPHandler func(conn *PacketConn)
@@ -136,6 +137,10 @@ func NewEngine(cfg Config) (*Engine, error) {
 		unregisterEngine(e.id)
 		C.sp_lwip_destroy(e.lw)
 		return nil, fmt.Errorf("sp_lwip_init failed: %d", int(ret))
+	}
+
+	if cfg.MTU > 0 {
+		C.sp_lwip_set_mtu(e.lw, C.uint16_t(cfg.MTU))
 	}
 
 	e.wg.Add(1)

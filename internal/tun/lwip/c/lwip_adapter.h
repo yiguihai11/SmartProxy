@@ -84,6 +84,7 @@ void sp_lwip_set_callbacks(
 void sp_set_ip4_addr(ip4_addr_t *a, uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3);
 
 int sp_lwip_init(struct sp_lwip *lw, const ip4_addr_t *ip, const ip4_addr_t *mask, const ip4_addr_t *gw);
+void sp_lwip_set_mtu(struct sp_lwip *lw, uint16_t mtu);
 void sp_lwip_free(struct sp_lwip *lw);
 int sp_lwip_input(struct sp_lwip *lw, const void *data, uint32_t len);
 void sp_lwip_timers(void);

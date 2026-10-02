@@ -1150,4 +1150,138 @@ func TestEngine_ICMPv6_Echo(t *testing.T) {
 	}
 }
 
+func TestEngine_TCP_MTU_1400_MSS(t *testing.T) {
+	outPkts := make(chan []byte, 16)
+	connChan := make(chan net.Conn, 1)
+
+	cfg := Config{
+		MTU: 1400,
+		OutputFn: func(packet []byte) {
+			p := make([]byte, len(packet))
+			copy(p, packet)
+			outPkts <- p
+		},
+		TCPHandler: func(conn net.Conn) {
+			connChan <- conn
+		},
+	}
+
+	engine, err := NewEngine(cfg)
+	if err != nil {
+		t.Fatalf("NewEngine failed: %v", err)
+	}
+	defer engine.Close()
+
+	clientIP := net.IPv4(10, 0, 0, 2)
+	targetIP := net.IPv4(1, 1, 1, 1)
+	clientPort := uint16(45678)
+	targetPort := uint16(80)
+
+	// Send SYN with MSS 1360 option and Window Scale option (scale factor 7)
+	// IPv4 header (20 bytes) + TCP header (20 bytes) + MSS opt (4 bytes) + Wscale opt (3 bytes + 1 NOP)
+	totalLen := 20 + 20 + 8
+	synPkt := make([]byte, totalLen)
+	synPkt[0] = 0x45
+	binary.BigEndian.PutUint16(synPkt[2:4], uint16(totalLen))
+	binary.BigEndian.PutUint16(synPkt[4:6], 0x1234)
+	synPkt[6] = 0x40
+	synPkt[8] = 64
+	synPkt[9] = 6 // TCP
+	copy(synPkt[12:16], clientIP.To4())
+	copy(synPkt[16:20], targetIP.To4())
+	binary.BigEndian.PutUint16(synPkt[10:12], checksum(synPkt[0:20]))
+
+	tcpHdr := synPkt[20:]
+	binary.BigEndian.PutUint16(tcpHdr[0:2], clientPort)
+	binary.BigEndian.PutUint16(tcpHdr[2:4], targetPort)
+	binary.BigEndian.PutUint32(tcpHdr[4:8], 1000)
+	tcpHdr[12] = 0x70 // Data offset 7 (28 bytes)
+	tcpHdr[13] = 0x02 // SYN
+	binary.BigEndian.PutUint16(tcpHdr[14:16], 65535)
+
+	// TCP MSS Option (kind 2, len 4, value 1360)
+	tcpHdr[20] = 0x02
+	tcpHdr[21] = 0x04
+	binary.BigEndian.PutUint16(tcpHdr[22:24], 1360)
+
+	// TCP Window Scale Option (NOP=0x01, kind 3, len 3, shift 7)
+	tcpHdr[24] = 0x01 // NOP
+	tcpHdr[25] = 0x03
+	tcpHdr[26] = 0x03
+	tcpHdr[27] = 0x07
+
+	pseudo := make([]byte, 12+len(tcpHdr))
+	copy(pseudo[0:4], clientIP.To4())
+	copy(pseudo[4:8], targetIP.To4())
+	pseudo[8] = 0
+	pseudo[9] = 6
+	binary.BigEndian.PutUint16(pseudo[10:12], uint16(len(tcpHdr)))
+	copy(pseudo[12:], tcpHdr)
+	binary.BigEndian.PutUint16(tcpHdr[16:18], checksum(pseudo))
+
+	if err := engine.Input(synPkt); err != nil {
+		t.Fatalf("engine.Input SYN failed: %v", err)
+	}
+
+	var synAck []byte
+	select {
+	case synAck = <-outPkts:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for SYN/ACK")
+	}
+
+	if len(synAck) < 40 {
+		t.Fatalf("synAck too short: %d", len(synAck))
+	}
+
+	dataOffset := int((synAck[32] >> 4) * 4)
+	if dataOffset < 24 {
+		t.Fatalf("expected TCP options in SYN/ACK, dataOffset=%d", dataOffset)
+	}
+
+	opts := synAck[40 : 20+dataOffset]
+	foundMSS := false
+	foundWScale := false
+	for i := 0; i < len(opts); {
+		kind := opts[i]
+		if kind == 0 { // End of options
+			break
+		}
+		if kind == 1 { // NOP
+			i++
+			continue
+		}
+		if i+1 >= len(opts) {
+			break
+		}
+		optLen := int(opts[i+1])
+		if optLen < 2 || i+optLen > len(opts) {
+			break
+		}
+		if kind == 2 && optLen == 4 { // MSS option
+			mssVal := binary.BigEndian.Uint16(opts[i+2 : i+4])
+			if mssVal != 1360 {
+				t.Fatalf("expected advertised MSS to be 1360 for MTU 1400, got %d", mssVal)
+			}
+			foundMSS = true
+		}
+		if kind == 3 && optLen == 3 { // Window Scale option
+			scaleVal := opts[i+2]
+			if scaleVal != 4 {
+				t.Fatalf("expected advertised Window Scale to be 4, got %d", scaleVal)
+			}
+			foundWScale = true
+		}
+		i += optLen
+	}
+
+	if !foundMSS {
+		t.Fatal("MSS option not found in SYN/ACK")
+	}
+	if !foundWScale {
+		t.Fatal("Window Scale option not found in SYN/ACK")
+	}
+}
+
+
 

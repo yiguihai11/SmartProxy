@@ -2,7 +2,7 @@ LWIP_DIR ?= ../../../../third_party/lwip
 CC ?= cc
 CFLAGS ?= -O2 -Wall -Wextra -Werror -std=c11
 CPPFLAGS += -I. -I$(LWIP_DIR)/src/include -DLWIP_NOASSERT -D_POSIX_C_SOURCE=200809L
-CFLAGS += -MMD -MP -Wno-unused-but-set-variable -Wno-unused-parameter
+CFLAGS += -MMD -MP -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-tautological-constant-out-of-range-compare
 
 CORE_SRCS := \
  $(LWIP_DIR)/src/core/init.c \
