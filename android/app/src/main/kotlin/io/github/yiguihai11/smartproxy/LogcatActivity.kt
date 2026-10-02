@@ -311,6 +311,9 @@ class LogcatActivity : ComponentActivity() {
                     process.waitFor()
                     text
                 } finally {
+                    runCatching { process.inputStream.close() }
+                    runCatching { process.outputStream.close() }
+                    runCatching { process.errorStream.close() }
                     runCatching { process.destroy() }
                 }
             }
@@ -358,6 +361,9 @@ class LogcatActivity : ComponentActivity() {
                 try {
                     p.waitFor()
                 } finally {
+                    runCatching { p.inputStream.close() }
+                    runCatching { p.outputStream.close() }
+                    runCatching { p.errorStream.close() }
                     runCatching { p.destroy() }
                 }
             }

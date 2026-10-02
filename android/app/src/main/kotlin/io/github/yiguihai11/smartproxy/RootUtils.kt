@@ -41,8 +41,14 @@ object RootUtils {
     private fun checkSuExec(): Boolean {
         return try {
             val process = Runtime.getRuntime().exec(arrayOf("which", "su"))
-            val line = process.inputStream.bufferedReader().readLine()
-            process.destroy()
+            val line = try {
+                process.inputStream.bufferedReader().use { it.readLine() }
+            } finally {
+                runCatching { process.inputStream.close() }
+                runCatching { process.outputStream.close() }
+                runCatching { process.errorStream.close() }
+                process.destroy()
+            }
             !line.isNullOrBlank()
         } catch (_: Throwable) {
             false

@@ -29,6 +29,11 @@ class SmartProxyApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // 降低 fdsan 严格度至 WARN_ONCE，防止部分 Android 14/15/16 机型（如 OriginOS / 高通平台 qdgralloc 驱动
+        // 在 Binder IPC 传递 SyncFence 时）发生 FD 所有权竞态时触发底层 libc SIGABRT 闪退。
+        runCatching {
+            smartproxy.mobile.Mobile.setFdsanLevel(1)
+        }
         // 路由数据(chnroute/acl)→ cacheDir + filesDir/config.json 应用不变量:
         // 首页开关、面板 /files、dashboard 首次进入都要读它们。
         //
