@@ -20,6 +20,10 @@ func (c *Conn) SetLinger(sec int) error {
 	return nil
 }
 
+func (c *Conn) SetNoDelay(noDelay bool) error {
+	return nil
+}
+
 // Config configures the lwIP Engine.
 type Config struct {
 	IPv4       net.IP

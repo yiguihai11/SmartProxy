@@ -70,11 +70,12 @@ type Engine struct {
 	id        uint64
 	cfg       Config
 	lw        *C.struct_sp_lwip
-	inputChan chan inPacket
-	cmdChan   chan any
-	doneChan  chan struct{}
-	closeOnce sync.Once
-	wg        sync.WaitGroup
+	inputChan  chan inPacket
+	cmdChan    chan any
+	udpCmdChan chan *udpSendReq
+	doneChan   chan struct{}
+	closeOnce  sync.Once
+	wg         sync.WaitGroup
 
 	// conns and udpConns are accessed strictly within the single owner goroutine
 	conns    map[uint64]*Conn
@@ -93,13 +94,14 @@ func NewEngine(cfg Config) (*Engine, error) {
 	}
 
 	e := &Engine{
-		cfg:       cfg,
-		lw:        lw,
-		inputChan: make(chan inPacket, 1024),
-		cmdChan:   make(chan any, 1024),
-		doneChan:  make(chan struct{}),
-		conns:     make(map[uint64]*Conn),
-		udpConns:  make(map[uint64]*PacketConn),
+		cfg:        cfg,
+		lw:         lw,
+		inputChan:  make(chan inPacket, 1024),
+		cmdChan:    make(chan any, 1024),
+		udpCmdChan: make(chan *udpSendReq, 512),
+		doneChan:   make(chan struct{}),
+		conns:      make(map[uint64]*Conn),
+		udpConns:   make(map[uint64]*PacketConn),
 	}
 
 	e.id = registerEngine(e)

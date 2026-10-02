@@ -66,6 +66,16 @@ func (e *Engine) loop() {
 		}
 	drainedInput:
 
+		for {
+			select {
+			case req := <-e.udpCmdChan:
+				req.doneChan <- errConnectionClosed
+			default:
+				goto drainedUDPCmd
+			}
+		}
+	drainedUDPCmd:
+
 		C.sp_lwip_destroy(e.lw)
 	}()
 
@@ -76,6 +86,19 @@ func (e *Engine) loop() {
 		select {
 		case <-e.doneChan:
 			return
+
+		case req := <-e.udpCmdChan:
+			e.handleUDPSend(req)
+			// Drain ready UDP packets immediately for ultra-low latency gaming & DNS responses
+			drainMoreUDP := true
+			for i := 0; i < 32 && drainMoreUDP; i++ {
+				select {
+				case u := <-e.udpCmdChan:
+					e.handleUDPSend(u)
+				default:
+					drainMoreUDP = false
+				}
+			}
 
 		case pkt := <-e.inputChan:
 			e.handleInput(pkt)

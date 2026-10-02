@@ -202,6 +202,7 @@ static err_t sp_tcp_accept_cb(void *arg, struct tcp_pcb *newpcb, err_t err) {
     tcp_recv(newpcb, sp_tcp_recv_cb);
     tcp_sent(newpcb, sp_tcp_sent_cb);
     tcp_err(newpcb, sp_tcp_err_cb);
+    tcp_nagle_disable(newpcb);
 
     if (lw->tcp_accept) {
         int is_ipv6 = IP_IS_V6(&newpcb->local_ip) ? 1 : 0;

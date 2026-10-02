@@ -73,6 +73,11 @@ func (c *Conn) RemoteAddr() net.Addr {
 	return c.remoteAddr
 }
 
+// SetNoDelay implements the standard TCPConn SetNoDelay interface method.
+func (c *Conn) SetNoDelay(noDelay bool) error {
+	return nil
+}
+
 func (c *Conn) Read(b []byte) (int, error) {
 	if len(b) == 0 {
 		return 0, nil

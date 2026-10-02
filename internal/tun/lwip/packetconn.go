@@ -216,7 +216,7 @@ func (c *PacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 		return 0, net.ErrClosed
 	case <-timerCh:
 		return 0, os.ErrDeadlineExceeded
-	case c.engine.cmdChan <- req:
+	case c.engine.udpCmdChan <- req:
 	}
 
 	select {
@@ -266,7 +266,7 @@ func (c *PacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) er
 		return net.ErrClosed
 	case <-timerCh:
 		return os.ErrDeadlineExceeded
-	case c.engine.cmdChan <- req:
+	case c.engine.udpCmdChan <- req:
 	}
 
 	select {
