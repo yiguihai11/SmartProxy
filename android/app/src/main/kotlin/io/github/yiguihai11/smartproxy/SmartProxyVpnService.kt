@@ -51,6 +51,8 @@ class SmartProxyVpnService : VpnService() {
          *  (注销 NetworkAgent / 移除路由 → 应用活跃连接的 dst 引用释放)。对齐 v2rayNG
          *  stopAllService 的 Thread.sleep(100),防止"先关 fd 网络还挂着 → 图标赖着不掉"。
          *  留白太小或 vivo 拆网更慢时调大。 */
+        private const val TEARDOWN_SETTLE_MS = 100L
+
         /** 系统基础组件与特权网络排除列表(防热点 DHCP 劫持、回环与认证失效)。 */
         private val SYSTEM_DISALLOWED_PACKAGES = listOf(
             "com.android.shell",
@@ -346,6 +348,22 @@ class SmartProxyVpnService : VpnService() {
             }
 
             // 排除路由 (excludeRoute, API 33+ 特性, minSdk 33 原生支持)
+            // 若 routing.bypass_lan 开启，自动在内核路由层排除热点与常见局域网网段（10.0.0.0/8, 192.168.0.0/16）：
+            // 确保热点下游网段在系统内核路由层直接从物理/虚拟网卡转发，绝不进入 tun0。
+            val bypassLan = configJson.optJSONObject("routing")?.optBoolean("bypass_lan", true) ?: true
+            if (bypassLan) {
+                listOf("10.0.0.0/8", "192.168.0.0/16").forEach { cidrStr ->
+                    runCatching {
+                        val cidr = TunConfig.parseCidr(cidrStr)
+                        val inetAddr = java.net.InetAddress.getByName(cidr.ip)
+                        builder.excludeRoute(android.net.IpPrefix(inetAddr, cidr.prefix))
+                        Log.i(TAG, "[establishVpn] Excluded LAN route (bypass_lan): ${cidr.ip}/${cidr.prefix}")
+                    }.onFailure { e ->
+                        Log.w(TAG, "[establishVpn] Failed to exclude LAN route '$cidrStr': ${e.message}")
+                    }
+                }
+            }
+
             val excluded = AppPrefs.excludedRoutes(this)
             if (excluded.isNotEmpty()) {
                 Log.i(TAG, "[establishVpn] Applying ${excluded.size} excludeRoute rules...")
