@@ -62,11 +62,20 @@ func (h *Handler) isDNSCleanAndPrefer(ctx, wire, qname) (out []byte, preferCache
 - 未污染且启用 IP 优选时才进入 `filterIPPreference` 过滤最快 IP 并重新 `Pack`；
 - 返回 `(输出 wire, 是否命中优选缓存, 是否干净)`，调用方据此决定缓存/回退国外 DNS。
 
-## §6 协议栈基准测试与对比（Benchmark）
+## §6 TUN 协议栈特性与性能基准（Benchmark）
 
-SmartProxy 支持 5 种 TUN 协议栈实现（`gvisor`、`lwip`、`system`、`mixed`、`go`）。为了解各协议栈在真实场景下的开销特征与性能边界，在**两套典型硬件与运行时环境**下执行了标准化基准压测：
-1. **云端 CI 环境**：GitHub Actions Runner (`ubuntu-latest`, AMD/Intel x86_64 4-Core, Go 1.26+)
-2. **移动端真机环境**：Android 设备 (ARM64 / aarch64 8-Core, Termux, Go 1.27.1 + Clang CGO)
+SmartProxy 支持 5 种 TUN 协议栈实现，可在不同设备环境与权限要求下灵活选用：
+- **`gvisor`（全平台默认）**：Google 开源的成熟用户态 Go 栈。并发多协程驱动，TCP 握手快（~14–51 µs），全平台无需 CGO 编译即可运行，生态兼容性好，适合网页高频并发短连接场景。
+- **`lwip`（移动端推荐）**：轻量级 C 语言协议栈（Lightweight IP）。单连接内存开销极低（~489–492 B），0 次 Go 运行时堆分配（0 allocs/op），UDP 吞吐高达 4.5~24.8 GB/s，非常适合 Android 客户端长期后台驻留防 OOM/LMK 杀进程；但单核定时轮询调度特性使其单个 TCP 握手开销稍大（~1 ms）。
+- **`system`**：利用 Linux 内核网络栈直接处理 TCP，性能强但需系统 root / `CAP_NET_ADMIN` 特权。
+- **`mixed`**：混合协议栈（TCP 走 System 内核栈，UDP 走 gVisor 用户态栈），需系统特权。
+- **`go`**：纯 Go 原生简易栈，主要用于开发参考与测试。
+
+### 实测基准数据对比
+
+为了解各协议栈在真实场景下的开销特征与性能边界，在**两套典型硬件与运行时环境**下执行了标准化基准压测：
+1. **云端 CI 环境**：GitHub Actions Runner (`ubuntu-latest`, AMD EPYC 9V45 96-Core / Linux x86_64, Go 1.27.1)
+2. **移动端真机环境**：Android 设备 (ARM64 / aarch64 8-Core, Termux, Go 1.25+ / Clang CGO)
 
 测试执行命令：
 ```bash
@@ -129,6 +138,21 @@ CGO_ENABLED=1 go test -tags "with_gvisor,with_lwip" -bench="BenchmarkStack_" -be
 >   - **默认推荐 `gvisor`**：全 Go 实现，零 CGO 编译依赖，跨平台成熟稳定，短连接响应快，全平台通用首选。
 >   - **移动端推荐 `lwip`**：极低内存 Footprint、极低 GC 压力、超高 UDP 吞吐（4.5 GB/s 实机吞吐），非常契合 Android 客户端长期后台驻留，有效避免系统低内存清理（LMK 杀进程）。
 >   - **特权环境可选 `system` / `mixed`**：在 Linux 服务器等具备 root / `CAP_NET_ADMIN` 权限且需要极致吞吐的环境下可选用。
+### 3. lwIP 协议栈深度优化与零拷贝架构
+
+在 v2.2 中，SmartProxy 对 lwIP 用户态协议栈进行了端到端的深度调优，使得其在移动端获得了超高吞吐并实现发包零堆分配：
+1. **TUN 物理输出真·零拷贝 (`unsafe.Slice`)**：
+   - 优化前：每次下行报文触发 `goPacketOutput` 时通过 `C.GoBytes` 分配 Go 堆内存切片，20MB/s 高速下载下每秒产生超 15,000 次堆分配，导致 GC 频繁停顿。
+   - 优化后：由于 `OutputFn` 紧接着同步执行系统调用 `tun.Write(packet)` 写入虚拟网卡，生命周期无需跨 goroutine 留存，改用 `unsafe.Slice` 直接借用 C 连续内存，彻底消除堆内存分配（0 allocs/op）。
+2. **TCP 时间戳与大窗口扩展 (RFC 7323)**：
+   - 启用 `#define LWIP_TCP_TIMESTAMPS 1` 与 `#define LWIP_WND_SCALE 1`（接收缩放比例 `TCP_RCV_SCALE 4`，滑动窗口 560KB）。
+   - 毫秒级高精 RTT 采样，避免在百兆/千兆速率下因 TCP 序列号回绕（PAWS）产生误判重传或丢包。
+3. **单 Pbuf 传输防分片 (`LWIP_NETIF_TX_SINGLE_PBUF 1`)**：
+   - 避免 lwIP 在分段发包时将数据拆碎为 pbuf 链表，让底层网卡发包逻辑稳定命中 `p->next == NULL` 的直出单段快路径。
+4. **TCP NoDelay 与 UDP 游戏小包优先调度隔离**：
+   - 入栈 lwIP 显式调用 `tcp_nagle_disable(newpcb)`，出栈与 `countingConn` 监控代理全链路透传 `SetNoDelay(true)`，彻底消除 40ms/200ms ACK 延迟等待；
+   - 与大文件下载无冲突：中继层采用 32KB/64KB 块缓冲通过 `io.CopyBuffer` 批量复制，自然发出满尺寸 MSS 报文，兼具极速建连与满带宽吞吐；
+   - 为 UDP 分配独立的 `udpCmdChan` 并赋予抢占式调度优先级，避免游戏/DNS 报文在后台进行大流量 TCP 下载时产生队头阻塞（Head-of-Line Blocking）。
 
 
 ## §7 检查清单（优化后验证）
