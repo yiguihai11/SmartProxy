@@ -51,8 +51,18 @@ class SmartProxyVpnService : VpnService() {
          *  (注销 NetworkAgent / 移除路由 → 应用活跃连接的 dst 引用释放)。对齐 v2rayNG
          *  stopAllService 的 Thread.sleep(100),防止"先关 fd 网络还挂着 → 图标赖着不掉"。
          *  留白太小或 vivo 拆网更慢时调大。 */
-        private const val TEARDOWN_SETTLE_MS = 100L
-        private const val SHELL_PACKAGE_NAME = "com.android.shell"
+        /** 系统基础组件与特权网络排除列表(防热点 DHCP 劫持、回环与认证失效)。 */
+        private val SYSTEM_DISALLOWED_PACKAGES = listOf(
+            "com.android.shell",
+            "com.android.networkstack",
+            "com.android.networkstack.tethering",
+            "com.android.networkstack.permissionconfig",
+            "com.google.android.networkstack",
+            "com.google.android.networkstack.tethering",
+            "com.google.android.networkstack.permissionconfig",
+            "com.android.captiveportallogin",
+            "com.google.android.captiveportallogin",
+        )
 
         private const val ACTION_START = "io.github.yiguihai11.smartproxy.START_VPN"
 
@@ -370,10 +380,15 @@ class SmartProxyVpnService : VpnService() {
                 // 自身 uid 无条件排除,防回环:引擎的出站直连/上游连接出自本进程 uid,
                 // 不排除就会灌回 TUN → gvisor 处理自己的出站包 → 死循环。
                 applyDisallowedApp(builder, packageName, isSelf = true)
-                // 排除 Shizuku 特权网络共享进程(com.android.shell, UID 2000):
-                // 开启热点/USB共享时 Shizuku 进程内运行独立的 Go 引擎实例处理下挂客户端流量。
-                // 若不排除,其 UID 2000 出站 socket 会被主 VPN tun0 再次捕获,引发二次代理与嵌套延迟。
-                applyDisallowedApp(builder, SHELL_PACKAGE_NAME, isSelf = false)
+                // 排除系统底层网络/热点共享/认证组件与 Shizuku 特权网络共享进程:
+                // 1. com.android.networkstack (UID 1073): 运行系统 DHCP Server。若不排除，其发往
+                //    热点接口(如 wlan2)的 DHCP Offer/Ack UDP 67/68 广播包会被主 VPN tun0 捕获，
+                //    导致下挂客户端永远收不到 IP 分配(卡在“正在获取 IP 地址”后显示已停用)。
+                // 2. com.android.shell (UID 2000): 运行 Shizuku 特权热点共享 Go 引擎，防止二次代理与回环。
+                // 3. CaptivePortalLogin: 避免连入需认证的 Wi-Fi 时认证弹窗被代理劫持打不开。
+                SYSTEM_DISALLOWED_PACKAGES.forEach { sysPkg ->
+                    applyDisallowedApp(builder, sysPkg, isSelf = false)
+                }
             } else {
                 Log.i(TAG, "[establishVpn] Mode: Bypass (Proxy selected apps only)")
                 // 仅代理(白名单):只放行选中。自身 uid 天然不在白名单里(面板枚举已滤掉
