@@ -6,7 +6,9 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
+import android.graphics.Point
 import android.graphics.drawable.Drawable
+import android.hardware.display.DisplayManager
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Process
@@ -74,6 +76,9 @@ object SpeedMeterOverlay {
     private var capsuleShown = true
     /** 待触发的长按 runnable(attachDrag 里 postDelayed;hideOnMain 取消)。仅主线程。 */
     private var longPressRunnable: Runnable? = null
+
+    /** 屏幕旋转/尺寸变化的监听(见 show()):转屏后把胶囊收回新边界内。 */
+    private var displayListener: DisplayManager.DisplayListener? = null
     /** 上次打开设置对话框的时间(防重复打开守卫)。 */
     private var lastSettingsOpenAt = 0L
     /** 设置对话框打开期间为 true:强制胶囊保持显示(设置页作为前台被自我排除,无流量
@@ -143,7 +148,7 @@ object SpeedMeterOverlay {
             gravity = Gravity.TOP or Gravity.START
             if (defaultPos) {
                 // 默认放到右上角:x 先给屏宽(屏外),测量后按实际宽度贴回右边。
-                x = app.resources.displayMetrics.widthPixels
+                x = screenSize(app).x
                 y = dp(app, 40)
             } else {
                 x = sx
@@ -166,9 +171,25 @@ object SpeedMeterOverlay {
             // 首次(无保存位置):布局完成后贴到右边并留 8dp 边距。
             view.post {
                 val lp = layoutParams ?: return@post
-                lp.x = app.resources.displayMetrics.widthPixels - view.width - dp(app, 8)
+                lp.x = screenSize(app).x - view.width - dp(app, 8)
                 runCatching { manager.updateViewLayout(view, lp) }
             }
+        }
+        // 转屏后重新钳位。横屏下允许拖到的 x 远超竖屏屏宽,转回竖屏不收回就等于把胶囊留在
+        // 屏幕外 —— 再也点不到。DisplayListener 直接挂在显示上,不依赖本进程的 Resources
+        // 是否收到配置变更(见 screenSize 的注释)。
+        val displayManager = app.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
+        if (displayManager != null && displayListener == null) {
+            val listener = object : DisplayManager.DisplayListener {
+                override fun onDisplayAdded(displayId: Int) {}
+                override fun onDisplayRemoved(displayId: Int) {}
+                override fun onDisplayChanged(displayId: Int) {
+                    // 转屏时窗口尺寸还没落定,下一帧再收,免得按旧尺寸算出错的边界。
+                    mainHandler.post { clampToScreen(app) }
+                }
+            }
+            displayManager.registerDisplayListener(listener, mainHandler)
+            displayListener = listener
         }
         attachDrag(app, view, params, manager)
         startPolling(app)
@@ -182,6 +203,12 @@ object SpeedMeterOverlay {
         longPressRunnable = null
         // 配置标记复位:下次 show 重新按当前状态决定淡入淡出(设置页可能已关)。
         settingsOpen = false
+        // 注销转屏监听:胶囊都拆了,回调里也拿不到 capsule,留着只是白跑。
+        displayListener?.let { l ->
+            (appContext?.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager)
+                ?.unregisterDisplayListener(l)
+        }
+        displayListener = null
         val view = capsule
         val manager = wm
         if (view != null && manager != null) {
@@ -283,8 +310,7 @@ object SpeedMeterOverlay {
      *  滑块一动就调;胶囊未显示(VPN 未跑)时静默 no-op,下次 buildCapsule 读新偏好。需主线程。 */
     fun applySettingsInPlace(app: Context) {
         val cap = capsule ?: return
-        val lp = layoutParams ?: return
-        val manager = wm ?: return
+        if (layoutParams == null || wm == null) return
 
         val capsuleSize = AppPrefs.speedMeterCapsuleSize(app)
         val fontSize = AppPrefs.speedMeterFontSize(app)
@@ -321,19 +347,9 @@ object SpeedMeterOverlay {
         cap.requestLayout()
         cap.invalidate()
 
-        // 位置钳制:尺寸变大贴右/贴边溢出时自动往内收。
+        // 位置钳制:尺寸变大贴右/贴边溢出时自动往内收(转屏后越界也走这里)。
         // 读到的 cap.width/height 是旧布局值,滞后一帧自纠,可接受。
-        val dm = app.resources.displayMetrics
-        val maxX = (dm.widthPixels - cap.width).coerceAtLeast(0)
-        val maxY = (dm.heightPixels - cap.height).coerceAtLeast(0)
-        val newX = lp.x.coerceIn(0, maxX)
-        val newY = lp.y.coerceIn(0, maxY)
-        if (newX != lp.x || newY != lp.y) {
-            lp.x = newX
-            lp.y = newY
-            AppPrefs.setSpeedMeterPos(app, newX, newY)
-            runCatching { manager.updateViewLayout(cap, lp) }
-        }
+        clampToScreen(app)
     }
 
     /** 拖动:按下记起点,移动 updateViewLayout,抬起持久化位置。未拖动且双击(轻点两次)→ 打开联网状态页;
@@ -349,6 +365,9 @@ object SpeedMeterOverlay {
         var startRawY = 0f
         var startX = 0
         var startY = 0
+        // 屏幕边界在按下时取一次:拖动中每次 MOVE 都去问 WindowManager 是白花 binder。
+        var screenW = 0
+        var screenH = 0
         var dragging = false
         var longPressTriggered = false
         var lastTapTime = 0L
@@ -365,6 +384,7 @@ object SpeedMeterOverlay {
                 MotionEvent.ACTION_DOWN -> {
                     startRawX = ev.rawX; startRawY = ev.rawY
                     startX = params.x; startY = params.y
+                    screenSize(app).let { screenW = it.x; screenH = it.y }
                     dragging = false
                     longPressTriggered = false
                     mainHandler.postDelayed(longPress, LONG_PRESS_MS)
@@ -380,11 +400,10 @@ object SpeedMeterOverlay {
                         }
                     }
                     if (dragging) {
-                        val dm = app.resources.displayMetrics
                         params.x = (startX + dx).toInt()
-                            .coerceIn(0, (dm.widthPixels - view.width).coerceAtLeast(0))
+                            .coerceIn(0, (screenW - view.width).coerceAtLeast(0))
                         params.y = (startY + dy).toInt()
-                            .coerceIn(0, (dm.heightPixels - view.height).coerceAtLeast(0))
+                            .coerceIn(0, (screenH - view.height).coerceAtLeast(0))
                         runCatching { manager.updateViewLayout(view, params) }
                     }
                     true
@@ -667,4 +686,42 @@ object SpeedMeterOverlay {
             TypedValue.COMPLEX_UNIT_DIP, value.toFloat(),
             app.resources.displayMetrics
         ).toInt()
+
+    /** 悬浮窗 x/y 的钳位边界 = 默认显示**当前旋转**下的边界。
+     *  不能用 app.resources.displayMetrics:读的是本进程 Resources 的度量,本进程没有前台
+     *  Activity(游戏在前台)时它未必跟着屏幕转 —— 横屏下仍报竖屏的 1080x2400,于是
+     *  x 被卡在 1080 以内(屏幕右半边一片拖不过去),y 又放行到 2400(能拖出屏幕下沿)。
+     *  WindowMetrics 取的是显示当前的窗口边界,与 TYPE_APPLICATION_OVERLAY 的坐标系一致;
+     *  拿不到时退回旧行为,不至于把胶囊锁死。 */
+    private fun screenSize(app: Context): Point {
+        // runCatching:个别 ROM 对非可视 Context 取 WindowMetrics 会抛,别让它把拖动整条链路带崩。
+        val bounds = runCatching {
+            (app.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)
+                ?.currentWindowMetrics?.bounds
+        }.getOrNull()
+        return if (bounds != null && bounds.width() > 0 && bounds.height() > 0) {
+            Point(bounds.width(), bounds.height())
+        } else {
+            Point(
+                app.resources.displayMetrics.widthPixels,
+                app.resources.displayMetrics.heightPixels
+            )
+        }
+    }
+
+    /** 把胶囊收回当前屏幕边界内(尺寸变大、转屏后都可能溢出),越界才写盘。 */
+    private fun clampToScreen(app: Context) {
+        val cap = capsule ?: return
+        val lp = layoutParams ?: return
+        val manager = wm ?: return
+        val screen = screenSize(app)
+        val newX = lp.x.coerceIn(0, (screen.x - cap.width).coerceAtLeast(0))
+        val newY = lp.y.coerceIn(0, (screen.y - cap.height).coerceAtLeast(0))
+        if (newX != lp.x || newY != lp.y) {
+            lp.x = newX
+            lp.y = newY
+            AppPrefs.setSpeedMeterPos(app, newX, newY)
+            runCatching { manager.updateViewLayout(cap, lp) }
+        }
+    }
 }
