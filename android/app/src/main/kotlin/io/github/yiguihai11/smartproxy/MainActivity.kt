@@ -122,6 +122,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import io.github.yiguihai11.smartproxy.shizuku.ShizukuShell
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -849,24 +850,40 @@ private fun HomeLauncher(
 
     var networkStatus by remember { mutableStateOf(NetworkUtils.checkPhysicalNetworkAddresses(context)) }
 
+    // 底层网络状态的唯一写入口。光靠 NetworkCallback 不够:回调是异步投递的,首页组合被跳过时
+    // DisposableEffect 不重跑、进程在后台被冻结期间投递的 AVAIL/LOST 又可能整段错过,缓存一旦停在
+    // 上一张网,按钮就保留上一张网的「可用」外观 —— 启动环看着能点、v4 开关看着能拨,点下去才由
+    // 各自的守卫弹提示,而且两个提示的理由还不一致(一个说没网,一个说不能关掉最后一个协议族)。
+    // 所以除回调外还有三处重算:注册回调时、每次回到前台时、以及可见期间每 2s 兜底一次。
+    // NetworkAddressStatus 是 data class,值没变时写回不触发重组,轮询本身几乎零开销。
+    fun refreshNetworkStatus(): NetworkAddressStatus {
+        val fresh = NetworkUtils.checkPhysicalNetworkAddresses(context)
+        networkStatus = fresh
+        return fresh
+    }
+
     DisposableEffect(context) {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         val cb = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                networkStatus = NetworkUtils.checkPhysicalNetworkAddresses(context)
-            }
-            override fun onLost(network: Network) {
-                networkStatus = NetworkUtils.checkPhysicalNetworkAddresses(context)
-            }
-            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                networkStatus = NetworkUtils.checkPhysicalNetworkAddresses(context)
-            }
-            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
-                networkStatus = NetworkUtils.checkPhysicalNetworkAddresses(context)
-            }
+            override fun onAvailable(network: Network) { refreshNetworkStatus() }
+            override fun onLost(network: Network) { refreshNetworkStatus() }
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) { refreshNetworkStatus() }
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) { refreshNetworkStatus() }
         }
+        refreshNetworkStatus() // 组合重建时立刻对齐,不吃上一次的旧值
         runCatching { cm?.registerDefaultNetworkCallback(cb) }
         onDispose { runCatching { cm?.unregisterNetworkCallback(cb) } }
+    }
+
+    // 可见期间兜底:在通知栏里关掉 WiFi/移动数据后直接看首页时,回调未必已经到,靠这个把按钮的
+    // 置灰态补上。repeatOnLifecycle 进入 RESUMED 立刻跑一轮,离开即取消,不在后台空转。
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                refreshNetworkStatus()
+                delay(2000)
+            }
+        }
     }
 
     var ipv4 by remember(socksMode) { mutableStateOf(
@@ -1034,9 +1051,13 @@ private fun HomeLauncher(
                 elapsedMs = elapsedMs,
                 enabled = startEnabled,
                 onDisabledClick = {
+                    // 点到了灰环说明缓存认为没网;顺手重算一次,万一网又回来了立刻恢复可用。
+                    refreshNetworkStatus()
                     Toast.makeText(context, context.getString(R.string.toast_no_network_start), Toast.LENGTH_SHORT).show()
                 },
-                onToggleVpn = onToggleVpn
+                // 启停前重算:onToggleClicked() 自己会再查一次真实网络(Line 236),这里同步一份
+                // 到 UI 状态,免得它判完「无网」返回后首页还维持着可点的样子。
+                onToggleVpn = { refreshNetworkStatus(); onToggleVpn() }
             )
             Spacer(Modifier.height(30.dp))
 
@@ -1062,6 +1083,12 @@ private fun HomeLauncher(
                         Toast.makeText(context, context.getString(R.string.toast_no_ipv4_address), Toast.LENGTH_SHORT).show()
                     },
                     onCheckedChange = { v ->
+                        // 先按真实网络重算再判:开关的可用性取自可能过期的缓存,直接信它会把
+                        // 「网已经没了」误报成「你不肯关掉最后一个协议族」。
+                        if (!refreshNetworkStatus().hasV4) {
+                            Toast.makeText(context, context.getString(R.string.toast_no_ipv4_address), Toast.LENGTH_SHORT).show()
+                            return@SwitchCard
+                        }
                         if (!v && !ipv6) {
                             Toast.makeText(context, context.getString(R.string.toast_need_ipv46), Toast.LENGTH_SHORT).show()
                             return@SwitchCard
@@ -1095,6 +1122,11 @@ private fun HomeLauncher(
                         Toast.makeText(context, context.getString(R.string.toast_no_ipv6_address), Toast.LENGTH_SHORT).show()
                     },
                     onCheckedChange = { v ->
+                        // 同 v4:先重算,网已经没了就报「未分配地址」而不是「不能关最后一个协议族」。
+                        if (!refreshNetworkStatus().hasV6) {
+                            Toast.makeText(context, context.getString(R.string.toast_no_ipv6_address), Toast.LENGTH_SHORT).show()
+                            return@SwitchCard
+                        }
                         if (!v && !ipv4) {
                             Toast.makeText(context, context.getString(R.string.toast_need_ipv46), Toast.LENGTH_SHORT).show()
                             return@SwitchCard
