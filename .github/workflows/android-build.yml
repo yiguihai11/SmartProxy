@@ -40,6 +40,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -243,3 +245,19 @@ jobs:
           name: smartproxy-x86-release-apk
           path: android/app/build/outputs/apk/release/app-x86-release.apk
           if-no-files-found: error
+
+      # 当通过 workflow_dispatch 手动输入版本号(如 2.3)发版时，直接自动创建 GitHub Release 并挂载 4 个架构的 APK
+      - name: Publish GitHub Release
+        if: github.event.inputs.version != '' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ github.event.inputs.version }}"
+          echo "Publishing GitHub Release $TAG..."
+          gh release create "$TAG" \
+            android/app/build/outputs/apk/release/app-arm64-v8a-release.apk#smartproxy-${TAG}-arm64-v8a.apk \
+            android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk#smartproxy-${TAG}-armeabi-v7a.apk \
+            android/app/build/outputs/apk/release/app-x86_64-release.apk#smartproxy-${TAG}-x86_64.apk \
+            android/app/build/outputs/apk/release/app-x86-release.apk#smartproxy-${TAG}-x86.apk \
+            --title "$TAG" \
+            --generate-notes
