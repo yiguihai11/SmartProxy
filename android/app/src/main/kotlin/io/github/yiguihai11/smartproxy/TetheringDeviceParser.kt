@@ -34,11 +34,29 @@ object TetheringDeviceParser {
         return runCatching {
             val root = JSONObject(statsJson)
             val clientsArr = root.optJSONArray("clients") ?: JSONArray()
+            val clientByMac = LinkedHashMap<String, JSONObject>()
             val clientByIp = LinkedHashMap<String, JSONObject>()
             for (i in 0 until clientsArr.length()) {
                 val c = clientsArr.getJSONObject(i)
                 val ip = c.optString("ip", "")
-                if (ip.isNotEmpty()) clientByIp[ip] = c
+                val mac = c.optString("mac", "").lowercase().trim()
+                if (mac.isNotEmpty()) {
+                    val existing = clientByMac[mac]
+                    if (existing == null) {
+                        clientByMac[mac] = c
+                        if (ip.isNotEmpty()) clientByIp[ip] = c
+                    } else {
+                        // 同一物理 MAC 分配了双栈地址时，优先使用 IPv4 作为主展示 IP 聚合
+                        val existingIp = existing.optString("ip", "")
+                        if (existingIp.contains(':') && !ip.contains(':') && ip.isNotEmpty()) {
+                            clientByIp.remove(existingIp)
+                            clientByMac[mac] = c
+                            clientByIp[ip] = c
+                        }
+                    }
+                } else if (ip.isNotEmpty()) {
+                    clientByIp[ip] = c
+                }
             }
 
             val appsArr = root.optJSONArray("apps") ?: JSONArray()

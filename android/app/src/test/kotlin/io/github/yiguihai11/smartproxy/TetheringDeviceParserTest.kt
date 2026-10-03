@@ -165,4 +165,40 @@ class TetheringDeviceParserTest {
         assertTrue(blockedOfflineDev!!.isBlocked)
         assertEquals("", blockedOfflineDev.ip)
     }
+
+    @Test
+    fun dualStackIpv4AndIpv6SameClientConsolidatedToOneDevice() {
+        val statsJson = """
+            {
+              "clients": [
+                {
+                  "mac": "32:bb:2e:bf:ab:70",
+                  "ip": "2001:db8:9877:0:1829:c468:ddc:a822",
+                  "hostname": "JER-AN20",
+                  "type": 0,
+                  "vendor": "Huawei",
+                  "is_random_mac": false,
+                  "os_guess": "Android"
+                },
+                {
+                  "mac": "32:bb:2e:bf:ab:70",
+                  "ip": "10.121.0.245",
+                  "hostname": "JER-AN20",
+                  "type": 0,
+                  "vendor": "Huawei",
+                  "is_random_mac": false,
+                  "os_guess": "Android"
+                }
+              ],
+              "apps": []
+            }
+        """.trimIndent()
+
+        val devices = TetheringDeviceParser.parse(statsJson)
+        assertEquals(1, devices.size)
+        val dev = devices.first()
+        assertEquals("32:bb:2e:bf:ab:70", dev.mac)
+        assertEquals("10.121.0.245", dev.ip) // Prefers IPv4
+        assertEquals("JER-AN20", dev.hostname)
+    }
 }

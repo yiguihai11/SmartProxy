@@ -329,26 +329,46 @@ internal fun extractTetheredClients(collection: Collection<*>): List<TetheredCli
             clientClass.methods.firstOrNull { it.name == "getAddresses" }?.invoke(client) as? Collection<*>
         }.getOrNull()
 
+        var primaryIp = ""
+        var resolvedHostname: String? = null
+
         if (!addresses.isNullOrEmpty()) {
+            // 同一物理设备可能同时分配了 IPv4 与 IPv6 双栈地址。
+            // 归一化聚合为同一台物理设备，优先展示 IPv4 地址，杜绝「1台手机展示为2台设备」的割裂。
+            var ipv4: String? = null
+            var ipv6: String? = null
+
             for (addrInfo in addresses) {
                 if (addrInfo == null) continue
                 val addrClass = addrInfo.javaClass
                 val linkAddress = runCatching {
                     addrClass.methods.firstOrNull { it.name == "getAddress" }?.invoke(addrInfo)
                 }.getOrNull()
-                val ip = runCatching {
-                    (linkAddress?.javaClass?.methods?.firstOrNull { it.name == "getAddress" }?.invoke(linkAddress) as? InetAddress)?.hostAddress
-                }.getOrNull().orEmpty()
+                val inetAddr = runCatching {
+                    linkAddress?.javaClass?.methods?.firstOrNull { it.name == "getAddress" }?.invoke(linkAddress) as? InetAddress
+                }.getOrNull()
                 val hostname = runCatching {
                     addrClass.methods.firstOrNull { it.name == "getHostname" }?.invoke(addrInfo) as? String
                 }.getOrNull()
 
-                if (mac.isNotEmpty() || ip.isNotEmpty()) {
-                    results.add(createTetheredClientInfo(mac = mac, ip = ip, hostname = hostname, tetheringType = type))
+                if (!hostname.isNullOrBlank() && resolvedHostname.isNullOrBlank()) {
+                    resolvedHostname = hostname
+                }
+
+                if (inetAddr != null) {
+                    val hostAddr = inetAddr.hostAddress.orEmpty()
+                    if (inetAddr is java.net.Inet4Address && ipv4 == null) {
+                        ipv4 = hostAddr
+                    } else if (inetAddr is java.net.Inet6Address && ipv6 == null) {
+                        ipv6 = hostAddr
+                    }
                 }
             }
-        } else if (mac.isNotEmpty()) {
-            results.add(createTetheredClientInfo(mac = mac, ip = "", hostname = null, tetheringType = type))
+            primaryIp = ipv4 ?: ipv6.orEmpty()
+        }
+
+        if (mac.isNotEmpty() || primaryIp.isNotEmpty()) {
+            results.add(createTetheredClientInfo(mac = mac, ip = primaryIp, hostname = resolvedHostname, tetheringType = type))
         }
     }
     return results
@@ -399,14 +419,31 @@ internal fun mergeTetheredClients(
 ): List<TetheredClientInfo> {
     if (systemClients.isEmpty()) return arpClients
     if (arpClients.isEmpty()) return systemClients
-    val map = systemClients.associateBy { if (it.ip.isNotEmpty()) it.ip else it.mac }.toMutableMap()
+
+    // 优先以 MAC 作为唯一物理设备标识聚合(L2 归一化)，无 MAC 时回退 IP
+    fun clientKey(c: TetheredClientInfo): String =
+        if (c.mac.isNotBlank()) c.mac.lowercase() else c.ip
+
+    val map = LinkedHashMap<String, TetheredClientInfo>()
+    for (sys in systemClients) {
+        val key = clientKey(sys)
+        if (key.isNotBlank()) {
+            map[key] = sys
+        }
+    }
     for (arp in arpClients) {
-        val key = if (arp.ip.isNotEmpty()) arp.ip else arp.mac
+        val key = clientKey(arp)
+        if (key.isBlank()) continue
         val existing = map[key]
         if (existing == null) {
             map[key] = arp
         } else {
-            val mergedIp = existing.ip.ifBlank { arp.ip }
+            // 优先保留 IPv4 地址作为主展示 IP
+            val mergedIp = if (existing.ip.contains(':') && !arp.ip.contains(':') && arp.ip.isNotBlank()) {
+                arp.ip
+            } else {
+                existing.ip.ifBlank { arp.ip }
+            }
             val mergedMac = existing.mac.ifBlank { arp.mac }
             val mergedHost = existing.hostname ?: arp.hostname
             val mergedType = if (existing.tetheringType >= 0) existing.tetheringType else arp.tetheringType
