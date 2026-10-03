@@ -99,6 +99,10 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
     private var statusListener: ITetheringStatusListener? = null
     // 仅 routingWorker 读写。
     private var requestedTetheringTypes = 0
+
+    init {
+        runCatching { ensureSoftApClientControlDisabled() }
+    }
     // getStatus 在 binder 线程 getAndSet 清零,worker 端 or 位标记,用原子整数免锁。
     private val wrongUpstreamWarningTypes = AtomicInteger(0)
     private val upstreamRejections = AtomicLong(0)
@@ -380,6 +384,7 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
     }
 
     private fun startRoutingLocked(config: HotspotRoutingLaunchConfig, activeTypes: Int): Int {
+        ensureSoftApClientControlDisabled()
         if (routingActive) {
             routingDetail = "Tethering routing is already active"
             return RESULT_ALREADY_ACTIVE
@@ -811,7 +816,11 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
 
             val getBlockedListMethod = config.javaClass.getMethod("getBlockedClientList")
             val currentList = (getBlockedListMethod.invoke(config) as? List<*>)?.filterIsInstance<MacAddress>() ?: emptyList()
-            if (!currentList.contains(targetMac)) return@runCatching true
+            val isClientControlEnabled = runCatching {
+                config.javaClass.getMethod("isClientControlByUserEnabled").invoke(config) as? Boolean
+            }.getOrNull() ?: false
+
+            if (!currentList.contains(targetMac) && !isClientControlEnabled) return@runCatching true
 
             val updatedList = currentList.filter { it != targetMac }
 
@@ -826,6 +835,36 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             Log.i(TAG, "unblockClient: applied softApConfig for $mac, res=$res, blockedCount=${updatedList.size}")
             (res as? Boolean) ?: true
         }.onFailure { Log.e(TAG, "unblockClient failed for $mac", it) }.getOrDefault(false)
+    }
+
+    /**
+     * 确保 SoftApConfiguration 中的 ClientControlByUser 保持为 false。
+     * 某些系统API/版本曾误配置 setClientControlByUserEnabled(true)，导致系统进入“用户控制模式(白名单模式)”，
+     * 下挂设备由于不在 AllowedClientList 中，连接 Wi-Fi 时会被系统静默阻断，卡在“正在获取 IP 地址”后显示已停用。
+     * 在服务启动以及开启路由时强制重置回 false，彻底消除白名单限制。
+     */
+    private fun ensureSoftApClientControlDisabled() {
+        val wm = wifiManager ?: return
+        runCatching {
+            val getSoftApConfigMethod = wm.javaClass.getMethod("getSoftApConfiguration")
+            val config = getSoftApConfigMethod.invoke(wm) ?: return@runCatching
+            val isClientControlEnabled = runCatching {
+                config.javaClass.getMethod("isClientControlByUserEnabled").invoke(config) as? Boolean
+            }.getOrNull() ?: false
+
+            if (isClientControlEnabled) {
+                Log.i(TAG, "SoftApConfiguration has clientControlByUserEnabled=true; resetting to false to allow hotspot connections")
+                val builderClass = Class.forName("android.net.wifi.SoftApConfiguration\$Builder")
+                val builder = builderClass.getConstructor(config.javaClass).newInstance(config)
+                builderClass.getMethod("setClientControlByUserEnabled", java.lang.Boolean.TYPE).invoke(builder, false)
+                val newConfig = builderClass.getMethod("build").invoke(builder)
+                val setSoftApConfigMethod = wm.javaClass.getMethod("setSoftApConfiguration", config.javaClass)
+                setSoftApConfigMethod.invoke(wm, newConfig)
+                Log.i(TAG, "ensureSoftApClientControlDisabled: successfully ensured ClientControlByUser=false")
+            }
+        }.onFailure {
+            Log.w(TAG, "ensureSoftApClientControlDisabled failed: ${it.message}")
+        }
     }
 
     override fun destroy() {
