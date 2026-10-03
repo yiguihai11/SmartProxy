@@ -280,7 +280,9 @@
     <string name="device_mac">MAC 地址</string>
     <string name="device_random_mac">随机 MAC (隐私保护)</string>
     <string name="device_standard_mac">标准物理 MAC</string>
-    <string name="device_ip">分配 IPv4</string>
+    <string name="device_ip">分配 IP</string>
+    <string name="device_ipv4">分配 IPv4</string>
+    <string name="device_ipv6">分配 IPv6</string>
     <string name="device_tethering_type">接入链路</string>
     <string name="device_type_wifi">Wi-Fi 热点</string>
     <string name="device_type_usb">USB 共享网络</string>

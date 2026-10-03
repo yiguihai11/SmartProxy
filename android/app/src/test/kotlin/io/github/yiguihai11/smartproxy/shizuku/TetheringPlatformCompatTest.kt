@@ -122,4 +122,33 @@ class TetheringPlatformCompatTest {
         assertEquals(true, dual.any { it.ip == "192.168.43.16" })
         assertEquals(false, dual.any { it.ip == "192.168.0.1" })
     }
+
+    @Test
+    fun parseNeighborLinesParsesBothIpv4AndIpv6WithDownstreamFiltering() {
+        val neighContent = """
+            10.121.0.245 dev wlan2 lladdr 32:bb:2e:bf:ab:70 REACHABLE
+            2001:db8:9877:0:1829:c468:ddc:a822 dev wlan2 lladdr 32:bb:2e:bf:ab:70 STALE
+            2001:db8:9877:0:1a4f:99b:867b:825e dev wlan2 lladdr 32:bb:2e:bf:ab:70 REACHABLE
+            192.168.1.1 dev wlan0 lladdr 00:11:22:33:44:55 REACHABLE
+            10.121.0.99 dev wlan2 lladdr 00:00:00:00:00:00 FAILED
+        """.trimIndent()
+
+        val parsed = parseNeighborLines(neighContent.lineSequence(), setOf("wlan2"), setOf("wlan0"))
+        assertEquals(3, parsed.size)
+        assertTrue(parsed.all { it.mac == "32:bb:2e:bf:ab:70" })
+        assertEquals("10.121.0.245", parsed[0].ip)
+        assertEquals("2001:db8:9877:0:1829:c468:ddc:a822", parsed[1].ip)
+        assertEquals("2001:db8:9877:0:1a4f:99b:867b:825e", parsed[2].ip)
+
+        // Merging them by MAC aggregates all assigned IPs under the same client
+        val merged = mergeTetheredClients(emptyList(), parsed)
+        assertEquals(1, merged.size)
+        val client = merged.first()
+        assertEquals("32:bb:2e:bf:ab:70", client.mac)
+        assertEquals("10.121.0.245", client.ip) // Prefers IPv4 as primary IP
+        assertEquals(3, client.assignedIps.size)
+        assertTrue(client.assignedIps.contains("10.121.0.245"))
+        assertTrue(client.assignedIps.contains("2001:db8:9877:0:1829:c468:ddc:a822"))
+        assertTrue(client.assignedIps.contains("2001:db8:9877:0:1a4f:99b:867b:825e"))
+    }
 }

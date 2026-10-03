@@ -235,6 +235,7 @@ internal data class TetheredClientInfo(
     val vendor: String? = null,
     val isRandomMac: Boolean = false,
     val osGuess: String? = null,
+    val assignedIps: List<String> = emptyList(),
 )
 
 internal fun isLocallyAdministeredMac(mac: String): Boolean {
@@ -297,19 +298,29 @@ internal fun createTetheredClientInfo(
     ip: String,
     hostname: String?,
     tetheringType: Int,
+    assignedIps: List<String> = emptyList(),
 ): TetheredClientInfo {
     val cleanMac = mac.trim().lowercase()
     val isRandom = if (cleanMac.isNotEmpty()) isLocallyAdministeredMac(cleanMac) else false
     val vendor = if (cleanMac.isNotEmpty() && !isRandom) lookupMacVendor(cleanMac) else null
     val os = inferDeviceOs(hostname, vendor, isRandom)
+    val normalizedIps = (listOf(ip) + assignedIps)
+        .map { it.trim().substringBefore('%') }
+        .filter { it.isNotBlank() }
+        .distinct()
+    val primaryIp = normalizedIps.firstOrNull { !it.contains(':') }
+        ?: normalizedIps.firstOrNull { !it.startsWith("fe80:", ignoreCase = true) }
+        ?: normalizedIps.firstOrNull()
+        ?: ""
     return TetheredClientInfo(
         mac = cleanMac,
-        ip = ip.trim(),
+        ip = primaryIp,
         hostname = hostname?.trim()?.ifBlank { null },
         tetheringType = tetheringType,
         vendor = vendor,
         isRandomMac = isRandom,
         osGuess = os,
+        assignedIps = normalizedIps,
     )
 }
 
@@ -329,15 +340,10 @@ internal fun extractTetheredClients(collection: Collection<*>): List<TetheredCli
             clientClass.methods.firstOrNull { it.name == "getAddresses" }?.invoke(client) as? Collection<*>
         }.getOrNull()
 
-        var primaryIp = ""
+        val allIps = mutableListOf<String>()
         var resolvedHostname: String? = null
 
         if (!addresses.isNullOrEmpty()) {
-            // 同一物理设备可能同时分配了 IPv4 与 IPv6 双栈地址。
-            // 归一化聚合为同一台物理设备，优先展示 IPv4 地址，杜绝「1台手机展示为2台设备」的割裂。
-            var ipv4: String? = null
-            var ipv6: String? = null
-
             for (addrInfo in addresses) {
                 if (addrInfo == null) continue
                 val addrClass = addrInfo.javaClass
@@ -356,22 +362,67 @@ internal fun extractTetheredClients(collection: Collection<*>): List<TetheredCli
                 }
 
                 if (inetAddr != null) {
-                    val hostAddr = inetAddr.hostAddress.orEmpty()
-                    if (inetAddr is java.net.Inet4Address && ipv4 == null) {
-                        ipv4 = hostAddr
-                    } else if (inetAddr is java.net.Inet6Address && ipv6 == null) {
-                        ipv6 = hostAddr
+                    val hostAddr = inetAddr.hostAddress?.substringBefore('%').orEmpty()
+                    if (hostAddr.isNotEmpty()) {
+                        allIps.add(hostAddr)
                     }
                 }
             }
-            primaryIp = ipv4 ?: ipv6.orEmpty()
         }
 
-        if (mac.isNotEmpty() || primaryIp.isNotEmpty()) {
-            results.add(createTetheredClientInfo(mac = mac, ip = primaryIp, hostname = resolvedHostname, tetheringType = type))
+        if (mac.isNotEmpty() || allIps.isNotEmpty()) {
+            val primaryIp = allIps.firstOrNull { !it.contains(':') } ?: allIps.firstOrNull().orEmpty()
+            results.add(
+                createTetheredClientInfo(
+                    mac = mac,
+                    ip = primaryIp,
+                    hostname = resolvedHostname,
+                    tetheringType = type,
+                    assignedIps = allIps,
+                )
+            )
         }
     }
     return results
+}
+
+internal fun parseNeighborLines(
+    lines: Sequence<String>,
+    downstreamInterfaces: Set<String> = emptySet(),
+    upstreamInterfaces: Set<String> = emptySet(),
+): List<TetheredClientInfo> {
+    if (downstreamInterfaces.isEmpty()) return emptyList()
+    return lines.mapNotNull { line ->
+        val tokens = line.trim().split(Regex("\\s+"))
+        if (tokens.size < 4) return@mapNotNull null
+        val rawIp = tokens[0].substringBefore('%').trim()
+        if (rawIp.isBlank()) return@mapNotNull null
+
+        val devIdx = tokens.indexOfFirst { it.equals("dev", ignoreCase = true) || it.equals("Device:", ignoreCase = true) }
+        val lladdrIdx = tokens.indexOfFirst { it.equals("lladdr", ignoreCase = true) }
+        if (devIdx < 0 || devIdx + 1 >= tokens.size) return@mapNotNull null
+        if (lladdrIdx < 0 || lladdrIdx + 1 >= tokens.size) return@mapNotNull null
+
+        val iface = tokens[devIdx + 1].trim().removeSuffix(":")
+        val mac = tokens[lladdrIdx + 1].trim().lowercase()
+
+        if (mac == "00:00:00:00:00:00" || !mac.contains(':')) return@mapNotNull null
+        if (upstreamInterfaces.contains(iface)) return@mapNotNull null
+        if (!downstreamInterfaces.contains(iface)) return@mapNotNull null
+
+        // 丢弃不可达或失败的邻居状态
+        val lastToken = tokens.last().uppercase()
+        if (lastToken == "FAILED" || lastToken == "INCOMPLETE") return@mapNotNull null
+
+        val type = TetheringPlatformCompat.inferLegacyTetheringType(iface) ?: -1
+        createTetheredClientInfo(
+            mac = mac,
+            ip = rawIp,
+            hostname = null,
+            tetheringType = type,
+            assignedIps = listOf(rawIp),
+        )
+    }.toList()
 }
 
 internal fun parseArpLines(
@@ -394,7 +445,7 @@ internal fun parseArpLines(
             if (!downstreamInterfaces.contains(iface)) return@mapNotNull null
 
             val type = TetheringPlatformCompat.inferLegacyTetheringType(iface) ?: -1
-            createTetheredClientInfo(mac = mac, ip = ip, hostname = null, tetheringType = type)
+            createTetheredClientInfo(mac = mac, ip = ip, hostname = null, tetheringType = type, assignedIps = listOf(ip))
         } else null
     }.toList()
 }
@@ -413,10 +464,28 @@ internal fun readArpClients(
     }.getOrDefault(emptyList())
 }
 
+internal fun readNeighborClients(
+    downstreamInterfaces: Set<String> = emptySet(),
+    upstreamInterfaces: Set<String> = emptySet(),
+): List<TetheredClientInfo> {
+    if (downstreamInterfaces.isEmpty()) return emptyList()
+
+    val neighborClients = runCatching {
+        val proc = ProcessBuilder("/system/bin/ip", "neigh", "show").redirectErrorStream(true).start()
+        val lines = proc.inputStream.bufferedReader().useLines { it.toList() }
+        proc.waitFor(1, TimeUnit.SECONDS)
+        parseNeighborLines(lines.asSequence(), downstreamInterfaces, upstreamInterfaces)
+    }.getOrNull().orEmpty()
+
+    val arpClients = readArpClients(downstreamInterfaces, upstreamInterfaces)
+    return mergeTetheredClients(neighborClients, arpClients)
+}
+
 internal fun mergeTetheredClients(
     systemClients: List<TetheredClientInfo>,
     arpClients: List<TetheredClientInfo>,
 ): List<TetheredClientInfo> {
+    if (systemClients.isEmpty() && arpClients.isEmpty()) return emptyList()
     if (systemClients.isEmpty()) return arpClients
     if (arpClients.isEmpty()) return systemClients
 
@@ -425,30 +494,38 @@ internal fun mergeTetheredClients(
         if (c.mac.isNotBlank()) c.mac.lowercase() else c.ip
 
     val map = LinkedHashMap<String, TetheredClientInfo>()
+
+    fun mergeInto(existing: TetheredClientInfo?, incoming: TetheredClientInfo): TetheredClientInfo {
+        if (existing == null) return incoming
+        val allIps = (existing.assignedIps + incoming.assignedIps + listOf(existing.ip, incoming.ip))
+            .map { it.trim().substringBefore('%') }
+            .filter { it.isNotBlank() }
+            .distinct()
+        val mergedIp = allIps.firstOrNull { !it.contains(':') }
+            ?: allIps.firstOrNull()
+            ?: existing.ip.ifBlank { incoming.ip }
+        val mergedMac = existing.mac.ifBlank { incoming.mac }
+        val mergedHost = existing.hostname ?: incoming.hostname
+        val mergedType = if (existing.tetheringType >= 0) existing.tetheringType else incoming.tetheringType
+        return createTetheredClientInfo(
+            mac = mergedMac,
+            ip = mergedIp,
+            hostname = mergedHost,
+            tetheringType = mergedType,
+            assignedIps = allIps,
+        )
+    }
+
     for (sys in systemClients) {
         val key = clientKey(sys)
         if (key.isNotBlank()) {
-            map[key] = sys
+            map[key] = mergeInto(map[key], sys)
         }
     }
     for (arp in arpClients) {
         val key = clientKey(arp)
         if (key.isBlank()) continue
-        val existing = map[key]
-        if (existing == null) {
-            map[key] = arp
-        } else {
-            // 优先保留 IPv4 地址作为主展示 IP
-            val mergedIp = if (existing.ip.contains(':') && !arp.ip.contains(':') && arp.ip.isNotBlank()) {
-                arp.ip
-            } else {
-                existing.ip.ifBlank { arp.ip }
-            }
-            val mergedMac = existing.mac.ifBlank { arp.mac }
-            val mergedHost = existing.hostname ?: arp.hostname
-            val mergedType = if (existing.tetheringType >= 0) existing.tetheringType else arp.tetheringType
-            map[key] = createTetheredClientInfo(mergedMac, mergedIp, mergedHost, mergedType)
-        }
+        map[key] = mergeInto(map[key], arp)
     }
     return map.values.toList()
 }

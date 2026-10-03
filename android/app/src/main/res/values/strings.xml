@@ -280,7 +280,9 @@
     <string name="device_mac">MAC address</string>
     <string name="device_random_mac">Randomized MAC (Privacy)</string>
     <string name="device_standard_mac">Physical MAC</string>
-    <string name="device_ip">IPv4 address</string>
+    <string name="device_ip">IP address</string>
+    <string name="device_ipv4">IPv4 address</string>
+    <string name="device_ipv6">IPv6 address</string>
     <string name="device_tethering_type">Link type</string>
     <string name="device_type_wifi">Wi-Fi hotspot</string>
     <string name="device_type_usb">USB tethering</string>

@@ -72,6 +72,7 @@ data class TetheredDeviceDetail(
     val downBps: Long = 0L,
     val conns: List<ConnStatsRec> = emptyList(),
     val isBlocked: Boolean = false,
+    val extraIps: List<String> = emptyList(),
 )
 
 /**
@@ -298,13 +299,26 @@ fun TetheredDeviceDetailDialog(
                         valueColor = textDark
                     )
 
-                    if (device.ip.isNotBlank()) {
+                    val allDeviceIps = (listOf(device.ip) + device.extraIps)
+                        .map(String::trim)
+                        .filter(String::isNotBlank)
+                        .distinct()
+                    val hasBothIpv4AndIpv6 = allDeviceIps.any { !it.contains(':') } && allDeviceIps.any { it.contains(':') }
+
+                    for (ip in allDeviceIps) {
+                        val isIpv6 = ip.contains(':')
+                        val label = when {
+                            hasBothIpv4AndIpv6 && !isIpv6 -> stringResource(R.string.device_ipv4)
+                            hasBothIpv4AndIpv6 && isIpv6 -> stringResource(R.string.device_ipv6)
+                            isIpv6 -> stringResource(R.string.device_ipv6)
+                            else -> stringResource(R.string.device_ipv4)
+                        }
                         DetailItemRow(
-                            label = stringResource(R.string.device_ip),
-                            value = device.ip,
+                            label = label,
+                            value = ip,
                             labelColor = greyText,
                             valueColor = textDark,
-                            onCopy = { copyToClipboard("IP", device.ip) }
+                            onCopy = { copyToClipboard("IP", ip) }
                         )
                     }
                 }

@@ -234,8 +234,16 @@ fun TetheringDialog(
                 runCatching { service.tetheringConnectionStats }.getOrNull()
             }
             if (!statsJson.isNullOrBlank()) {
-                connectedDevices = withContext(Dispatchers.IO) {
+                val parsed = withContext(Dispatchers.IO) {
                     TetheringDeviceParser.parse(statsJson)
+                }
+                connectedDevices = parsed
+                selectedDeviceDetail?.let { cur ->
+                    val refreshed = parsed.firstOrNull {
+                        (it.mac.isNotBlank() && it.mac.equals(cur.mac, ignoreCase = true)) ||
+                            (it.ip.isNotBlank() && it.ip == cur.ip)
+                    }
+                    if (refreshed != null) selectedDeviceDetail = refreshed
                 }
             }
             delay(2000L)

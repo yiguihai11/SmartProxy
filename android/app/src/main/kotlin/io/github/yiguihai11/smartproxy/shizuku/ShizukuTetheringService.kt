@@ -701,8 +701,8 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             .toSet()
 
         val systemClients = monitor?.currentClients.orEmpty()
-        val arpClients = readArpClients(downstreamIfaces, upstreamIfaces)
-        val clients = mergeTetheredClients(systemClients, arpClients)
+        val neighborClients = readNeighborClients(downstreamIfaces, upstreamIfaces)
+        val clients = mergeTetheredClients(systemClients, neighborClients)
         val arr = JSONArray()
         for (client in clients) {
             val obj = JSONObject()
@@ -713,6 +713,11 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             obj.put("vendor", client.vendor ?: "")
             obj.put("is_random_mac", client.isRandomMac)
             obj.put("os_guess", client.osGuess ?: "")
+            val ipsArr = JSONArray()
+            for (assignedIp in client.assignedIps) {
+                ipsArr.put(assignedIp)
+            }
+            obj.put("assigned_ips", ipsArr)
             arr.put(obj)
         }
         return arr.toString()
@@ -731,8 +736,8 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             .toSet()
 
         val systemClients = monitor?.currentClients.orEmpty()
-        val arpClients = readArpClients(downstreamIfaces, upstreamIfaces)
-        val clients = mergeTetheredClients(systemClients, arpClients)
+        val neighborClients = readNeighborClients(downstreamIfaces, upstreamIfaces)
+        val clients = mergeTetheredClients(systemClients, neighborClients)
 
         val clientsArr = JSONArray()
         for (client in clients) {
@@ -744,6 +749,11 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             obj.put("vendor", client.vendor ?: "")
             obj.put("is_random_mac", client.isRandomMac)
             obj.put("os_guess", client.osGuess ?: "")
+            val ipsArr = JSONArray()
+            for (assignedIp in client.assignedIps) {
+                ipsArr.put(assignedIp)
+            }
+            obj.put("assigned_ips", ipsArr)
             clientsArr.put(obj)
         }
 
