@@ -1,6 +1,7 @@
 package io.github.yiguihai11.smartproxy.shizuku
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TetheringPlatformCompatTest {
