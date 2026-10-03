@@ -27,6 +27,19 @@ import (
 	"smartproxy/internal/config"
 )
 
+// benchTeardownGuard 把收尾(栈 / 设备的 Close)挡在 ns/op 的计时窗口之外。
+//
+// testing 的计时窗口一直到 benchmark 函数返回才关闭,所以用裸 defer 注册的 Close
+// 会被算进单次耗时里。而 LWIPStack.Close() 在 tun 尚未先关闭时会等满 500ms 的
+// 「读循环退出」超时(见 stack_lwip.go),摊到 -benchtime=500x 上正好是 1ms/op ——
+// docs/performance.md 里那个「lwIP 单次 TCP 握手 ~1.0ms」就是这么来的:把迭代数
+// 换成 2000x,同一个 benchmark 报的是 254µs/op,乘回去总时长始终是 0.5s。
+// 真实值约 3µs,与栈本身无关。
+//
+// 用法:在 b.ResetTimer() 之前 defer 本函数。它比上面的 Close defer 注册得晚,
+// 按 LIFO 先于它们执行,于是计时在收尾开始前就停住。
+func benchTeardownGuard(b *testing.B) { b.StopTimer() }
+
 type benchGVisorTun struct {
 	*pipeTun
 	ep *channel.Endpoint
@@ -442,6 +455,8 @@ func BenchmarkStack_UDP_Throughput_gVisor(b *testing.B) {
 	pkt := testBuildIPv4UDP(clientIP, serverIP, 45678, 53, payload)
 
 	b.SetBytes(int64(len(payload)))
+	defer benchTeardownGuard(b)
+
 	b.ResetTimer()
 	b.ReportAllocs()
 
@@ -514,6 +529,8 @@ func BenchmarkStack_UDP_Throughput_Go(b *testing.B) {
 	pkt := testBuildIPv4UDP(clientIP, serverIP, 45678, 53, payload)
 
 	b.SetBytes(int64(len(payload)))
+	defer benchTeardownGuard(b)
+
 	b.ResetTimer()
 	b.ReportAllocs()
 
@@ -570,6 +587,8 @@ func BenchmarkStack_UDP_Throughput_lwIP(b *testing.B) {
 	pkt := testBuildIPv4UDP(clientIP, serverIP, 45678, 53, payload)
 
 	b.SetBytes(int64(len(payload)))
+	defer benchTeardownGuard(b)
+
 	b.ResetTimer()
 	b.ReportAllocs()
 
@@ -626,6 +645,8 @@ func BenchmarkStack_UDP_Throughput_System(b *testing.B) {
 	pkt := testBuildIPv4UDP(clientIP, serverIP, 45678, 53, payload)
 
 	b.SetBytes(int64(len(payload)))
+	defer benchTeardownGuard(b)
+
 	b.ResetTimer()
 	b.ReportAllocs()
 
@@ -682,6 +703,8 @@ func BenchmarkStack_UDP_Throughput_Mixed(b *testing.B) {
 	pkt := testBuildIPv4UDP(clientIP, serverIP, 45678, 53, payload)
 
 	b.SetBytes(int64(len(payload)))
+	defer benchTeardownGuard(b)
+
 	b.ResetTimer()
 	b.ReportAllocs()
 
@@ -720,6 +743,8 @@ func BenchmarkStack_TCP_Handshake_gVisor(b *testing.B) {
 
 	clientIP := net.IPv4(10, 0, 0, 2)
 	serverIP := net.IPv4(1, 2, 3, 4)
+
+	defer benchTeardownGuard(b)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -819,6 +844,8 @@ func BenchmarkStack_TCP_Handshake_Go(b *testing.B) {
 		}
 	}()
 
+	defer benchTeardownGuard(b)
+
 	b.ResetTimer()
 	b.ReportAllocs()
 
@@ -872,6 +899,8 @@ func BenchmarkStack_TCP_Handshake_lwIP(b *testing.B) {
 	clientIP := net.IPv4(10, 0, 0, 2)
 	serverIP := net.IPv4(1, 2, 3, 4)
 
+	defer benchTeardownGuard(b)
+
 	b.ResetTimer()
 	b.ReportAllocs()
 
@@ -914,6 +943,8 @@ func BenchmarkStack_TCP_Handshake_System(b *testing.B) {
 	clientIP := net.IPv4(10, 0, 0, 2)
 	serverIP := net.IPv4(1, 2, 3, 4)
 
+	defer benchTeardownGuard(b)
+
 	b.ResetTimer()
 	b.ReportAllocs()
 
@@ -955,6 +986,8 @@ func BenchmarkStack_TCP_Handshake_Mixed(b *testing.B) {
 
 	clientIP := net.IPv4(10, 0, 0, 2)
 	serverIP := net.IPv4(1, 2, 3, 4)
+
+	defer benchTeardownGuard(b)
 
 	b.ResetTimer()
 	b.ReportAllocs()
