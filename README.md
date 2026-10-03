@@ -47,7 +47,7 @@ SmartProxy 是一个用 Go 语言编写的高性能透明代理与智能路由�
 
 SmartProxy 支持 5 种 TUN 协议栈实现，可在不同设备环境与权限要求下灵活选用：
 - **`gvisor`（全平台默认）**：Google 开源的成熟用户态 Go 栈。并发多协程驱动，TCP 握手约 25–38 µs（实测），全平台无需 CGO 编译即可运行，生态兼容性好，适合通用网页高频短连接场景。
-- **`lwip`（移动端推荐）**：轻量级 C 语言协议栈（Lightweight IP）。单连接内存开销极低（~490 B，比 gVisor 省 76%），TCP 建连实测 3.6 µs（云端）/ 4.6 µs（真机），与 `system`/`mixed` 同量级，发包真·零拷贝（0 allocs/op），非常适合 Android 客户端长期后台驻留防 OOM/LMK 杀进程。
+- **`lwip`（移动端推荐）**：轻量级 C 语言协议栈（Lightweight IP）。单连接内存开销极低（~490 B，比 gVisor 省 76%），TCP 建连实测 2.4 µs（云端）/ 5.9 µs（真机），与 `system`/`mixed` 同档；UDP 端到端吞吐 430 MB/s（真机，非 Root 栈中最高），发包方向真·零拷贝（0 allocs/op）。非常适合 Android 客户端长期后台驻留防 OOM/LMK 杀进程。
 - **`system`**：利用 Linux 内核网络栈直接处理 TCP，性能强但需系统 root / `CAP_NET_ADMIN` 特权。
 - **`mixed`**：混合协议栈（TCP 走 System 内核栈，UDP 走 gVisor 用户态栈），需系统特权。
 - **`go`**：纯 Go 原生简易栈，主要用于开发参考与测试。
