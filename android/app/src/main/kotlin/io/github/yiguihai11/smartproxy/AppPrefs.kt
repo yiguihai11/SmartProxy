@@ -220,6 +220,26 @@ object AppPrefs {
         sp(context).edit().putString(KEY_SOCKS_LISTEN, mode).apply()
     }
 
+    private const val KEY_AUTO_DISABLED_V4 = "auto_disabled_v4"
+    private const val KEY_AUTO_DISABLED_V6 = "auto_disabled_v6"
+
+    /** 该协议族是「因底层网络没有这族地址而被自动关掉」的,不是用户主动关的(首页 v4/v6 开关)。
+     *  只有打上这个标记的一族才允许在网络恢复时自动拨回 —— 用户自己关掉的不许替他开。
+     *  标记落盘是因为进程可能在断网期间被杀,重启后仍要认得出这次关闭不是用户的意思。 */
+    fun autoDisabledV4(context: Context): Boolean =
+        sp(context).getBoolean(KEY_AUTO_DISABLED_V4, false)
+
+    fun setAutoDisabledV4(context: Context, value: Boolean) {
+        sp(context).edit().putBoolean(KEY_AUTO_DISABLED_V4, value).apply()
+    }
+
+    fun autoDisabledV6(context: Context): Boolean =
+        sp(context).getBoolean(KEY_AUTO_DISABLED_V6, false)
+
+    fun setAutoDisabledV6(context: Context, value: Boolean) {
+        sp(context).edit().putBoolean(KEY_AUTO_DISABLED_V6, value).apply()
+    }
+
     /** Shizuku 网络共享同步 Token */
     fun shizukuSyncToken(context: Context): String =
         sp(context).getString(KEY_SHIZUKU_SYNC_TOKEN, "") ?: ""

@@ -911,10 +911,41 @@ private fun HomeLauncher(
         else ConfigProvider.ipv6(context)
     ) }
 
-    // 当底层物理网络未分配 v4 或 v6 地址时自动关闭对应开关并同步落盘
+    // 底层物理网络缺哪一族就关掉对应开关并同步落盘;网络把该族还回来时,只把「当初是自动关的」
+    // 那一族拨回去。原先只有前半段,是单向的:WiFi 关一次两族全关,WiFi 回来两个都还是关的,
+    // 点启动只会得到「至少需开启 IPv4 或 IPv6 其中一个」,得手动拨回来。
+    // 靠 AppPrefs 的标记区分「自动关的」和「用户自己关的」,丢进 SharedPreferences 是为了
+    // 进程在断网期间被杀后仍认得出来 —— 光用内存标记,重启后开关就永远停在关。
     LaunchedEffect(networkStatus, socksMode) {
+        if (networkStatus.hasV6 && !ipv6 && AppPrefs.autoDisabledV6(context)) {
+            ipv6 = true
+            AppPrefs.setAutoDisabledV6(context, false)
+            if (vpnIntercept) {
+                // 与自动关闭对称:setIpv6(true) 会把 dns.filter_aaaa 复位成 false。
+                ConfigProvider.setIpv6(context, true)
+            } else if (AppPrefs.socksListen(context) == AppPrefs.SOCKS_LISTEN_V4) {
+                // listen 是单值(§8):v6 被自动关时从 both 落成了 v4,补回 v6 就是 both。
+                AppPrefs.setSocksListen(context, AppPrefs.SOCKS_LISTEN_BOTH)
+            }
+            if (running) {
+                SmartProxyVpnService.restart(context)
+            }
+        }
+        if (networkStatus.hasV4 && !ipv4 && AppPrefs.autoDisabledV4(context)) {
+            ipv4 = true
+            AppPrefs.setAutoDisabledV4(context, false)
+            if (vpnIntercept) {
+                ConfigProvider.setIpv4(context, true)
+            } else if (AppPrefs.socksListen(context) == AppPrefs.SOCKS_LISTEN_V6) {
+                AppPrefs.setSocksListen(context, AppPrefs.SOCKS_LISTEN_BOTH)
+            }
+            if (running) {
+                SmartProxyVpnService.restart(context)
+            }
+        }
         if (!networkStatus.hasV6 && ipv6) {
             ipv6 = false
+            AppPrefs.setAutoDisabledV6(context, true)
             if (vpnIntercept) {
                 ConfigProvider.setIpv6(context, false)
             } else {
@@ -930,6 +961,7 @@ private fun HomeLauncher(
         }
         if (!networkStatus.hasV4 && ipv4) {
             ipv4 = false
+            AppPrefs.setAutoDisabledV4(context, true)
             if (vpnIntercept) {
                 ConfigProvider.setIpv4(context, false)
             } else {
@@ -1108,6 +1140,8 @@ private fun HomeLauncher(
                             return@SwitchCard
                         }
                         ipv4 = v
+                        // 用户手动拨过就以他的为准:清掉「自动关」标记,网络回来时不再替他打开。
+                        AppPrefs.setAutoDisabledV4(context, false)
                         if (vpnIntercept) {
                             // 写 config.json tun.inet4_address(§4.6),运行中显式重建才生效。
                             ConfigProvider.setIpv4(context, v)
@@ -1146,6 +1180,8 @@ private fun HomeLauncher(
                             return@SwitchCard
                         }
                         ipv6 = v
+                        // 同 v4:用户手动拨过就清掉「自动关」标记,不再由网络恢复替他把开关打开。
+                        AppPrefs.setAutoDisabledV6(context, false)
                         if (vpnIntercept) {
                             ConfigProvider.setIpv6(context, v)
                         } else {
