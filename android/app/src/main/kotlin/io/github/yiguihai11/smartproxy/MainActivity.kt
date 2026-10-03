@@ -877,6 +877,8 @@ private fun HomeLauncher(
 
     // 可见期间兜底:在通知栏里关掉 WiFi/移动数据后直接看首页时,回调未必已经到,靠这个把按钮的
     // 置灰态补上。repeatOnLifecycle 进入 RESUMED 立刻跑一轮,离开即取消,不在后台空转。
+    // 注意 lifecycleOwner 要在这里自己取一份 —— HomeScreen 里那个同名变量不在本组合的作用域内。
+    val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             while (true) {
