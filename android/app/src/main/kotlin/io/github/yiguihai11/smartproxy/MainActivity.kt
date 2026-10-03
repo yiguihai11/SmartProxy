@@ -239,6 +239,18 @@ class MainActivity : ComponentActivity() {
             Toast.makeText(this, getString(R.string.toast_no_network_start), Toast.LENGTH_SHORT).show()
             return
         }
+        // 协议族全关时建不出隧道:Builder 一次 addAddress 都没调,establish() 会抛
+        // IllegalArgumentException。establishVpn 里那道同款守卫只 Log.e 后 return false,
+        // 服务随即被收掉,用户看到的就是「点了没反应、也没有任何提示」。这里提前把原因说清楚。
+        // 用 readConfig(内部 ensureConfig,文件缺失时回落 asset 默认值)而不是 ipv4()/ipv6():
+        // 后两者读不到文件会双双返回 false,把「读不到配置」误判成「两个都关了」,会把启动锁死。
+        // 仅代理(SOCKS5)模式的 listen 取值为 both/v4/v6,恒有其一,不会命中。
+        val tunCfg = TunConfig.parse(ConfigProvider.readConfig(this))
+        if (tunCfg.inet4 == null && tunCfg.inet6 == null) {
+            android.util.Log.w("SmartProxyVpn", "[MainActivity] Both IPv4 and IPv6 disabled (tun has no address); refusing to start.")
+            Toast.makeText(this, getString(R.string.toast_need_ipv46), Toast.LENGTH_SHORT).show()
+            return
+        }
         // 仅代理(SOCKS5)模式(§8 服务模式)不建 VpnService,无需系统授权。
         if (AppPrefs.serviceMode(this) == AppPrefs.MODE_SOCKS5) {
             android.util.Log.i("SmartProxyVpn", "[MainActivity] serviceMode=SOCKS5, skipping VPN consent. Starting service directly...")
