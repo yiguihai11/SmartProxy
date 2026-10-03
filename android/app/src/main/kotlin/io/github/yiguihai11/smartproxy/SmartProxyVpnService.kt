@@ -392,7 +392,21 @@ class SmartProxyVpnService : VpnService() {
                 //    导致下挂客户端永远收不到 IP 分配(卡在“正在获取 IP 地址”后显示已停用)。
                 // 2. com.android.shell (UID 2000): 运行 Shizuku 特权热点共享 Go 引擎，防止二次代理与回环。
                 // 3. CaptivePortalLogin: 避免连入需认证的 Wi-Fi 时认证弹窗被代理劫持打不开。
-                SYSTEM_DISALLOWED_PACKAGES.forEach { sysPkg ->
+                //
+                // 双保险机制(兼容所有国产 UI: HyperOS/MIUI、ColorOS、OriginOS、HarmonyOS 等):
+                // 静态知名包名清单 + 运行时动态反查 UID 1073 (AID_NETWORK_STACK) 与 UID 2000 (AID_SHELL)，
+                // 无论厂商如何重命名或魔改网络栈包名，均能 100% 动态捕获并排除。
+                val finalDisallowed = SYSTEM_DISALLOWED_PACKAGES.toMutableSet()
+                listOf(1073, 2000).forEach { uid ->
+                    try {
+                        packageManager.getPackagesForUid(uid)?.let { pkgs ->
+                            finalDisallowed.addAll(pkgs)
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "[establishVpn] Failed to resolve packages for uid $uid: ${e.message}")
+                    }
+                }
+                finalDisallowed.forEach { sysPkg ->
                     applyDisallowedApp(builder, sysPkg, isSelf = false)
                 }
             } else {
