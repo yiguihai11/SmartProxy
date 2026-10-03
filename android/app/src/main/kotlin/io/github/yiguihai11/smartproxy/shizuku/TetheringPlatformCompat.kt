@@ -486,8 +486,6 @@ internal fun mergeTetheredClients(
     arpClients: List<TetheredClientInfo>,
 ): List<TetheredClientInfo> {
     if (systemClients.isEmpty() && arpClients.isEmpty()) return emptyList()
-    if (systemClients.isEmpty()) return arpClients
-    if (arpClients.isEmpty()) return systemClients
 
     // 优先以 MAC 作为唯一物理设备标识聚合(L2 归一化)，无 MAC 时回退 IP
     fun clientKey(c: TetheredClientInfo): String =
