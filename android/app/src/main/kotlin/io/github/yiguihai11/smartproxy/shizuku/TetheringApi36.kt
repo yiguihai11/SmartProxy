@@ -6,6 +6,7 @@ import android.net.Network
 import android.net.TetheringInterface
 import android.net.TetheringManager
 import android.os.Build
+import android.util.Log
 import androidx.annotation.Keep
 import androidx.annotation.RequiresApi
 import java.util.concurrent.CountDownLatch
