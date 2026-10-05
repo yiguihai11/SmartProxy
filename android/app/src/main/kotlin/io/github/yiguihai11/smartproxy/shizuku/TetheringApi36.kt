@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicReference
 /** Keeps API 36-only tethering types out of classes loaded on Android 13 through 15. */
 @RequiresApi(Build.VERSION_CODES.BAKLAVA)
 internal object TetheringApi36 {
+    private const val TAG = "ShizukuTethering"
     fun getManager(context: Context): TetheringManager =
         requireNotNull(context.getSystemService(TetheringManager::class.java)) {
             "TetheringManager is unavailable"
@@ -163,6 +164,7 @@ internal object TetheringApi36 {
         private val onChanged: () -> Unit,
     ) : TetheringManager.TetheringEventCallback {
         override fun onTetheredInterfacesChanged(interfaces: Set<TetheringInterface>) {
+            Log.w(TAG, "CALLBACK onTetheredInterfacesChanged: " + interfaces.joinToString { it.type.toString() + ":" + it.`interface` })
             tetheredInterfaces.set(interfaces.map { ActiveTetheringInterface(it.type, it.`interface`) })
             interfacesReceived.countDown()
             notifyChanged()
@@ -171,7 +173,9 @@ internal object TetheringApi36 {
         @Keep
         @Suppress("unused")
         fun onUpstreamChanged(network: Network?) {
-            interfaceNames.set(upstreamInterfaceNames(connectivityManager, network))
+            val names = upstreamInterfaceNames(connectivityManager, network)
+            Log.w(TAG, "CALLBACK onUpstreamChanged: network=$network interfaces=$names")
+            interfaceNames.set(names)
             notifyChanged()
         }
 
