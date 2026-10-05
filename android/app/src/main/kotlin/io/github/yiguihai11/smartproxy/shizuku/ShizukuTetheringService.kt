@@ -1043,7 +1043,8 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
         if (affectedTypes == 0) return
 
         wrongUpstreamWarningTypes.updateAndGet { it or affectedTypes }
-        Log.e(TAG, "Android moved tethering to unprotected upstream $actual; stopping downstreams")
+        Log.e(TAG, "STOP_TETHERING: reason=UNPROTECTED_UPSTREAM expected=$expected actual=$actual activeTypes=$activeTypes requestedTypes=$requestedTetheringTypes")
+        Log.e(TAG, "STOP_TETHERING: calling stopActiveTetheringLocked()", Throwable("stopActiveTetheringLocked caller"))
         val result = stopActiveTetheringLocked(clearDesired = false, activeTypes = activeTypes)
         if (result != RESULT_OK) {
             Log.e(TAG, "Unable to stop downstreams: $result")
