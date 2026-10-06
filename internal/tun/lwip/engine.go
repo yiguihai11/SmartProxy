@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/netip"
 	"sync"
 	"sync/atomic"
 )
