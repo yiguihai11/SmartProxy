@@ -71,35 +71,31 @@ func newPacketConn(
 	engine *Engine,
 	id uint64,
 	isIPv6 bool,
-	srcIP net.IP,
+	srcIP netip.Addr,
 	srcPort uint16,
-	dstIP net.IP,
+	dstIP netip.Addr,
 	dstPort uint16,
 ) *PacketConn {
-	sAddr, _ := netip.AddrFromSlice(srcIP)
-	dAddr, _ := netip.AddrFromSlice(dstIP)
-
 	return &PacketConn{
 		engine:     engine,
 		id:         id,
 		isIPv6:     isIPv6,
-		localAddr:  &net.UDPAddr{IP: srcIP, Port: int(srcPort)},
-		remoteAddr: &net.UDPAddr{IP: dstIP, Port: int(dstPort)},
-		source:     M.Socksaddr{Addr: sAddr, Port: srcPort},
-		dest:       M.Socksaddr{Addr: dAddr, Port: dstPort},
+		localAddr:  &net.UDPAddr{IP: srcIP.AsSlice(), Port: int(srcPort)},
+		remoteAddr: &net.UDPAddr{IP: dstIP.AsSlice(), Port: int(dstPort)},
+		source:     M.Socksaddr{Addr: srcIP, Port: srcPort},
+		dest:       M.Socksaddr{Addr: dstIP, Port: dstPort},
 		recvQueue:  make(chan *udpInboundPacket, 256),
 		closeChan:  make(chan struct{}),
 	}
 }
 
-func (c *PacketConn) onData(dstIP net.IP, dstPort uint16, data []byte) {
+func (c *PacketConn) onData(dstIP netip.Addr, dstPort uint16, data []byte) {
 	if c.closed.Load() {
 		return
 	}
 
-	dAddr, _ := netip.AddrFromSlice(dstIP)
 	pkt := &udpInboundPacket{
-		dst:  M.Socksaddr{Addr: dAddr, Port: dstPort},
+		dst:  M.Socksaddr{Addr: dstIP, Port: dstPort},
 		data: data,
 	}
 

@@ -9,7 +9,7 @@ package lwip
 */
 import "C"
 import (
-	"net"
+	"net/netip"
 	"unsafe"
 )
 
@@ -26,20 +26,16 @@ func goPacketOutput(data *C.uint8_t, length C.uint32_t, ctxID C.uint64_t) {
 	e.onPacketOutput(pkt)
 }
 
-func parseIP(ptr unsafe.Pointer, isIPv6 bool) net.IP {
+func parseIP(ptr unsafe.Pointer, isIPv6 bool) netip.Addr {
 	if ptr == nil {
-		return nil
+		return netip.Addr{}
 	}
 	if isIPv6 {
-		b := (*[16]byte)(ptr)
-		ip := make(net.IP, 16)
-		copy(ip, b[:])
-		return ip
+		b := *(*[16]byte)(ptr)
+		return netip.AddrFrom16(b)
 	}
-	b := (*[4]byte)(ptr)
-	ip := make(net.IP, 4)
-	copy(ip, b[:])
-	return ip
+	b := *(*[4]byte)(ptr)
+	return netip.AddrFrom4(b)
 }
 
 //export goTcpAccept
