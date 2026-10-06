@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net"
 	"time"
+	"runtime"
 	"unsafe"
 )
 
@@ -320,6 +321,8 @@ func (e *Engine) handleUDPSend(req *udpSendReq) {
 		srcIPBytes = ip4
 	}
 
+	var pinner runtime.Pinner
+	pinner.Pin(&req.data[0])
 	ret := C.sp_lwip_udp_send(
 		e.lw,
 		C.uint64_t(req.connID),
@@ -329,6 +332,8 @@ func (e *Engine) handleUDPSend(req *udpSendReq) {
 		unsafe.Pointer(&req.data[0]),
 		C.uint32_t(len(req.data)),
 	)
+	pinner.Unpin()
+	runtime.KeepAlive(req.data)
 	if ret < 0 {
 		req.doneChan <- fmt.Errorf("lwip udp_send error: %d", int(ret))
 		return

@@ -564,10 +564,15 @@ int sp_lwip_udp_send(struct sp_lwip *lw, uint64_t conn_id, int is_ipv6, const vo
         from_addr.type = IPADDR_TYPE_V4;
     }
 
-    struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, (u16_t)len, PBUF_RAM);
+    /*
+     * PBUF_REF borrows the caller's payload. The Go adapter pins req.data for
+     * the complete sp_lwip_udp_send call, and this NO_SYS raw-API path sends
+     * synchronously before returning. That removes the payload memcpy without
+     * changing the lifetime visible to lwIP.
+     */
+    struct pbuf *p = pbuf_alloc_reference((void *)data, (u16_t)len, PBUF_REF);
     if (!p) return ERR_MEM;
 
-    memcpy(p->payload, data, len);
     err_t err = udp_sendfrom(conn->pcb, p, &from_addr, src_port);
     pbuf_free(p);
 
