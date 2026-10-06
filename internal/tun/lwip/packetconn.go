@@ -24,6 +24,28 @@ var (
 type udpInboundPacket struct {
 	dst  M.Socksaddr
 	data []byte
+	buf  *[]byte
+}
+
+var udpRecvBufferPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 2048)
+		return &b
+	},
+}
+
+func acquireUDPRecvBuffer(length int) ([]byte, *[]byte) {
+	if length <= 2048 {
+		b := udpRecvBufferPool.Get().(*[]byte)
+		return (*b)[:length], b
+	}
+	return make([]byte, length), nil
+}
+
+func releaseUDPRecvBuffer(b *[]byte) {
+	if b != nil {
+		udpRecvBufferPool.Put(b)
+	}
 }
 
 type udpSendReq struct {
@@ -89,7 +111,7 @@ func newPacketConn(
 	}
 }
 
-func (c *PacketConn) onData(dstIP netip.Addr, dstPort uint16, data []byte) {
+func (c *PacketConn) onData(dstIP netip.Addr, dstPort uint16, data []byte, dataBuf *[]byte) {
 	if c.closed.Load() {
 		return
 	}
@@ -97,12 +119,14 @@ func (c *PacketConn) onData(dstIP netip.Addr, dstPort uint16, data []byte) {
 	pkt := &udpInboundPacket{
 		dst:  M.Socksaddr{Addr: dstIP, Port: dstPort},
 		data: data,
+		buf:  dataBuf,
 	}
 
 	select {
 	case c.recvQueue <- pkt:
 	default:
 		// Queue full: drop datagram under extreme congestion
+		releaseUDPRecvBuffer(dataBuf)
 	}
 }
 
@@ -133,6 +157,7 @@ func (c *PacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 		return 0, nil, os.ErrDeadlineExceeded
 	case pkt := <-c.recvQueue:
 		n = copy(p, pkt.data)
+		releaseUDPRecvBuffer(pkt.buf)
 		udpAddr := &net.UDPAddr{
 			IP:   pkt.dst.Addr.AsSlice(),
 			Port: int(pkt.dst.Port),
@@ -168,6 +193,7 @@ func (c *PacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, er
 		return M.Socksaddr{}, os.ErrDeadlineExceeded
 	case pkt := <-c.recvQueue:
 		_, _ = buffer.Write(pkt.data)
+		releaseUDPRecvBuffer(pkt.buf)
 		return pkt.dst, nil
 	}
 }
