@@ -350,8 +350,11 @@ func (e *Engine) handleUDPClose(connID uint64) {
 func (e *Engine) onUDPRecv(connID uint64, isIPv6 bool, srcIP netip.Addr, srcPort uint16, dstIP netip.Addr, dstPort uint16, data []byte, dataBuf *[]byte) {
 	conn := e.udpConns[connID]
 	if conn == nil {
-		releaseUDPRecvBuffer(dataBuf)
-		return
+		conn = newPacketConn(e, connID, isIPv6, srcIP, srcPort, dstIP, dstPort)
+		e.udpConns[connID] = conn
+		if e.cfg.UDPHandler != nil {
+			go e.cfg.UDPHandler(conn)
+		}
 	}
 	conn.onData(dstIP, dstPort, data, dataBuf)
 }
