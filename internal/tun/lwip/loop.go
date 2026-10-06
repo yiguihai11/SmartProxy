@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"time"
 	"runtime"
 	"unsafe"
@@ -227,9 +228,9 @@ func (e *Engine) onPacketOutput(pkt []byte) {
 	}
 }
 
-func (e *Engine) onTCPAccept(connID uint64, srcIP net.IP, srcPort uint16, dstIP net.IP, dstPort uint16) {
-	remoteAddr := &net.TCPAddr{IP: srcIP, Port: int(srcPort)}
-	localAddr := &net.TCPAddr{IP: dstIP, Port: int(dstPort)}
+func (e *Engine) onTCPAccept(connID uint64, srcIP netip.Addr, srcPort uint16, dstIP netip.Addr, dstPort uint16) {
+	remoteAddr := &net.TCPAddr{IP: srcIP.AsSlice(), Port: int(srcPort)}
+	localAddr := &net.TCPAddr{IP: dstIP.AsSlice(), Port: int(dstPort)}
 	conn := newConn(e, connID, remoteAddr, localAddr)
 	e.conns[connID] = conn
 
@@ -346,14 +347,11 @@ func (e *Engine) handleUDPClose(connID uint64) {
 	C.sp_lwip_udp_close(e.lw, C.uint64_t(connID))
 }
 
-func (e *Engine) onUDPRecv(connID uint64, isIPv6 bool, srcIP net.IP, srcPort uint16, dstIP net.IP, dstPort uint16, data []byte) {
+func (e *Engine) onUDPRecv(connID uint64, isIPv6 bool, srcIP netip.Addr, srcPort uint16, dstIP netip.Addr, dstPort uint16, data []byte, dataBuf *[]byte) {
 	conn := e.udpConns[connID]
 	if conn == nil {
-		conn = newPacketConn(e, connID, isIPv6, srcIP, srcPort, dstIP, dstPort)
-		e.udpConns[connID] = conn
-		if e.cfg.UDPHandler != nil {
-			go e.cfg.UDPHandler(conn)
-		}
+		releaseUDPRecvBuffer(dataBuf)
+		return
 	}
-	conn.onData(dstIP, dstPort, data)
+	conn.onData(dstIP, dstPort, data, dataBuf)
 }
