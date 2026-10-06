@@ -113,6 +113,7 @@ func newPacketConn(
 
 func (c *PacketConn) onData(dstIP netip.Addr, dstPort uint16, data []byte, dataBuf *[]byte) {
 	if c.closed.Load() {
+		releaseUDPRecvBuffer(dataBuf)
 		return
 	}
 
