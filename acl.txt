@@ -75,3 +75,39 @@ proxy domain api.tripdata.app ss-local
 block domain cdn.wwads.cn
 
 block domain ads.mozilla.org
+
+# ─────────────────────────────────────────
+# 番茄小说 / 红果短剧 广告拦截 (adblock-fq)
+# ─────────────────────────────────────────
+# 1. 字节广告/埋点/监控 SDK 通用子域
+block domain *ads*-*.zijieapi.com
+block domain *ad*-*.zijieapi.com
+block domain *polaris*.zijieapi.com
+block domain *apm*.zijieapi.com
+block domain *log*.zijieapi.com
+block domain *mon*.zijieapi.com
+block domain *security*.zijieapi.com
+block domain *frontier*.zijieapi.com
+block domain *tracker*.zijieapi.com
+block domain *ugc*.zijieapi.com
+block domain *minigame*-*.zijieapi.com
+block domain *webcast*-*.zijieapi.com
+
+# 2. 字节短剧/小说广告视频 CDN
+block domain *reading-ad*.qznovelvod.com
+block domain *-ad-*.byteimg.com
+
+# 3. 巨量引擎 / 穿山甲 / 字节商业化广告平台
+block domain *.oceanengine.com
+block domain *.pangolin-sdk-toutiao.com
+block domain *.pangolin-sdk-toutiao1.com
+block domain *.pangolin-sdk-toutiao-b.com
+block domain *.pglstatp-toutiao.com
+block domain *.zijieapi.net
+block domain *.pstatp.com
+
+# 4. 第三方广告聚合 SDK (快手/腾讯/穿山甲联盟)
+block domain *.kuaishou.com
+block domain *.e.kuaishou.com
+block domain *.e.kuaishouzt.com
+block domain *.ad.toutiao.com

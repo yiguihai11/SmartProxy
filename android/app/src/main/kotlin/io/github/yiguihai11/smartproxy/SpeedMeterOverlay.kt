@@ -105,6 +105,9 @@ object SpeedMeterOverlay {
     private val prevTotals = ConcurrentHashMap<Int, Pair<Long, Long>>()
     /** uid → (应用名, 图标)。同上:bg 写、主线程 hide 时 clear,用并发 Map。 */
     private val metaCache = ConcurrentHashMap<Int, Pair<String, Drawable?>>()
+    /** 轮询线程专用的复用集合(避免每秒创建 HashSet/HashMap 产生 GC 抖动)。仅 bg 线程读写。 */
+    private val reusableSeenUids = HashSet<Int>()
+    private val reusableSpeeds = HashMap<Int, Pair<Long, Long>>()
     /** 当前前台应用 uid;-1 = 拿不到(未授权「使用情况访问权限」/无可判定)。仅 bg 线程访问。 */
     private var foregroundUid = -1
     private var lastForegroundQuery = 0L
@@ -511,9 +514,8 @@ object SpeedMeterOverlay {
             val appsArr = root.optJSONArray("apps")
             var maxUid = -1
             var maxSum = -1L
-            val nowSeen = HashSet<Int>()
-            // uid -> 本秒 (up, down);winner 展示需要各自速率。
-            val speeds = HashMap<Int, Pair<Long, Long>>()
+            reusableSeenUids.clear()
+            reusableSpeeds.clear()
             if (appsArr != null) {
                 for (i in 0 until appsArr.length()) {
                     val a = appsArr.optJSONObject(i) ?: continue
@@ -521,18 +523,18 @@ object SpeedMeterOverlay {
                     if (uid < 0) continue
                     val up = a.optLong("up", 0L)
                     val down = a.optLong("down", 0L)
-                    nowSeen.add(uid)
+                    reusableSeenUids.add(uid)
                     val prev = prevTotals[uid]
                     val upD = (up - (prev?.first ?: up)).coerceAtLeast(0L)
                     val downD = (down - (prev?.second ?: down)).coerceAtLeast(0L)
                     prevTotals[uid] = Pair(up, down)
-                    speeds[uid] = Pair(upD, downD)
+                    reusableSpeeds[uid] = Pair(upD, downD)
                     val sum = upD + downD
                     if (sum > maxSum) { maxSum = sum; maxUid = uid }
                 }
             }
             // 清掉已不在快照里的 uid 旧基准,防 map 无限增长。
-            prevTotals.keys.removeAll { it !in nowSeen }
+            prevTotals.keys.removeAll { it !in reusableSeenUids }
 
             // 「谁网速大显示谁」:比前台应用 vs 流量最大的上下行之和,大的上;平局优先
             // 前台(正在看的应用);前台拿不到(未授权/无 RESUMED)退流量最大;都无则前台(0 速率)。
@@ -540,10 +542,10 @@ object SpeedMeterOverlay {
             var win = maxUid
             var winSum = maxSum
             if (fg >= 0) {
-                val fgSum = speeds[fg]?.let { it.first + it.second } ?: 0L
+                val fgSum = reusableSpeeds[fg]?.let { it.first + it.second } ?: 0L
                 if (fgSum >= winSum) { win = fg; winSum = fgSum }
             }
-            val (wUp, wDown) = speeds[win] ?: Pair(0L, 0L)
+            val (wUp, wDown) = reusableSpeeds[win] ?: Pair(0L, 0L)
             Tick(win, wUp, wDown)
         }.getOrNull() ?: return // 引擎未启动等:本次跳过,视图保持原样
 

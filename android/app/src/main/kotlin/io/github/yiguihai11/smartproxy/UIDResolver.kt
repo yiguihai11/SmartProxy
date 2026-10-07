@@ -40,10 +40,17 @@ class UIDResolver(context: Context) : smartproxy.mobile.UIDResolver {
         appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
     }
 
+    private data class QuadKey(
+        val proto: Int,
+        val localPort: Int,
+        val remoteIP: String,
+        val remotePort: Int
+    )
+
     private data class CacheEntry(val uid: Int, val expireAt: Long)
 
-    /** 线程安全 LRU 缓存:Key 为四元组字符串,Value 为包含过期时间的 UID 条目。 */
-    private val lruCache = object : LruCache<String, CacheEntry>(CACHE_CAPACITY) {}
+    /** 线程安全 LRU 缓存:Key 为四元组数据类,Value 为包含过期时间的 UID 条目。 */
+    private val lruCache = object : LruCache<QuadKey, CacheEntry>(CACHE_CAPACITY) {}
 
     override fun resolveUID(
         proto: Int,
@@ -52,7 +59,7 @@ class UIDResolver(context: Context) : smartproxy.mobile.UIDResolver {
         remoteIP: String,
         remotePort: Int
     ): Int {
-        val cacheKey = "$proto:$localPort:$remoteIP:$remotePort"
+        val cacheKey = QuadKey(proto, localPort, remoteIP, remotePort)
         val now = SystemClock.elapsedRealtime()
 
         // 1. 优先查内存 LRU 缓存(纳秒级响应,规避 0.5~2ms 的 Binder IPC 阻塞)

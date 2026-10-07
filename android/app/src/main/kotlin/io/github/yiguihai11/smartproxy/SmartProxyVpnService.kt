@@ -114,8 +114,9 @@ class SmartProxyVpnService : VpnService() {
             )
         }
 
-        private var appContextRef: java.lang.ref.WeakReference<android.content.Context>? = null
-        fun getAppContext(): android.content.Context? = appContextRef?.get()
+        @Volatile
+        private var appContext: android.content.Context? = null
+        fun getAppContext(): android.content.Context? = appContext
     }
 
     @Volatile
@@ -267,7 +268,7 @@ class SmartProxyVpnService : VpnService() {
         // 服务模式(§8):仅代理(SOCKS5)不建 VpnService,直接起引擎 SOCKS5;VPN 模式走 establishVpn。
         val socksOnly = AppPrefs.serviceMode(this) == AppPrefs.MODE_SOCKS5
         Log.i(TAG, "[startInternal] serviceMode=${AppPrefs.serviceMode(this)}, socksOnly=$socksOnly. Calling ${if (socksOnly) "startSocksOnly()" else "establishVpn()"}...")
-        appContextRef = java.lang.ref.WeakReference(applicationContext)
+        appContext = applicationContext
         val started = if (socksOnly) startSocksOnly() else establishVpn()
         if (started) {
             startedEngine = true

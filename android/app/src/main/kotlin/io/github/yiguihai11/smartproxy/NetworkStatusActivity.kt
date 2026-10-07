@@ -98,6 +98,9 @@ import org.json.JSONObject
  *  - UID→包名/图标:懒解析 + 缓存(复用 AppEnumerator 图标缓存),只解快照里出现的 app。
  */
 
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.Stable
+
 data class ConnStatsRec(
     val proto: Int,
     val host: String,
@@ -107,6 +110,8 @@ data class ConnStatsRec(
     val srcIp: String = "",
 )
 private data class AppStats(val uid: Int, val up: Long, val down: Long, val conns: List<ConnStatsRec>)
+
+@Immutable
 private data class AppItem(
     val uid: Int,
     val label: String,
@@ -116,6 +121,7 @@ private data class AppItem(
     val downBps: Long,
     val conns: List<ConnStatsRec>
 )
+@Immutable
 private data class AppMeta(val label: String, val icon: ImageBitmap?, val pkg: String?)
 
 class NetworkStatusActivity : ComponentActivity() {
