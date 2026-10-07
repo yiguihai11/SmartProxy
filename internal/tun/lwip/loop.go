@@ -307,19 +307,17 @@ func (e *Engine) handleUDPSend(req *udpSendReq) {
 	var srcIPBytes []byte
 	if req.isIPv6 {
 		isIPv6 = 1
-		ip16 := req.srcIP.To16()
-		if ip16 == nil {
+		if !req.srcIP.Is6() {
 			req.doneChan <- errors.New("invalid IPv6 address in UDP send")
 			return
 		}
-		srcIPBytes = ip16
+		srcIPBytes = req.srcIP.As16()[:]
 	} else {
-		ip4 := req.srcIP.To4()
-		if ip4 == nil {
+		if !req.srcIP.Is4() {
 			req.doneChan <- errors.New("invalid IPv4 address in UDP send")
 			return
 		}
-		srcIPBytes = ip4
+		srcIPBytes = req.srcIP.As4()[:]
 	}
 
 	var pinner runtime.Pinner
