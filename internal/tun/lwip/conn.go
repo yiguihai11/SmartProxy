@@ -50,6 +50,19 @@ func releaseWriteReq(req *writeReq) {
 	writeReqPool.Put(req)
 }
 
+const (
+	tcpRecvBufMinCap = 32768  // 32 KiB
+	tcpRecvBufMaxCap = 131072 // 128 KiB
+	tcpRecvBatchSize = 32768  // 32 KiB window update batching threshold
+)
+
+var tcpRecvBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, tcpRecvBufMinCap)
+		return &b
+	},
+}
+
 // Conn represents a TCP connection accepted by the lwIP stack, implementing net.Conn.
 type Conn struct {
 	id         uint64
@@ -57,14 +70,16 @@ type Conn struct {
 	remoteAddr net.Addr // client
 	localAddr  net.Addr // target
 
-	mu       sync.Mutex
-	readCond *sync.Cond
-	recvBuf  []byte
-	recvOff  int
-	readErr  error
-	eof      bool
-	closed     bool
-	lingerZero bool
+	mu          sync.Mutex
+	readCond    *sync.Cond
+	recvBuf     []byte
+	recvBufPtr  *[]byte
+	recvOff     int
+	pendingRecv uint32
+	readErr     error
+	eof         bool
+	closed      bool
+	lingerZero  bool
 
 	closeChan chan struct{}
 
@@ -114,14 +129,16 @@ func (c *Conn) Read(b []byte) (int, error) {
 	}
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	for {
 		if c.closed {
+			c.mu.Unlock()
 			return 0, errConnectionClosed
 		}
 		if c.readErr != nil {
-			return 0, c.readErr
+			err := c.readErr
+			c.mu.Unlock()
+			return 0, err
 		}
 		avail := len(c.recvBuf) - c.recvOff
 		if avail > 0 {
@@ -131,14 +148,30 @@ func (c *Conn) Read(b []byte) (int, error) {
 				c.recvBuf = c.recvBuf[:0]
 				c.recvOff = 0
 			}
-			// Notify lwIP to advance receive window
-			c.engine.postRecved(c.id, uint32(n))
+
+			c.pendingRecv += uint32(n)
+			var toNotify uint32
+			// Flush window update if batch threshold reached (32KB) or buffer fully drained
+			if c.pendingRecv >= tcpRecvBatchSize || len(c.recvBuf) == 0 {
+				toNotify = c.pendingRecv
+				c.pendingRecv = 0
+			}
+
+			connID := c.id
+			engine := c.engine
+			c.mu.Unlock()
+
+			if toNotify > 0 {
+				engine.postRecved(connID, toNotify)
+			}
 			return n, nil
 		}
 		if c.eof {
+			c.mu.Unlock()
 			return 0, io.EOF
 		}
 		if !c.readDeadline.IsZero() && time.Now().After(c.readDeadline) {
+			c.mu.Unlock()
 			return 0, os.ErrDeadlineExceeded
 		}
 
@@ -224,8 +257,16 @@ func (c *Conn) Close() error {
 		return nil
 	}
 	c.closed = true
+	if c.recvBufPtr != nil {
+		if cap(c.recvBuf) >= tcpRecvBufMinCap && cap(c.recvBuf) <= tcpRecvBufMaxCap {
+			*c.recvBufPtr = c.recvBuf[:0]
+			tcpRecvBufPool.Put(c.recvBufPtr)
+		}
+		c.recvBufPtr = nil
+	}
 	c.recvBuf = nil
 	c.recvOff = 0
+	c.pendingRecv = 0
 	isLingerZero := c.lingerZero
 	close(c.closeChan)
 	if c.readTimer != nil {
@@ -286,6 +327,15 @@ func (c *Conn) SetWriteDeadline(t time.Time) error {
 
 func (c *Conn) onData(b []byte) {
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	if c.recvBuf == nil {
+		bufPtr := tcpRecvBufPool.Get().(*[]byte)
+		c.recvBuf = (*bufPtr)[:0]
+		c.recvBufPtr = bufPtr
+	}
 	if c.recvOff >= len(c.recvBuf) {
 		c.recvBuf = c.recvBuf[:0]
 		c.recvOff = 0

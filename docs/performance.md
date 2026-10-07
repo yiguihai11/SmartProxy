@@ -161,9 +161,11 @@ CGO_ENABLED=1 go test -tags "with_gvisor,with_lwip" -bench="BenchmarkStack_" -be
    - TUN 物理输出通过 `unsafe.Slice` 直接借用 C 连续内存，彻底消除发包堆分配（0 allocs/op）；
    - UDP 发包直接透传 payload 切片指针至 `pbuf_alloc_reference(..., PBUF_REF)`，消灭 Go 侧二次克隆；请求结构体与 Channel 全面池化（`udpSendReqPool` + `writeReqPool`），端到端发包压至 **2.0 µs / 1 alloc (16B)**。
    - 纯同步 CGO 调用去除冗余的 `runtime.Pinner`，指针在调用期由 Go 运行时天然固定，消除 GC 原子标记开销。
-2. **TCP 接收滑动缓冲常驻复用（Sliding RecvBuffer）**：
+2. **TCP 接收滑动缓冲池化与锁外批量扩窗（Sliding Buffer Pool & Batch Recved）**：
    - 彻底摒弃以往读空缓冲区即丢弃底层数组（`c.recvBuf = nil`）的设计；
-   - 采用基于读偏移指针（`recvOff`）的滑动缓冲：读空时保留底层 `cap` 并重置指针（`recvBuf[:0]`），空间过半自动紧凑重排。长连接流媒体与下载在稳态下实现 **0 次切片扩容与重新分配**。
+   - 采用基于读偏移指针（`recvOff`）的滑动缓冲：读空时保留底层 `cap` 并重置指针（`recvBuf[:0]`），空间过半自动紧凑重排。长连接流媒体与下载在稳态下实现 **0 次切片扩容与重新分配**；
+   - 引入 `tcpRecvBufPool`（32 KiB~128 KiB 对象池）按需惰性分配，连接关闭后归还复用，杜绝短连接高频建闭下的 GC 堆抖动，空闲连接 0 内存占用；
+   - **锁外非阻塞扩窗与批量聚合**：`Conn.Read` 在锁外调用 `postRecved`，彻底消除持锁发送 Channel 导致的死锁与主事件循环阻塞风险；引入 32 KiB 阈值与缓冲区读空时按需合并通报，削减高速下载下 80%+ 的 CGO 与 Channel 调度开销。
 3. **连接查找 1024 槽位扩容与无锁注册**：
    - C 端连接哈希桶由 256 扩容至 **1024 桶（`SP_CONN_BUCKETS 1024`，掩码 `id & 1023U`）**，万级并发下链表碰撞深度降至 1~2 节点，查找逼近绝对 $O(1)$；
    - Go 侧 Engine 注册表使用 `atomic.Pointer` 换快照，CGO 回调全程无锁。
