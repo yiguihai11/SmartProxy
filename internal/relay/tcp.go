@@ -26,7 +26,8 @@ var (
 
 var bufferPool = sync.Pool{
 	New: func() interface{} {
-		return make([]byte, 32*1024)
+		buf := make([]byte, 32*1024)
+		return &buf
 	},
 }
 
@@ -186,9 +187,9 @@ func relayDirection(ctx context.Context, dst, src net.Conn, direction string, pr
 
 	// Fall back to a buffered copy when splice conditions are not met or it fails
 	{
-		buf := bufferPool.Get().([]byte)
-		m, cerr := io.CopyBuffer(dst, src, buf)
-		bufferPool.Put(buf)
+		bufPtr := bufferPool.Get().(*[]byte)
+		m, cerr := io.CopyBuffer(dst, src, *bufPtr)
+		bufferPool.Put(bufPtr)
 		total += m
 		err = cerr
 	}

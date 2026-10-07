@@ -1018,8 +1018,9 @@ func (h *TUNHandler) remoteUDPReader(ll *slog.Logger, tunConn N.PacketConn, entr
 		// (IP 头 + UDP 头,IPv4=28 / IPv6=48 字节)补包头,而 buf.As 产出的 buffer start=0 没有任何前导空间,
 		// ExtendHeader 会 panic("buffer overflow: capacity N,start 0, need 28")。
 		// 该 panic 被 safego 兜住不闪退,但回包会被静默丢弃导致会话中断。
-		respBuf := tunResponseBuffer(rawBuf[payloadStart:n])
+		respBuf, slicePtr := acquireTunResponseBuffer(rawBuf[payloadStart:n])
 		if err := tunConn.WritePacket(respBuf, entry.dst); err != nil {
+			releaseTunResponseBuffer(slicePtr)
 			respBuf.Release()
 			select {
 			case errCh <- err:
@@ -1027,6 +1028,7 @@ func (h *TUNHandler) remoteUDPReader(ll *slog.Logger, tunConn N.PacketConn, entr
 			}
 			return
 		}
+		releaseTunResponseBuffer(slicePtr)
 		respBuf.Release()
 	}
 }
@@ -1076,10 +1078,11 @@ func (h *TUNHandler) handleDNS(ctx context.Context, conn N.PacketConn, host stri
 			// buffer start=0 没有任何前导空间,ExtendHeader 会 panic("buffer overflow:
 			// capacity N,start 0, need 28")。该 panic 被 safego 兜住不闪退,但 DNS 响应会被
 			// 静默丢弃,客户端只能等超时(实测 handleDNS 高频触发,capacity 52/78/230 都出现过)。
-			respBuf := tunResponseBuffer(response)
+			respBuf, slicePtr := acquireTunResponseBuffer(response)
 			if err := conn.WritePacket(respBuf, addr); err != nil {
 				ll.Debug("DNS write response failed", "error", err)
 			}
+			releaseTunResponseBuffer(slicePtr)
 			respBuf.Release()
 		}
 	}
@@ -1092,14 +1095,38 @@ func (h *TUNHandler) handleDNS(ctx context.Context, conn N.PacketConn, host stri
 const tunResponseHeadroom = 128
 const dnsResponseHeadroom = tunResponseHeadroom
 
+var tunResponseSlicePool = sync.Pool{
+	New: func() any {
+		b := make([]byte, tunResponseHeadroom+2048)
+		return &b
+	},
+}
+
+func acquireTunResponseBuffer(payload []byte) (*buf.Buffer, *[]byte) {
+	if len(payload) <= 2048 {
+		ptr := tunResponseSlicePool.Get().(*[]byte)
+		padded := (*ptr)[:tunResponseHeadroom+len(payload)]
+		copy(padded[tunResponseHeadroom:], payload)
+		buffer := buf.As(padded)
+		buffer.Advance(tunResponseHeadroom)
+		return buffer, ptr
+	}
+	padded := make([]byte, tunResponseHeadroom+len(payload))
+	copy(padded[tunResponseHeadroom:], payload)
+	buffer := buf.As(padded)
+	buffer.Advance(tunResponseHeadroom)
+	return buffer, nil
+}
+
+func releaseTunResponseBuffer(ptr *[]byte) {
+	if ptr != nil {
+		tunResponseSlicePool.Put(ptr)
+	}
+}
+
 // tunResponseBuffer 把回包 payload 拷进一个前导 tunResponseHeadroom 字节的切片,
 // 用 buf.As 包装并 Advance 到 payload 起点后返回 —— 既让 ExtendHeader 有空间补包头,
 // 又保持"未托管 buffer、Release 是 no-op"的语义不变。
-//
-// 用 buf.As 而不是 buf.With:With 不设 end,Bytes() 返回空切片,会把 UDP 回包写成空数据报。
-// 用 buf.As 而不是 buf.NewPacket():这里是调用方自己 Release(见 handleDNS / remoteUDPReader,
-// 以及 GoPacketConn.WritePacket 内部也 defer buffer.Release())——托管 buffer 在两条释放路径
-// 下会被重复放回池里,未托管 buffer 的 Release 是 no-op,不会踩这个雷。
 func tunResponseBuffer(payload []byte) *buf.Buffer {
 	padded := make([]byte, tunResponseHeadroom+len(payload))
 	copy(padded[tunResponseHeadroom:], payload)

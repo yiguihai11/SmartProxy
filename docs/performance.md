@@ -28,12 +28,14 @@ type Engine struct {
 
 | 池 | 位置 | 大小 | 用途 |
 | --- | --- | --- | --- |
-| `bufferPool` | `internal/relay/tcp.go` | 32 KiB | TCP relay 的 `io.CopyBuffer` 缓冲 |
+| `bufferPool` | `internal/relay/tcp.go` | 32 KiB | TCP relay 的 `io.CopyBuffer` 缓冲（`*[]byte` 指针池化免装箱） |
 | `UDPBufPool` / `udpBufPool` | `relay` / `udp` | 65535 字节 | UDP 数据报缓冲 |
 | `PacketPool` | `internal/relay/tcp.go` | 4096 字节 | DNS 查询短包缓冲 |
+| `tunResponseSlicePool` | `internal/tun/handler.go` | 2176 字节 | TUN 下行与 DNS 回包（前导 128 字节 headroom）池化缓冲 |
 | `clientHelloBufPool` | `internal/tun/handler.go` | 4096 字节 | `ReadClientHello` 预读首包 |
 
-- **TCP relay**：32 KiB 池化缓冲 + `tcpSplice` 内核零拷贝（两端都是 `*net.TCPConn` 时 `dst.ReadFrom(src)` 走 `splice(2)`，避免用户态拷贝，低 CPU）。
+- **TCP relay**：32 KiB 池化缓冲（采用 `*[]byte` 指针避免 Go 接口装箱分配）+ `tcpSplice` 内核零拷贝（两端都是 `*net.TCPConn` 时 `dst.ReadFrom(src)` 走 `splice(2)`，避免用户态拷贝，低 CPU）。
+- **TUN 下行与 DNS 回包**：经 `acquireTunResponseBuffer` 从 `tunResponseSlicePool` 借用前导 128 字节 headroom 缓冲，下行写完 TUN 立即归还，彻底免除回包每包 `make([]byte)` 堆分配。
 - **TUN ReadClientHello**：从 `clientHelloBufPool` 取池化缓冲预读，但返回给调用方的是**精确尺寸独立拷贝**（`out := make([]byte, exact)`），池复用不污染调用方、也不与调用方生命周期耦合。
 - **UDP**：`udpBufPool` 65535 满尺寸；`buf.NewPacket` 分配 packet buffer、`Release` 归还；非托管缓冲 `buf.As` 的 `Release` 是 no-op。给 TUN 发已有数据必须用 `buf.As` 而非 `buf.With`（`With` 不设置 end 导致 `Bytes()` 返回空切片，会把 UDP/DNS 回包写成空数据报）。
 
@@ -44,7 +46,9 @@ type Engine struct {
 
 ## §4 减少每包 / 每连接开销
 
-- **UDP 每包免解析 IP**：`udp.Handler` 构造时把 `clientIP` 用 `net.ParseIP` 解析一次存入 `clientIPParsed`，`HandlePacket` 每包直接复用，避免每包分配（`internal/udp/handler.go`）。
+- **UDP 每包免解析 IP 与延迟字符串拼接**：
+  - `udp.Handler` 构造时把 `clientIP` 用 `net.ParseIP` 解析一次存入 `clientIPParsed`，`HandlePacket` 每包直接复用，避免每包分配（`internal/udp/handler.go`）；
+  - `targetAddr`（`net.JoinHostPort` + `strconv.Itoa`）移入新会话未命中分支，已建立会话热路径 **0 字符串分配**。
 - **热路径日志降级**：高频日志从 `slog.Info` 改为 `slog.Debug`，在高查询/连接率下是纯开销：
   - DNS `"handling DNS query"`（`internal/dns/handler.go`）；
   - TUN `"new connection"`、`"extracted domain"`（`internal/tun/handler.go`）。

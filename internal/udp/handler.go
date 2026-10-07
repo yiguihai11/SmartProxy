@@ -124,7 +124,7 @@ type udpOutbound struct {
 
 type udpSession struct {
 	flowID uint64
-	log    *slog.Logger                 // 绑定会话 id 的 logger;会话内日志全经它,自动带 "flow",grep 一个号即可串联整条会话
+	log    *slog.Logger                // 绑定会话 id 的 logger;会话内日志全经它,自动带 "flow",grep 一个号即可串联整条会话
 	snap   atomic.Pointer[udpOutbound] // 当前出向;判死热切时原子替换(读写无锁取当前值)
 	wd     *quic.Watchdog              // B 路径(国外 QUIC 先直连判死观察)非 nil;其余会话恒 nil
 
@@ -325,7 +325,6 @@ func (h *Handler) HandlePacket(ctx context.Context, data []byte, clientAddr net.
 
 	port := int(binary.BigEndian.Uint16(data[headerLen : headerLen+2]))
 	payload := data[headerLen+2:]
-	targetAddr := net.JoinHostPort(ip, strconv.Itoa(port))
 
 	key := sessionKeyFor(clientAddr, ip, port)
 	sess, ok := h.getSession(key)
@@ -340,6 +339,8 @@ func (h *Handler) HandlePacket(ctx context.Context, data []byte, clientAddr net.
 		}
 		return
 	}
+
+	targetAddr := net.JoinHostPort(ip, strconv.Itoa(port))
 
 	// 新会话:在 SOCKS5-UDP 入口分配 flow id 并注入 ctx(遮蔽控制 TCP 连接的 id——
 	// UDP 会话是独立生命周期),此后 block / DNS / 建会话 / 转发日志全带同一个号。
