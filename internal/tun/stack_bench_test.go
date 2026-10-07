@@ -766,10 +766,7 @@ func BenchmarkStack_TCP_Handshake_Go(b *testing.B) {
 
 	bh := &benchHandler{
 		onTCP: func(conn net.Conn) {
-			go func() {
-				time.Sleep(10 * time.Millisecond)
-				conn.Close()
-			}()
+			conn.Close()
 		},
 	}
 
@@ -821,7 +818,10 @@ func BenchmarkStack_TCP_Handshake_Go(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		clientPort := uint16(10000 + (i % 16))
+		// Use a fresh 4-tuple on every iteration. Reusing only 16 source ports
+		// can collide with the Go stack's still-closing TCP control blocks and
+		// make the benchmark fail for reasons unrelated to handshake cost.
+		clientPort := uint16(10000 + i)
 		syn := testBuildIPv4TCP(clientIP, serverIP, clientPort, 80, 1000, 0, 0x02, nil)
 		_, err := unix.Write(fds[1], syn)
 		if err != nil {
