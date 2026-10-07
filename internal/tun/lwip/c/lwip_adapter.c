@@ -34,13 +34,13 @@ static struct sp_tcp_conn *sp_find_conn(struct sp_lwip *lw, uint64_t id) {
 }
 
 static void sp_add_conn(struct sp_lwip *lw, struct sp_tcp_conn *conn) {
-    uint32_t b = (uint32_t)(conn->id % 256);
+    uint32_t b = (uint32_t)(conn->id & 255U);
     conn->next = lw->conn_buckets[b];
     lw->conn_buckets[b] = conn;
 }
 
 static void sp_remove_conn(struct sp_lwip *lw, struct sp_tcp_conn *conn) {
-    uint32_t b = (uint32_t)(conn->id % 256);
+    uint32_t b = (uint32_t)(conn->id & 255U);
     struct sp_tcp_conn **curr = &lw->conn_buckets[b];
     while (*curr) {
         if (*curr == conn) {
@@ -61,7 +61,7 @@ struct sp_udp_conn {
 
 static struct sp_udp_conn *sp_find_udp_conn(struct sp_lwip *lw, uint64_t id) {
     if (!lw || !id) return NULL;
-    uint32_t b = (uint32_t)(id % 256);
+    uint32_t b = (uint32_t)(id & 255U);
     struct sp_udp_conn *c = lw->udp_conn_buckets[b];
     while (c) {
         if (c->id == id) return c;
@@ -150,8 +150,18 @@ static err_t sp_tcp_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_
     }
 
     if (lw->tcp_recv) {
-        for (struct pbuf *q = p; q != NULL; q = q->next) {
-            lw->tcp_recv(conn->id, (const uint8_t *)q->payload, q->len, lw->ctx_id);
+        if (p->next == NULL) {
+            lw->tcp_recv(conn->id, (const uint8_t *)p->payload, p->len, lw->ctx_id);
+        } else {
+            /*
+             * A chained TCP pbuf would otherwise cross the cgo boundary once
+             * per fragment. Aggregate it while the callback is synchronous so
+             * Go pays one callback and one receive-buffer append per segment.
+             */
+            u16_t copied = pbuf_copy_partial(p, lw->output_buf, p->tot_len, 0);
+            if (copied == p->tot_len) {
+                lw->tcp_recv(conn->id, lw->output_buf, copied, lw->ctx_id);
+            }
         }
     }
     pbuf_free(p);
