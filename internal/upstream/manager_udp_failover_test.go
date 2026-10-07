@@ -271,15 +271,20 @@ func TestUDPAssociate_UnverifiedRawDeadThenHealthy(t *testing.T) {
 // TestUDPAssociate_RawFastPathStillTrusted 对照用例:udp_only/已知 raw 节点的快路径本地
 // 拨号不算"未验证回落",不能被新增的端到端验证拦下来(否则纯 raw 节点彻底不可用)。
 func TestUDPAssociate_RawFastPathStillTrusted(t *testing.T) {
-	fdns, dnsPort := startFrameDNSServer(t)
-	defer fdns.Close()
-
-	// 同一 host:port 上:SOCKS5 TCP(拒绝 ASSOCIATE)+ 裸 UDP 中继(应答真实 DNS)。
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", dnsPort))
+// 同一 host:port 上:先绑定 TCP，再让裸 UDP 中继复用这个端口。
+	// 这样避免部分 CI 内核/网络栈在 UDP 已监听后再建立同端口 TCP 时出现
+	// 偶发的 EADDRINUSE。
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ln.Close()
+	dnsPort := ln.Addr().(*net.TCPAddr).Port
+	fdns, err := startFrameDNSServerAt(t, net.IPv4(127, 0, 0, 1), dnsPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fdns.Close()
 	go func() {
 		for {
 			c, err := ln.Accept()

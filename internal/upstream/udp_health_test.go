@@ -38,6 +38,39 @@ func startFrameDNSServer(t *testing.T) (*net.UDPConn, int) {
 	return startFrameDNSServerOn(t, net.IPv4(127, 0, 0, 1))
 }
 
+func startFrameDNSServerAt(t *testing.T, ip net.IP, port int) (*net.UDPConn, error) {
+	t.Helper()
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: ip, Port: port})
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, addr, err := pc.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			payload, err := parseUDPFrame(buf[:n])
+			if err != nil {
+				continue
+			}
+			var q dns.Msg
+			if err := q.Unpack(payload); err != nil || len(q.Question) == 0 {
+				continue
+			}
+			resp := new(dns.Msg)
+			resp.SetReply(&q)
+			packed, err := resp.Pack()
+			if err != nil {
+				continue
+			}
+			pc.WriteToUDP(buildUDPFrame("1.1.1.1", 53, packed), addr)
+		}
+	}()
+	return pc, nil
+}
+
 // startFrameDNSServerOn listens on the given IP (IPv4 or IPv6 loopback) and answers
 // SOCKS5-UDP-frame-wrapped DNS queries with a valid DNS response (same TXID, QR=1) wrapped
 // back in a frame. It doubles as the raw-relay target and the DNS server for udp_only probes:

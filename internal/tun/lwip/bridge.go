@@ -9,7 +9,7 @@ package lwip
 */
 import "C"
 import (
-	"net"
+	"net/netip"
 	"unsafe"
 )
 
@@ -26,20 +26,16 @@ func goPacketOutput(data *C.uint8_t, length C.uint32_t, ctxID C.uint64_t) {
 	e.onPacketOutput(pkt)
 }
 
-func parseIP(ptr unsafe.Pointer, isIPv6 bool) net.IP {
+func parseIP(ptr unsafe.Pointer, isIPv6 bool) netip.Addr {
 	if ptr == nil {
-		return nil
+		return netip.Addr{}
 	}
 	if isIPv6 {
-		b := (*[16]byte)(ptr)
-		ip := make(net.IP, 16)
-		copy(ip, b[:])
-		return ip
+		b := *(*[16]byte)(ptr)
+		return netip.AddrFrom16(b)
 	}
-	b := (*[4]byte)(ptr)
-	ip := make(net.IP, 4)
-	copy(ip, b[:])
-	return ip
+	b := *(*[4]byte)(ptr)
+	return netip.AddrFrom4(b)
 }
 
 //export goTcpAccept
@@ -71,7 +67,7 @@ func goTcpRecv(connID C.uint64_t, data *C.uint8_t, length C.uint16_t, ctxID C.ui
 		return
 	}
 
-	b := C.GoBytes(unsafe.Pointer(data), C.int(length))
+	b := unsafe.Slice((*byte)(unsafe.Pointer(data)), int(length))
 	e.onTCPRecv(id, b)
 }
 
@@ -109,6 +105,7 @@ func goUdpRecv(connID C.uint64_t, isIPv6 C.int, srcIP unsafe.Pointer, srcPort C.
 	sIP := parseIP(srcIP, useIPv6)
 	dIP := parseIP(dstIP, useIPv6)
 
-	b := C.GoBytes(unsafe.Pointer(data), C.int(length))
-	e.onUDPRecv(uint64(connID), useIPv6, sIP, uint16(srcPort), dIP, uint16(dstPort), b)
+	b, buf := acquireUDPRecvBuffer(int(length))
+	copy(b, unsafe.Slice((*byte)(unsafe.Pointer(data)), int(length)))
+	e.onUDPRecv(uint64(connID), useIPv6, sIP, uint16(srcPort), dIP, uint16(dstPort), b, buf)
 }

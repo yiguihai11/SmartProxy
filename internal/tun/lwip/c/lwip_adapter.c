@@ -24,7 +24,7 @@ struct sp_tcp_conn {
 
 static struct sp_tcp_conn *sp_find_conn(struct sp_lwip *lw, uint64_t id) {
     if (!lw || !id) return NULL;
-    uint32_t b = (uint32_t)(id % 256);
+    uint32_t b = (uint32_t)(id & 255U);
     struct sp_tcp_conn *c = lw->conn_buckets[b];
     while (c) {
         if (c->id == id) return c;
@@ -34,13 +34,13 @@ static struct sp_tcp_conn *sp_find_conn(struct sp_lwip *lw, uint64_t id) {
 }
 
 static void sp_add_conn(struct sp_lwip *lw, struct sp_tcp_conn *conn) {
-    uint32_t b = (uint32_t)(conn->id % 256);
+    uint32_t b = (uint32_t)(conn->id & 255U);
     conn->next = lw->conn_buckets[b];
     lw->conn_buckets[b] = conn;
 }
 
 static void sp_remove_conn(struct sp_lwip *lw, struct sp_tcp_conn *conn) {
-    uint32_t b = (uint32_t)(conn->id % 256);
+    uint32_t b = (uint32_t)(conn->id & 255U);
     struct sp_tcp_conn **curr = &lw->conn_buckets[b];
     while (*curr) {
         if (*curr == conn) {
@@ -61,7 +61,7 @@ struct sp_udp_conn {
 
 static struct sp_udp_conn *sp_find_udp_conn(struct sp_lwip *lw, uint64_t id) {
     if (!lw || !id) return NULL;
-    uint32_t b = (uint32_t)(id % 256);
+    uint32_t b = (uint32_t)(id & 255U);
     struct sp_udp_conn *c = lw->udp_conn_buckets[b];
     while (c) {
         if (c->id == id) return c;
@@ -71,13 +71,13 @@ static struct sp_udp_conn *sp_find_udp_conn(struct sp_lwip *lw, uint64_t id) {
 }
 
 static void sp_add_udp_conn(struct sp_lwip *lw, struct sp_udp_conn *conn) {
-    uint32_t b = (uint32_t)(conn->id % 256);
+    uint32_t b = (uint32_t)(conn->id & 255U);
     conn->next = lw->udp_conn_buckets[b];
     lw->udp_conn_buckets[b] = conn;
 }
 
 static void sp_remove_udp_conn(struct sp_lwip *lw, struct sp_udp_conn *conn) {
-    uint32_t b = (uint32_t)(conn->id % 256);
+    uint32_t b = (uint32_t)(conn->id & 255U);
     struct sp_udp_conn **curr = &lw->udp_conn_buckets[b];
     while (*curr) {
         if (*curr == conn) {
@@ -150,8 +150,18 @@ static err_t sp_tcp_recv_cb(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_
     }
 
     if (lw->tcp_recv) {
-        for (struct pbuf *q = p; q != NULL; q = q->next) {
-            lw->tcp_recv(conn->id, (const uint8_t *)q->payload, q->len, lw->ctx_id);
+        if (p->next == NULL) {
+            lw->tcp_recv(conn->id, (const uint8_t *)p->payload, p->len, lw->ctx_id);
+        } else {
+            /*
+             * A chained TCP pbuf would otherwise cross the cgo boundary once
+             * per fragment. Aggregate it while the callback is synchronous so
+             * Go pays one callback and one receive-buffer append per segment.
+             */
+            u16_t copied = pbuf_copy_partial(p, lw->output_buf, p->tot_len, 0);
+            if (copied == p->tot_len) {
+                lw->tcp_recv(conn->id, lw->output_buf, copied, lw->ctx_id);
+            }
         }
     }
     pbuf_free(p);
@@ -555,7 +565,6 @@ int sp_lwip_udp_send(struct sp_lwip *lw, uint64_t conn_id, int is_ipv6, const vo
     if (!conn || !conn->pcb) return ERR_CONN;
 
     ip_addr_t from_addr;
-    memset(&from_addr, 0, sizeof(from_addr));
     if (is_ipv6) {
         memcpy(&from_addr.u_addr.ip6.addr, src_ip, 16);
         from_addr.type = IPADDR_TYPE_V6;
@@ -564,10 +573,15 @@ int sp_lwip_udp_send(struct sp_lwip *lw, uint64_t conn_id, int is_ipv6, const vo
         from_addr.type = IPADDR_TYPE_V4;
     }
 
-    struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, (u16_t)len, PBUF_RAM);
+    /*
+     * PBUF_REF borrows the caller's payload. The Go adapter pins req.data for
+     * the complete sp_lwip_udp_send call, and this NO_SYS raw-API path sends
+     * synchronously before returning. That removes the payload memcpy without
+     * changing the lifetime visible to lwIP.
+     */
+    struct pbuf *p = pbuf_alloc_reference((void *)data, (u16_t)len, PBUF_REF);
     if (!p) return ERR_MEM;
 
-    memcpy(p->payload, data, len);
     err_t err = udp_sendfrom(conn->pcb, p, &from_addr, src_port);
     pbuf_free(p);
 

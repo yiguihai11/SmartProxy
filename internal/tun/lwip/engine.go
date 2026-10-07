@@ -13,33 +13,53 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 )
 
 var (
-	engineMu     sync.RWMutex
-	engines      = make(map[uint64]*Engine)
-	nextEngineID uint64
+	engineMu          sync.Mutex
+	nextEngineID      uint64
+	engineRegistryPtr atomic.Pointer[engineRegistry]
 )
+
+type engineRegistry struct {
+	engines map[uint64]*Engine
+}
+
+func init() {
+	engineRegistryPtr.Store(&engineRegistry{engines: make(map[uint64]*Engine)})
+}
 
 func registerEngine(e *Engine) uint64 {
 	engineMu.Lock()
 	defer engineMu.Unlock()
 	nextEngineID++
 	id := nextEngineID
-	engines[id] = e
+	old := engineRegistryPtr.Load()
+	next := make(map[uint64]*Engine, len(old.engines)+1)
+	for k, v := range old.engines {
+		next[k] = v
+	}
+	next[id] = e
+	engineRegistryPtr.Store(&engineRegistry{engines: next})
 	return id
 }
 
 func unregisterEngine(id uint64) {
 	engineMu.Lock()
 	defer engineMu.Unlock()
-	delete(engines, id)
+	old := engineRegistryPtr.Load()
+	next := make(map[uint64]*Engine, len(old.engines))
+	for k, v := range old.engines {
+		if k != id {
+			next[k] = v
+		}
+	}
+	engineRegistryPtr.Store(&engineRegistry{engines: next})
 }
 
 func getEngine(id uint64) *Engine {
-	engineMu.RLock()
-	defer engineMu.RUnlock()
-	return engines[id]
+	return engineRegistryPtr.Load().engines[id]
 }
 
 // Config configures the lwIP Engine.

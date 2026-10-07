@@ -12,7 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"time"
+	"runtime"
 	"unsafe"
 )
 
@@ -226,9 +228,9 @@ func (e *Engine) onPacketOutput(pkt []byte) {
 	}
 }
 
-func (e *Engine) onTCPAccept(connID uint64, srcIP net.IP, srcPort uint16, dstIP net.IP, dstPort uint16) {
-	remoteAddr := &net.TCPAddr{IP: srcIP, Port: int(srcPort)}
-	localAddr := &net.TCPAddr{IP: dstIP, Port: int(dstPort)}
+func (e *Engine) onTCPAccept(connID uint64, srcIP netip.Addr, srcPort uint16, dstIP netip.Addr, dstPort uint16) {
+	remoteAddr := &net.TCPAddr{IP: srcIP.AsSlice(), Port: int(srcPort)}
+	localAddr := &net.TCPAddr{IP: dstIP.AsSlice(), Port: int(dstPort)}
 	conn := newConn(e, connID, remoteAddr, localAddr)
 	e.conns[connID] = conn
 
@@ -305,21 +307,24 @@ func (e *Engine) handleUDPSend(req *udpSendReq) {
 	var srcIPBytes []byte
 	if req.isIPv6 {
 		isIPv6 = 1
-		ip16 := req.srcIP.To16()
-		if ip16 == nil {
+		if !req.srcIP.Is6() {
 			req.doneChan <- errors.New("invalid IPv6 address in UDP send")
 			return
 		}
-		srcIPBytes = ip16
+		srcIP4 := req.srcIP.As16()
+		srcIPBytes = srcIP4[:]
 	} else {
-		ip4 := req.srcIP.To4()
-		if ip4 == nil {
+		// Preserve net.IP.To4 semantics for IPv4-mapped IPv6 addresses.
+		if !req.srcIP.Is4() && !req.srcIP.Is4In6() {
 			req.doneChan <- errors.New("invalid IPv4 address in UDP send")
 			return
 		}
-		srcIPBytes = ip4
+		srcIP4 := req.srcIP.Unmap().As4()
+		srcIPBytes = srcIP4[:]
 	}
 
+	var pinner runtime.Pinner
+	pinner.Pin(&req.data[0])
 	ret := C.sp_lwip_udp_send(
 		e.lw,
 		C.uint64_t(req.connID),
@@ -329,6 +334,8 @@ func (e *Engine) handleUDPSend(req *udpSendReq) {
 		unsafe.Pointer(&req.data[0]),
 		C.uint32_t(len(req.data)),
 	)
+	pinner.Unpin()
+	runtime.KeepAlive(req.data)
 	if ret < 0 {
 		req.doneChan <- fmt.Errorf("lwip udp_send error: %d", int(ret))
 		return
@@ -341,7 +348,7 @@ func (e *Engine) handleUDPClose(connID uint64) {
 	C.sp_lwip_udp_close(e.lw, C.uint64_t(connID))
 }
 
-func (e *Engine) onUDPRecv(connID uint64, isIPv6 bool, srcIP net.IP, srcPort uint16, dstIP net.IP, dstPort uint16, data []byte) {
+func (e *Engine) onUDPRecv(connID uint64, isIPv6 bool, srcIP netip.Addr, srcPort uint16, dstIP netip.Addr, dstPort uint16, data []byte, dataBuf *[]byte) {
 	conn := e.udpConns[connID]
 	if conn == nil {
 		conn = newPacketConn(e, connID, isIPv6, srcIP, srcPort, dstIP, dstPort)
@@ -350,5 +357,5 @@ func (e *Engine) onUDPRecv(connID uint64, isIPv6 bool, srcIP net.IP, srcPort uin
 			go e.cfg.UDPHandler(conn)
 		}
 	}
-	conn.onData(dstIP, dstPort, data)
+	conn.onData(dstIP, dstPort, data, dataBuf)
 }
