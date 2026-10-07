@@ -24,7 +24,7 @@ struct sp_tcp_conn {
 
 static struct sp_tcp_conn *sp_find_conn(struct sp_lwip *lw, uint64_t id) {
     if (!lw || !id) return NULL;
-    uint32_t b = (uint32_t)(id % 256);
+    uint32_t b = (uint32_t)(id & 255U);
     struct sp_tcp_conn *c = lw->conn_buckets[b];
     while (c) {
         if (c->id == id) return c;
@@ -555,7 +555,6 @@ int sp_lwip_udp_send(struct sp_lwip *lw, uint64_t conn_id, int is_ipv6, const vo
     if (!conn || !conn->pcb) return ERR_CONN;
 
     ip_addr_t from_addr;
-    memset(&from_addr, 0, sizeof(from_addr));
     if (is_ipv6) {
         memcpy(&from_addr.u_addr.ip6.addr, src_ip, 16);
         from_addr.type = IPADDR_TYPE_V6;
