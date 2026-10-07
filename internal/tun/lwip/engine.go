@@ -214,9 +214,13 @@ func (e *Engine) Close() error {
 }
 
 func (e *Engine) postRecved(connID uint64, n uint32) {
+	cmd := recvedCmdPool.Get().(*recvedCmd)
+	cmd.connID = connID
+	cmd.len = n
 	select {
-	case e.cmdChan <- &recvedCmd{connID: connID, len: n}:
+	case e.cmdChan <- cmd:
 	case <-e.doneChan:
+		recvedCmdPool.Put(cmd)
 	}
 }
 

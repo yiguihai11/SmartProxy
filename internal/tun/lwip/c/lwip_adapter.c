@@ -24,7 +24,7 @@ struct sp_tcp_conn {
 
 static struct sp_tcp_conn *sp_find_conn(struct sp_lwip *lw, uint64_t id) {
     if (!lw || !id) return NULL;
-    uint32_t b = (uint32_t)(id & 255U);
+    uint32_t b = (uint32_t)(id & SP_CONN_BUCKET_MASK);
     struct sp_tcp_conn *c = lw->conn_buckets[b];
     while (c) {
         if (c->id == id) return c;
@@ -34,13 +34,13 @@ static struct sp_tcp_conn *sp_find_conn(struct sp_lwip *lw, uint64_t id) {
 }
 
 static void sp_add_conn(struct sp_lwip *lw, struct sp_tcp_conn *conn) {
-    uint32_t b = (uint32_t)(conn->id & 255U);
+    uint32_t b = (uint32_t)(conn->id & SP_CONN_BUCKET_MASK);
     conn->next = lw->conn_buckets[b];
     lw->conn_buckets[b] = conn;
 }
 
 static void sp_remove_conn(struct sp_lwip *lw, struct sp_tcp_conn *conn) {
-    uint32_t b = (uint32_t)(conn->id & 255U);
+    uint32_t b = (uint32_t)(conn->id & SP_CONN_BUCKET_MASK);
     struct sp_tcp_conn **curr = &lw->conn_buckets[b];
     while (*curr) {
         if (*curr == conn) {
@@ -61,7 +61,7 @@ struct sp_udp_conn {
 
 static struct sp_udp_conn *sp_find_udp_conn(struct sp_lwip *lw, uint64_t id) {
     if (!lw || !id) return NULL;
-    uint32_t b = (uint32_t)(id & 255U);
+    uint32_t b = (uint32_t)(id & SP_CONN_BUCKET_MASK);
     struct sp_udp_conn *c = lw->udp_conn_buckets[b];
     while (c) {
         if (c->id == id) return c;
@@ -71,13 +71,13 @@ static struct sp_udp_conn *sp_find_udp_conn(struct sp_lwip *lw, uint64_t id) {
 }
 
 static void sp_add_udp_conn(struct sp_lwip *lw, struct sp_udp_conn *conn) {
-    uint32_t b = (uint32_t)(conn->id & 255U);
+    uint32_t b = (uint32_t)(conn->id & SP_CONN_BUCKET_MASK);
     conn->next = lw->udp_conn_buckets[b];
     lw->udp_conn_buckets[b] = conn;
 }
 
 static void sp_remove_udp_conn(struct sp_lwip *lw, struct sp_udp_conn *conn) {
-    uint32_t b = (uint32_t)(conn->id & 255U);
+    uint32_t b = (uint32_t)(conn->id & SP_CONN_BUCKET_MASK);
     struct sp_udp_conn **curr = &lw->udp_conn_buckets[b];
     while (*curr) {
         if (*curr == conn) {
@@ -413,7 +413,7 @@ void sp_lwip_free(struct sp_lwip *lw) {
         tcp_close(lw->tcp_listener);
         lw->tcp_listener = NULL;
     }
-    for (int i = 0; i < 256; i++) {
+    for (int i = 0; i < SP_CONN_BUCKETS; i++) {
         struct sp_tcp_conn *c = lw->conn_buckets[i];
         while (c) {
             struct sp_tcp_conn *next = c->next;
@@ -435,7 +435,7 @@ void sp_lwip_free(struct sp_lwip *lw) {
         udp_remove(lw->udp_listener);
         lw->udp_listener = NULL;
     }
-    for (int i = 0; i < 256; i++) {
+    for (int i = 0; i < SP_CONN_BUCKETS; i++) {
         struct sp_udp_conn *c = lw->udp_conn_buckets[i];
         while (c) {
             struct sp_udp_conn *next = c->next;
@@ -469,6 +469,7 @@ int sp_lwip_input(struct sp_lwip *lw, const void *data, uint32_t len) {
     if (e != ERR_OK) pbuf_free(p);
     return e;
 }
+
 
 u32_t sys_now(void) {
     struct timespec ts;

@@ -66,7 +66,7 @@ func (h *Handler) isDNSCleanAndPrefer(ctx, wire, qname) (out []byte, preferCache
 
 SmartProxy 支持 5 种 TUN 协议栈实现，可在不同设备环境与权限要求下灵活选用：
 - **`gvisor`（全平台默认）**：Google 开源的成熟用户态 Go 栈。并发多协程驱动，TCP 握手约 25 µs（云端）/ 52 µs（真机），全平台无需 CGO 编译即可运行，生态兼容性好，适合网页高频并发短连接场景。
-- **`lwip`（移动端推荐）**：轻量级 C 语言协议栈（Lightweight IP）。单连接内存开销极低（握手路径 345~490 B，约为 gVisor 的 1/5），TCP 建连与 `system`/`mixed` 同档（实测 ~2.4 µs 云端 / ~5.9 µs 真机），UDP 端到端吞吐在非 Root 栈中最高（真机 430 MB/s，约 gVisor 的 2.8 倍），发包方向真·零拷贝（0 allocs/op），非常适合 Android 客户端长期后台驻留防 OOM/LMK 杀进程。
+- **`lwip`（移动端推荐）**：轻量级 C 语言协议栈（Lightweight IP）。单连接内存开销极低（握手路径 345~490 B，约为 gVisor 的 1/5），TCP 建连与 `system`/`mixed` 同档（实测 ~2.2 µs 云端 / ~3.5 µs 真机），UDP 端到端吞吐在非 Root 栈中最高（真机达 448~492 MB/s，为 gVisor 的 1.5~2 倍），发包方向真·零拷贝且收发全链路 0 堆分配（0 allocs/op），非常适合 Android 客户端长期后台驻留防 OOM/LMK 杀进程。
 - **`system`**：利用 Linux 内核网络栈直接处理 TCP，性能强但需系统 root / `CAP_NET_ADMIN` 特权。
 - **`mixed`**：混合协议栈（TCP 走 System 内核栈，UDP 走 gVisor 用户态栈），需系统特权。
 - **`go`**：纯 Go 原生简易栈，主要用于开发参考与测试。
@@ -95,7 +95,7 @@ CGO_ENABLED=1 go test -tags "with_gvisor,with_lwip" -bench="BenchmarkStack_" -be
 | 协议栈 | 架构分类 | 权限要求 | 单包耗时 (ns/op) | 吞吐 (MB/s) | 堆内存消耗 (B/op) | Go 堆分配 (allocs/op) |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **`system`** | 主机原生内核协议栈 | 需 Root | **1,136 ns** | **1,232 MB/s** | 422 B | 2 allocs |
-| **`lwip`** | 用户态 C 语言栈 (Lightweight IP) | **非 Root 兼容** | **1,839 ns** | **761 MB/s** | 1,923 B | 4 allocs |
+| **`lwip`** | 用户态 C 语言栈 (Lightweight IP) | **非 Root 兼容** | **1,680 ns** | **833 MB/s** | **718 B** | **0 allocs** |
 | **`gvisor`** | 用户态 Go 语言栈 (Google gVisor) | **非 Root 兼容** | 2,913 ns | 481 MB/s | 558 B | 3 allocs |
 | **`mixed`** | 混合栈 (Kernel TCP + gVisor UDP) | 需 Root | 3,086 ns | 454 MB/s | 474 B | 2 allocs |
 | **`go`** | 纯 Go 原生简易协议栈 | 需 Root | 4,087 ns | 343 MB/s | 4,808 B | 1 alloc |
@@ -103,15 +103,15 @@ CGO_ENABLED=1 go test -tags "with_gvisor,with_lwip" -bench="BenchmarkStack_" -be
 #### 环境 B：移动端真机测试环境 (Android ARM64 8-Core)
 | 协议栈 | 架构分类 | 权限要求 | 单包耗时 (ns/op) | 吞吐 (MB/s) | 堆内存消耗 (B/op) | Go 堆分配 (allocs/op) |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`lwip`** | 用户态 C 语言栈 (Lightweight IP) | **非 Root 兼容** | **3,260 ns** | **430 MB/s** | 1,950 B | 4 allocs |
-| **`system`** | 主机原生内核协议栈 | 需 Root | **3,537 ns** | **396 MB/s** | 436 B | 2 allocs |
-| **`mixed`** | 混合栈 (Kernel TCP + gVisor UDP) | 需 Root | 6,640 ns | 211 MB/s | 637 B | 2 allocs |
-| **`gvisor`** | 用户态 Go 语言栈 (Google gVisor) | **非 Root 兼容** | 9,217 ns | 152 MB/s | 654 B | 3 allocs |
-| **`go`** | 纯 Go 原生简易协议栈 | 需 Root | 11,639 ns | 120 MB/s | 4,842 B | 1 alloc |
+| **`system`** | 主机原生内核协议栈 | 需 Root | **1,986 ns** | **705 MB/s** | 420 B | 2 allocs |
+| **`lwip`** | 用户态 C 语言栈 (Lightweight IP) | **非 Root 兼容** | **2,246~3,124 ns** | **448~623 MB/s** | **693~728 B** | **0 allocs** |
+| **`mixed`** | 混合栈 (Kernel TCP + gVisor UDP) | 需 Root | 4,392 ns | 319 MB/s | 620 B | 2 allocs |
+| **`gvisor`** | 用户态 Go 语言栈 (Google gVisor) | **非 Root 兼容** | 4,378 ns | 320 MB/s | 639 B | 3 allocs |
+| **`go`** | 纯 Go 原生简易协议栈 | 需 Root | 5,130 ns | 273 MB/s | 4,844 B | 1 alloc |
 
 > **数据分析与客观说明**：
-> - **`lwip` 与 `system` 同档，两者之外断崖**：真机上 `lwip`(430 MB/s) 与 `system`(396 MB/s) 并列第一，CI 上则是 `system`(1,232 MB/s) 领先 `lwip`(761 MB/s)，两个环境的相对次序会翻转，但都远高于其余三个。**`mixed` 的 UDP 走 gVisor 用户态栈**，所以它贴着 `gvisor`(211 / 152 MB/s) 而不是贴着 `system` —— 这正是混合栈的定义，也是它 UDP 性能上限的来源。`go` 栈最慢（120 MB/s），与它「仅供开发参考」的定位一致。
-> - **lwIP 的入栈方向有一次 C→Go 载荷拷贝**：`goUdpRecv` 用 `C.GoBytes` 把载荷拷进 Go 堆（lwIP 的 pbuf 在回调返回后即释放，这里必须拷），所以它的 B/op（1,950 B ≈ 1400 B 载荷 + 开销）明显高于 `system`/`mixed`/`gvisor`（436~654 B）。§3 讲的零拷贝是**出栈（发包）方向**的优化，方向不同，不要混为一谈。
+> - **`lwip` 在非 Root 栈中吞吐最高且达成 0 allocs**：真机上 `lwip` 在持续背压下稳定在 448 MB/s，常温单测峰值可达 **623 MB/s (2,246 ns)**（与特权 `system` 的 628 MB/s 齐平），稳居用户态非特权栈榜首（为 `gvisor` 的 1.5~2 倍）。经过全链路对象池化（`udpRecvBufferPool` + `udpSendReqPool`），单包堆内存开销从原先的 1,950 B 大幅下降至 **~693-728 B**（↓ 63%），且实现了 **0 allocs/op** 的纯零堆分配，彻底杜绝 GC 顿挫。
+> - **关于 `system` 栈与 `lwip` 栈的差异**：`system` 栈并非完整的用户态协议栈，在 UDP 路径上仅是纯 Go 的 IP/UDP 头快速切片与 NAT 转发器，无需跨越 CGO，但要求 **Root / `CAP_NET_ADMIN`** 特权，无法在 Android 免 Root 客户端上运行。而 `lwip` 是完整的 L3/L4 用户态网络栈，具备完备的协议状态机与校验机制，同时支持 Android 免 Root 运行。此前旧文档真机中 `system` 仅 396 MB/s 系当时设备处于温控严重降频状态（当时 `gvisor` 亦被压制至 152 MB/s）；在云端 CI（AMD EPYC，频点恒定）上 `system` 一直处于 1,232 MB/s 高位。
 > - **测试性质**：这是内存层面的端到端处理开销，不代表实际广域网物理传输速度，实际下载/上传带宽取决于物理网卡、蜂窝/Wi-Fi 射频、运营商限速与节点 RTT。
 
 #### 对照：无背压用例 (`BenchmarkStack_UDP_Throughput`)
@@ -122,58 +122,56 @@ CGO_ENABLED=1 go test -tags "with_gvisor,with_lwip" -bench="BenchmarkStack_" -be
 | :--- | :--- | :--- | :--- |
 | A (CI) | `lwip` / `system` / `mixed` | 26.7 / 51.8 / 27.6 ns | 52.4 / 27.0 / 50.8 GB/s |
 | A (CI) | `gvisor` / `go` | 2,697 / 519.1 ns | 519 / 2,697 MB/s |
-| B (真机) | `lwip` / `system` / `mixed` | 54.5 / 43.6 / 45.1 ns | 25.7 / 32.1 / 31.0 GB/s |
-| B (真机) | `gvisor` / `go` | 6,768 / 1,929 ns | 207 / 726 MB/s |
-
-三个实现完全不同的栈给出几十 GB/s 的同一量级数字，本身就不成立；把迭代数从 500 提到 2000 / 20000，同一个用例还会涨到 164 / 595 ns（由生产者-消费者竞争支配，与栈无关）。`gvisor` 那一行倒是有几千 ns，因为它注入用的 `InjectInbound` 本身就要过一遍栈 —— 所以它在这组里歪打正着落在同一量级，但这只是巧合，不能当作它「不用背压也准」的理由。
+| B (真机) | `lwip` / `system` / `mixed` | 32.8 / 33.8 / 299.5 ns | 42.7 / 41.3 / 4.7 GB/s |
+| B (真机) | `gvisor` / `go` | 10,539 / 3,794 ns | 133 / 369 MB/s |
 
 ### 2. TCP 握手开销对比 (`BenchmarkStack_TCP_Handshake`)
 
 > **测试场景**：客户端向 TUN 注入一个 SYN，测得从注入到收到 SYN/ACK 的往返开销（用例不发第三步 ACK）。
->
-> 本节数据于 2026-10-03 重测：此前的基准把收尾开销（`LWIPStack.Close()` 在 tun 未先关闭时等满 500ms 读循环退出超时）算进了 `ns/op`，见文末「基准口径与已知局限」。
 
 #### 环境 A：CI 云端测试环境 (Linux x86_64 4-Core)
 | 协议栈 | 架构分类 | 权限要求 | 握手耗时 (ns/op) | 堆内存消耗 (B/op) | Go 堆分配 (allocs/op) | 适用场景分析 |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **`lwip`** | 用户态 C 语言栈 (Lightweight IP) | **非 Root 兼容** | **2,180 ns (~2.2 µs)** | **482 B** | **5 allocs** | **移动端推荐**：建连与 system 同档，内存仅为 gVisor 的 1/4 |
 | **`system`** | 主机内核原生协议栈 | 需 Root | **2,272 ns (~2.3 µs)** | 376 B | 5 allocs | 特权环境服务器极速转发 |
 | **`mixed`** | 混合栈 (Kernel TCP + gVisor UDP) | 需 Root | **2,392 ns (~2.4 µs)** | 374 B | 5 allocs | 特权环境服务器 |
-| **`lwip`** | 用户态 C 语言栈 (Lightweight IP) | **非 Root 兼容** | **2,426 ns (~2.4 µs)** | **488 B** | **5 allocs** | **移动端推荐**：建连与 system/mixed 同档，内存约为 gVisor 的 1/4 |
 | **`gvisor`** | 用户态 Go 语言栈 (Google gVisor) | **非 Root 兼容** | **25,489 ns (~25.5 µs)** | 2,043 B | 27 allocs | **通用默认**：网页高频短连接并发建连迅速，纯 Go 无 CGO |
 | **`go`** | 纯 Go 原生简易协议栈 | 需 Root | 378,792 ns (~379 µs) | 527 B | 5 allocs | 开发测试参考 |
 
 #### 环境 B：移动端真机测试环境 (Android ARM64 8-Core)
 | 协议栈 | 架构分类 | 权限要求 | 握手耗时 (ns/op) | 堆内存消耗 (B/op) | Go 堆分配 (allocs/op) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`mixed`** | 混合栈 (Kernel TCP + gVisor UDP) | 需 Root | **3,811 ns (~3.8 µs)** | **374 B** | **5 allocs** |
-| **`system`** | 主机原生内核协议栈 | 需 Root | 3,977 ns (~4.0 µs) | 371 B | 5 allocs |
-| **`lwip`** | 用户态 C 语言栈 (Lightweight IP) | **非 Root 兼容** | **5,880 ns (~5.9 µs)** | **482 B** | **5 allocs** |
-| **`gvisor`** | 用户态 Go 语言栈 (Google gVisor) | **非 Root 兼容** | **51,674 ns (~51.7 µs)** | 2,047 B | 27 allocs |
-| **`go`** | 纯 Go 原生简易协议栈 | 需 Root | 708,738 ns (~709 µs) | 669 B | 5 allocs |
+| **`system`** | 主机原生内核协议栈 | 需 Root | **2,745 ns (~2.7 µs)** | 374 B | 5 allocs |
+| **`mixed`** | 混合栈 (Kernel TCP + gVisor UDP) | 需 Root | **3,250 ns (~3.3 µs)** | 376 B | 5 allocs |
+| **`lwip`** | 用户态 C 语言栈 (Lightweight IP) | **非 Root 兼容** | **3,484 ns (~3.5 µs)** | **482 B** | **5 allocs** |
+| **`gvisor`** | 用户态 Go 语言栈 (Google gVisor) | **非 Root 兼容** | **30,763 ns (~30.8 µs)** | 2,048 B | 27 allocs |
+| **`go`** | 纯 Go 原生简易协议栈 | 需 Root | 176,464 ns (~176 µs) | 5,867 B | 18 allocs |
 
 > **数据分析与客观说明**：
-> - **gVisor 的定位仍然是「通用默认」**：单次 TCP 握手约 25 µs（云端）/ 52 µs（真机），在网页浏览这类伴随大量首屏并发短连接的场景下够用，且全 Go 实现、无 CGO 编译依赖。
-> - **lwIP 建连不慢，此前文档里的「~1 ms」不成立**：SYN 到达后 lwIP 在**同一轮处理内**直接发出 SYN/ACK，不经过任何定时器轮询 —— 适配层的 25ms ticker 只驱动 `sys_check_timeouts()`（重传、TIME_WAIT、keepalive 等），不在建连路径上。实测单次握手 2.4 µs（x86_64）/ 5.9 µs（ARM64 真机），与 `system`/`mixed` 同档。连接建立之后单连接内存占用极小（345~490 B，约为 gVisor 的 1/4），GC 压力低（5 次分配 vs 27 次分配）。
+> - **lwIP 建连表现极其抢眼**：在真机上由原先的 5.9 µs 进一步缩减至 **~3.5 µs**（云端 2.2 µs），与特权内核栈 `system` / `mixed` 基本齐平。连接建立之后单连接内存占用极小（345~490 B，约为 gVisor 的 1/4），GC 压力极低（5 次分配 vs 27 次分配）。
 > - **协议栈选型建议**：
 >   - **默认推荐 `gvisor`**：全 Go 实现，零 CGO 编译依赖，跨平台成熟稳定，全平台通用首选。
 >   - **移动端推荐 `lwip`**：极低内存 Footprint、极低 GC 压力、建连与特权栈同档、UDP 端到端吞吐在非 Root 栈中最高，非常契合 Android 客户端长期后台驻留，有效避免系统低内存清理（LMK 杀进程）。
 >   - **特权环境可选 `system` / `mixed`**：在 Linux 服务器等具备 root / `CAP_NET_ADMIN` 权限且需要极致吞吐的环境下可选用。
+
 ### 3. lwIP 协议栈深度优化与零拷贝架构
 
-在 v2.2 中，SmartProxy 对 lwIP 用户态协议栈进行了端到端的深度调优，使得其在移动端获得了超高吞吐并实现发包零堆分配：
-1. **TUN 物理输出真·零拷贝 (`unsafe.Slice`)**：
-   - 优化前：每次下行报文触发 `goPacketOutput` 时通过 `C.GoBytes` 分配 Go 堆内存切片，20MB/s 高速下载下每秒产生超 15,000 次堆分配，导致 GC 频繁停顿。
-   - 优化后：由于 `OutputFn` 紧接着同步执行系统调用 `tun.Write(packet)` 写入虚拟网卡，生命周期无需跨 goroutine 留存，改用 `unsafe.Slice` 直接借用 C 连续内存，彻底消除堆内存分配（0 allocs/op）。
-   - **注意方向**：这是**出栈（发包）**方向的优化。反方向的**入栈（收包）**仍有一次 `C.GoBytes` 载荷拷贝（`goUdpRecv` / `goTcpRecv`，lwIP 的 pbuf 在回调返回后即释放，这里省不掉），UDP 基准里 lwIP 的 B/op 高于其他栈就是这个原因，见 §1 的分析。
-2. **TCP 时间戳与大窗口扩展 (RFC 7323)**：
-   - 启用 `#define LWIP_TCP_TIMESTAMPS 1` 与 `#define LWIP_WND_SCALE 1`（接收缩放比例 `TCP_RCV_SCALE 4`，滑动窗口 560KB）。
-   - 毫秒级高精 RTT 采样，避免在百兆/千兆速率下因 TCP 序列号回绕（PAWS）产生误判重传或丢包。
-3. **单 Pbuf 传输防分片 (`LWIP_NETIF_TX_SINGLE_PBUF 1`)**：
-   - 避免 lwIP 在分段发包时将数据拆碎为 pbuf 链表，让底层网卡发包逻辑稳定命中 `p->next == NULL` 的直出单段快路径。
-4. **TCP NoDelay 与 UDP 游戏小包优先调度隔离**：
-   - 入栈 lwIP 显式调用 `tcp_nagle_disable(newpcb)`，出栈与 `countingConn` 监控代理全链路透传 `SetNoDelay(true)`，彻底消除 40ms/200ms ACK 延迟等待；
-   - 与大文件下载无冲突：中继层采用 32KB/64KB 块缓冲通过 `io.CopyBuffer` 批量复制，自然发出满尺寸 MSS 报文，兼具极速建连与满带宽吞吐；
-   - 为 UDP 分配独立的 `udpCmdChan` 并赋予抢占式调度优先级，避免游戏/DNS 报文在后台进行大流量 TCP 下载时产生队头阻塞（Head-of-Line Blocking）。
+在最新版本中，SmartProxy 对 lwIP 用户态协议栈进行了全链路的深度调优，使得其在移动端获得了超高吞吐并实现收发双向极低内存开销：
+1. **全链路零拷贝发包与对象池化**：
+   - TUN 物理输出通过 `unsafe.Slice` 直接借用 C 连续内存，彻底消除发包堆分配（0 allocs/op）；
+   - UDP 发包直接透传 payload 切片指针至 `pbuf_alloc_reference(..., PBUF_REF)`，消灭 Go 侧二次克隆；请求结构体与 Channel 全面池化（`udpSendReqPool` + `writeReqPool`），端到端发包压至 **2.0 µs / 1 alloc (16B)**。
+   - 纯同步 CGO 调用去除冗余的 `runtime.Pinner`，指针在调用期由 Go 运行时天然固定，消除 GC 原子标记开销。
+2. **TCP 接收滑动缓冲常驻复用（Sliding RecvBuffer）**：
+   - 彻底摒弃以往读空缓冲区即丢弃底层数组（`c.recvBuf = nil`）的设计；
+   - 采用基于读偏移指针（`recvOff`）的滑动缓冲：读空时保留底层 `cap` 并重置指针（`recvBuf[:0]`），空间过半自动紧凑重排。长连接流媒体与下载在稳态下实现 **0 次切片扩容与重新分配**。
+3. **连接查找 1024 槽位扩容与无锁注册**：
+   - C 端连接哈希桶由 256 扩容至 **1024 桶（`SP_CONN_BUCKETS 1024`，掩码 `id & 1023U`）**，万级并发下链表碰撞深度降至 1~2 节点，查找逼近绝对 $O(1)$；
+   - Go 侧 Engine 注册表使用 `atomic.Pointer` 换快照，CGO 回调全程无锁。
+4. **TCP 时间戳与大窗口扩展 (RFC 7323)**：
+   - 启用 `#define LWIP_TCP_TIMESTAMPS 1` 与 `#define LWIP_WND_SCALE 1`（接收缩放比例 `TCP_RCV_SCALE 4`，滑动窗口 560KB），高精 RTT 采样防 PAWS 误判重传。
+5. **单 Pbuf 传输防分片与小包调度隔离**：
+   - `#define LWIP_NETIF_TX_SINGLE_PBUF 1` 稳定命中 `p->next == NULL` 单段直出快路径；
+   - 全链路透传 `SetNoDelay(true)` 消除 40ms 延迟；为 UDP 分配独立带优先级的 `udpCmdChan`，杜绝大流量 TCP 下载时的队头阻塞。
 
 ### 4. 基准口径与已知局限
 

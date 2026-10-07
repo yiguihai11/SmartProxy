@@ -1285,5 +1285,92 @@ func TestEngine_TCP_MTU_1400_MSS(t *testing.T) {
 	}
 }
 
+func BenchmarkEngine_UDP_WritePacket(b *testing.B) {
+	connCh := make(chan *PacketConn, 1)
+	cfg := Config{
+		IPv4:    net.IPv4(10, 0, 0, 2),
+		Mask:    net.IPv4(255, 255, 255, 0),
+		Gateway: net.IPv4(10, 0, 0, 1),
+		OutputFn: func(packet []byte) {},
+		UDPHandler: func(conn *PacketConn) {
+			connCh <- conn
+		},
+	}
+	engine, err := NewEngine(cfg)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer engine.Close()
+
+	clientIP := net.IPv4(10, 0, 0, 2)
+	targetIP := net.IPv4(8, 8, 8, 8)
+	pkt := buildIPv4UDP(clientIP, targetIP, 40001, 53, []byte("INIT"))
+	if err := engine.Input(pkt); err != nil {
+		b.Fatal(err)
+	}
+	pconn := <-connCh
+	defer pconn.Close()
+
+	dummyBuf := buf.NewPacket()
+	_, _ = pconn.ReadPacket(dummyBuf)
+	dummyBuf.Release()
+
+	payload := make([]byte, 1400)
+	packetBuf := buf.As(payload)
+	dst := pconn.Destination()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if err := pconn.WritePacket(packetBuf, dst); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkEngine_UDP_WriteTo(b *testing.B) {
+	connCh := make(chan *PacketConn, 1)
+	cfg := Config{
+		IPv4:    net.IPv4(10, 0, 0, 2),
+		Mask:    net.IPv4(255, 255, 255, 0),
+		Gateway: net.IPv4(10, 0, 0, 1),
+		OutputFn: func(packet []byte) {},
+		UDPHandler: func(conn *PacketConn) {
+			connCh <- conn
+		},
+	}
+	engine, err := NewEngine(cfg)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer engine.Close()
+
+	clientIP := net.IPv4(10, 0, 0, 2)
+	targetIP := net.IPv4(8, 8, 8, 8)
+	pkt := buildIPv4UDP(clientIP, targetIP, 40001, 53, []byte("INIT"))
+	if err := engine.Input(pkt); err != nil {
+		b.Fatal(err)
+	}
+	pconn := <-connCh
+	defer pconn.Close()
+
+	dummyBuf := buf.NewPacket()
+	_, _ = pconn.ReadPacket(dummyBuf)
+	dummyBuf.Release()
+
+	payload := make([]byte, 1400)
+	targetUDPAddr := &net.UDPAddr{IP: targetIP, Port: 53}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if _, err := pconn.WriteTo(payload, targetUDPAddr); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+
+
 
 

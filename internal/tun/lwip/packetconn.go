@@ -71,17 +71,34 @@ type udpSendReq struct {
 	doneChan chan error
 }
 
-func newUDPSendReq(connID uint64, isIPv6 bool, srcIP netip.Addr, srcPort uint16, data []byte) *udpSendReq {
-	dataCopy := make([]byte, len(data))
-	copy(dataCopy, data)
-	return &udpSendReq{
-		connID:   connID,
-		isIPv6:   isIPv6,
-		srcIP:    srcIP,
-		srcPort:  srcPort,
-		data:     dataCopy,
-		doneChan: make(chan error, 1),
+var udpSendReqPool = sync.Pool{
+	New: func() any {
+		return &udpSendReq{
+			doneChan: make(chan error, 1),
+		}
+	},
+}
+
+func acquireUDPSendReq(connID uint64, isIPv6 bool, srcIP netip.Addr, srcPort uint16, data []byte) *udpSendReq {
+	req := udpSendReqPool.Get().(*udpSendReq)
+	req.connID = connID
+	req.isIPv6 = isIPv6
+	req.srcIP = srcIP
+	req.srcPort = srcPort
+	req.data = data
+	return req
+}
+
+func releaseUDPSendReq(req *udpSendReq) {
+	if req == nil {
+		return
 	}
+	req.data = nil
+	select {
+	case <-req.doneChan:
+	default:
+	}
+	udpSendReqPool.Put(req)
 }
 
 // PacketConn wraps a transparent lwIP UDP PCB into standard net.PacketConn and sing-tun N.PacketConn.
@@ -250,18 +267,21 @@ func (c *PacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 		isIPv6 = true
 	}
 
-srcIP, ok := netip.AddrFromSlice(udpAddr.IP)
+	srcIP, ok := netip.AddrFromSlice(udpAddr.IP)
 	if !ok {
 		return 0, errors.New("invalid UDP address")
 	}
-	req := newUDPSendReq(c.id, isIPv6, srcIP, uint16(udpAddr.Port), p)
+	req := acquireUDPSendReq(c.id, isIPv6, srcIP, uint16(udpAddr.Port), p)
 
 	select {
 	case <-c.closeChan:
+		releaseUDPSendReq(req)
 		return 0, net.ErrClosed
 	case <-c.engine.doneChan:
+		releaseUDPSendReq(req)
 		return 0, net.ErrClosed
 	case <-timerCh:
+		releaseUDPSendReq(req)
 		return 0, os.ErrDeadlineExceeded
 	case c.engine.udpCmdChan <- req:
 	}
@@ -274,6 +294,7 @@ srcIP, ok := netip.AddrFromSlice(udpAddr.IP)
 	case <-timerCh:
 		return 0, os.ErrDeadlineExceeded
 	case err := <-req.doneChan:
+		releaseUDPSendReq(req)
 		if err != nil {
 			return 0, err
 		}
@@ -303,14 +324,17 @@ func (c *PacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) er
 		timerCh = timer.C
 	}
 
-req := newUDPSendReq(c.id, destination.Addr.Is6(), destination.Addr, destination.Port, data)
+	req := acquireUDPSendReq(c.id, destination.Addr.Is6(), destination.Addr, destination.Port, data)
 
 	select {
 	case <-c.closeChan:
+		releaseUDPSendReq(req)
 		return net.ErrClosed
 	case <-c.engine.doneChan:
+		releaseUDPSendReq(req)
 		return net.ErrClosed
 	case <-timerCh:
+		releaseUDPSendReq(req)
 		return os.ErrDeadlineExceeded
 	case c.engine.udpCmdChan <- req:
 	}
@@ -323,6 +347,7 @@ req := newUDPSendReq(c.id, destination.Addr.Is6(), destination.Addr, destination
 	case <-timerCh:
 		return os.ErrDeadlineExceeded
 	case err := <-req.doneChan:
+		releaseUDPSendReq(req)
 		return err
 	}
 }

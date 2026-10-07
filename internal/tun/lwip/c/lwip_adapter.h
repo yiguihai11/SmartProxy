@@ -49,6 +49,9 @@ typedef void (*sp_lwip_udp_recv_fn)(
 struct sp_tcp_conn;
 struct sp_udp_conn;
 
+#define SP_CONN_BUCKETS 1024
+#define SP_CONN_BUCKET_MASK (SP_CONN_BUCKETS - 1)
+
 struct sp_lwip {
     struct netif netif;
     struct tcp_pcb *tcp_listener;
@@ -63,8 +66,8 @@ struct sp_lwip {
 
     uint64_t ctx_id;
     uint64_t next_conn_id;
-    struct sp_tcp_conn *conn_buckets[256];
-    struct sp_udp_conn *udp_conn_buckets[256];
+    struct sp_tcp_conn *conn_buckets[SP_CONN_BUCKETS];
+    struct sp_udp_conn *udp_conn_buckets[SP_CONN_BUCKETS];
     uint8_t output_buf[65536];
 };
 

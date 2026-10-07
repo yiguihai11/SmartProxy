@@ -13,8 +13,9 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"time"
 	"runtime"
+	"sync"
+	"time"
 	"unsafe"
 )
 
@@ -22,6 +23,11 @@ type recvedCmd struct {
 	connID uint64
 	len    uint32
 }
+
+var recvedCmdPool = sync.Pool{
+	New: func() any { return new(recvedCmd) },
+}
+
 
 type closeCmd struct {
 	connID uint64
@@ -143,12 +149,14 @@ func (e *Engine) handleInput(pkt inPacket) {
 	}
 }
 
+
 func (e *Engine) handleCmd(cmd any) {
 	switch v := cmd.(type) {
 	case *writeReq:
 		e.handleWriteReq(v)
 	case *recvedCmd:
 		C.sp_lwip_tcp_recved(e.lw, C.uint64_t(v.connID), C.uint32_t(v.len))
+		recvedCmdPool.Put(v)
 	case *closeCmd:
 		e.handleClose(v.connID)
 	case *abortCmd:
@@ -304,15 +312,15 @@ func (e *Engine) handleUDPSend(req *udpSendReq) {
 		return
 	}
 	isIPv6 := 0
-	var srcIPBytes []byte
+	var srcIPBytes [16]byte
 	if req.isIPv6 {
 		isIPv6 = 1
 		if !req.srcIP.Is6() {
 			req.doneChan <- errors.New("invalid IPv6 address in UDP send")
 			return
 		}
-		srcIP4 := req.srcIP.As16()
-		srcIPBytes = srcIP4[:]
+		srcIP16 := req.srcIP.As16()
+		copy(srcIPBytes[:], srcIP16[:])
 	} else {
 		// Preserve net.IP.To4 semantics for IPv4-mapped IPv6 addresses.
 		if !req.srcIP.Is4() && !req.srcIP.Is4In6() {
@@ -320,11 +328,9 @@ func (e *Engine) handleUDPSend(req *udpSendReq) {
 			return
 		}
 		srcIP4 := req.srcIP.Unmap().As4()
-		srcIPBytes = srcIP4[:]
+		copy(srcIPBytes[:4], srcIP4[:])
 	}
 
-	var pinner runtime.Pinner
-	pinner.Pin(&req.data[0])
 	ret := C.sp_lwip_udp_send(
 		e.lw,
 		C.uint64_t(req.connID),
@@ -334,7 +340,6 @@ func (e *Engine) handleUDPSend(req *udpSendReq) {
 		unsafe.Pointer(&req.data[0]),
 		C.uint32_t(len(req.data)),
 	)
-	pinner.Unpin()
 	runtime.KeepAlive(req.data)
 	if ret < 0 {
 		req.doneChan <- fmt.Errorf("lwip udp_send error: %d", int(ret))
