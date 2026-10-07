@@ -27,6 +27,10 @@ type udpInboundPacket struct {
 	buf  *[]byte
 }
 
+var udpInboundPacketPool = sync.Pool{
+	New: func() any { return new(udpInboundPacket) },
+}
+
 var udpRecvBufferPool = sync.Pool{
 	New: func() any {
 		b := make([]byte, 2048)
@@ -51,13 +55,13 @@ func releaseUDPRecvBuffer(b *[]byte) {
 type udpSendReq struct {
 	connID   uint64
 	isIPv6   bool
-	srcIP    net.IP
+	srcIP    netip.Addr
 	srcPort  uint16
 	data     []byte
 	doneChan chan error
 }
 
-func newUDPSendReq(connID uint64, isIPv6 bool, srcIP net.IP, srcPort uint16, data []byte) *udpSendReq {
+func newUDPSendReq(connID uint64, isIPv6 bool, srcIP netip.Addr, srcPort uint16, data []byte) *udpSendReq {
 	dataCopy := make([]byte, len(data))
 	copy(dataCopy, data)
 	return &udpSendReq{
@@ -117,17 +121,19 @@ func (c *PacketConn) onData(dstIP netip.Addr, dstPort uint16, data []byte, dataB
 		return
 	}
 
-	pkt := &udpInboundPacket{
-		dst:  M.Socksaddr{Addr: dstIP, Port: dstPort},
-		data: data,
-		buf:  dataBuf,
-	}
+	pkt := udpInboundPacketPool.Get().(*udpInboundPacket)
+	pkt.dst = M.Socksaddr{Addr: dstIP, Port: dstPort}
+	pkt.data = data
+	pkt.buf = dataBuf
 
 	select {
 	case c.recvQueue <- pkt:
 	default:
 		// Queue full: drop datagram under extreme congestion
 		releaseUDPRecvBuffer(dataBuf)
+		pkt.data = nil
+		pkt.buf = nil
+		udpInboundPacketPool.Put(pkt)
 	}
 }
 
@@ -163,6 +169,9 @@ func (c *PacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 			IP:   pkt.dst.Addr.AsSlice(),
 			Port: int(pkt.dst.Port),
 		}
+		pkt.data = nil
+		pkt.buf = nil
+		udpInboundPacketPool.Put(pkt)
 		return n, udpAddr, nil
 	}
 }
@@ -194,8 +203,12 @@ func (c *PacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, er
 		return M.Socksaddr{}, os.ErrDeadlineExceeded
 	case pkt := <-c.recvQueue:
 		_, _ = buffer.Write(pkt.data)
+		dst := pkt.dst
 		releaseUDPRecvBuffer(pkt.buf)
-		return pkt.dst, nil
+		pkt.data = nil
+		pkt.buf = nil
+		udpInboundPacketPool.Put(pkt)
+		return dst, nil
 	}
 }
 
@@ -230,7 +243,11 @@ func (c *PacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 		isIPv6 = true
 	}
 
-	req := newUDPSendReq(c.id, isIPv6, udpAddr.IP, uint16(udpAddr.Port), p)
+srcIP, ok := netip.AddrFromSlice(udpAddr.IP)
+	if !ok {
+		return 0, errors.New("invalid UDP address")
+	}
+	req := newUDPSendReq(c.id, isIPv6, srcIP, uint16(udpAddr.Port), p)
 
 	select {
 	case <-c.closeChan:
@@ -279,8 +296,7 @@ func (c *PacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) er
 		timerCh = timer.C
 	}
 
-	srcIP := destination.Addr.AsSlice()
-	req := newUDPSendReq(c.id, destination.Addr.Is6(), srcIP, destination.Port, data)
+req := newUDPSendReq(c.id, destination.Addr.Is6(), destination.Addr, destination.Port, data)
 
 	select {
 	case <-c.closeChan:
