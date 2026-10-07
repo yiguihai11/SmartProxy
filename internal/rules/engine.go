@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +27,11 @@ type proxyTarget struct {
 	index int
 }
 
+type proxyGlobRule struct {
+	pattern string
+	target  proxyTarget
+}
+
 // ruleSet is an immutable snapshot of the effective ACL data. Readers load the
 // current snapshot through Engine.rules and never mutate it; writers build a
 // fresh snapshot and atomically swap the pointer, so hot paths take no locks.
@@ -35,18 +41,21 @@ type ruleSet struct {
 	allowedCIDR     *chnroute.Trie
 	allowedDomains  map[string]bool
 	allowedSuffixes *suffixTrie
+	allowedGlobs    []string
 
 	blockedPorts    map[int]bool
 	blockedIPs      map[string]bool
 	blockedCIDR     *chnroute.Trie
 	blockedDomains  map[string]bool
 	blockedSuffixes *suffixTrie
+	blockedGlobs    []string
 
 	proxyPorts    map[int]proxyTarget
 	proxyIPs      map[string]proxyTarget
 	proxyCIDRTrie *proxyCidrTrie
 	proxyDomains  map[string]proxyTarget
 	proxySuffixes *proxySuffixTrie
+	proxyGlobs    []proxyGlobRule
 
 	proxyRules []ProxyRule
 }
@@ -97,18 +106,21 @@ func (rs *ruleSet) reset() {
 	rs.allowedCIDR = chnroute.New()
 	rs.allowedDomains = make(map[string]bool)
 	rs.allowedSuffixes = newSuffixTrie()
+	rs.allowedGlobs = nil
 
 	rs.blockedPorts = make(map[int]bool)
 	rs.blockedIPs = make(map[string]bool)
 	rs.blockedCIDR = chnroute.New()
 	rs.blockedDomains = make(map[string]bool)
 	rs.blockedSuffixes = newSuffixTrie()
+	rs.blockedGlobs = nil
 
 	rs.proxyPorts = make(map[int]proxyTarget)
 	rs.proxyIPs = make(map[string]proxyTarget)
 	rs.proxyCIDRTrie = newProxyCidrTrie()
 	rs.proxyDomains = make(map[string]proxyTarget)
 	rs.proxySuffixes = newProxySuffixTrie()
+	rs.proxyGlobs = nil
 	rs.proxyRules = nil
 }
 
@@ -178,8 +190,10 @@ func (rs *ruleSet) load(path string) error {
 				rs.proxyCIDRTrie.insert(prefix, target)
 			case "domain":
 				d := normalizeDomain(rule.Value)
-				if strings.HasPrefix(d, "*.") {
+				if isPureSuffixPattern(d) {
 					rs.proxySuffixes.insert(d[1:], target)
+				} else if isGlobPattern(d) {
+					rs.proxyGlobs = append(rs.proxyGlobs, proxyGlobRule{pattern: d, target: target})
 				} else {
 					if _, exists := rs.proxyDomains[d]; !exists {
 						rs.proxyDomains[d] = target
@@ -316,21 +330,36 @@ func (rs *ruleSet) parseAllowBlockValue(objType, value string, isAllow bool) {
 	case "cidr":
 		rs.parseCIDRInto(value, isAllow)
 	case "domain":
-		if strings.HasPrefix(value, "*.") {
-			suffix := value[1:]
+		d := normalizeDomain(value)
+		if isPureSuffixPattern(d) {
+			suffix := d[1:]
 			if isAllow {
 				rs.allowedSuffixes.insert(suffix)
 			} else {
 				rs.blockedSuffixes.insert(suffix)
 			}
+		} else if isGlobPattern(d) {
+			if isAllow {
+				rs.allowedGlobs = append(rs.allowedGlobs, d)
+			} else {
+				rs.blockedGlobs = append(rs.blockedGlobs, d)
+			}
 		} else {
 			if isAllow {
-				rs.allowedDomains[value] = true
+				rs.allowedDomains[d] = true
 			} else {
-				rs.blockedDomains[value] = true
+				rs.blockedDomains[d] = true
 			}
 		}
 	}
+}
+
+func isPureSuffixPattern(domain string) bool {
+	return strings.HasPrefix(domain, "*.") && !strings.ContainsAny(domain[2:], "*?[")
+}
+
+func isGlobPattern(domain string) bool {
+	return strings.ContainsAny(domain, "*?[")
 }
 
 func (rs *ruleSet) parseCIDRInto(value string, isAllow bool) {
@@ -415,10 +444,23 @@ func (rs *ruleSet) isDomainBlocked(domain string) bool {
 	if rs.allowedSuffixes.match(domain) {
 		return false
 	}
+	for _, pattern := range rs.allowedGlobs {
+		if matched, _ := path.Match(pattern, domain); matched {
+			return false
+		}
+	}
 	if rs.blockedDomains[domain] {
 		return true
 	}
-	return rs.blockedSuffixes.match(domain)
+	if rs.blockedSuffixes.match(domain) {
+		return true
+	}
+	for _, pattern := range rs.blockedGlobs {
+		if matched, _ := path.Match(pattern, domain); matched {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) MatchProxyRule(targetIP string, targetPort int, domain string) (alias string, matched bool) {
@@ -440,6 +482,11 @@ func (e *Engine) MatchProxyRule(targetIP string, targetPort int, domain string) 
 		d := normalizeDomain(domain)
 		if rs.allowedDomains[d] || rs.allowedSuffixes.match(d) {
 			return "", false
+		}
+		for _, pattern := range rs.allowedGlobs {
+			if matched, _ := path.Match(pattern, d); matched {
+				return "", false
+			}
 		}
 	}
 
@@ -470,6 +517,14 @@ func (e *Engine) MatchProxyRule(targetIP string, targetPort int, domain string) 
 			if bestIndex == -1 || t.index < bestIndex {
 				bestIndex = t.index
 				bestAlias = t.alias
+			}
+		}
+		for _, pg := range rs.proxyGlobs {
+			if matched, _ := path.Match(pg.pattern, d); matched {
+				if bestIndex == -1 || pg.target.index < bestIndex {
+					bestIndex = pg.target.index
+					bestAlias = pg.target.alias
+				}
 			}
 		}
 	}

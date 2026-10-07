@@ -25,7 +25,7 @@
 | `port` | `443` | 精确端口 |
 | `ip` | `1.2.3.4` 或 `10.0.0.0/8` | 精确 IP；含 `/` 时按 CIDR 解析 |
 | `cidr` | `10.0.0.0/8` | 强制按 CIDR 解析，裸地址退化为 /32 或 /128 |
-| `domain` | `example.com` 或 `*.example.com` | 精确域名或通配符后缀 |
+| `domain` | `example.com`、`*.example.com` 或 `*ads*-*.domain.com` | 精确域名、子域通配符后缀或 Glob 泛通配符 |
 
 示例（`internal/rules/engine_test.go` 中大量用例）：
 
@@ -36,6 +36,7 @@ allow port 53
 block ip 192.168.1.100
 block cidr 10.0.0.0/8
 block domain *.tracker.com
+block domain *ads*-*.zijieapi.com
 proxy port 22 ssh_proxy
 proxy cidr 10.0.0.0/8 internal
 proxy domain google.com direct
@@ -47,19 +48,20 @@ allow 严格优先于 block；匹配 proxy 规则前先做 allow 判定，命中
 
 - `IsPortBlocked(port)`：`allowedPorts` → false；否则查 `blockedPorts`。
 - `IsIPBlocked(ip)`：`allowedIPs` → false；`allowedCIDR.Contains` → false；否则 `blockedIPs` → true / `blockedCIDR.Contains`。
-- `IsDomainBlocked(domain)`：`allowedDomains` → false；`allowedSuffixes.match` → false；否则 `blockedDomains` → true / `blockedSuffixes.match`。
-- `MatchProxyRule(ip, port, domain)` 的检查顺序为 **allow（port→ip→cidr→domain/suffix）→ proxy（port→ip→domain→suffix→cidr）**；allow 命中直接返回 `("", false)`。
+- `IsDomainBlocked(domain)`：`allowedDomains` → false；`allowedSuffixes.match` → false；`allowedGlobs`（`path.Match`）→ false；否则 `blockedDomains` → true / `blockedSuffixes.match` / `blockedGlobs`（`path.Match`）。
+- `MatchProxyRule(ip, port, domain)` 的检查顺序为 **allow（port→ip→cidr→domain/suffix/glob）→ proxy（port→ip→domain→suffix→glob→cidr）**；allow 命中直接返回 `("", false)`。
 
-`*.example.com` 只匹配其子域（`www.example.com`），不匹配 `example.com` 本身（见 `TestSuffixTrie_NoMatchExactDomain`）。
+`*.example.com` 走高性能前缀树（Trie），只匹配其子域（`www.example.com`），不匹配 `example.com` 本身（见 `TestSuffixTrie_NoMatchExactDomain`）。含 `*` 或 `?` 的非纯子域规则（如 `*ads*-*.zijieapi.com`）自动进入 Glob 匹配器。
 
-## §3 四类数据结构
+## §3 数据结构
 
 | 数据结构 | 用途 |
 | --- | --- |
 | `map[int]bool` / `map[string]bool` | 精确 port / ip / domain 的 allow 与 block |
 | `map[int]string` / `map[string]string` | 精确 port / ip / domain 的 proxy（value→alias） |
-| `suffixTrie` | 通配符域名后缀（`*.x.com`）的 allow/block 匹配 |
-| `proxySuffixTrie` | 带 alias 的域名后缀 trie |
+| `suffixTrie` | 纯通配符域名后缀（`*.x.com`）的 allow/block 匹配 |
+| `proxySuffixTrie` | 带 alias 的纯域名后缀 trie |
+| `[]string` / `[]proxyGlobRule` | 泛通配符（Glob）域名规则，支持任意位置的 `*` 和 `?` 通配 |
 | `chnroute.Trie` | CIDR（`allowedCIDR` / `blockedCIDR`），支持前缀包含查询 |
 | `proxyCidrTrie` | 带 alias 的 CIDR 二分 trie（IPv4 偏移 96 bit，IPv6 从 0 bit） |
 

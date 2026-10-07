@@ -1062,4 +1062,57 @@ func TestAppendProxyRule(t *testing.T) {
 	}
 }
 
+func TestEngine_GlobDomainMatching(t *testing.T) {
+	rules := `
+# Glob rules test
+block domain *ads*-*.zijieapi.com
+block domain *reading-ad*.qznovelvod.com
+block domain *-ad-*-sign.byteimg.com
+allow domain api-normal.zijieapi.com
+allow domain *safe*.zijieapi.com
+proxy domain *proxy*.custom.org proxy_node
+`
+	tmp := writeTempRuleFile(t, rules)
+	e, err := New(tmp)
+	if err != nil {
+		t.Fatalf("failed to load engine: %v", err)
+	}
+
+	// 1. Blocked globs
+	if !e.IsDomainBlocked("sf3-ads-test.zijieapi.com") {
+		t.Errorf("sf3-ads-test.zijieapi.com should be blocked")
+	}
+	if !e.IsDomainBlocked("reading-ad123.qznovelvod.com") {
+		t.Errorf("reading-ad123.qznovelvod.com should be blocked")
+	}
+	if !e.IsDomainBlocked("p3-ad-test-sign.byteimg.com") {
+		t.Errorf("p3-ad-test-sign.byteimg.com should be blocked")
+	}
+
+	// 2. Allowed domain and allowed glob take precedence over blocked glob
+	if e.IsDomainBlocked("api-normal.zijieapi.com") {
+		t.Errorf("api-normal.zijieapi.com should be allowed")
+	}
+	if e.IsDomainBlocked("sf3-ads-safe.zijieapi.com") {
+		t.Errorf("sf3-ads-safe.zijieapi.com should be allowed because of *safe*.zijieapi.com")
+	}
+
+	// 3. Normal domains not matching glob
+	if e.IsDomainBlocked("sf6-short-video.zijieapi.com") {
+		t.Errorf("sf6-short-video.zijieapi.com should not be blocked")
+	}
+
+	// 4. Proxy glob match
+	alias, matched := e.MatchProxyRule("", 0, "node1-proxy.custom.org")
+	if !matched || alias != "proxy_node" {
+		t.Errorf("node1-proxy.custom.org should match proxy_node, got matched=%v, alias=%s", matched, alias)
+	}
+
+	// 5. Proxy glob bypassed by allow
+	alias, matched = e.MatchProxyRule("", 0, "sf3-ads-safe.zijieapi.com")
+	if matched {
+		t.Errorf("allowed domain should not match proxy, got alias=%s", alias)
+	}
+}
+
 
