@@ -314,11 +314,12 @@ func (e *Engine) handleUDPSend(req *udpSendReq) {
 		srcIP4 := req.srcIP.As16()
 		srcIPBytes = srcIP4[:]
 	} else {
-		if !req.srcIP.Is4() {
+		// Preserve net.IP.To4 semantics for IPv4-mapped IPv6 addresses.
+		if !req.srcIP.Is4() && !req.srcIP.Is4In6() {
 			req.doneChan <- errors.New("invalid IPv4 address in UDP send")
 			return
 		}
-		srcIP4 := req.srcIP.As4()
+		srcIP4 := req.srcIP.Unmap().As4()
 		srcIPBytes = srcIP4[:]
 	}
 
