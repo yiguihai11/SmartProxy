@@ -52,6 +52,16 @@ func releaseUDPRecvBuffer(b *[]byte) {
 	}
 }
 
+func releaseUDPInboundPacket(pkt *udpInboundPacket) {
+	if pkt == nil {
+		return
+	}
+	releaseUDPRecvBuffer(pkt.buf)
+	pkt.data = nil
+	pkt.buf = nil
+	udpInboundPacketPool.Put(pkt)
+}
+
 type udpSendReq struct {
 	connID   uint64
 	isIPv6   bool
@@ -130,10 +140,7 @@ func (c *PacketConn) onData(dstIP netip.Addr, dstPort uint16, data []byte, dataB
 	case c.recvQueue <- pkt:
 	default:
 		// Queue full: drop datagram under extreme congestion
-		releaseUDPRecvBuffer(dataBuf)
-		pkt.data = nil
-		pkt.buf = nil
-		udpInboundPacketPool.Put(pkt)
+		releaseUDPInboundPacket(pkt)
 	}
 }
 
@@ -325,7 +332,15 @@ func (c *PacketConn) Close() error {
 	c.closeOnce.Do(func() {
 		c.closed.Store(true)
 		close(c.closeChan)
-		c.engine.postUDPClose(c.id)
+		for {
+			select {
+			case pkt := <-c.recvQueue:
+				releaseUDPInboundPacket(pkt)
+			default:
+				c.engine.postUDPClose(c.id)
+				return
+			}
+		}
 	})
 	return nil
 }
