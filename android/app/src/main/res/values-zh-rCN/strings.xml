@@ -110,14 +110,8 @@
     <string name="dialog_service_help">VPN 隧道:接管系统流量智能分流(默认)。\n仅代理:不启动 VPN 模式,仅运行引擎 SOCKS5 代理(:1080,局域网可访问)。\n运行中切换将自动重启生效。</string>
     <string name="service_stack_title">网络协议栈 (TUN Stack)</string>
     <string name="cd_choose_tun_stack">选择网络协议栈</string>
-    <string name="stack_gvisor">gVisor (默认 / 免 Root)</string>
-    <string name="stack_lwip">lwIP (推荐 / 轻量低内存 / 免 Root)</string>
-    <string name="stack_go">Go (自研高性能 / 需 Root)</string>
-    <string name="stack_system">System (需 Root 权限)</string>
-    <string name="stack_mixed">Mixed (需 Root 权限)</string>
-    <string name="stack_need_root_sub">需要 Root 权限</string>
-    <string name="stack_non_root_hint">当前设备未检测到 Root 权限，仅可使用 gVisor 或 lwIP 协议栈</string>
-    <string name="toast_stack_need_root">该协议栈需要 Root 权限，当前设备未 Root 仅可使用 gVisor 或 lwIP</string>
+    <string name="stack_gvisor">gVisor (默认)</string>
+    <string name="stack_lwip">lwIP (推荐 / 轻量低内存)</string>
 
     <!-- Toasts / platform dialogs -->
     <string name="toast_no_upstream">未配置上游代理节点,流量无法转发,请到管理面板配置</string>

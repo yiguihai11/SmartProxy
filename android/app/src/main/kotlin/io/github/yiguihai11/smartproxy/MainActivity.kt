@@ -403,9 +403,6 @@ private fun serviceModeLabel(context: Context, mode: String): String = when (mod
 
 private fun tunStackLabel(context: Context, stack: String): String = when (stack) {
     AppPrefs.STACK_LWIP -> context.getString(R.string.stack_lwip)
-    AppPrefs.STACK_GO -> context.getString(R.string.stack_go)
-    AppPrefs.STACK_SYSTEM -> context.getString(R.string.stack_system)
-    AppPrefs.STACK_MIXED -> context.getString(R.string.stack_mixed)
     else -> context.getString(R.string.stack_gvisor)
 }
 
@@ -599,7 +596,6 @@ private fun HomeScreen(
         ServiceModeDialog(
             initialMode = AppPrefs.serviceMode(context),
             initialStack = AppPrefs.tunStack(context),
-            isRooted = RootUtils.checkRoot(forceRefresh = true),
             onDismiss = { showServiceModeDialog = false },
             onSave = { mode, stack ->
                 showServiceModeDialog = false
@@ -1488,17 +1484,16 @@ private fun ExcludeRoutesDialog(
 private fun ServiceModeDialog(
     initialMode: String,
     initialStack: String,
-    isRooted: Boolean,
     onDismiss: () -> Unit,
     onSave: (String, String) -> Unit
 ) {
     var selectedMode by remember { mutableStateOf(initialMode) }
-    var selectedStack by remember { mutableStateOf(if (!isRooted && initialStack != AppPrefs.STACK_LWIP) AppPrefs.STACK_GVISOR else initialStack) }
+    var selectedStack by remember { mutableStateOf(if (initialStack == AppPrefs.STACK_LWIP) AppPrefs.STACK_LWIP else AppPrefs.STACK_GVISOR) }
     var modeExpanded by remember { mutableStateOf(false) }
     var stackExpanded by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val modeOptions = listOf(AppPrefs.MODE_VPN, AppPrefs.MODE_SOCKS5)
-    val stackOptions = listOf(AppPrefs.STACK_GVISOR, AppPrefs.STACK_LWIP, AppPrefs.STACK_GO, AppPrefs.STACK_SYSTEM, AppPrefs.STACK_MIXED)
+    val stackOptions = listOf(AppPrefs.STACK_GVISOR, AppPrefs.STACK_LWIP)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1589,44 +1584,17 @@ private fun ServiceModeDialog(
                     }
                     DropdownMenu(expanded = stackExpanded && isVpn, onDismissRequest = { stackExpanded = false }) {
                         stackOptions.forEach { stack ->
-                            val canSelect = stack == AppPrefs.STACK_GVISOR || stack == AppPrefs.STACK_LWIP || isRooted
                             DropdownMenuItem(
                                 text = {
-                                    Column {
-                                        Text(
-                                            tunStackLabel(context, stack),
-                                            color = if (canSelect) Color.Unspecified else GreyText.copy(alpha = 0.6f)
-                                        )
-                                        if (!canSelect) {
-                                            Text(
-                                                stringResource(R.string.stack_need_root_sub),
-                                                fontSize = 11.sp,
-                                                color = GreyText.copy(alpha = 0.6f)
-                                            )
-                                        }
-                                    }
+                                    Text(tunStackLabel(context, stack))
                                 },
-                                enabled = canSelect,
                                 onClick = {
-                                    if (canSelect) {
-                                        selectedStack = stack
-                                        stackExpanded = false
-                                    } else {
-                                        Toast.makeText(context, context.getString(R.string.toast_stack_need_root), Toast.LENGTH_SHORT).show()
-                                    }
+                                    selectedStack = stack
+                                    stackExpanded = false
                                 }
                             )
                         }
                     }
-                }
-
-                if (!isRooted && isVpn) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = stringResource(R.string.stack_non_root_hint),
-                        fontSize = 11.sp,
-                        color = GreyText
-                    )
                 }
 
                 Spacer(Modifier.height(10.dp))
