@@ -193,6 +193,7 @@
     <string name="net_loading">正在采集连接数据…</string>
     <string name="net_empty">暂无联网应用</string>
     <string name="net_empty_sub">应用联网后会自动出现在这里</string>
+    <string name="net_unknown_app">未知应用 / 系统瞬态连接</string>
     <string name="net_footer">仅显示有联网活动的应用 · 每秒刷新 · 离开页面即停止采集</string>
     <string name="net_conn_count">%1$d 条连接</string>
     <string name="cd_collapse_conn">收起连接</string>

@@ -501,6 +501,9 @@ class NetworkStatusActivity : ComponentActivity() {
 
     /** uid → 应用名/图标/包名(懒解析 + 缓存);共享 uid 取第一个包,失败回退 "UID x"。 */
     private fun metaFor(uid: Int): AppMeta = metaCache.getOrPut(uid) {
+        if (uid == -1) {
+            return@getOrPut AppMeta(getString(R.string.net_unknown_app), null, null)
+        }
         runCatching {
             val pm = packageManager
             val pkg = pm.getPackagesForUid(uid)?.firstOrNull()

@@ -28,7 +28,8 @@ const (
 	// 连接最后一次有流量后保留的时间:超过即视为「已 idle」,Snapshot 懒清扫移除。
 	// 用户反馈无流量后消失太快,想要「最后流量后 5 秒再消失」—— 从 30s 收到 5s,
 	// 列表只留最近 5 秒仍在动的东西。被 pin 查看的 app 不受此限。
-	connStatsIdleRemove = 5 * time.Second
+	connStatsIdleRemove             = 5 * time.Second
+	connStatsUdpTransientIdleRemove = 2 * time.Second
 )
 
 // connRecord 是监控里的一条连接(生命周期 = 该连接的观察窗口)。
@@ -167,7 +168,13 @@ func (cs *ConnStats) Snapshot() string {
 				kept = append(kept, r) // 正在查看的 app:无流量也不淡出
 				continue
 			}
-			if now-r.lastSeen.Load() > int64(connStatsIdleRemove.Seconds()) {
+			idleLimit := int64(connStatsIdleRemove.Seconds())
+			// 针对小流量瞬时 UDP(如 QUIC 探测握手包且总流量 < 2KB):
+			// 缩短清扫周期至 2 秒,避免瞬时断开的 UDP 探测连接大量堆积。
+			if r.proto == 17 && (r.up.Load()+r.down.Load()) < 2048 {
+				idleLimit = int64(connStatsUdpTransientIdleRemove.Seconds())
+			}
+			if now-r.lastSeen.Load() > idleLimit {
 				us.up.Add(r.up.Load())
 				us.down.Add(r.down.Load())
 				cs.total--

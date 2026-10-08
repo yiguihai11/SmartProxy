@@ -193,6 +193,7 @@
     <string name="net_loading">Collecting connection data…</string>
     <string name="net_empty">No active apps</string>
     <string name="net_empty_sub">Apps appear here once they use the network</string>
+    <string name="net_unknown_app">Unknown app / Transient connection</string>
     <string name="net_footer">Only apps with activity · refreshes every second · stops when leaving</string>
     <string name="net_conn_count">%1$d connections</string>
     <string name="cd_collapse_conn">Collapse connections</string>
