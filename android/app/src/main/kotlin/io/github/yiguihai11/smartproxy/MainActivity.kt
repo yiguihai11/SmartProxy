@@ -599,7 +599,7 @@ private fun HomeScreen(
         ServiceModeDialog(
             initialMode = AppPrefs.serviceMode(context),
             initialStack = AppPrefs.tunStack(context),
-            isRooted = RootUtils.isDeviceRooted,
+            isRooted = RootUtils.checkRoot(forceRefresh = true),
             onDismiss = { showServiceModeDialog = false },
             onSave = { mode, stack ->
                 showServiceModeDialog = false
