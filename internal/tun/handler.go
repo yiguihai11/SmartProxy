@@ -73,10 +73,10 @@ type TUNHandler struct {
 // do not match sing-tun, this will fail to compile.
 var _ singtun.Handler = (*TUNHandler)(nil)
 
-// maxUDPSessions bounds the TUN UDP session table (udpSessions). SOCKS5's UDP handler
-// already caps at 500 (internal/udp); without a matching cap here a flood of distinct UDP
+// maxUDPSessions bounds the TUN UDP session table (udpSessions). Caps at 2048 (aligned
+// with internal/udp); without a matching cap here a flood of distinct UDP
 // destinations would grow the map — one goroutine + one remote conn per session — until OOM.
-const maxUDPSessions = 500
+const maxUDPSessions = 2048
 
 func NewHandler(cfg *config.Config, r *route.Router, re *rules.Engine, um *upstream.Manager, dh *dns.Handler) *TUNHandler {
 	h := &TUNHandler{
@@ -342,12 +342,20 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 	defer h.liveTCP.remove(hd)
 	ll := trace.Log(ctx)
 
-	firstPkt, err := ReadClientHello(conn, 3*time.Second)
+	firstPkt, err := ReadClientHello(conn, 500*time.Millisecond)
 	if err != nil {
-		if err != io.EOF {
-			ll.Info("TUN error reading first packet", "error", err)
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			// Server-first protocol (SSH/FTP/SMTP/banner): client connects but sends 0 bytes initially.
+			// Gracefully fallback to transparent stream without dropping the connection.
+			ll.Debug("TUN first packet read timed out (likely server-first protocol), falling back to transparent stream", "host", host, "port", port)
+			firstPkt = nil
+		} else {
+			if err != io.EOF {
+				ll.Info("TUN error reading first packet", "error", err)
+			}
+			return
 		}
-		return
 	}
 
 	domain := ExtractDomain(firstPkt)
@@ -539,15 +547,26 @@ func (h *TUNHandler) countUDPSessions() int {
 
 // evictLeastRecentUDPSession closes and removes the session that was active longest ago.
 // Its own select unblocks via closeCh and its deferred cleanup runs normally.
+// Uses bounded randomized sampling to avoid full-table O(N) Range scan under high concurrency.
 func (h *TUNHandler) evictLeastRecentUDPSession() {
 	var victimKey any
 	var victimLast int64 = 1 << 62
+	count := 0
+	now := time.Now().Unix()
 	h.udpSessions.Range(func(key, value any) bool {
-		if act := value.(*tunUdpSession).lastActive.Load(); act < victimLast {
+		sess := value.(*tunUdpSession)
+		act := sess.lastActive.Load()
+		// If an expired session is encountered, immediately evict it
+		if now-act > int64(sess.timeout.Seconds()) {
+			victimKey = key
+			return false
+		}
+		if act < victimLast {
 			victimLast = act
 			victimKey = key
 		}
-		return true
+		count++
+		return count < 32 // sample up to 32 items
 	})
 	if victimKey != nil {
 		if v, ok := h.deleteUDPSession(victimKey.(string)); ok {
@@ -1055,6 +1074,14 @@ func (h *TUNHandler) handleDNS(ctx context.Context, conn N.PacketConn, host stri
 		return
 	}
 
+	var writeMu sync.Mutex
+	var wg sync.WaitGroup
+	var closed atomic.Bool
+	defer func() {
+		closed.Store(true)
+		wg.Wait()
+	}()
+
 	for {
 		if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
 			ll.Debug("DNS SetReadDeadline failed", "error", err)
@@ -1067,24 +1094,34 @@ func (h *TUNHandler) handleDNS(ctx context.Context, conn N.PacketConn, host stri
 			return
 		}
 		payload := buffer.Bytes()
-
-		response := h.dnsHandler.HandleDNS(ctx, payload, host, port, h.ruleEng)
+		payloadCopy := make([]byte, len(payload))
+		copy(payloadCopy, payload)
 		buffer.Release()
 
-		if response != nil {
-			// 必须经 tunResponseBuffer 留出前导空间,不能直接 buf.As(response):
-			// TUN 包连接的写路径(sing-tun GoPacketConn.transmit)会对 buffer 调
-			// ExtendHeader(IP 头 + UDP 头,IPv4=28 / IPv6=48 字节)补包头,而 buf.As 产出的
-			// buffer start=0 没有任何前导空间,ExtendHeader 会 panic("buffer overflow:
-			// capacity N,start 0, need 28")。该 panic 被 safego 兜住不闪退,但 DNS 响应会被
-			// 静默丢弃,客户端只能等超时(实测 handleDNS 高频触发,capacity 52/78/230 都出现过)。
-			respBuf, slicePtr := acquireTunResponseBuffer(response)
-			if err := conn.WritePacket(respBuf, addr); err != nil {
-				ll.Debug("DNS write response failed", "error", err)
+		// Dispatch query asynchronously so concurrent queries (e.g. A and AAAA dual-stack)
+		// on the same client socket do not block each other head-of-line.
+		wg.Add(1)
+		safego.Go("tun.handleDNSQuery", func() {
+			defer wg.Done()
+			response := h.dnsHandler.HandleDNS(ctx, payloadCopy, host, port, h.ruleEng)
+			if response != nil {
+				if closed.Load() {
+					return
+				}
+				respBuf, slicePtr := acquireTunResponseBuffer(response)
+				writeMu.Lock()
+				var writeErr error
+				if !closed.Load() {
+					writeErr = conn.WritePacket(respBuf, addr)
+				}
+				writeMu.Unlock()
+				if writeErr != nil {
+					ll.Debug("DNS write response failed", "error", writeErr)
+				}
+				releaseTunResponseBuffer(slicePtr)
+				respBuf.Release()
 			}
-			releaseTunResponseBuffer(slicePtr)
-			respBuf.Release()
-		}
+		})
 	}
 }
 
@@ -1385,7 +1422,7 @@ func ReadClientHello(conn net.Conn, timeout time.Duration) ([]byte, error) {
 	// No SNI/Host header can be extracted. Drain any already-arrived bytes from the kernel socket buffer
 	// with a short deadline (10ms) and return immediately without stalling for 4096 bytes or full timeout.
 	if !isHTTPMethod(buf[:5]) {
-		conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
+		conn.SetReadDeadline(time.Now().Add(1 * time.Millisecond))
 		n := 5
 		if nn, _ := conn.Read(buf[5:]); nn > 0 {
 			n += nn

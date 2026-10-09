@@ -31,7 +31,7 @@ import (
 	"smartproxy/internal/upstream"
 )
 
-const maxUDPSessions = 500
+const maxUDPSessions = 2048
 
 // errBlockedDomainByACL 表示 QUIC 目标按外层 SNI 命中 ACL block 域名规则,应丢包不建会话。
 // 与拨号错误区分:handleGenericUDP 识别后不落 Error 日志(block Info 已在识别处打一次)。

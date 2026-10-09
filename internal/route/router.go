@@ -361,84 +361,146 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 
 	start := time.Now()
 	ll.Info("attempting smart proxy direct connection", "host", host, "port", port, "domain", domain, "timeout_ms", cfg.smartTimeout.Milliseconds())
-	conn, err := dialDirectTCP(ctx, host, port, domain, cfg.smartTimeout)
-	if err != nil {
-		shortReason := simplifyError(err, host, port)
-		ll.Warn("direct connection failed, falling back to proxy", "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds(), "reason", shortReason)
-		r.addToBlacklists(host, port, domain, shortReason)
 
-		proxyConn, pErr := r.upstreamMgr.ConnectDefault(ctx, host, port)
-		if pErr != nil {
-			return nil, nil, false, fmt.Errorf("direct failed (%v) and proxy fallback failed (%v)", err, pErr)
+	type directResult struct {
+		conn    net.Conn
+		oneByte []byte
+		err     error
+		written int
+	}
+	directCh := make(chan directResult, 1)
+	directCtx, cancelDirect := context.WithCancel(ctx)
+	defer cancelDirect()
+
+	safego.Go("route.smartDirect", func() {
+		dConn, dErr := dialDirectTCP(directCtx, host, port, domain, cfg.smartTimeout)
+		if dErr != nil {
+			directCh <- directResult{err: dErr}
+			return
 		}
-		if _, err := proxyConn.Write(firstPkt); err != nil {
-			proxyConn.Close()
-			return nil, nil, false, err
+		if len(firstPkt) > 0 {
+			wn, writeErr := dConn.Write(firstPkt)
+			if writeErr != nil {
+				dConn.Close()
+				directCh <- directResult{err: writeErr, written: wn}
+				return
+			}
 		}
-		return proxyConn, nil, true, nil
+		dConn.SetReadDeadline(time.Now().Add(cfg.smartTimeout))
+		oneByte := make([]byte, 1)
+		_, readErr := io.ReadFull(dConn, oneByte)
+		dConn.SetReadDeadline(time.Time{})
+		if readErr != nil {
+			dConn.Close()
+			directCh <- directResult{err: readErr, written: len(firstPkt)}
+			return
+		}
+		directCh <- directResult{conn: dConn, oneByte: oneByte, written: len(firstPkt)}
+	})
+
+	hedgeDelay := 250 * time.Millisecond
+	if cfg.smartTimeout > 0 && cfg.smartTimeout < hedgeDelay {
+		hedgeDelay = cfg.smartTimeout
+	}
+	hedgeTimer := time.NewTimer(hedgeDelay)
+	defer hedgeTimer.Stop()
+
+	type proxyResult struct {
+		conn net.Conn
+		err  error
+	}
+	proxyCh := make(chan proxyResult, 1)
+	proxyCtx, cancelProxy := context.WithCancel(ctx)
+	defer cancelProxy()
+
+	var proxyStarted atomic.Bool
+	startProxy := func() {
+		if proxyStarted.CompareAndSwap(false, true) {
+			safego.Go("route.smartProxy", func() {
+				pConn, pErr := r.upstreamMgr.ConnectDefault(proxyCtx, host, port)
+				proxyCh <- proxyResult{conn: pConn, err: pErr}
+			})
+		}
 	}
 
-	wn, writeErr := conn.Write(firstPkt)
-	if writeErr != nil {
-		conn.Close()
-		shortReason := simplifyError(writeErr, host, port)
-		r.addToBlacklists(host, port, domain, shortReason)
-		if wn == 0 {
-			// 0 bytes sent to direct remote: safe to fallback to proxy
-			ll.Warn("direct write failed with 0 bytes, falling back to proxy", "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds(), "reason", shortReason)
-			proxyConn, pErr := r.upstreamMgr.ConnectDefault(ctx, host, port)
-			if pErr != nil {
-				return nil, nil, false, fmt.Errorf("direct write failed (%v) and proxy fallback failed (%v)", writeErr, pErr)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, nil, false, ctx.Err()
+
+		case res := <-directCh:
+			if res.err == nil {
+				cancelProxy()
+				if proxyStarted.Load() {
+					safego.Go("route.drainProxy", func() {
+						pRes := <-proxyCh
+						if pRes.conn != nil {
+							pRes.conn.Close()
+						}
+					})
+				}
+				ll.Info("direct connection successfully verified, keeping direct", "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds())
+				return res.conn, res.oneByte, false, nil
 			}
-			if _, err := proxyConn.Write(firstPkt); err != nil {
-				proxyConn.Close()
-				return nil, nil, false, err
+
+			// Direct failed!
+			shortReason := simplifyError(res.err, host, port)
+			ll.Warn("direct connection failed, falling back to proxy", "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds(), "reason", shortReason)
+			r.addToBlacklists(host, port, domain, shortReason)
+
+			// If data was partially written and not replay-safe, we cannot replay over proxy
+			if res.written > 0 && !isTLSClientHello(firstPkt) && len(firstPkt) > 0 {
+				ll.Error("direct failed for non-handshake payload, replay forbidden", "written", res.written, "total", len(firstPkt), "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds(), "reason", shortReason)
+				return nil, nil, false, fmt.Errorf("direct connection failed (%d bytes sent, not replay-safe): %w", res.written, res.err)
 			}
-			return proxyConn, nil, true, nil
+
+			startProxy()
+			pRes := <-proxyCh
+			if pRes.err != nil {
+				return nil, nil, false, fmt.Errorf("direct failed (%v) and proxy fallback failed (%v)", res.err, pRes.err)
+			}
+			if len(firstPkt) > 0 {
+				if _, err := pRes.conn.Write(firstPkt); err != nil {
+					pRes.conn.Close()
+					return nil, nil, false, err
+				}
+			}
+			return pRes.conn, nil, true, nil
+
+		case <-hedgeTimer.C:
+			// Direct is taking longer than 250ms (GFW SYN drop or high cross-border latency).
+			// If payload is replay-safe, start hedged proxy connection in parallel.
+			if len(firstPkt) == 0 || isTLSClientHello(firstPkt) {
+				ll.Info("smart direct connection taking longer than hedge window, launching hedged proxy dial", "host", host, "port", port, "domain", domain, "hedge_ms", hedgeDelay.Milliseconds())
+				startProxy()
+			}
+
+		case pRes := <-proxyCh:
+			if pRes.err != nil {
+				// Proxy failed, continue waiting for direct
+				continue
+			}
+			// Hedged proxy won the race against slow/blocked direct!
+			cancelDirect()
+			shortReason := "direct_hedged_timeout"
+			ll.Info("hedged proxy connection won race against slow/blocked direct", "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds())
+			r.addToBlacklists(host, port, domain, shortReason)
+
+			if len(firstPkt) > 0 {
+				if _, err := pRes.conn.Write(firstPkt); err != nil {
+					pRes.conn.Close()
+					return nil, nil, false, err
+				}
+			}
+			safego.Go("route.drainDirect", func() {
+				dRes := <-directCh
+				if dRes.conn != nil {
+					dRes.conn.Close()
+				}
+			})
+			return pRes.conn, nil, true, nil
 		}
-		// Partial write (wn > 0): data has entered the wire!
-		// Replay is STRICTLY FORBIDDEN to prevent duplicate processing.
-		ll.Error("direct write failed partially, replay forbidden", "written", wn, "total", len(firstPkt), "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds(), "reason", shortReason)
-		return nil, nil, false, fmt.Errorf("direct partial write failed (%d/%d bytes sent): %w", wn, len(firstPkt), writeErr)
 	}
-
-	conn.SetReadDeadline(time.Now().Add(cfg.smartTimeout))
-	oneByte := make([]byte, 1)
-	_, readErr := io.ReadFull(conn, oneByte)
-	conn.SetReadDeadline(time.Time{})
-
-	if readErr != nil {
-		conn.Close()
-		shortReason := simplifyError(readErr, host, port)
-		ll.Warn("direct connection failed on read verify, falling back to proxy", "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds(), "reason", shortReason)
-		r.addToBlacklists(host, port, domain, shortReason)
-
-		// All bytes of firstPkt were written to direct server, but no response was received within timeout.
-		// Only allow replay if the payload is proven to be a side-effect-free protocol handshake (TLS ClientHello).
-		if isTLSClientHello(firstPkt) {
-			ll.Info("replaying TLS ClientHello over proxy after direct read timeout", "host", host, "port", port, "domain", domain)
-			proxyConn, pErr := r.upstreamMgr.ConnectDefault(ctx, host, port)
-			if pErr != nil {
-				return nil, nil, false, fmt.Errorf("direct read timeout (%v) and proxy fallback failed (%v)", readErr, pErr)
-			}
-			if _, err := proxyConn.Write(firstPkt); err != nil {
-				proxyConn.Close()
-				return nil, nil, false, err
-			}
-			return proxyConn, nil, true, nil
-		}
-
-		// Non-handshake or unknown application data (e.g. HTTP POST, non-idempotent TCP payload):
-		// Server may have already received and started processing the request.
-		// Fail safe: return read error to caller, do NOT replay.
-		ll.Error("direct read timeout for non-handshake payload, replay forbidden", "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds(), "reason", shortReason)
-		return nil, nil, false, fmt.Errorf("direct connection read verify timeout (payload not replay-safe): %w", readErr)
-	}
-
-	ll.Info("direct connection successfully verified, keeping direct", "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds())
-	// Return the raw connection plus the first byte already read, which relay replays before
-	// splicing, avoiding a prefixedConn that would break zero-copy.
-	return conn, oneByte, false, nil
 }
 
 // isTLSClientHello reports whether pkt contains exactly and exclusively a single,
@@ -572,7 +634,7 @@ func (r *Router) addToBlacklists(host string, port int, domain, reason string) {
 		r.domainBlacklist.Add(domain, port, cfg.blacklistTTL, reason)
 	}
 
-	if cfg == nil || !cfg.disableIPBlacklist {
+	if cfg == nil || !cfg.disableIPBlacklist || domain == "" {
 		r.ipBlacklist.Add(host, port, cfg.blacklistTTL, reason)
 	} else {
 		slog.Debug("skipping ip blacklist addition (disable_ip_blacklist enabled)", "ip", host, "port", port, "domain", domain)

@@ -878,7 +878,53 @@ func TestDialDirectTCP_Fallback(t *testing.T) {
 	}
 }
 
+func TestSmartConnectWithFallback_HedgeRace(t *testing.T) {
+	proxyHit := make(chan struct{}, 1)
+	addr, stop := startMockSOCKS5Server(t, proxyHit)
+	defer stop()
 
+	cn := chnroute.New()
 
+	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
+		Default: "failover",
+		Proxies: []upstream.ProxyEntry{
+			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s", addr)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Stop()
 
+	// 2s smartTimeout
+	r := New(cn, mgr, false, 2*time.Second, nil, 300*time.Second)
 
+	dir := t.TempDir()
+	rulesFile := filepath.Join(dir, "rules.txt")
+	os.WriteFile(rulesFile, []byte(""), 0644)
+	eng, err := rules.New(rulesFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+
+	// RFC 5737 TEST-NET-2 address (silent blackhole)
+	conn, _, isProxy, err := r.SmartConnectWithFallback(ctx, "198.51.100.1", 443, "blocked.example.com", nil, eng)
+	if err != nil {
+		t.Fatalf("expected hedged proxy fallback to succeed, got %v", err)
+	}
+	if conn != nil {
+		conn.Close()
+	}
+	if !isProxy {
+		t.Fatalf("expected isProxy=true, got false")
+	}
+
+	duration := time.Since(start)
+	if duration >= 1500*time.Millisecond {
+		t.Fatalf("expected hedged proxy to connect fast (<1500ms), took %v", duration)
+	}
+}

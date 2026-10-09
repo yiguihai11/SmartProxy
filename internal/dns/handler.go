@@ -20,6 +20,7 @@ import (
 	"smartproxy/internal/netutil"
 	"smartproxy/internal/relay"
 	"smartproxy/internal/rules"
+	"smartproxy/internal/safego"
 	"smartproxy/internal/trace"
 	"smartproxy/internal/upstream"
 )
@@ -318,24 +319,82 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 
 		if isDomestic {
 			fll.Debug("querying domestic DNS", "target", fmt.Sprintf("%s:%d", targetIP, targetPort))
-			resp, rerr = h.QueryUDPVerifyID(fctx, queryWire, targetIP, targetPort)
-			if rerr != nil {
-				fll.Warn("domestic DNS query failed, falling back to foreign DNS",
-					"qname", qname, "error", rerr)
-				foreignHost := cfg.foreignIPv4
-				foreignPort := cfg.foreignIPv4Port
-				if strings.Contains(targetIP, ":") {
-					foreignHost = cfg.foreignIPv6
-					foreignPort = cfg.foreignIPv6Port
+			foreignHost := cfg.foreignIPv4
+			foreignPort := cfg.foreignIPv4Port
+			if strings.Contains(targetIP, ":") {
+				foreignHost = cfg.foreignIPv6
+				foreignPort = cfg.foreignIPv6Port
+			}
+
+			// Hedged domestic DNS query:
+			// Normal domestic DNS returns in 10-50ms. If domestic DNS doesn't return
+			// within 150ms (packet loss, carrier IPv6 stall), start foreign query via proxy in parallel.
+			const dnsHedgeDelay = 150 * time.Millisecond
+			type dnsQueryResult struct {
+				resp []byte
+				err  error
+				from string
+			}
+			resCh := make(chan dnsQueryResult, 2)
+			domCtx, cancelDom := context.WithCancel(fctx)
+			defer cancelDom()
+
+			safego.Go("dns.domesticQuery", func() {
+				dResp, dErr := h.QueryUDPVerifyID(domCtx, queryWire, targetIP, targetPort)
+				resCh <- dnsQueryResult{resp: dResp, err: dErr, from: "domestic"}
+			})
+
+			hedgeTimer := time.NewTimer(dnsHedgeDelay)
+			defer hedgeTimer.Stop()
+
+			var foreignLaunched atomic.Bool
+			launchForeign := func() {
+				if foreignLaunched.CompareAndSwap(false, true) {
+					safego.Go("dns.foreignHedgeQuery", func() {
+						fResp, fErr := h.queryForeignDNSWithRetry(fctx, queryWire, foreignHost, foreignPort)
+						resCh <- dnsQueryResult{resp: fResp, err: fErr, from: "foreign"}
+					})
 				}
-				resp, rerr = h.queryForeignDNSWithRetry(fctx, queryWire, foreignHost, foreignPort)
-				if rerr != nil {
-					fll.Error("foreign DNS fallback also failed, answering SERVFAIL", "qname", qname, "error", rerr)
-					return h.buildSERVFAIL(queryWire), nil
+			}
+
+			for {
+				select {
+				case <-fctx.Done():
+					return nil, fctx.Err()
+
+				case <-hedgeTimer.C:
+					fll.Debug("domestic DNS slow (>150ms), launching foreign hedge query", "qname", qname)
+					launchForeign()
+
+				case qRes := <-resCh:
+					if qRes.from == "domestic" {
+						if qRes.err != nil {
+							fll.Warn("domestic DNS query failed, falling back to foreign DNS", "qname", qname, "error", qRes.err)
+							launchForeign()
+							continue
+						}
+						// Check pollution and preference
+						if preferred, cached, clean := h.isDNSCleanAndPrefer(fctx, qRes.resp, qname); clean {
+							resp = sanitizeResponse(preferred, cfg.filterAAAA, filterLAN)
+							if cached {
+								h.cache.Set(qname, qtype, resp, 0)
+							}
+							return resp, nil
+						}
+						// Domestic response is polluted by GFW: discard and launch/wait for foreign
+						fll.Warn("domestic DNS response polluted, falling back to foreign DNS", "qname", qname)
+						launchForeign()
+						continue
+					} else { // from == "foreign"
+						if qRes.err != nil {
+							fll.Warn("foreign DNS fallback failed, answering SERVFAIL", "qname", qname, "error", qRes.err)
+							return h.buildSERVFAIL(queryWire), nil
+						}
+						resp = sanitizeResponse(qRes.resp, cfg.filterAAAA, filterLAN)
+						h.cache.Set(qname, qtype, resp, 0)
+						return resp, nil
+					}
 				}
-				resp = sanitizeResponse(resp, cfg.filterAAAA, filterLAN)
-				h.cache.Set(qname, qtype, resp, 0)
-				return resp, nil
 			}
 		} else {
 			fll.Debug("querying foreign DNS via proxy", "target", fmt.Sprintf("%s:%d", targetIP, targetPort))
@@ -344,36 +403,6 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 				fll.Error("foreign DNS query failed, answering SERVFAIL", "error", rerr)
 				return h.buildSERVFAIL(queryWire), nil
 			}
-		}
-
-		if isDomestic {
-			// A single parse performs both the pollution check and IP preference selection (avoiding unpacking the response twice)
-			if preferred, cached, clean := h.isDNSCleanAndPrefer(fctx, resp, qname); clean {
-				resp = sanitizeResponse(preferred, cfg.filterAAAA, filterLAN)
-				if cached {
-					h.cache.Set(qname, qtype, resp, 0)
-				}
-				return resp, nil
-			} else {
-				fll.Warn("domestic DNS response polluted, falling back to foreign DNS", "qname", qname)
-				foreignHost := cfg.foreignIPv4
-				foreignPort := cfg.foreignIPv4Port
-				if strings.Contains(targetIP, ":") {
-					foreignHost = cfg.foreignIPv6
-					foreignPort = cfg.foreignIPv6Port
-				}
-				fallback, ferr := h.queryForeignDNSWithRetry(fctx, queryWire, foreignHost, foreignPort)
-				if ferr != nil || fallback == nil {
-					fll.Warn("foreign DNS fallback failed, answering SERVFAIL",
-						"qname", qname, "foreignTarget", fmt.Sprintf("%s:%d", foreignHost, foreignPort),
-						"error", ferr, "queryLen", len(queryWire))
-					return h.buildSERVFAIL(queryWire), nil
-				}
-				resp = sanitizeResponse(fallback, cfg.filterAAAA, filterLAN)
-				h.cache.Set(qname, qtype, resp, 0)
-				return resp, nil
-			}
-		} else {
 			resp = sanitizeResponse(resp, cfg.filterAAAA, filterLAN)
 			h.cache.Set(qname, qtype, resp, 0)
 			return resp, nil
