@@ -806,7 +806,7 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             val builderClass = Class.forName("android.net.wifi.SoftApConfiguration\$Builder")
             val builder = builderClass.getConstructor(config.javaClass).newInstance(config)
             builderClass.getMethod("setClientControlByUserEnabled", java.lang.Boolean.TYPE).invoke(builder, false)
-            builderClass.getMethod("setBlockedClientList", java.util.List::class.java).invoke(builder, updatedList)
+            builderClass.getMethod("setBlockedClientList", List::class.java).invoke(builder, updatedList)
             val newConfig = builderClass.getMethod("build").invoke(builder)
 
             val setSoftApConfigMethod = wm.javaClass.getMethod("setSoftApConfiguration", config.javaClass)
@@ -837,7 +837,7 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             val builderClass = Class.forName("android.net.wifi.SoftApConfiguration\$Builder")
             val builder = builderClass.getConstructor(config.javaClass).newInstance(config)
             builderClass.getMethod("setClientControlByUserEnabled", java.lang.Boolean.TYPE).invoke(builder, false)
-            builderClass.getMethod("setBlockedClientList", java.util.List::class.java).invoke(builder, updatedList)
+            builderClass.getMethod("setBlockedClientList", List::class.java).invoke(builder, updatedList)
             val newConfig = builderClass.getMethod("build").invoke(builder)
 
             val setSoftApConfigMethod = wm.javaClass.getMethod("setSoftApConfiguration", config.javaClass)
