@@ -207,6 +207,12 @@ var zhStrings = map[string]string{
 	"udp_only": "仅 UDP", "raw": "原生", "standard": "标准",
 	"manual": "手动", "unknown": "未知",
 	"up": "连通", "down": "断开", "half": "恢复中", "n/a": "不支持",
+	"Supports IPv6 & IPv4 Dual-Stack": "支持 IPv6 与 IPv4 双栈",
+	"IPv4 Only": "仅 IPv4",
+	"IPv6 Host Address": "IPv6 节点主机",
+	"IPv6 Capability": "IPv6 出口能力",
+	"Supported (Dual-Stack)": "支持 (双栈)",
+	"IPv6 Host": "IPv6 主机",
 
 	// proxy cards — buttons / tooltips / badges
 	"Disable": "停用", "Enable": "启用",
