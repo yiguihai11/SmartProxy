@@ -1428,7 +1428,7 @@ func (m *Manager) SetStrategy(strategy string) {
 	slog.Info("upstream manager strategy dynamically updated", "strategy", m.strategy)
 }
 
-// CycleStrategy cycles through the main supported routing strategies (failover -> latency -> round_robin -> failover).
+// CycleStrategy cycles through the 4 supported routing strategies (failover -> latency -> round_robin -> random -> failover).
 func (m *Manager) CycleStrategy() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1439,6 +1439,8 @@ func (m *Manager) CycleStrategy() string {
 	case "latency":
 		next = "round_robin"
 	case "round_robin":
+		next = "random"
+	case "random":
 		next = "failover"
 	default:
 		next = "latency"

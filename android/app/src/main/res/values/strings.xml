@@ -13,6 +13,7 @@
     <string name="notification_strategy_latency">Latency</string>
     <string name="notification_strategy_failover">Failover</string>
     <string name="notification_strategy_round_robin">Round-Robin</string>
+    <string name="notification_strategy_random">Random</string>
     <string name="notification_node_dual">Node: %1$s (v4+v6%2$s)</string>
     <string name="notification_node_separate">v4: %1$s%2$s · v6: %3$s%4$s</string>
     <string name="notification_node_v4_only">v4: %1$s%2$s</string>

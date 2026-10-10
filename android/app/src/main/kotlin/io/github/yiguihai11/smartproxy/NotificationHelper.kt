@@ -53,6 +53,7 @@ object NotificationHelper {
         return when (strategy.lowercase()) {
             "latency" -> context.getString(R.string.notification_strategy_latency)
             "round_robin" -> context.getString(R.string.notification_strategy_round_robin)
+            "random" -> context.getString(R.string.notification_strategy_random)
             else -> context.getString(R.string.notification_strategy_failover)
         }
     }

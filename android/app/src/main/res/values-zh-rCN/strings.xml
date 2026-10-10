@@ -13,6 +13,7 @@
     <string name="notification_strategy_latency">最低延迟</string>
     <string name="notification_strategy_failover">故障转移</string>
     <string name="notification_strategy_round_robin">负载轮询</string>
+    <string name="notification_strategy_random">随机</string>
     <string name="notification_node_dual">节点: %1$s (v4+v6%2$s)</string>
     <string name="notification_node_separate">v4: %1$s%2$s · v6: %3$s%4$s</string>
     <string name="notification_node_v4_only">v4: %1$s%2$s</string>
