@@ -153,7 +153,7 @@ object NotificationHelper {
             .setOngoing(true)
             .setShowWhen(false)
 
-        // Action 1: 切换调度策略 [切换调度策略]
+        // Action 1: 策略切换 [切换调度]
         content.addAction(
             Notification.Action.Builder(
                 null,
