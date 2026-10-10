@@ -134,7 +134,9 @@ func (m *Manager) Reload(cfg UpstreamConfig) {
 	pins := m.captureManualPins()
 	m.staticProxies = cfg.Proxies
 	m.healthCfg = cfg.HealthCheck
-	m.strategy = cfg.Default
+	if cfg.Default != "" {
+		m.strategy = cfg.Default
+	}
 	activeSB := m.rebuildLocked()
 	newProxies := m.defaultProxies
 	m.mu.Unlock()

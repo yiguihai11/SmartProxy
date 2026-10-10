@@ -29,8 +29,15 @@ func (c *Config) applyDefaults() {
 	// sets 1080, so an absent "port" keeps 1080 after Unmarshal; an explicit
 	// "port": 0 must survive as "socks5 disabled" (Android fd-mode default).
 	// Filling 0→1080 here would defeat that.
+	if c.Upstream.Strategy != "" && c.Upstream.Default == "" {
+		c.Upstream.Default = c.Upstream.Strategy
+	}
+	if c.Upstream.Default != "" && c.Upstream.Strategy == "" {
+		c.Upstream.Strategy = c.Upstream.Default
+	}
 	if c.Upstream.Default == "" {
 		c.Upstream.Default = "failover"
+		c.Upstream.Strategy = "failover"
 	}
 	if c.TUN.Stack == "" {
 		c.TUN.Stack = "gvisor"

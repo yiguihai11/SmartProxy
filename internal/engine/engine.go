@@ -1009,8 +1009,12 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 		}
 	}
 
+	strategy := newCfg.Upstream.Strategy
+	if strategy == "" {
+		strategy = newCfg.Upstream.Default
+	}
 	upstreamCfg := upstream.UpstreamConfig{
-		Default:     newCfg.Upstream.Default,
+		Default:     strategy,
 		HealthCheck: newCfg.Upstream.HealthCheck,
 	}
 	for _, p := range newCfg.Upstream.Proxies {
@@ -1181,13 +1185,26 @@ func (e *Engine) UpstreamActiveNodeStatus() upstream.UpstreamActiveNodeStatus {
 func (e *Engine) SetUpstreamStrategy(strategy string) {
 	if e != nil && e.UpstreamMgr != nil {
 		e.UpstreamMgr.SetStrategy(strategy)
+		if cur := e.Config.Load(); cur != nil {
+			cp := cur.Clone()
+			cp.Upstream.Default = strategy
+			cp.Upstream.Strategy = strategy
+			e.Config.Store(cp)
+		}
 	}
 }
 
 // CycleUpstreamStrategy cycles the current default upstream selection strategy.
 func (e *Engine) CycleUpstreamStrategy() string {
 	if e != nil && e.UpstreamMgr != nil {
-		return e.UpstreamMgr.CycleStrategy()
+		newStrat := e.UpstreamMgr.CycleStrategy()
+		if cur := e.Config.Load(); cur != nil {
+			cp := cur.Clone()
+			cp.Upstream.Default = newStrat
+			cp.Upstream.Strategy = newStrat
+			e.Config.Store(cp)
+		}
+		return newStrat
 	}
 	return ""
 }

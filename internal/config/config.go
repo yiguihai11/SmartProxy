@@ -135,6 +135,7 @@ type AuthConf struct {
 
 type UpstreamConf struct {
 	Default       string             `json:"default"`
+	Strategy      string             `json:"strategy,omitempty"`
 	HealthCheck   HealthCheckConf    `json:"health_check"`
 	Proxies       []ProxyEntry       `json:"proxies"`
 	Subscriptions []SubscriptionConf `json:"subscriptions,omitempty"`
@@ -708,7 +709,8 @@ func DefaultConfig() *Config {
 			RouteExcludePorts: []int{22},
 		},
 		Upstream: UpstreamConf{
-			Default: "failover",
+			Default:  "failover",
+			Strategy: "failover",
 			HealthCheck: HealthCheckConf{
 				Enabled:            false,
 				URL:                "http://cp.cloudflare.com/generate_204",

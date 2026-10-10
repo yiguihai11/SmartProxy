@@ -143,15 +143,18 @@ object ConfigProvider {
         return proxies != null && proxies.length() > 0
     }
 
-    /** 上游节点选路策略 (latency / failover / round_robin)。只读，不触发写盘。 */
-    fun upstreamStrategy(context: Context): String =
-        readRaw(context)?.optJSONObject("upstream")?.optString("strategy", "latency")?.ifBlank { "latency" } ?: "latency"
+    /** 上游节点选路策略 (latency / failover / round_robin / random)。只读，不触发写盘。 */
+    fun upstreamStrategy(context: Context): String {
+        val up = readRaw(context)?.optJSONObject("upstream") ?: return "latency"
+        return up.optString("strategy").ifBlank { up.optString("default", "latency") }.ifBlank { "latency" }
+    }
 
-    /** 保存上游选路策略至 config.json。 */
+    /** 保存上游选路策略至 config.json，同时同步 default 与 strategy 字段以兼容 Go 核心与 Android。 */
     fun setUpstreamStrategy(context: Context, strategy: String) {
         val json = readConfig(context)
         val upstream = json.optJSONObject("upstream") ?: JSONObject().also { json.put("upstream", it) }
         upstream.put("strategy", strategy)
+        upstream.put("default", strategy)
         writeConfig(context, json)
     }
 
