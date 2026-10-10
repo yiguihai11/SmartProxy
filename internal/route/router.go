@@ -1,6 +1,7 @@
 package route
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -449,7 +450,7 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 			r.addToBlacklists(host, port, domain, shortReason)
 
 			// If data was partially written and not replay-safe, we cannot replay over proxy
-			if res.written > 0 && !isTLSClientHello(firstPkt) && len(firstPkt) > 0 {
+			if res.written > 0 && !isReplaySafePayload(firstPkt) && len(firstPkt) > 0 {
 				ll.Error("direct failed for non-handshake payload, replay forbidden", "written", res.written, "total", len(firstPkt), "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds(), "reason", shortReason)
 				return nil, nil, false, fmt.Errorf("direct connection failed (%d bytes sent, not replay-safe): %w", res.written, res.err)
 			}
@@ -470,7 +471,7 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 		case <-hedgeTimer.C:
 			// Direct is taking longer than 250ms (GFW SYN drop or high cross-border latency).
 			// If payload is replay-safe, start hedged proxy connection in parallel.
-			if len(firstPkt) == 0 || isTLSClientHello(firstPkt) {
+			if len(firstPkt) == 0 || isReplaySafePayload(firstPkt) {
 				ll.Info("smart direct connection taking longer than hedge window, launching hedged proxy dial", "host", host, "port", port, "domain", domain, "hedge_ms", hedgeDelay.Milliseconds())
 				startProxy()
 			}
@@ -501,6 +502,41 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 			return pRes.conn, nil, true, nil
 		}
 	}
+}
+
+// isReplaySafePayload reports whether pkt can be safely replayed over an upstream proxy
+// if a smart direct connection attempt times out or is reset before any response data is received.
+//
+// Replay-safe payloads are:
+// 1. A single, well-formed TLS ClientHello handshake record (HTTPS).
+// 2. A complete, idempotent HTTP read-only request (GET, HEAD, OPTIONS) with no request body.
+func isReplaySafePayload(pkt []byte) bool {
+	if isTLSClientHello(pkt) {
+		return true
+	}
+	return isIdempotentHTTPRequest(pkt)
+}
+
+// isIdempotentHTTPRequest checks if pkt contains a complete HTTP GET/HEAD/OPTIONS request
+// with all headers terminated by \r\n\r\n and no trailing body.
+func isIdempotentHTTPRequest(pkt []byte) bool {
+	if len(pkt) < 14 {
+		return false
+	}
+	isGet := bytes.HasPrefix(pkt, []byte("GET "))
+	isHead := bytes.HasPrefix(pkt, []byte("HEAD "))
+	isOptions := bytes.HasPrefix(pkt, []byte("OPTIONS "))
+	if !isGet && !isHead && !isOptions {
+		return false
+	}
+	headerEnd := bytes.Index(pkt, []byte("\r\n\r\n"))
+	if headerEnd == -1 {
+		return false
+	}
+	if len(pkt) != headerEnd+4 {
+		return false
+	}
+	return true
 }
 
 // isTLSClientHello reports whether pkt contains exactly and exclusively a single,

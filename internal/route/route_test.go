@@ -928,3 +928,116 @@ func TestSmartConnectWithFallback_HedgeRace(t *testing.T) {
 		t.Fatalf("expected hedged proxy to connect fast (<1500ms), took %v", duration)
 	}
 }
+
+func TestIsReplaySafePayload(t *testing.T) {
+	// 1. Valid HTTP GET
+	validGet := []byte("GET /index.html HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	if !isReplaySafePayload(validGet) {
+		t.Errorf("expected valid GET to be replay-safe")
+	}
+
+	// 2. Valid HTTP HEAD
+	validHead := []byte("HEAD /test HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	if !isReplaySafePayload(validHead) {
+		t.Errorf("expected valid HEAD to be replay-safe")
+	}
+
+	// 3. Valid HTTP OPTIONS
+	validOptions := []byte("OPTIONS * HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	if !isReplaySafePayload(validOptions) {
+		t.Errorf("expected valid OPTIONS to be replay-safe")
+	}
+
+	// 4. Incomplete HTTP GET (no \r\n\r\n)
+	incompleteGet := []byte("GET /index.html HTTP/1.1\r\nHost: example.com")
+	if isReplaySafePayload(incompleteGet) {
+		t.Errorf("expected incomplete GET without \\r\\n\\r\\n to be NOT replay-safe")
+	}
+
+	// 5. HTTP POST (non-idempotent)
+	postReq := []byte("POST /api HTTP/1.1\r\nHost: example.com\r\n\r\n")
+	if isReplaySafePayload(postReq) {
+		t.Errorf("expected POST to be NOT replay-safe")
+	}
+
+	// 6. HTTP GET with trailing pipelined body data
+	pipelinedGet := []byte("GET / HTTP/1.1\r\n\r\nextra_data")
+	if isReplaySafePayload(pipelinedGet) {
+		t.Errorf("expected GET with extra data beyond \\r\\n\\r\\n to be NOT replay-safe")
+	}
+}
+
+func TestSmartConnectWithFallback_IdempotentHTTPReplay(t *testing.T) {
+	// Set up a mock direct server that immediately closes on receiving data (simulating server EOF/RST)
+	directLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer directLn.Close()
+	directAddr := directLn.Addr().String()
+
+	go func() {
+		for {
+			conn, err := directLn.Accept()
+			if err != nil {
+				return
+			}
+			// Read whatever was sent, then close immediately with 0 response bytes
+			buf := make([]byte, 1024)
+			_, _ = conn.Read(buf)
+			conn.Close()
+		}
+	}()
+
+	proxyHit := make(chan struct{}, 1)
+	proxyAddr, stopProxy := startMockSOCKS5Server(t, proxyHit)
+	defer stopProxy()
+
+	cn := chnroute.New() // 127.0.0.1 won't be in chnroute for direct check
+	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
+		Default: "failover",
+		Proxies: []upstream.ProxyEntry{
+			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s", proxyAddr)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Stop()
+
+	r := New(cn, mgr, false, 500*time.Millisecond, nil, 300*time.Second)
+
+	dir := t.TempDir()
+	rulesFile := filepath.Join(dir, "rules.txt")
+	os.WriteFile(rulesFile, []byte(""), 0644)
+	eng, err := rules.New(rulesFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	host, portStr, _ := net.SplitHostPort(directAddr)
+	var port int
+	fmt.Sscanf(portStr, "%d", &port)
+
+	httpPayload := []byte("GET /test HTTP/1.1\r\nHost: example.com\r\n\r\n")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	conn, _, isProxy, err := r.SmartConnectWithFallback(ctx, host, port, "example.com", httpPayload, eng)
+	if err != nil {
+		t.Fatalf("expected HTTP replay to fallback to proxy successfully, got: %v", err)
+	}
+	if conn != nil {
+		conn.Close()
+	}
+	if !isProxy {
+		t.Errorf("expected isProxy=true after direct EOF reset, got false")
+	}
+
+	select {
+	case <-proxyHit:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for proxy replay hit")
+	}
+}
