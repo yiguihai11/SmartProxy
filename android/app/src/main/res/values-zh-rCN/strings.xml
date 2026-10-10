@@ -83,6 +83,8 @@
     <string name="speed_meter_down_color">下行颜色</string>
     <string name="speed_meter_rate_order">上/下行顺序</string>
     <string name="speed_meter_swap_order">⇅ 调换位置</string>
+    <string name="speed_meter_lock_position">锁定胶囊位置</string>
+    <string name="speed_meter_lock_position_sub">锁定后禁止拖动移动，防止误触</string>
     <string name="notification_speed_meter_lock">锁定</string>
     <string name="notification_speed_meter_unlock">解锁</string>
     <string name="toast_speed_meter_locked">流量条已锁定</string>

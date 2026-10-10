@@ -66,29 +66,6 @@ object NotificationHelper {
             .setOngoing(true)
             .setShowWhen(false)
 
-        // 流量条锁定/解锁开关:仅当悬浮网速计开启时显示。未锁定时为"锁定",锁定后变为"解锁"。
-        if (AppPrefs.speedMeterEnabled(context)) {
-            val locked = AppPrefs.speedMeterLocked(context)
-            val lockTitle = if (locked) {
-                context.getString(R.string.notification_speed_meter_unlock)
-            } else {
-                context.getString(R.string.notification_speed_meter_lock)
-            }
-            val lockIntent = Intent(context, SmartProxyVpnService::class.java)
-                .setAction(ACTION_TOGGLE_SPEED_METER_LOCK)
-            val lockPending = PendingIntent.getService(
-                context, 2, lockIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            content.addAction(
-                Notification.Action.Builder(
-                    null,
-                    lockTitle,
-                    lockPending
-                ).build()
-            )
-        }
-
         content.addAction(
             Notification.Action.Builder(
                 null,

@@ -30,6 +30,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -95,6 +97,7 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
     var upLabel by remember { mutableStateOf(AppPrefs.speedMeterUpLabel(ctx)) }
     var downLabel by remember { mutableStateOf(AppPrefs.speedMeterDownLabel(ctx)) }
     var swapOrder by remember { mutableStateOf(AppPrefs.speedMeterSwapOrder(ctx)) }
+    var locked by remember { mutableStateOf(AppPrefs.speedMeterLocked(ctx)) }
     var upColor by remember { mutableStateOf(AppPrefs.speedMeterUpColor(ctx)) }
     var downColor by remember { mutableStateOf(AppPrefs.speedMeterDownColor(ctx)) }
     // 颜色输入框文本(随选中色/输入同步;非法时红框不写入)。
@@ -272,6 +275,40 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
                         Text(stringResource(R.string.speed_meter_swap_order), color = AccentColor)
                     }
                 }
+                // 锁定胶囊位置:开关开启后禁止拖动胶囊,防止日常手势误触移位。
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            stringResource(R.string.speed_meter_lock_position),
+                            color = LabelColor,
+                            fontSize = 15.sp
+                        )
+                        Text(
+                            stringResource(R.string.speed_meter_lock_position_sub),
+                            color = ValueColor,
+                            fontSize = 12.sp
+                        )
+                    }
+                    Switch(
+                        checked = locked,
+                        onCheckedChange = { next ->
+                            locked = next
+                            AppPrefs.setSpeedMeterLocked(ctx, next)
+                            applyAppearance()
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = AccentColor,
+                            uncheckedThumbColor = Color.White,
+                            uncheckedTrackColor = if (ThemeState.isDark) Color(0xFF48484A) else Color(0xFFE5E5EA)
+                        )
+                    )
+                }
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -289,6 +326,7 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
                         AppPrefs.setSpeedMeterUpColor(ctx, AppPrefs.SPEED_METER_DEFAULT_UP_COLOR)
                         AppPrefs.setSpeedMeterDownColor(ctx, AppPrefs.SPEED_METER_DEFAULT_DOWN_COLOR)
                         AppPrefs.setSpeedMeterSwapOrder(ctx, false) // 出厂:上行在左、下行在右
+                        AppPrefs.setSpeedMeterLocked(ctx, false) // 出厂:未锁定位置
                         capsuleSize = AppPrefs.SPEED_METER_DEFAULT_CAPSULE_SIZE.toFloat()
                         fontSize = AppPrefs.SPEED_METER_DEFAULT_FONT_SIZE.toFloat()
                         iconSize = AppPrefs.SPEED_METER_DEFAULT_ICON_SIZE.toFloat()
@@ -300,6 +338,7 @@ private fun SpeedMeterSettingsScreen(onClose: () -> Unit) {
                         upColorHex = hexOf(AppPrefs.SPEED_METER_DEFAULT_UP_COLOR)
                         downColorHex = hexOf(AppPrefs.SPEED_METER_DEFAULT_DOWN_COLOR)
                         swapOrder = false
+                        locked = false
                         applyAppearance()
                     }) {
                         Text(stringResource(R.string.speed_meter_restore_defaults), color = LabelColor)
