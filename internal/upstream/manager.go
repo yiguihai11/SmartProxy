@@ -1404,6 +1404,107 @@ func (m *Manager) Strategy() string {
 	return m.strategy
 }
 
+// UpstreamActiveNodeStatus records the current active routing state for Android UI/notifications.
+type UpstreamActiveNodeStatus struct {
+	Strategy      string `json:"strategy"`
+	V4Node        string `json:"v4_node"`
+	V4LatencyMs   int64  `json:"v4_latency_ms"`
+	V6Node        string `json:"v6_node"`
+	V6LatencyMs   int64  `json:"v6_latency_ms"`
+	DualStackNode bool   `json:"dual_stack_node"`
+}
+
+// SetStrategy dynamically updates the upstream routing strategy.
+func (m *Manager) SetStrategy(strategy string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	strategy = strings.ToLower(strings.TrimSpace(strategy))
+	if strategy == "" {
+		strategy = "failover"
+	}
+	m.strategy = strategy
+	m.order[transportTCP].band.Store(nil)
+	m.order[transportUDP].band.Store(nil)
+	slog.Info("upstream manager strategy dynamically updated", "strategy", m.strategy)
+}
+
+// CycleStrategy cycles through the main supported routing strategies (failover -> latency -> round_robin -> failover).
+func (m *Manager) CycleStrategy() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	next := "failover"
+	switch m.strategy {
+	case "failover":
+		next = "latency"
+	case "latency":
+		next = "round_robin"
+	case "round_robin":
+		next = "failover"
+	default:
+		next = "latency"
+	}
+	m.strategy = next
+	m.order[transportTCP].band.Store(nil)
+	m.order[transportUDP].band.Store(nil)
+	slog.Info("upstream manager strategy cycled", "strategy", m.strategy)
+	return m.strategy
+}
+
+// ProbeAll immediately triggers an active probe on all proxies.
+func (m *Manager) ProbeAll() {
+	m.mu.RLock()
+	hc := m.healthChecker
+	m.mu.RUnlock()
+	if hc != nil {
+		hc.ProbeAll()
+	}
+}
+
+// ActiveNodeStatus returns the current primary nodes for IPv4 and IPv6 traffic.
+func (m *Manager) ActiveNodeStatus() UpstreamActiveNodeStatus {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	status := UpstreamActiveNodeStatus{
+		Strategy: m.strategy,
+	}
+	if status.Strategy == "" {
+		status.Strategy = "failover"
+	}
+
+	ordered := m.orderedProxies()
+	var v4Proxy *Proxy
+	var v6Proxy *Proxy
+
+	for _, p := range ordered {
+		if p.IsUDPOnly() || !p.IsAvailable() {
+			continue
+		}
+		if v4Proxy == nil {
+			v4Proxy = p
+		}
+		if v6Proxy == nil && p.SupportsIPv6() {
+			v6Proxy = p
+		}
+		if v4Proxy != nil && v6Proxy != nil {
+			break
+		}
+	}
+
+	if v4Proxy != nil {
+		status.V4Node = v4Proxy.DisplayName()
+		status.V4LatencyMs = v4Proxy.health.Latency().Milliseconds()
+	}
+	if v6Proxy != nil {
+		status.V6Node = v6Proxy.DisplayName()
+		status.V6LatencyMs = v6Proxy.health.Latency().Milliseconds()
+	}
+	if v4Proxy != nil && v6Proxy != nil && v4Proxy == v6Proxy {
+		status.DualStackNode = true
+	}
+	return status
+}
+
 // TestProxy runs an on-demand, real network test for the given proxy alias and protocol ("ping", "tcp" or "udp").
 // Returns the round-trip latency and any error encountered during the probe.
 func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.Duration, error) {

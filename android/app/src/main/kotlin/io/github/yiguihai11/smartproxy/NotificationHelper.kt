@@ -9,9 +9,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import androidx.core.app.ServiceCompat
+import org.json.JSONObject
 
 /**
- * 保活通知(§4.3):极简,只显示"正在运行" + 一个停止按钮。
+ * 保活通知(§4.3):显示当前选路策略、活跃节点及延迟，提供切换策略、刷新测速和停止按钮。
  * setOngoing(true) 不可滑动清除、无清除按钮;渠道 IMPORTANCE_LOW 不打扰。
  */
 object NotificationHelper {
@@ -22,7 +23,13 @@ object NotificationHelper {
 
     const val ACTION_STOP = "io.github.yiguihai11.smartproxy.STOP_VPN"
 
-    /** 悬浮网速计(流量条)位置锁定/解锁切换。 */
+    /** 循环切换选路策略 (latency -> failover -> round_robin)。 */
+    const val ACTION_CYCLE_STRATEGY = "io.github.yiguihai11.smartproxy.CYCLE_STRATEGY"
+
+    /** 触发上游节点并发对冲测速与重新选路。 */
+    const val ACTION_REFRESH_NODES = "io.github.yiguihai11.smartproxy.REFRESH_NODES"
+
+    /** 悬浮网速计(流量条)位置锁定/解锁切换(兼容保留)。 */
     const val ACTION_TOGGLE_SPEED_METER_LOCK = "io.github.yiguihai11.smartproxy.TOGGLE_SPEED_METER_LOCK"
 
     /** 通知授权补发(§4.3):startForeground 先于 POST_NOTIFICATIONS 授权执行时,系统压住
@@ -42,15 +49,40 @@ object NotificationHelper {
         nm.createNotificationChannel(channel)
     }
 
+    fun getStrategyDisplayName(context: Context, strategy: String): String {
+        return when (strategy.lowercase()) {
+            "latency" -> context.getString(R.string.notification_strategy_latency)
+            "round_robin" -> context.getString(R.string.notification_strategy_round_robin)
+            else -> context.getString(R.string.notification_strategy_failover)
+        }
+    }
+
     fun build(context: Context): Notification {
         // 点通知正文 → 打开主界面(CLEAR_TOP+SINGLE_TOP:已存在则复用同一实例,
-        // 不清任务栈;requestCode=1 与下方 stop 的 0 区分,避免 PendingIntent 互撞)。
+        // 不清任务栈;requestCode=1 与下方各 action 区分,避免 PendingIntent 互撞)。
         val openIntent = Intent(context, MainActivity::class.java)
             .setFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         val openPending = PendingIntent.getActivity(
             context, 1, openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+
+        // 策略切换按钮:循环切换 latency / failover / round_robin
+        val cycleIntent = Intent(context, SmartProxyVpnService::class.java)
+            .setAction(ACTION_CYCLE_STRATEGY)
+        val cyclePending = PendingIntent.getService(
+            context, 2, cycleIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // 刷新测速按钮:重新并发探测节点延迟并选路
+        val refreshIntent = Intent(context, SmartProxyVpnService::class.java)
+            .setAction(ACTION_REFRESH_NODES)
+        val refreshPending = PendingIntent.getService(
+            context, 3, refreshIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         // 停止按钮:用户主动停止 → 服务静默停(§4.5 userInitiatedStop)。
         val stopIntent = Intent(context, SmartProxyVpnService::class.java)
             .setAction(ACTION_STOP)
@@ -58,14 +90,87 @@ object NotificationHelper {
             context, 0, stopIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val content = android.app.Notification.Builder(context, CHANNEL_ID)
+
+        // 解析 Go 引擎当前的选路与活跃节点状态
+        val status = runCatching {
+            JSONObject(smartproxy.mobile.Mobile.getActiveNodeStatus())
+        }.getOrNull()
+
+        val rawStrategy = status?.optString("strategy").orEmpty().ifBlank {
+            ConfigProvider.upstreamStrategy(context)
+        }
+        val strategyDisplayName = getStrategyDisplayName(context, rawStrategy)
+        val title = context.getString(R.string.notification_title_with_strategy, strategyDisplayName)
+
+        val v4Node = status?.optString("v4_node").orEmpty()
+        val v4Latency = status?.optLong("v4_latency_ms", 0L) ?: 0L
+        val v6Node = status?.optString("v6_node").orEmpty()
+        val v6Latency = status?.optLong("v6_latency_ms", 0L) ?: 0L
+        val isDualStackNode = status?.optBoolean("dual_stack_node", false) ?: false
+
+        val fmtLatencySuffix = { ms: Long -> if (ms > 0) " · ${ms}ms" else "" }
+        val fmtLatencyParens = { ms: Long -> if (ms > 0) " (${ms}ms)" else "" }
+
+        val hasConfiguredNodes = ConfigProvider.hasUpstreamProxy(context)
+        val contentText: String
+        val bigDetailLines = mutableListOf<String>()
+        bigDetailLines.add(context.getString(R.string.notification_action_strategy, strategyDisplayName))
+
+        if (v4Node.isBlank() && v6Node.isBlank()) {
+            contentText = if (!hasConfiguredNodes) {
+                context.getString(R.string.notification_node_unconfigured)
+            } else {
+                context.getString(R.string.notification_node_none)
+            }
+            bigDetailLines.add(contentText)
+        } else if (isDualStackNode && v4Node.isNotBlank()) {
+            val latSuffix = fmtLatencySuffix(v4Latency)
+            contentText = context.getString(R.string.notification_node_dual, v4Node, latSuffix)
+            bigDetailLines.add(contentText)
+        } else if (v4Node.isNotBlank() && v6Node.isNotBlank()) {
+            val v4Suffix = fmtLatencyParens(v4Latency)
+            val v6Suffix = fmtLatencyParens(v6Latency)
+            contentText = context.getString(R.string.notification_node_separate, v4Node, v4Suffix, v6Node, v6Suffix)
+            bigDetailLines.add("IPv4: $v4Node$v4Suffix")
+            bigDetailLines.add("IPv6: $v6Node$v6Suffix")
+        } else if (v4Node.isNotBlank()) {
+            val v4Suffix = fmtLatencyParens(v4Latency)
+            contentText = context.getString(R.string.notification_node_v4_only, v4Node, v4Suffix)
+            bigDetailLines.add("IPv4: $v4Node$v4Suffix")
+        } else {
+            val v6Suffix = fmtLatencyParens(v6Latency)
+            contentText = context.getString(R.string.notification_node_v6_only, v6Node, v6Suffix)
+            bigDetailLines.add("IPv6: $v6Node$v6Suffix")
+        }
+
+        val content = Notification.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_vpn)
-            .setContentTitle(context.getString(R.string.app_name))
-            .setContentText(context.getString(R.string.notification_running))
+            .setContentTitle(title)
+            .setContentText(contentText)
+            .setStyle(Notification.BigTextStyle().bigText(bigDetailLines.joinToString("\n")))
             .setContentIntent(openPending)
             .setOngoing(true)
             .setShowWhen(false)
 
+        // Action 1: 策略切换 [策略: 最低延迟]
+        content.addAction(
+            Notification.Action.Builder(
+                null,
+                context.getString(R.string.notification_action_strategy, strategyDisplayName),
+                cyclePending
+            ).build()
+        )
+
+        // Action 2: 重新测速与选路 [刷新]
+        content.addAction(
+            Notification.Action.Builder(
+                null,
+                context.getString(R.string.notification_action_refresh),
+                refreshPending
+            ).build()
+        )
+
+        // Action 3: 停止服务 [停止]
         content.addAction(
             Notification.Action.Builder(
                 null,

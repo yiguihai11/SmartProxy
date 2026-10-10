@@ -186,6 +186,42 @@ class SmartProxyVpnService : VpnService() {
             return START_NOT_STICKY
         }
 
+        // 循环切换选路策略 (latency -> failover -> round_robin)
+        if (action == NotificationHelper.ACTION_CYCLE_STRATEGY) {
+            val newStrategy = smartproxy.mobile.Mobile.cycleUpstreamStrategy()
+            if (newStrategy.isNotBlank()) {
+                ConfigProvider.setUpstreamStrategy(this, newStrategy)
+            }
+            NotificationHelper.refresh(this)
+            val displayName = NotificationHelper.getStrategyDisplayName(this, newStrategy)
+            Toast.makeText(
+                this,
+                getString(R.string.toast_strategy_switched, displayName),
+                Toast.LENGTH_SHORT
+            ).show()
+            return START_STICKY
+        }
+
+        // 刷新测速与重新选路
+        if (action == NotificationHelper.ACTION_REFRESH_NODES) {
+            Toast.makeText(this, R.string.toast_reprobe_started, Toast.LENGTH_SHORT).show()
+            enqueueEngineWork("REFRESH_NODES") {
+                smartproxy.mobile.Mobile.triggerNodeReprobe()
+            }
+            NotificationHelper.refresh(this)
+            mainHandler.postDelayed({
+                if (startedEngine) {
+                    NotificationHelper.refresh(this)
+                }
+            }, 800)
+            mainHandler.postDelayed({
+                if (startedEngine) {
+                    NotificationHelper.refresh(this)
+                }
+            }, 1600)
+            return START_STICKY
+        }
+
         // 悬浮网速计(流量条)锁定/解锁切换:仅改锁定偏好 + 通知原地刷新 + 弹 Toast 提示。
         if (action == NotificationHelper.ACTION_TOGGLE_SPEED_METER_LOCK) {
             val nowLocked = !AppPrefs.speedMeterLocked(this)
@@ -279,6 +315,11 @@ class SmartProxyVpnService : VpnService() {
             // 悬浮网速计:仅 VPN 隧道模式有按 UID 统计(TUN 数据路径),SOCKS5 模式无数据可显。
             // autoShow 内部按开关 + 悬浮窗权限自门控,未开/未授权均为 no-op。
             if (!socksOnly) SpeedMeterOverlay.autoShow(applicationContext)
+            mainHandler.postDelayed({
+                if (startedEngine) {
+                    NotificationHelper.refresh(this@SmartProxyVpnService)
+                }
+            }, 1500L)
             Log.i(TAG, "[startInternal] Start SUCCESS (socks=$socksOnly)! startedEngine=true, _isRunning=true. Returning START_STICKY.")
             return START_STICKY
         }
@@ -647,6 +688,11 @@ class SmartProxyVpnService : VpnService() {
                             Log.i(TAG, "[NetworkCallback] Notifying Go engine about network change...")
                             smartproxy.mobile.Mobile.notifyNetworkChange()
                             Log.i(TAG, "[NetworkCallback] Go engine notified successfully")
+                            mainHandler.postDelayed({
+                                if (startedEngine) {
+                                    NotificationHelper.refresh(this@SmartProxyVpnService)
+                                }
+                            }, 1500L)
                         } catch (t: Throwable) {
                             Log.e(TAG, "[NetworkCallback] Failed to notify Go engine", t)
                         }

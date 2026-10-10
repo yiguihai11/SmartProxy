@@ -327,6 +327,55 @@ func GetConnectionStats() (string, error) {
 	return globalEngine.ConnectionStats(), nil
 }
 
+// GetActiveNodeStatus returns the current primary upstream node and routing strategy as JSON:
+// {"strategy":"latency", "v4_node":"...", "v4_latency_ms":45, "v6_node":"...", "v6_latency_ms":88, "dual_stack_node":true}
+func GetActiveNodeStatus() string {
+	engineMu.Lock()
+	eng := globalEngine
+	engineMu.Unlock()
+
+	if eng == nil {
+		return `{"strategy":"failover","v4_node":"","v4_latency_ms":0,"v6_node":"","v6_latency_ms":0,"dual_stack_node":false}`
+	}
+	status := eng.UpstreamActiveNodeStatus()
+	data, err := json.Marshal(status)
+	if err != nil {
+		return `{"strategy":"failover","v4_node":"","v4_latency_ms":0,"v6_node":"","v6_latency_ms":0,"dual_stack_node":false}`
+	}
+	return string(data)
+}
+
+// SetUpstreamStrategy sets the current default upstream selection strategy.
+func SetUpstreamStrategy(strategy string) {
+	engineMu.Lock()
+	eng := globalEngine
+	engineMu.Unlock()
+	if eng != nil {
+		eng.SetUpstreamStrategy(strategy)
+	}
+}
+
+// CycleUpstreamStrategy cycles through supported routing strategies and returns the new strategy.
+func CycleUpstreamStrategy() string {
+	engineMu.Lock()
+	eng := globalEngine
+	engineMu.Unlock()
+	if eng != nil {
+		return eng.CycleUpstreamStrategy()
+	}
+	return ""
+}
+
+// TriggerNodeReprobe initiates an active health probe across all upstream proxies.
+func TriggerNodeReprobe() {
+	engineMu.Lock()
+	eng := globalEngine
+	engineMu.Unlock()
+	if eng != nil {
+		eng.TriggerNodeReprobe()
+	}
+}
+
 // BlockConnection 把某条连接的目标(域名/IP)加入 ACL 封锁列表并立即生效:写 acl.txt
 // → fsnotify → RuleEng.Reload → KillBlockedConnections 掐断现存匹配连接。
 // 「联网状态」页「封禁」按钮调用;error 走 gomobile 抛 Java 异常约定。

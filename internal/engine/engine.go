@@ -1169,6 +1169,36 @@ func (e *Engine) SetReloadFn(fn func()) {
 	e.reloadFn = fn
 }
 
+// UpstreamActiveNodeStatus returns the current primary upstream routing status.
+func (e *Engine) UpstreamActiveNodeStatus() upstream.UpstreamActiveNodeStatus {
+	if e == nil || e.UpstreamMgr == nil {
+		return upstream.UpstreamActiveNodeStatus{}
+	}
+	return e.UpstreamMgr.ActiveNodeStatus()
+}
+
+// SetUpstreamStrategy sets the current default upstream selection strategy.
+func (e *Engine) SetUpstreamStrategy(strategy string) {
+	if e != nil && e.UpstreamMgr != nil {
+		e.UpstreamMgr.SetStrategy(strategy)
+	}
+}
+
+// CycleUpstreamStrategy cycles the current default upstream selection strategy.
+func (e *Engine) CycleUpstreamStrategy() string {
+	if e != nil && e.UpstreamMgr != nil {
+		return e.UpstreamMgr.CycleStrategy()
+	}
+	return ""
+}
+
+// TriggerNodeReprobe initiates an active probe across all upstream proxies.
+func (e *Engine) TriggerNodeReprobe() {
+	if e != nil && e.UpstreamMgr != nil {
+		e.UpstreamMgr.ProbeAll()
+	}
+}
+
 func (e *Engine) SetConfigPath(path string) {
 	e.configPath = path
 }

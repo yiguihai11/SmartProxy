@@ -143,6 +143,18 @@ object ConfigProvider {
         return proxies != null && proxies.length() > 0
     }
 
+    /** 上游节点选路策略 (latency / failover / round_robin)。只读，不触发写盘。 */
+    fun upstreamStrategy(context: Context): String =
+        readRaw(context)?.optJSONObject("upstream")?.optString("strategy", "latency")?.ifBlank { "latency" } ?: "latency"
+
+    /** 保存上游选路策略至 config.json。 */
+    fun setUpstreamStrategy(context: Context, strategy: String) {
+        val json = readConfig(context)
+        val upstream = json.optJSONObject("upstream") ?: JSONObject().also { json.put("upstream", it) }
+        upstream.put("strategy", strategy)
+        writeConfig(context, json)
+    }
+
     /** 面板管理端口:读 filesDir/config.json(运行时真源,面板可改、引擎实际绑定它)。
      *  动态跟随面板编辑;首页链接 ON_RESUME 重算即取到最新值。只读,不触发写盘。 */
     fun adminPort(context: Context): Int =

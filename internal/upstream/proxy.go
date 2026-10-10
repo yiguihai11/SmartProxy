@@ -159,6 +159,16 @@ func (p *Proxy) SetPingLatency(d time.Duration) {
 	p.pingLatency.Store(int64(d))
 }
 
+func (p *Proxy) DisplayName() string {
+	if p.Name != "" {
+		return p.Name
+	}
+	if p.Host != "" && p.Port > 0 {
+		return net.JoinHostPort(p.Host, strconv.Itoa(p.Port))
+	}
+	return p.Host
+}
+
 func (p *Proxy) CountryCode() string {
 	if ptr := p.countryCode.Load(); ptr != nil {
 		return *ptr
