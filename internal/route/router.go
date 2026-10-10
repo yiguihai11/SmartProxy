@@ -449,8 +449,11 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 			ll.Warn("direct connection failed, falling back to proxy", "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds(), "reason", shortReason)
 			r.addToBlacklists(host, port, domain, shortReason)
 
-			// If data was partially written and not replay-safe, we cannot replay over proxy
-			if res.written > 0 && !isReplaySafePayload(firstPkt) && len(firstPkt) > 0 {
+			// If data was partially written, only replay-safe payloads (TLS ClientHello on any failure,
+			// or idempotent HTTP requests on RST / timeout) can be replayed over upstream proxy.
+			// Clean EOF (remote FIN) for HTTP requests is NOT replayed.
+			canReplay := isTLSClientHello(firstPkt) || (isIdempotentHTTPRequest(firstPkt) && isReplaySafeError(res.err))
+			if res.written > 0 && !canReplay && len(firstPkt) > 0 {
 				ll.Error("direct failed for non-handshake payload, replay forbidden", "written", res.written, "total", len(firstPkt), "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds(), "reason", shortReason)
 				return nil, nil, false, fmt.Errorf("direct connection failed (%d bytes sent, not replay-safe): %w", res.written, res.err)
 			}
@@ -537,6 +540,25 @@ func isIdempotentHTTPRequest(pkt []byte) bool {
 		return false
 	}
 	return true
+}
+
+// isReplaySafeError reports whether an error from the direct connection is a censor-like
+// interruption (TCP RST or Timeout) eligible for proxy replay. Clean EOF (remote FIN) is excluded.
+func isReplaySafeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	errStr := strings.ToLower(err.Error())
+	if strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "reset by peer") ||
+		errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+	return false
 }
 
 // isTLSClientHello reports whether pkt contains exactly and exclusively a single,

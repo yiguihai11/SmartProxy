@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -560,7 +561,20 @@ func startMockSOCKS5Server(t *testing.T, hitChan chan<- struct{}) (string, func(
 				if _, err := c.Write([]byte{0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 80}); err != nil {
 					return
 				}
-				if hitChan != nil {
+				// Ignore background manager geo/health probes (e.g. cp.cloudflare.com, 2606:4700:4700::1111)
+				isProbe := false
+				if n > 5 && buf[3] == 0x03 {
+					dLen := int(buf[4])
+					if 5+dLen <= n && strings.Contains(string(buf[5:5+dLen]), "cloudflare") {
+						isProbe = true
+					}
+				} else if n >= 22 && buf[3] == 0x04 {
+					ip := net.IP(buf[4:20])
+					if strings.HasPrefix(ip.String(), "2606:4700:") {
+						isProbe = true
+					}
+				}
+				if !isProbe && hitChan != nil {
 					select {
 					case hitChan <- struct{}{}:
 					default:
@@ -967,8 +981,8 @@ func TestIsReplaySafePayload(t *testing.T) {
 	}
 }
 
-func TestSmartConnectWithFallback_IdempotentHTTPReplay(t *testing.T) {
-	// Set up a mock direct server that immediately closes on receiving data (simulating server EOF/RST)
+func TestSmartConnectWithFallback_IdempotentHTTPReplay_RST(t *testing.T) {
+	// Set up a mock direct server that sends TCP RST upon receiving data (SetLinger(0))
 	directLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -982,9 +996,11 @@ func TestSmartConnectWithFallback_IdempotentHTTPReplay(t *testing.T) {
 			if err != nil {
 				return
 			}
-			// Read whatever was sent, then close immediately with 0 response bytes
 			buf := make([]byte, 1024)
 			_, _ = conn.Read(buf)
+			if tc, ok := conn.(*net.TCPConn); ok {
+				_ = tc.SetLinger(0) // Forces TCP RST instead of FIN
+			}
 			conn.Close()
 		}
 	}()
@@ -993,7 +1009,7 @@ func TestSmartConnectWithFallback_IdempotentHTTPReplay(t *testing.T) {
 	proxyAddr, stopProxy := startMockSOCKS5Server(t, proxyHit)
 	defer stopProxy()
 
-	cn := chnroute.New() // 127.0.0.1 won't be in chnroute for direct check
+	cn := chnroute.New()
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
 		Default: "failover",
 		Proxies: []upstream.ProxyEntry{
@@ -1026,18 +1042,92 @@ func TestSmartConnectWithFallback_IdempotentHTTPReplay(t *testing.T) {
 
 	conn, _, isProxy, err := r.SmartConnectWithFallback(ctx, host, port, "example.com", httpPayload, eng)
 	if err != nil {
-		t.Fatalf("expected HTTP replay to fallback to proxy successfully, got: %v", err)
+		t.Fatalf("expected HTTP replay to fallback to proxy on RST, got: %v", err)
 	}
 	if conn != nil {
 		conn.Close()
 	}
 	if !isProxy {
-		t.Errorf("expected isProxy=true after direct EOF reset, got false")
+		t.Errorf("expected isProxy=true after direct RST, got false")
 	}
 
 	select {
 	case <-proxyHit:
 	case <-time.After(1 * time.Second):
-		t.Fatal("timed out waiting for proxy replay hit")
+		t.Fatal("timed out waiting for proxy replay hit on RST")
+	}
+}
+
+func TestSmartConnectWithFallback_IdempotentHTTP_EOFNotReplayed(t *testing.T) {
+	// Set up a mock direct server that sends clean TCP FIN (EOF)
+	directLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer directLn.Close()
+	directAddr := directLn.Addr().String()
+
+	go func() {
+		for {
+			conn, err := directLn.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 1024)
+			_, _ = conn.Read(buf)
+			conn.Close() // Clean FIN (EOF)
+		}
+	}()
+
+	proxyHit := make(chan struct{}, 1)
+	proxyAddr, stopProxy := startMockSOCKS5Server(t, proxyHit)
+	defer stopProxy()
+
+	cn := chnroute.New()
+	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
+		Default: "failover",
+		Proxies: []upstream.ProxyEntry{
+			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s", proxyAddr)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Stop()
+
+	r := New(cn, mgr, false, 500*time.Millisecond, nil, 300*time.Second)
+
+	dir := t.TempDir()
+	rulesFile := filepath.Join(dir, "rules.txt")
+	os.WriteFile(rulesFile, []byte(""), 0644)
+	eng, err := rules.New(rulesFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	host, portStr, _ := net.SplitHostPort(directAddr)
+	var port int
+	fmt.Sscanf(portStr, "%d", &port)
+
+	httpPayload := []byte("GET /test HTTP/1.1\r\nHost: example.com\r\n\r\n")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	conn, _, isProxy, err := r.SmartConnectWithFallback(ctx, host, port, "example.com", httpPayload, eng)
+	if err == nil {
+		if conn != nil {
+			conn.Close()
+		}
+		t.Fatalf("expected EOF to NOT be replayed, but connection succeeded")
+	}
+	if isProxy {
+		t.Errorf("expected isProxy=false because EOF is not replay-safe, got true")
+	}
+
+	select {
+	case <-proxyHit:
+		t.Fatal("proxy should NOT be hit on clean EOF")
+	default:
 	}
 }

@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/netip"
+	"os/exec"
 	"runtime"
 	"strings"
 	"testing"
@@ -932,6 +934,74 @@ func TestReadClientHello_NonTLS_NonHTTP(t *testing.T) {
 	}
 	if duration > 500*time.Millisecond {
 		t.Errorf("ReadClientHello took too long for non-TLS: %v (expected < 500ms)", duration)
+	}
+}
+
+func TestReadClientHello_RealCurlCapture(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().String()
+
+	type captureResult struct {
+		data []byte
+		err  error
+	}
+	ch := make(chan captureResult, 1)
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			ch <- captureResult{err: err}
+			return
+		}
+		defer conn.Close()
+		pkt, readErr := ReadClientHello(conn, 2*time.Second)
+		// Send back a valid HTTP response so curl terminates cleanly
+		_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK"))
+		ch <- captureResult{data: pkt, err: readErr}
+	}()
+
+	cmd := exec.Command("curl", "-s", "-o", "/dev/null",
+		"-H", "User-Agent: SmartProxyTest/1.0",
+		"-H", "X-Custom: HelloCurl",
+		fmt.Sprintf("http://%s/test-capture", addr),
+	)
+	if err := cmd.Run(); err != nil {
+		t.Skipf("curl execution failed or not available in environment: %v", err)
+		return
+	}
+
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			t.Fatalf("ReadClientHello error capturing curl payload: %v", res.err)
+		}
+		raw := string(res.data)
+		t.Logf("Captured curl raw payload (%d bytes):\n%s", len(res.data), raw)
+
+		if !strings.HasPrefix(raw, "GET /test-capture HTTP/1.1\r\n") {
+			t.Errorf("expected request line 'GET /test-capture HTTP/1.1\\r\\n', got:\n%s", raw)
+		}
+		if !strings.Contains(raw, "User-Agent: SmartProxyTest/1.0\r\n") {
+			t.Errorf("expected User-Agent header in captured payload")
+		}
+		if !strings.Contains(raw, "X-Custom: HelloCurl\r\n") {
+			t.Errorf("expected X-Custom header in captured payload")
+		}
+		if !strings.HasSuffix(raw, "\r\n\r\n") {
+			t.Errorf("expected payload to cleanly terminate with \\r\\n\\r\\n")
+		}
+
+		domain := ExtractDomain(res.data)
+		t.Logf("Extracted domain: %s", domain)
+		if !strings.HasPrefix(domain, "127.0.0.1") {
+			t.Errorf("expected extracted domain to start with 127.0.0.1, got %s", domain)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for curl capture")
 	}
 }
 
