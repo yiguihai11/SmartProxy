@@ -209,16 +209,10 @@ class SmartProxyVpnService : VpnService() {
                 smartproxy.mobile.Mobile.triggerNodeReprobe()
             }
             NotificationHelper.refresh(this)
-            mainHandler.postDelayed({
-                if (startedEngine) {
-                    NotificationHelper.refresh(this)
-                }
-            }, 800)
-            mainHandler.postDelayed({
-                if (startedEngine) {
-                    NotificationHelper.refresh(this)
-                }
-            }, 1600)
+            mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this) }, 800)
+            mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this) }, 1600)
+            mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this) }, 3000)
+            mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this) }, 5000)
             return START_STICKY
         }
 

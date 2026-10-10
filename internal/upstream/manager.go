@@ -1454,8 +1454,13 @@ func (m *Manager) CycleStrategy() string {
 	return m.strategy
 }
 
-// ProbeAll immediately triggers an active probe on all proxies.
+// ProbeAll immediately triggers an active probe on all proxies, resets auto-opened circuits,
+// and invalidates the latency candidate bands so the latest fast node is immediately picked.
 func (m *Manager) ProbeAll() {
+	m.ResetAutoOpenedCircuits()
+	m.order[transportTCP].band.Store(nil)
+	m.order[transportUDP].band.Store(nil)
+
 	m.mu.RLock()
 	hc := m.healthChecker
 	m.mu.RUnlock()

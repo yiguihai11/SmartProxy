@@ -602,16 +602,17 @@ func (hc *HealthChecker) HasAnyUDPAvailable() bool {
 }
 
 // ProbeAll immediately triggers an asynchronous probe on all proxies, bypassing open cooldowns
-// to quickly re-evaluate node health after a network change. Probing concurrency is bounded
-// by the probe worker semaphore.
+// to quickly re-evaluate node health. Probing concurrency is bounded by the probe worker semaphore.
 func (hc *HealthChecker) ProbeAll() {
 	if hc == nil {
 		return
 	}
 	cfg := hc.cfg.Load()
-	if cfg == nil || !cfg.Enabled {
-		return
+	timeoutSec := 5
+	if cfg != nil && cfg.Timeout > 0 {
+		timeoutSec = cfg.Timeout
 	}
+
 	hc.mu.RLock()
 	proxies := hc.proxies
 	parentCtx := hc.ctx
@@ -622,13 +623,10 @@ func (hc *HealthChecker) ProbeAll() {
 		return
 	}
 
+	timeout := time.Duration(timeoutSec) * time.Second
 	for _, p := range proxies {
 		proxy := p
 		safego.Go("upstream.health.probeOnNetworkChange", func() {
-			timeout := time.Duration(cfg.Timeout) * time.Second
-			if timeout <= 0 {
-				timeout = 5 * time.Second
-			}
 			ctx, cancel := context.WithTimeout(parentCtx, timeout)
 			defer cancel()
 
@@ -649,6 +647,9 @@ func (hc *HealthChecker) ProbeAll() {
 					hc.releaseProbeSem()
 					if err == nil {
 						hc.RecordSuccess(proxy, latency)
+						if !proxy.IsIPv6Pinned() {
+							hc.checkProxyIPv6WithContext(parentCtx, proxy)
+						}
 					} else {
 						hc.RecordFailure(proxy, err)
 					}
