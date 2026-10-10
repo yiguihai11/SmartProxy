@@ -115,7 +115,7 @@ object NotificationHelper {
         val hasConfiguredNodes = ConfigProvider.hasUpstreamProxy(context)
         val contentText: String
         val bigDetailLines = mutableListOf<String>()
-        bigDetailLines.add(context.getString(R.string.notification_action_strategy, strategyDisplayName))
+        bigDetailLines.add(context.getString(R.string.notification_detail_strategy, strategyDisplayName))
 
         if (v4Node.isBlank() && v6Node.isBlank()) {
             contentText = if (!hasConfiguredNodes) {
@@ -153,11 +153,11 @@ object NotificationHelper {
             .setOngoing(true)
             .setShowWhen(false)
 
-        // Action 1: 策略切换 [策略: 最低延迟]
+        // Action 1: 切换调度策略 [切换调度策略]
         content.addAction(
             Notification.Action.Builder(
                 null,
-                context.getString(R.string.notification_action_strategy, strategyDisplayName),
+                context.getString(R.string.notification_action_strategy),
                 cyclePending
             ).build()
         )
