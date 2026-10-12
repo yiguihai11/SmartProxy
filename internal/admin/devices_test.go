@@ -539,3 +539,51 @@ func TestAdmin_Devices_ConnsDetail(t *testing.T) {
 	}
 }
 
+func TestDevices_VirtualGatewayProtection(t *testing.T) {
+	s := newTestServer(t)
+	startServer(t, s)
+
+	// Disconnecting virtual gateway 192.0.2.2 must be rejected with 403 Forbidden
+	reqDisc := httptest.NewRequest(http.MethodPost, "/api/devices/disconnect?ip=192.0.2.2", nil)
+	wDisc := httptest.NewRecorder()
+	s.handleDevicesDisconnect(wDisc, reqDisc)
+	if wDisc.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for disconnecting 192.0.2.2, got %d", wDisc.Code)
+	}
+
+	// Blocking virtual gateway 192.0.2.2 must be rejected with 403 Forbidden
+	reqBlock := httptest.NewRequest(http.MethodPost, "/api/devices/block?ip=192.0.2.2", nil)
+	wBlock := httptest.NewRecorder()
+	s.handleDevicesBlock(wBlock, reqBlock)
+	if wBlock.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for blocking 192.0.2.2, got %d", wBlock.Code)
+	}
+
+	// Devices list must exclude 192.0.2.2 / 热点共享流量池
+	bridgeJSON := `[
+		{"ip": "192.168.43.102", "mac": "11:22:33:44:55:66", "hostname": "real-client"},
+		{"ip": "192.0.2.2", "mac": "", "hostname": "热点共享流量池"}
+	]`
+	s.SetTetheringBridge(&mockTetheringBridge{clients: bridgeJSON})
+
+	reqDevs := httptest.NewRequest(http.MethodGet, "/api/devices", nil)
+	wDevs := httptest.NewRecorder()
+	s.handleDevices(wDevs, reqDevs)
+	if wDevs.Code != http.StatusOK {
+		t.Fatalf("handleDevices status = %d", wDevs.Code)
+	}
+
+	var resp struct {
+		Devices []TetheredDevice `json:"devices"`
+	}
+	if err := json.Unmarshal(wDevs.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	for _, d := range resp.Devices {
+		if d.IP == "192.0.2.2" || d.Hostname == "热点共享流量池" {
+			t.Fatalf("expected virtual gateway 192.0.2.2 to be excluded from devices, got: %+v", d)
+		}
+	}
+}
+
+

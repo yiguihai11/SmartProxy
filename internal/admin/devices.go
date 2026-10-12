@@ -360,6 +360,11 @@ func isLocalIP(ip string) bool {
 	return ip == "127.0.0.1" || ip == "localhost" || ip == "::1" || ip == ""
 }
 
+func isInternalVirtualIP(ip string) bool {
+	clean := strings.TrimSpace(ip)
+	return clean == "192.0.2.2" || clean == "192.0.2.1" || clean == "2001:db8:9877::1" || clean == "2001:db8:9877::2"
+}
+
 func contains(slice []string, val string) bool {
 	for _, s := range slice {
 		if s == val {
@@ -637,6 +642,10 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 
+					if isInternalVirtualIP(primaryIP) || bc.Hostname == "热点共享流量池" || bc.Hostname == "热点共享设备" {
+						continue
+					}
+
 					devices = append(devices, TetheredDevice{
 						IP:          primaryIP,
 						MAC:         cleanMAC,
@@ -760,6 +769,10 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			if isInternalVirtualIP(grp.primaryIP) || grp.hostname == "热点共享流量池" || grp.hostname == "热点共享设备" {
+				continue
+			}
+
 			devices = append(devices, TetheredDevice{
 				IP:          grp.primaryIP,
 				MAC:         grp.mac,
@@ -809,6 +822,10 @@ func (s *Server) handleDevicesDisconnect(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Cannot disconnect the current device managing the control panel", http.StatusForbidden)
 		return
 	}
+	if isInternalVirtualIP(targetIP) {
+		http.Error(w, "Cannot disconnect system internal virtual gateway", http.StatusForbidden)
+		return
+	}
 
 	killed := 0
 	if s.killClientConnections != nil {
@@ -839,6 +856,10 @@ func (s *Server) handleDevicesBlock(w http.ResponseWriter, r *http.Request) {
 	clientIP := extractClientIP(r)
 	if targetIP != "" && targetIP == clientIP {
 		http.Error(w, "Cannot block the current device managing the control panel", http.StatusForbidden)
+		return
+	}
+	if isInternalVirtualIP(targetIP) {
+		http.Error(w, "Cannot block system internal virtual gateway", http.StatusForbidden)
 		return
 	}
 

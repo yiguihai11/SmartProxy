@@ -61,7 +61,7 @@ class TetheringDeviceParserTest {
     }
 
     @Test
-    fun multipleClientsRetainNatAggregatePool() {
+    fun multipleClientsExcludeVirtualNatPoolCard() {
         val statsJson = """
             {
               "clients": [
@@ -99,12 +99,10 @@ class TetheringDeviceParserTest {
         """.trimIndent()
 
         val devices = TetheringDeviceParser.parse(statsJson)
-        assertEquals(3, devices.size)
-
-        val natDev = devices.firstOrNull { it.ip == HotspotRoutingConfig.SHIZUKU_TUN_IP_V4 }
-        org.junit.Assert.assertNotNull(natDev)
-        assertEquals(2048L, natDev!!.upBytes)
-        assertEquals(8192L, natDev.downBytes)
+        assertEquals(2, devices.size)
+        assertTrue(devices.none { it.ip == HotspotRoutingConfig.SHIZUKU_TUN_IP_V4 })
+        assertTrue(devices.any { it.hostname == "Phone-A" })
+        assertTrue(devices.any { it.hostname == "Phone-B" })
     }
 
     @Test

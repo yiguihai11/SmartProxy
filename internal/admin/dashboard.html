@@ -5258,7 +5258,11 @@ function copyDeviceIP(ip, e) {
 
 function renderDevices() {
   if (!devicesData) return;
-  var devList = devicesData.devices || [];
+  var devList = (devicesData.devices || []).filter(function(d) {
+    var ip = d.ip || '';
+    var host = d.hostname || '';
+    return ip !== '192.0.2.2' && ip !== '192.0.2.1' && ip !== '2001:db8:9877::1' && ip !== '2001:db8:9877::2' && host !== '热点共享流量池' && host !== '热点共享设备';
+  });
   var blockedList = devicesData.blocked_devices || [];
 
   var activeCount = 0;
@@ -5324,9 +5328,10 @@ function renderDevices() {
         badge = '<span class="tag green">' + t('Live') + '</span>';
       }
 
+      var isVirtual = (ip === '192.0.2.2' || ip === '192.0.2.1' || ip === '2001:db8:9877::1' || ip === '2001:db8:9877::2' || d.hostname === '热点共享流量池' || d.hostname === '热点共享设备');
       var actions = '';
-      if (isCur) {
-        actions = '<div style="font-size:.78rem;color:var(--text3);font-style:italic">' + t('Current Device (Protected)') + '</div>';
+      if (isCur || isVirtual) {
+        actions = '<div style="font-size:.78rem;color:var(--text3);font-style:italic">' + t(isCur ? 'Current Device (Protected)' : 'System Internal Pool (Protected)') + '</div>';
       } else {
         actions = '<button class="btn btn-sm" onclick="disconnectDevice(\'' + escAttr(ip) + '\')">' + t('Disconnect') + '</button>' +
                   '<button class="btn btn-sm danger" onclick="blockDevice(\'' + escAttr(ip) + '\',\'' + escAttr(mac) + '\',\'' + escAttr(d.hostname || '') + '\')">' + t('Block') + '</button>';

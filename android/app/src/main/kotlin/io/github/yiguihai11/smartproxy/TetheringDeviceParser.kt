@@ -333,17 +333,14 @@ object TetheringDeviceParser {
                 )
             }
 
-            // 3. 处理剩余的连接源 IP（例如多设备 NAT / 热点共享流量池）
+            // 3. 处理剩余的连接源 IP（例如未通过 DHCP 登记的其他局域网独立客户端）
             for ((ip, conns) in connsBySrcIp) {
                 if (ip in processedIps) continue
                 processedIps.add(ip)
 
+                // 彻底忽略系统虚拟网卡及 TUN NAT IP（192.0.2.2 等），严禁占用物理设备卡片
                 val isTunNat = ip in TUN_VIRTUAL_IPS || ip == HotspotRoutingConfig.SHIZUKU_TUN_IP_V4
-                val displayHostname = when {
-                    isTunNat && clientByMac.size > 1 -> HOSTNAME_SHARED_POOL
-                    isTunNat -> HOSTNAME_SHARED_DEVICE
-                    else -> ""
-                }
+                if (isTunNat) continue
 
                 val curUp = trafficBytesBySrcIp[ip]?.first ?: conns.sumOf { it.up }
                 val curDown = trafficBytesBySrcIp[ip]?.second ?: conns.sumOf { it.down }
@@ -353,7 +350,7 @@ object TetheringDeviceParser {
                     TetheredDeviceDetail(
                         ip = ip,
                         mac = "",
-                        hostname = displayHostname,
+                        hostname = "",
                         isRandomMac = false,
                         tetheringType = -1,
                         upBytes = stats.totalUp,
