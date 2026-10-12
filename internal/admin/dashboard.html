@@ -2429,7 +2429,7 @@ function openProxyDialog(i){
   document.getElementById('proxy-v2ray-servicename').value='GunService';
   document.getElementById('proxy-v2ray-certraw').value='';
   document.getElementById('proxy-udpintcp').checked=false;
-  if(document.getElementById('proxy-enable'))document.getElementById('proxy-enable').checked=(p&&p.enable!==undefined)?!!p.enable:true;
+  if(document.getElementById('proxy-enable'))document.getElementById('proxy-enable').checked=(p&&(p.enabled!==undefined||p.enable!==undefined))?!!(p.enabled!==undefined?p.enabled:p.enable):true;
   var scheme='socks5';
   if(p){
     if(p.udp_in_tcp)document.getElementById('proxy-udpintcp').checked=true;
@@ -2540,10 +2540,10 @@ async function saveProxy(){
   try{
     await putProxyConfig(function(cfg){
       var ps=cfg.upstream.proxies;
-      function entry(){return {alias:alias,url:url,udp_in_tcp:udpintcp,enable:proxyEnabled}}
+      function entry(){return {alias:alias,url:url,udp_in_tcp:udpintcp,enabled:proxyEnabled}}
       if(editing){
         for(var i=0;i<ps.length;i++){
-          if(ps[i].alias===editing){ps[i].alias=alias;ps[i].url=url;ps[i].udp_in_tcp=udpintcp;ps[i].enable=proxyEnabled;return}
+          if(ps[i].alias===editing){ps[i].alias=alias;ps[i].url=url;ps[i].udp_in_tcp=udpintcp;ps[i].enabled=proxyEnabled;delete ps[i].enable;delete ps[i].disabled;return}
           if(ps[i].alias===alias){alert(tf('Alias "{0}" already exists',[alias]));throw new Error('dup')}
         }
         ps.push(entry());

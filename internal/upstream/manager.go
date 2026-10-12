@@ -1250,6 +1250,7 @@ type ProxyInfo struct {
 	ExitIP         string              `json:"exit_ip,omitempty"`
 	Provider       string              `json:"provider,omitempty"`
 	Enable         bool                `json:"enable"`
+	Enabled        bool                `json:"enabled"`
 }
 
 func (m *Manager) Proxies() []ProxyInfo {
@@ -1278,6 +1279,7 @@ func (m *Manager) Proxies() []ProxyInfo {
 			Scheme:         string(proxy.Scheme),
 			UDPInTCP:       proxy.UDPInTCP,
 			Enable:         !isManualDown,
+			Enabled:        !isManualDown,
 			Mode:           proxy.EffectiveMode(),
 			UDPCapability:  string(proxy.UDPCapability()),
 			IPv6Capability: string(proxy.IPv6Capability()),
