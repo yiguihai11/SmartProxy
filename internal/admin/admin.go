@@ -1167,9 +1167,9 @@ func (s *Server) handleHealthProxy(w http.ResponseWriter, r *http.Request) {
 			_, _, _ = s.saveConfig(func(c *config.Config) {
 				for i := range c.Upstream.Proxies {
 					if c.Upstream.Proxies[i].Alias == alias {
-						c.Upstream.Proxies[i].Enable = enableVal
 						c.Upstream.Proxies[i].Enabled = enableVal
-						c.Upstream.Proxies[i].Disabled = !*enableVal
+						c.Upstream.Proxies[i].Enable = nil
+						c.Upstream.Proxies[i].Disabled = false
 						break
 					}
 				}
