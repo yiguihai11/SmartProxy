@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -362,14 +363,15 @@ fun TetheredDeviceDetailDialog(
                         val displayConns = device.conns.take(8)
                         displayConns.forEach { conn ->
                             Row(
-                                verticalAlignment = Alignment.CenterVertically,
+                                verticalAlignment = Alignment.Top,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 4.dp)
                             ) {
                                 Surface(
                                     color = if (conn.proto == 17) Color(0xFF3E7BFA) else purpleFill,
-                                    shape = RoundedCornerShape(3.dp)
+                                    shape = RoundedCornerShape(3.dp),
+                                    modifier = Modifier.padding(top = 2.dp)
                                 ) {
                                     Text(
                                         text = if (conn.proto == 17) "UDP" else "TCP",
@@ -380,18 +382,22 @@ fun TetheredDeviceDetailDialog(
                                     )
                                 }
                                 Spacer(Modifier.width(8.dp))
+                                val destText = if (conn.host.contains(':')) "[${conn.host}]:${conn.port}" else "${conn.host}:${conn.port}"
                                 Column(Modifier.weight(1f)) {
                                     Text(
-                                        text = if (conn.host.contains(':')) "[${conn.host}]:${conn.port}" else "${conn.host}:${conn.port}",
+                                        text = destText,
                                         fontSize = 12.sp,
                                         color = textDark,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                                        lineHeight = 16.sp,
+                                        modifier = Modifier.clickable {
+                                            copyToClipboard("Destination", destText)
+                                        }
                                     )
                                     Text(
                                         text = "↑ ${formatBytes(conn.up)} · ↓ ${formatBytes(conn.down)}",
                                         fontSize = 10.sp,
-                                        color = greyText
+                                        color = greyText,
+                                        modifier = Modifier.padding(top = 2.dp)
                                     )
                                 }
                             }
