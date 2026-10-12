@@ -231,14 +231,16 @@ object ConfigProvider {
         tun.remove("inet6_address")
         base.put("tun", tun)
 
-        // 仅代理(SOCKS5)模式:listen.host 由 AppPrefs.socksListen 派生(首页 v4/v6
-        // 监听开关,§8)——双开/只 v6 = "::"、只 v4 = "0.0.0.0"。VPN 模式不动:
-        // 隧道走 fd,listen.port 由 bridge 归零,SOCKS 不暴露,host 无意义。
-        if (AppPrefs.serviceMode(context) == AppPrefs.MODE_SOCKS5) {
-            val listen = base.optJSONObject("listen") ?: JSONObject().also { base.put("listen", it) }
-            listen.put("host", if (AppPrefs.socksListen(context) == AppPrefs.SOCKS_LISTEN_V4) "0.0.0.0" else "::")
-            base.put("listen", listen)
+        // 管理面板绑定主机:未手动显式指定时,默认绑定回环地址(127.0.0.1与::1),
+        // 避免通配绑定 0.0.0.0 导致热点共享引擎无法在网关 IP 上绑定同一 9090 端口。
+        val listen = base.optJSONObject("listen") ?: JSONObject().also { base.put("listen", it) }
+        if (listen.optString("admin_host").isBlank()) {
+            listen.put("admin_host", "127.0.0.1,::1")
         }
+        if (AppPrefs.serviceMode(context) == AppPrefs.MODE_SOCKS5) {
+            listen.put("host", if (AppPrefs.socksListen(context) == AppPrefs.SOCKS_LISTEN_V4) "0.0.0.0" else "::")
+        }
+        base.put("listen", listen)
 
         // routing 文件绝对路径:引擎 cfgDir 为空,相对路径会解析到 CWD 而失败;
         // 放 cacheDir 作持久化(面板可改),ensureRuntimeFiles 仅缺失/空才种入,已落盘保留。

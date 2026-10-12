@@ -1,8 +1,10 @@
 package io.github.yiguihai11.smartproxy
 
+import android.os.SystemClock
 import io.github.yiguihai11.smartproxy.shizuku.HotspotRoutingConfig
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 热点共享设备与流量统计解析器。
@@ -25,6 +27,9 @@ import org.json.JSONObject
  */
 object TetheringDeviceParser {
 
+    const val HOSTNAME_SHARED_POOL = "热点共享流量池"
+    const val HOSTNAME_SHARED_DEVICE = "热点共享设备"
+
     private val TUN_VIRTUAL_IPS = setOf(
         HotspotRoutingConfig.SHIZUKU_TUN_IP_V4,
         HotspotRoutingConfig.SHIZUKU_TUN_IP_V6,
@@ -39,6 +44,60 @@ object TetheringDeviceParser {
 
     private fun isHotspotIpv6Subnet(ip: String): Boolean =
         ip.startsWith(HOTSPOT_IPV6_PREFIX, ignoreCase = true)
+
+    private data class RateSample(
+        val upBytes: Long,
+        val downBytes: Long,
+        val timestampMs: Long,
+    )
+
+    private data class DeviceStatsResult(
+        val totalUp: Long,
+        val totalDown: Long,
+        val upBps: Long,
+        val downBps: Long,
+    )
+
+    private val lastSamples = ConcurrentHashMap<String, RateSample>()
+    private val lifetimeCumulativeBytes = ConcurrentHashMap<String, Pair<Long, Long>>()
+
+    fun reset() {
+        lastSamples.clear()
+        lifetimeCumulativeBytes.clear()
+    }
+
+    private fun resolveDeviceStats(
+        rateKey: String,
+        curUp: Long,
+        curDown: Long,
+    ): DeviceStatsResult {
+        if (rateKey.isBlank()) return DeviceStatsResult(0L, 0L, 0L, 0L)
+
+        val cleanKey = rateKey.lowercase().trim()
+        val prevCumulative = lifetimeCumulativeBytes[cleanKey]
+        val totalUp = if (prevCumulative != null) maxOf(prevCumulative.first, curUp) else curUp
+        val totalDown = if (prevCumulative != null) maxOf(prevCumulative.second, curDown) else curDown
+        lifetimeCumulativeBytes[cleanKey] = totalUp to totalDown
+
+        val now = runCatching { SystemClock.elapsedRealtime() }.getOrDefault(System.currentTimeMillis())
+        if (lastSamples.size > 256) {
+            val expireCutoff = now - 3600_000L
+            lastSamples.entries.removeIf { it.value.timestampMs < expireCutoff }
+        }
+        val prevSample = lastSamples[cleanKey]
+        lastSamples[cleanKey] = RateSample(totalUp, totalDown, now)
+
+        val (upBps, downBps) = if (prevSample != null) {
+            val deltaSec = ((now - prevSample.timestampMs) / 1000.0).coerceAtLeast(0.1)
+            val upDelta = (totalUp - prevSample.upBytes).coerceAtLeast(0L)
+            val downDelta = (totalDown - prevSample.downBytes).coerceAtLeast(0L)
+            ((upDelta / deltaSec).toLong()) to ((downDelta / deltaSec).toLong())
+        } else {
+            0L to 0L
+        }
+
+        return DeviceStatsResult(totalUp, totalDown, upBps, downBps)
+    }
 
     fun parse(statsJson: String?): List<TetheredDeviceDetail> {
         if (statsJson.isNullOrBlank() || statsJson == "{\"apps\":[]}") return emptyList()
@@ -110,6 +169,18 @@ object TetheringDeviceParser {
                 }
             }
 
+            val clientTrafficArr = root.optJSONArray("client_traffic")
+            val trafficBytesBySrcIp = HashMap<String, Pair<Long, Long>>()
+            if (clientTrafficArr != null) {
+                for (i in 0 until clientTrafficArr.length()) {
+                    val ct = clientTrafficArr.getJSONObject(i)
+                    val ip = ct.optString("ip", "").trim()
+                    if (ip.isNotEmpty()) {
+                        trafficBytesBySrcIp[ip] = ct.optLong("up", 0L) to ct.optLong("down", 0L)
+                    }
+                }
+            }
+
             // 提取因 Android 内核 NAT 转发（源 IP 改写为 TUN 虚拟网卡）以及未被系统回调即时登记的 SLAAC IPv6 临时地址流量
             val unassignedHotspotConns = ArrayList<ConnStatsRec>()
             for (tunIp in TUN_VIRTUAL_IPS) {
@@ -146,6 +217,12 @@ object TetheringDeviceParser {
                     for (c in unassignedHotspotConns) {
                         targetList.add(c.copy(srcIp = singleClientIp))
                     }
+                }
+
+                val tunV4Stats = trafficBytesBySrcIp[HotspotRoutingConfig.SHIZUKU_TUN_IP_V4]
+                if (tunV4Stats != null) {
+                    val cur = trafficBytesBySrcIp[singleClientIp] ?: (0L to 0L)
+                    trafficBytesBySrcIp[singleClientIp] = (cur.first + tunV4Stats.first) to (cur.second + tunV4Stats.second)
                 }
             } else {
                 // 2. 若有多个客户端接入，或尚无任何客户端注册完成：
@@ -186,29 +263,38 @@ object TetheringDeviceParser {
                 }
 
                 val hostname = clientObj.optString("hostname", "")
-                val vendor = clientObj.optString("vendor", "")
                 val isRandomMac = clientObj.optBoolean("is_random_mac", false)
-                val rawOsGuess = clientObj.optString("os_guess", "")
                 val tetheringType = clientObj.optInt("type", -1)
                 val isBlocked = mac.lowercase() in blockedSet
 
-                val osGuess = when {
-                    rawOsGuess.isNotBlank() -> rawOsGuess
-                    isRandomMac -> "局域网设备 (私有/随机 MAC)"
-                    else -> "局域网接入设备"
+                val allIps = (listOf(primaryIp) + extraIps).filter { it.isNotBlank() }
+                val curUp = if (trafficBytesBySrcIp.isNotEmpty()) {
+                    val sum = allIps.sumOf { trafficBytesBySrcIp[it]?.first ?: 0L }
+                    if (sum > 0) sum else deviceConns.sumOf { it.up }
+                } else {
+                    deviceConns.sumOf { it.up }
                 }
+                val curDown = if (trafficBytesBySrcIp.isNotEmpty()) {
+                    val sum = allIps.sumOf { trafficBytesBySrcIp[it]?.second ?: 0L }
+                    if (sum > 0) sum else deviceConns.sumOf { it.down }
+                } else {
+                    deviceConns.sumOf { it.down }
+                }
+
+                val rateKey = if (mac.isNotBlank()) mac else primaryIp
+                val stats = resolveDeviceStats(rateKey, curUp, curDown)
 
                 list.add(
                     TetheredDeviceDetail(
                         ip = primaryIp,
                         mac = mac,
                         hostname = hostname,
-                        vendor = vendor,
                         isRandomMac = isRandomMac,
-                        osGuess = osGuess,
                         tetheringType = tetheringType,
-                        upBytes = deviceConns.sumOf { it.up },
-                        downBytes = deviceConns.sumOf { it.down },
+                        upBytes = stats.totalUp,
+                        downBytes = stats.totalDown,
+                        upBps = stats.upBps,
+                        downBps = stats.downBps,
                         conns = deviceConns,
                         isBlocked = isBlocked,
                         extraIps = extraIps,
@@ -223,28 +309,24 @@ object TetheringDeviceParser {
 
                 val conns = connsBySrcIp[ip] ?: emptyList()
                 val hostname = clientObj.optString("hostname", "")
-                val vendor = clientObj.optString("vendor", "")
                 val isRandomMac = clientObj.optBoolean("is_random_mac", false)
-                val rawOsGuess = clientObj.optString("os_guess", "")
                 val tetheringType = clientObj.optInt("type", -1)
 
-                val osGuess = when {
-                    rawOsGuess.isNotBlank() -> rawOsGuess
-                    isRandomMac -> "局域网设备 (私有/随机 MAC)"
-                    else -> "局域网接入设备"
-                }
+                val curUp = trafficBytesBySrcIp[ip]?.first ?: conns.sumOf { it.up }
+                val curDown = trafficBytesBySrcIp[ip]?.second ?: conns.sumOf { it.down }
+                val stats = resolveDeviceStats(ip, curUp, curDown)
 
                 list.add(
                     TetheredDeviceDetail(
                         ip = ip,
                         mac = "",
                         hostname = hostname,
-                        vendor = vendor,
                         isRandomMac = isRandomMac,
-                        osGuess = osGuess,
                         tetheringType = tetheringType,
-                        upBytes = conns.sumOf { it.up },
-                        downBytes = conns.sumOf { it.down },
+                        upBytes = stats.totalUp,
+                        downBytes = stats.totalDown,
+                        upBps = stats.upBps,
+                        downBps = stats.downBps,
                         conns = conns,
                         isBlocked = false,
                     )
@@ -257,28 +339,27 @@ object TetheringDeviceParser {
                 processedIps.add(ip)
 
                 val isTunNat = ip in TUN_VIRTUAL_IPS || ip == HotspotRoutingConfig.SHIZUKU_TUN_IP_V4
-                val osGuess = when {
-                    isTunNat && clientByMac.size > 1 -> "热点共享汇聚 (多设备 NAT)"
-                    isTunNat -> "热点共享客户端 (NAT)"
-                    else -> "局域网接入设备"
-                }
                 val displayHostname = when {
-                    isTunNat && clientByMac.size > 1 -> "热点共享流量池"
-                    isTunNat -> "热点共享设备"
+                    isTunNat && clientByMac.size > 1 -> HOSTNAME_SHARED_POOL
+                    isTunNat -> HOSTNAME_SHARED_DEVICE
                     else -> ""
                 }
+
+                val curUp = trafficBytesBySrcIp[ip]?.first ?: conns.sumOf { it.up }
+                val curDown = trafficBytesBySrcIp[ip]?.second ?: conns.sumOf { it.down }
+                val stats = resolveDeviceStats(ip, curUp, curDown)
 
                 list.add(
                     TetheredDeviceDetail(
                         ip = ip,
                         mac = "",
                         hostname = displayHostname,
-                        vendor = "",
                         isRandomMac = false,
-                        osGuess = osGuess,
                         tetheringType = -1,
-                        upBytes = conns.sumOf { it.up },
-                        downBytes = conns.sumOf { it.down },
+                        upBytes = stats.totalUp,
+                        downBytes = stats.totalDown,
+                        upBps = stats.upBps,
+                        downBps = stats.downBps,
                         conns = conns,
                         isBlocked = false,
                     )
@@ -289,20 +370,18 @@ object TetheringDeviceParser {
             val addedMacs = list.map { it.mac.lowercase() }.filter { it.isNotEmpty() }.toSet()
             for (bMac in blockedSet) {
                 if (bMac !in addedMacs) {
-                    val vendor = io.github.yiguihai11.smartproxy.shizuku.lookupMacVendor(bMac).orEmpty()
                     val isRandom = io.github.yiguihai11.smartproxy.shizuku.isLocallyAdministeredMac(bMac)
-                    val osGuess = io.github.yiguihai11.smartproxy.shizuku.inferDeviceOs(null, vendor.ifEmpty { null }, isRandom)
                     list.add(
                         TetheredDeviceDetail(
                             ip = "",
                             mac = bMac,
                             hostname = "",
-                            vendor = vendor,
                             isRandomMac = isRandom,
-                            osGuess = osGuess,
                             tetheringType = -1,
                             upBytes = 0L,
                             downBytes = 0L,
+                            upBps = 0L,
+                            downBps = 0L,
                             conns = emptyList(),
                             isBlocked = true,
                         )
@@ -312,5 +391,46 @@ object TetheringDeviceParser {
 
             list
         }.getOrDefault(emptyList())
+    }
+
+    /**
+     * 将解析后的设备列表序列化为 JSON 字符串，供 Go 控制面板通过 Bridge 读取。
+     * 保持与 TetheredDeviceDetail/TetheredDevice 的所有字段（含 IPv6 附加地址、实时速率、活跃连接数）完全对齐。
+     */
+    fun parseToJson(statsJson: String?): String {
+        val list = parse(statsJson)
+        val arr = JSONArray()
+        for (d in list) {
+            val obj = JSONObject()
+            obj.put("ip", d.ip)
+            obj.put("mac", d.mac)
+            obj.put("hostname", d.hostname)
+            obj.put("type", d.tetheringType)
+            obj.put("is_random_mac", d.isRandomMac)
+            obj.put("up_bytes", d.upBytes)
+            obj.put("down_bytes", d.downBytes)
+            obj.put("up_bps", d.upBps)
+            obj.put("down_bps", d.downBps)
+            obj.put("active_conns", d.conns.size)
+            obj.put("is_blocked", d.isBlocked)
+            val extraArr = JSONArray()
+            for (eip in d.extraIps) {
+                extraArr.put(eip)
+            }
+            obj.put("extra_ips", extraArr)
+            val connsArr = JSONArray()
+            for (c in d.conns) {
+                val cObj = JSONObject()
+                cObj.put("proto", c.proto)
+                cObj.put("host", c.host)
+                cObj.put("port", c.port)
+                cObj.put("up", c.up)
+                cObj.put("down", c.down)
+                connsArr.put(cObj)
+            }
+            obj.put("conns", connsArr)
+            arr.put(obj)
+        }
+        return arr.toString()
     }
 }

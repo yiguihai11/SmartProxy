@@ -56,6 +56,7 @@ type Engine struct {
 	clientSem       chan struct{}
 	lanternProvider *lantern.Provider
 	subscriptionMgr *subscription.Manager
+	tetheringBridge admin.TetheringBridge
 }
 
 func New(cfg *config.Config, cfgDir string) (*Engine, error) {
@@ -86,6 +87,9 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 			URL:      p.URL,
 			UDPInTCP: p.UDPInTCP,
 			IPv6:     p.IPv6,
+			Enable:   p.Enable,
+			Enabled:  p.Enabled,
+			Disabled: p.Disabled,
 		})
 	}
 	upstreamMgr, err := upstream.NewManager(upstreamCfg)
@@ -165,7 +169,40 @@ func (e *Engine) SetConnStatsEnabled(on bool) {
 
 // ConnectionStats 返回按 app(uid)分组的连接快照 JSON(供 UI 每秒轮询)。
 func (e *Engine) ConnectionStats() string {
+	if e.TUNHandler == nil {
+		return ""
+	}
 	return e.TUNHandler.ConnectionStats()
+}
+
+// KillClientConnections terminates all active connections for a client IP.
+func (e *Engine) KillClientConnections(ip string) int {
+	if e.TUNHandler == nil {
+		return 0
+	}
+	return e.TUNHandler.KillBySrcIP(ip)
+}
+
+// BlockClientIP blocks all traffic from client IP and kills its existing connections.
+func (e *Engine) BlockClientIP(ip string) {
+	if e.TUNHandler != nil {
+		e.TUNHandler.BlockClientIP(ip)
+	}
+}
+
+// UnblockClientIP removes client IP from block list.
+func (e *Engine) UnblockClientIP(ip string) {
+	if e.TUNHandler != nil {
+		e.TUNHandler.UnblockClientIP(ip)
+	}
+}
+
+// IsClientIPBlocked checks if client IP is blocked.
+func (e *Engine) IsClientIPBlocked(ip string) bool {
+	if e.TUNHandler != nil {
+		return e.TUNHandler.IsClientIPBlocked(ip)
+	}
+	return false
 }
 
 // SetConnStatsPin 固定「正在查看」的 app 的连接不被 idle 清扫(「联网状态」页
@@ -303,11 +340,23 @@ func (e *Engine) Start(ctx context.Context) error {
 		e.adminServer.SetRefreshSubscription(e.RefreshSubscription)
 		e.adminServer.SetSubscriptionsStatus(e.SubscriptionsStatus)
 		e.adminServer.SetRemoveSubscriptionNodes(e.RemoveSubscriptionNodes)
+		e.adminServer.SetTCPHost(lc.AdminHost)
 		e.adminServer.SetTCPPort(lc.AdminPort)
 		e.adminServer.SetRefreshInterval(lc.AdminRefreshInterval)
 		// Extra SANs land in the auto-generated self-signed cert, so a LAN IP in
 		// admin_cert_sans is covered without supplying admin_cert_file/admin_key_file.
 		e.adminServer.SetTLS(lc.AdminCertFile, lc.AdminKeyFile, lc.AdminHTTPS, lc.AdminCertSANs...)
+		e.adminServer.SetDeviceHooks(
+			e.ConnectionStats,
+			e.KillClientConnections,
+			e.BlockClientIP,
+			e.UnblockClientIP,
+			e.IsClientIPBlocked,
+		)
+		e.adminServer.SetConnStatsEnabledHook(e.SetConnStatsEnabled)
+		if e.tetheringBridge != nil {
+			e.adminServer.SetTetheringBridge(e.tetheringBridge)
+		}
 		if err := e.adminServer.Start(); err != nil {
 			e.Stop()
 			return fmt.Errorf("failed to start admin server: %w", err)
@@ -318,6 +367,14 @@ func (e *Engine) Start(ctx context.Context) error {
 
 func (e *Engine) AdminServer() *admin.Server {
 	return e.adminServer
+}
+
+// SetTetheringBridge passes the tethering bridge to the admin server.
+func (e *Engine) SetTetheringBridge(b admin.TetheringBridge) {
+	e.tetheringBridge = b
+	if e.adminServer != nil {
+		e.adminServer.SetTetheringBridge(b)
+	}
 }
 
 // SubscriptionMgr returns the subscription manager instance.
@@ -1023,6 +1080,9 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 			URL:      p.URL,
 			UDPInTCP: p.UDPInTCP,
 			IPv6:     p.IPv6,
+			Enable:   p.Enable,
+			Enabled:  p.Enabled,
+			Disabled: p.Disabled,
 		})
 	}
 	e.UpstreamMgr.Reload(upstreamCfg)

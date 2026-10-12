@@ -22,10 +22,35 @@ var (
 	globalEngine  *engine.Engine
 	engineMu      sync.Mutex
 	lifecycleMu   sync.Mutex
-	cancelFunc    context.CancelFunc
-	routerWatcher *config.Watcher
-	uidResolver   UIDResolver
+	cancelFunc      context.CancelFunc
+	routerWatcher   *config.Watcher
+	uidResolver     UIDResolver
+	tetheringBridge TetheringBridge
 )
+
+// TetheringBridge 让 Go 管理面板与 Android Kotlin 层的热点/共享管理能力打通(AIDL 复用)。
+// gomobile 会把该接口绑定成 Java 接口,Kotlin 侧实现并注册:
+//
+//	Mobile.setTetheringBridge(TetheringBridge)
+//
+// 提供系统权威客户端查询、Wi-Fi 软热点底层硬件级拉黑/解封等能力。
+type TetheringBridge interface {
+	GetTetheredClients() string
+	BlockClient(mac string) bool
+	UnblockClient(mac string) bool
+	GetBlockedClients() string
+}
+
+// SetTetheringBridge 注册热点下挂设备管理 Bridge。
+func SetTetheringBridge(b TetheringBridge) {
+	engineMu.Lock()
+	defer engineMu.Unlock()
+	tetheringBridge = b
+	slog.Info("[Go-Bridge] SetTetheringBridge called", "set", b != nil)
+	if globalEngine != nil {
+		globalEngine.SetTetheringBridge(b)
+	}
+}
 
 // UIDResolver 让 Go TUN 路径按连接反查所属 app UID(per-app「禁止联网」拦截)。
 // gomobile 会把该接口绑定成 Java 接口,Kotlin 侧实现并回注册:
@@ -146,6 +171,10 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 		})
 	}
 
+	if tetheringBridge != nil {
+		eng.SetTetheringBridge(tetheringBridge)
+	}
+
 	// 纯 Go 面板机制(与 cmd/smartproxy/main.go L138-233 对齐):面板 PUT /config
 	// 写 configPath → fsnotify 监听目录 → configReload 热重载。此前移动端从未装配
 	// (SetReloadFn/SetConfigPath 缺省),/config 一律 503,面板只能走 /api/prefs 桥。
@@ -241,6 +270,7 @@ func StopRouter() {
 	watcher := routerWatcher
 	routerWatcher = nil
 	uidResolver = nil
+	tetheringBridge = nil
 	engineMu.Unlock()
 
 	if cancel != nil {

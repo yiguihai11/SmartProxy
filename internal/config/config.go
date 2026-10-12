@@ -102,6 +102,7 @@ type ListenConfig struct {
 	RelaxedUDPOriginCheck   bool           `json:"relaxed_udp_origin_check"`
 	UDPAssociateIdleTimeout int            `json:"udp_associate_idle_timeout"`
 	AdminSocket             string         `json:"admin_socket"`
+	AdminHost               string         `json:"admin_host"`
 	AdminPort               int            `json:"admin_port"`
 	AdminAuth               *AdminAuthConf `json:"admin_auth"`
 	AdminRefreshInterval    int            `json:"admin_refresh_interval"`
@@ -183,6 +184,24 @@ type ProxyEntry struct {
 	// IPv6 allows manually forcing IPv6 outbound capability (true = force enable, false = force disable).
 	// If omitted or nil, SmartProxy automatically probes and discovers whether the node can reach IPv6 targets.
 	IPv6 *bool `json:"ipv6,omitempty"`
+	// Enable/Enabled controls whether this node is active. If false, node starts disabled.
+	Enable   *bool `json:"enable,omitempty"`
+	Enabled  *bool `json:"enabled,omitempty"`
+	Disabled bool  `json:"disabled,omitempty"`
+}
+
+// IsDisabled reports whether this proxy entry has been explicitly turned off in config.
+func (p ProxyEntry) IsDisabled() bool {
+	if p.Disabled {
+		return true
+	}
+	if p.Enabled != nil && !*p.Enabled {
+		return true
+	}
+	if p.Enable != nil && !*p.Enable {
+		return true
+	}
+	return false
 }
 
 type RoutingConf struct {

@@ -9,16 +9,19 @@ import android.net.LinkProperties
 import android.net.MacAddress
 import android.net.Network
 import android.net.wifi.WifiManager
+import android.os.FileObserver
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.annotation.Keep
 import io.github.yiguihai11.smartproxy.BuildConfig
+import io.github.yiguihai11.smartproxy.TetheringDeviceParser
 import org.json.JSONArray
 import org.json.JSONObject
 import rikka.shizuku.Shizuku
 import rikka.shizuku.SystemServiceHelper
 import java.io.File
+import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.NetworkInterface
@@ -109,6 +112,8 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
     @Volatile private var coreLease: ICoreTetheringLease? = null
     @Volatile private var coreLifetime: LifetimeWatch? = null
     private var stagedAssetFingerprint = ""
+    private var stagedFileObserver: FileObserver? = null
+    @Volatile private var isSyncingFromMaster = false
 
     private val routingWorker = Executors.newSingleThreadExecutor { r ->
         Thread(r, "ShizukuTetheringRouting").apply { isDaemon = true }.also { workerThread = it }
@@ -420,6 +425,7 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             startUpstreamMonitorLocked()
             setPreferTestNetworks(true)
             createTestNetwork(config.dnsServers, config.ipv6Enabled)
+            setPreferTestNetworks(true)
             val tun = checkNotNull(testTun) { "Test TUN file descriptor is unavailable" }
             startRoutingEngineLocked(config, tun)
             setRoutingActiveLocked(config)
@@ -701,8 +707,9 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             .toSet()
 
         val systemClients = monitor?.currentClients.orEmpty()
+        val clientsReceived = monitor?.hasClientsReceived == true
         val neighborClients = readNeighborClients(downstreamIfaces, upstreamIfaces)
-        val clients = mergeTetheredClients(systemClients, neighborClients)
+        val clients = mergeTetheredClients(systemClients, neighborClients, clientsReceived)
         val arr = JSONArray()
         for (client in clients) {
             val obj = JSONObject()
@@ -710,9 +717,7 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             obj.put("ip", client.ip)
             obj.put("hostname", client.hostname ?: "")
             obj.put("type", client.tetheringType)
-            obj.put("vendor", client.vendor ?: "")
             obj.put("is_random_mac", client.isRandomMac)
-            obj.put("os_guess", client.osGuess ?: "")
             val ipsArr = JSONArray()
             for (assignedIp in client.assignedIps) {
                 ipsArr.put(assignedIp)
@@ -736,8 +741,9 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             .toSet()
 
         val systemClients = monitor?.currentClients.orEmpty()
+        val clientsReceived = monitor?.hasClientsReceived == true
         val neighborClients = readNeighborClients(downstreamIfaces, upstreamIfaces)
-        val clients = mergeTetheredClients(systemClients, neighborClients)
+        val clients = mergeTetheredClients(systemClients, neighborClients, clientsReceived)
 
         val clientsArr = JSONArray()
         for (client in clients) {
@@ -746,9 +752,7 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             obj.put("ip", client.ip)
             obj.put("hostname", client.hostname ?: "")
             obj.put("type", client.tetheringType)
-            obj.put("vendor", client.vendor ?: "")
             obj.put("is_random_mac", client.isRandomMac)
-            obj.put("os_guess", client.osGuess ?: "")
             val ipsArr = JSONArray()
             for (assignedIp in client.assignedIps) {
                 ipsArr.put(assignedIp)
@@ -1008,14 +1012,14 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
 
         val activeTypes = upstreamMonitor?.currentInterfaces?.let(::tetheringTypeMask)
             ?: getActiveTetheringTypes()
-        val affectedTypes = activeTypes.coerceAtLeast(0) or requestedTetheringTypes or
-            (routingSession?.desiredTetheringTypes ?: 0)
-        if (affectedTypes == 0) return
+        val establishedTypes = (activeTypes.coerceAtLeast(0) or
+            (routingSession?.desiredTetheringTypes ?: 0)) and requestedTetheringTypes.inv()
+        if (establishedTypes == 0) return
 
         upstreamRejections.incrementAndGet()
-        wrongUpstreamWarningTypes.updateAndGet { it or affectedTypes }
+        wrongUpstreamWarningTypes.updateAndGet { it or establishedTypes }
         Log.e(TAG, "Android moved tethering to unprotected upstream $actual; stopping downstreams")
-        forEachTetheringType(affectedTypes) { type, _ ->
+        forEachTetheringType(establishedTypes) { type, _ ->
             if (usesPublicTetheringApi()) {
                 runCatching {
                     TetheringApi36.requestStopTethering(tetheringManager, type, executor) { result ->
@@ -1092,10 +1096,10 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
         UPSTREAM_SELECTION_TIMEOUT_SECONDS,
     ) {
         val actualInterface = readUpstreamInterface()
-        when {
-            TetheringPlatformCompat.isProtectedUpstream(actualInterface, expectedInterface) -> true
-            actualInterface.isNotBlank() -> false
-            else -> null
+        if (TetheringPlatformCompat.isProtectedUpstream(actualInterface, expectedInterface)) {
+            true
+        } else {
+            null
         }
     }
 
@@ -1233,58 +1237,139 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             .invoke(tetheringManager, prefer)
     }
 
+    private fun getDownstreamGatewayIps(): List<String> {
+        val ips = mutableListOf<String>()
+        val ifaces = (upstreamMonitor?.currentInterfaces ?: runCatching { getTetheredInterfaces() }.getOrNull()).orEmpty()
+        for (iface in ifaces) {
+            runCatching {
+                val nif = NetworkInterface.getByName(iface.name) ?: return@runCatching
+                for (addr in nif.inetAddresses) {
+                    if (addr.isLoopbackAddress) continue
+                    if (addr is Inet4Address && addr.isSiteLocalAddress) {
+                        ips.add(addr.hostAddress)
+                    } else if (addr is Inet6Address && !addr.isLinkLocalAddress) {
+                        ips.add(addr.hostAddress)
+                    }
+                }
+            }
+        }
+        if (ips.none { it.contains('.') }) {
+            ips.add(HotspotRoutingConfig.SHIZUKU_TUN_IP_V4)
+        }
+        if (ips.none { it.contains(':') }) {
+            ips.add(HotspotRoutingConfig.SHIZUKU_TUN_IP_V6)
+        }
+        return ips.distinct()
+    }
+
+    private fun startStagedFileObserver(stagedDir: String) {
+        stopStagedFileObserver()
+        val dir = File(stagedDir)
+        val monitoredFiles = setOf("config.json", "acl.txt", "chnroute.txt")
+        val observer = object : FileObserver(dir, CLOSE_WRITE or MOVED_TO) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path == null || path !in monitoredFiles || isSyncingFromMaster) return
+                val file = File(dir, path)
+                if (!file.isFile || file.length() == 0L) return
+                runRoutingWork {
+                    if (isSyncingFromMaster) return@runRoutingWork
+                    val lease = coreLease ?: return@runRoutingWork
+                    runCatching {
+                        ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                            val ok = lease.updateAssetFile(path, pfd)
+                            Log.i(TAG, "Synced $path back to master: $ok")
+                            if (ok) {
+                                stagedAssetFingerprint = lease.assetFingerprint()
+                            }
+                        }
+                    }.onFailure { Log.e(TAG, "Failed to sync $path to master", it) }
+                }
+            }
+        }
+        observer.startWatching()
+        stagedFileObserver = observer
+    }
+
+    private fun stopStagedFileObserver() {
+        stagedFileObserver?.stopWatching()
+        stagedFileObserver = null
+    }
+
     private fun startRoutingEngineLocked(config: HotspotRoutingLaunchConfig, tunPfd: ParcelFileDescriptor) {
         val lease = checkNotNull(coreLease) { "Core lease is unavailable" }
         val stagedDir = stageNativeAssets(lease)
         val configFile = File(stagedDir, "config.json")
-        // 引擎按 config 的 routing.chnroute_file / acl_file 加载文件;本进程以 shell UID
-        // 运行,读不了主应用私有 cacheDir,必须把这两个路径重定向到已 stage 的同名文件,
-        // 否则 engine.New → chnroute.Load 直接 permission denied,startRouting 报 -2。
-        configFile.writeText(relocateRoutingFilesForShell(config.engineContent, stagedDir))
+        val gatewayIps = getDownstreamGatewayIps()
+        isSyncingFromMaster = true
+        try {
+            configFile.writeText(relocateRoutingFilesForShell(config.engineContent, stagedDir, gatewayIps))
+        } finally {
+            isSyncingFromMaster = false
+        }
+        startStagedFileObserver(stagedDir)
 
-        // Go sing-tun 用 os.NewFile 直接包传入的 fd 号(不 dup),StopRouter 关栈时 close 它。
-        // 若把 TestNetworkManager 原 PFD 的 fd 号直接给 Go,cleanupRouting 的 release() 再
-        // tun.close() 就是 fdsan double-close(fd 75 实测 SIGABRT,关路由即闪退,整个特权
-        // 进程死给你看)。dup 出独立 fd 交 Go 独占并 detachFd 转移 fdsan 所有权;原 PFD 始终
-        // 归 TestNetworkHandle.release() 关闭。失败路径 Go 的 startRouter 自己关 goFd
-        // (bridge closeFdOnErr),Kotlin 绝不碰——与 VpnService.establishVpn 同款归属。
         val goFd = tunPfd.dup().detachFd()
         try {
+            val bridge = object : smartproxy.mobile.TetheringBridge {
+                override fun getTetheredClients(): String {
+                    val statsJson = runCatching { this@ShizukuTetheringService.getTetheringConnectionStats() }.getOrNull()
+                    if (!statsJson.isNullOrBlank() && statsJson != "{\"apps\":[]}") {
+                        val json = TetheringDeviceParser.parseToJson(statsJson)
+                        if (json != "[]") return json
+                    }
+                    return this@ShizukuTetheringService.getTetheredClients()
+                }
+                override fun blockClient(mac: String): Boolean = this@ShizukuTetheringService.blockClient(mac)
+                override fun unblockClient(mac: String): Boolean = this@ShizukuTetheringService.unblockClient(mac)
+                override fun getBlockedClients(): String {
+                    val list = this@ShizukuTetheringService.getBlockedClientList()
+                    val arr = JSONArray()
+                    for (m in list) arr.put(m)
+                    return arr.toString()
+                }
+            }
+            smartproxy.mobile.Mobile.setTetheringBridge(bridge)
             smartproxy.mobile.Mobile.startRouter(configFile.absolutePath, goFd.toLong(), true)
             check(smartproxy.mobile.Mobile.isRunning()) { "SmartProxy tethering core did not start" }
             runCatching { smartproxy.mobile.Mobile.setConnStatsEnabled(true) }
         } catch (error: Throwable) {
+            runCatching { smartproxy.mobile.Mobile.setTetheringBridge(null) }
             stopRoutingEngineLocked()
             throw error
         }
     }
 
     private fun stageNativeAssets(coreLease: ICoreTetheringLease): String {
-        val directory = File(SHELL_RUNTIME_DIR, ASSET_DIRECTORY_NAME).apply { mkdirs() }
-        check(directory.isDirectory) { "Unable to create tethering asset directory" }
-        val names = coreLease.listAssetFiles().toList()
-        val fingerprint = coreLease.assetFingerprint()
-        if (fingerprint == stagedAssetFingerprint && names.all { File(directory, it).isFile }) {
-            return directory.absolutePath
-        }
-
-        directory.listFiles()?.filter { it.isFile && it.name !in names && it.name != "config.json" }?.forEach { it.delete() }
-        names.forEach { name ->
-            val target = File(directory, name)
-            val temporary = File(directory, ".$name.tmp")
-            runCatching {
-                ParcelFileDescriptor.AutoCloseInputStream(coreLease.openAssetFile(name)).use { input ->
-                    temporary.outputStream().use { output -> input.copyTo(output) }
-                }
-                check(!target.exists() || target.delete()) { "Unable to replace asset $name" }
-                check(temporary.renameTo(target)) { "Unable to install asset $name" }
-            }.onFailure {
-                temporary.delete()
-                throw it
+        isSyncingFromMaster = true
+        try {
+            val directory = File(SHELL_RUNTIME_DIR, ASSET_DIRECTORY_NAME).apply { mkdirs() }
+            check(directory.isDirectory) { "Unable to create tethering asset directory" }
+            val names = coreLease.listAssetFiles().toList()
+            val fingerprint = coreLease.assetFingerprint()
+            if (fingerprint == stagedAssetFingerprint && names.all { File(directory, it).isFile }) {
+                return directory.absolutePath
             }
+
+            directory.listFiles()?.filter { it.isFile && it.name !in names && it.name != "config.json" && !it.name.startsWith("admin.") && !it.name.startsWith("admin_ca.") }?.forEach { it.delete() }
+            names.forEach { name ->
+                val target = File(directory, name)
+                val temporary = File(directory, ".$name.tmp")
+                runCatching {
+                    ParcelFileDescriptor.AutoCloseInputStream(coreLease.openAssetFile(name)).use { input ->
+                        temporary.outputStream().use { output -> input.copyTo(output) }
+                    }
+                    check(!target.exists() || target.delete()) { "Unable to replace asset $name" }
+                    check(temporary.renameTo(target)) { "Unable to install asset $name" }
+                }.onFailure {
+                    temporary.delete()
+                    throw it
+                }
+            }
+            stagedAssetFingerprint = fingerprint
+            return directory.absolutePath
+        } finally {
+            isSyncingFromMaster = false
         }
-        stagedAssetFingerprint = fingerprint
-        return directory.absolutePath
     }
 
 
@@ -1344,6 +1429,8 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
     }
 
     private fun stopRoutingEngineLocked() {
+        runCatching { smartproxy.mobile.Mobile.setTetheringBridge(null) }
+        stopStagedFileObserver()
         stopEngineHealthCheck()
         runCatching { smartproxy.mobile.Mobile.setConnStatsEnabled(false) }
         runCatching { smartproxy.mobile.Mobile.stopRouter() }
@@ -1408,9 +1495,9 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
         private const val CALLBACK_TIMEOUT_SECONDS = 10L
         private const val TEST_NETWORK_TIMEOUT_SECONDS = 15L
         private const val TETHERING_STATE_TIMEOUT_SECONDS = 10L
-        private const val UPSTREAM_SELECTION_TIMEOUT_SECONDS = 5L
-        private const val UPSTREAM_RETRY_DELAY_MILLIS = 8_000L
-        private const val TETHERING_STATE_POLL_MILLIS = 200L
+        private const val UPSTREAM_SELECTION_TIMEOUT_SECONDS = 15L
+        private const val UPSTREAM_RETRY_DELAY_MILLIS = 2_000L
+        private const val TETHERING_STATE_POLL_MILLIS = 100L
 
         const val TETHERING_TYPE_WIFI = 0
         const val TETHERING_TYPE_USB = 1
@@ -1438,19 +1525,49 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             .debuggable(BuildConfig.DEBUG)
             .version(USER_SERVICE_VERSION)
 
-        internal fun relocateRoutingFilesForShell(engineContent: String, stagedDir: String): String {
+        internal fun relocateRoutingFilesForShell(
+            engineContent: String,
+            stagedDir: String,
+            gatewayIps: List<String> = emptyList()
+        ): String {
             val json = runCatching { JSONObject(engineContent) }.getOrElse { return engineContent }
             val routing = json.optJSONObject("routing") ?: JSONObject().also { json.put("routing", it) }
             routing.put("chnroute_file", File(stagedDir, "chnroute.txt").absolutePath)
             routing.put("acl_file", File(stagedDir, "acl.txt").absolutePath)
 
-            // 共享热点路由是专用的特权流量转发引擎，主应用已在运行并监听 admin_port (:9090) 与 SOCKS5 端口。
-            // 若特权引擎也去绑定相同端口，立即报 bind: address already in use (-2 失败)。
-            // 共享引擎完全不需要 Web 管理面板与本地代理监听器，将 admin_port/admin_socket/port 均置零屏蔽。
             val listen = json.optJSONObject("listen") ?: JSONObject().also { json.put("listen", it) }
-            listen.put("admin_port", 0)
             listen.put("admin_socket", "")
             listen.put("port", 0)
+
+            // 共享热点路由引擎:绑定到热点网关 IP 与 TUN 虚拟 IP(主应用监听 127.0.0.1,::1,避免端口冲突)
+            val effectiveIps = if (gatewayIps.isNotEmpty()) gatewayIps else listOf(
+                HotspotRoutingConfig.SHIZUKU_TUN_IP_V4,
+                HotspotRoutingConfig.SHIZUKU_TUN_IP_V6
+            )
+            listen.put("admin_host", effectiveIps.joinToString(","))
+            val origAdminPort = listen.optInt("admin_port", 9090).let { if (it <= 0) 9090 else it }
+            listen.put("admin_port", origAdminPort)
+
+            // 证书 SAN 确保包含 smartproxy.lan 及有效网关 IP
+            val sans = listen.optJSONArray("admin_cert_sans") ?: JSONArray().also { listen.put("admin_cert_sans", it) }
+            val existingSans = (0 until sans.length()).map { sans.getString(it) }.toMutableSet()
+            existingSans.add("smartproxy.lan")
+            existingSans.addAll(effectiveIps)
+            listen.put("admin_cert_sans", JSONArray(existingSans.toList()))
+
+            // 内置 DNS 静态记录将 smartproxy.lan 解析到热点网关/TUN 虚拟 IP
+            val dns = json.optJSONObject("dns") ?: JSONObject().also { json.put("dns", it) }
+            val records = dns.optJSONArray("static_records") ?: JSONArray().also { dns.put("static_records", it) }
+            var found = -1
+            for (i in 0 until records.length()) {
+                if (records.optJSONObject(i)?.optString("host") == "smartproxy.lan") {
+                    found = i
+                    break
+                }
+            }
+            val rec = if (found >= 0) records.getJSONObject(found)
+            else JSONObject().put("host", "smartproxy.lan").also { records.put(it) }
+            rec.put("ip", JSONArray(effectiveIps))
 
             return json.toString()
         }

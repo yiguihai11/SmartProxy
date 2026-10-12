@@ -26,9 +26,6 @@ import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Devices
-import androidx.compose.material.icons.outlined.Laptop
-import androidx.compose.material.icons.outlined.Smartphone
-import androidx.compose.material.icons.outlined.TabletAndroid
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -62,9 +59,7 @@ data class TetheredDeviceDetail(
     val ip: String,
     val mac: String,
     val hostname: String,
-    val vendor: String,
     val isRandomMac: Boolean,
-    val osGuess: String,
     val tetheringType: Int,
     val upBytes: Long = 0L,
     val downBytes: Long = 0L,
@@ -109,18 +104,8 @@ fun TetheredDeviceDetailDialog(
         Toast.makeText(context, context.getString(R.string.device_copied_to_clipboard, text), Toast.LENGTH_SHORT).show()
     }
 
-    val deviceIcon = when {
-        device.osGuess.contains("iOS", ignoreCase = true) ||
-            device.osGuess.contains("iPhone", ignoreCase = true) ||
-            device.osGuess.contains("Android", ignoreCase = true) -> Icons.Outlined.Smartphone
-        device.osGuess.contains("iPad", ignoreCase = true) ||
-            device.osGuess.contains("Tablet", ignoreCase = true) -> Icons.Outlined.TabletAndroid
-        device.osGuess.contains("macOS", ignoreCase = true) ||
-            device.osGuess.contains("Windows", ignoreCase = true) ||
-            device.osGuess.contains("Linux", ignoreCase = true) ||
-            device.osGuess.contains("PC", ignoreCase = true) -> Icons.Outlined.Laptop
-        else -> Icons.Outlined.Devices
-    }
+    val deviceIcon = Icons.Outlined.Devices
+
 
     val tetheringTypeLabel = when (device.tetheringType) {
         ShizukuTetheringService.TETHERING_TYPE_WIFI -> stringResource(R.string.device_type_wifi)
@@ -167,7 +152,7 @@ fun TetheredDeviceDetailDialog(
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(
-                            text = device.hostname.ifBlank { device.ip.ifBlank { "热点设备" } },
+                            text = device.hostname.ifBlank { device.ip.ifBlank { stringResource(R.string.device_fallback_name) } },
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
                             color = textDark,
@@ -245,21 +230,6 @@ fun TetheredDeviceDetailDialog(
                         )
                     }
 
-                    DetailItemRow(
-                        label = stringResource(R.string.device_os),
-                        value = device.osGuess,
-                        labelColor = greyText,
-                        valueColor = textDark
-                    )
-
-                    DetailItemRow(
-                        label = stringResource(R.string.device_vendor),
-                        value = device.vendor.ifBlank {
-                            if (device.isRandomMac) "被随机 MAC 隐私屏蔽" else "未知厂商"
-                        },
-                        labelColor = greyText,
-                        valueColor = textDark
-                    )
 
                     if (device.mac.isNotBlank()) {
                         DetailItemRow(

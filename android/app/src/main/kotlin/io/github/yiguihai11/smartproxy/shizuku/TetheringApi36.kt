@@ -13,6 +13,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /** Keeps API 36-only tethering types out of classes loaded on Android 13 through 15. */
@@ -35,6 +36,7 @@ internal object TetheringApi36 {
         val interfaces = AtomicReference<List<ActiveTetheringInterface>?>(null)
         val interfacesReceived = CountDownLatch(1)
         val clients = AtomicReference<List<TetheredClientInfo>>(emptyList())
+        val clientsReceived = AtomicBoolean(false)
         val changeExecutor = newTetheringChangeExecutor()
         val callback = UpstreamCallback(
             connectivityManager,
@@ -42,6 +44,7 @@ internal object TetheringApi36 {
             interfaces,
             interfacesReceived,
             clients,
+            clientsReceived,
             changeExecutor,
             onChanged,
         )
@@ -51,7 +54,7 @@ internal object TetheringApi36 {
             changeExecutor.shutdownNow()
             throw error
         }
-        return TetheringUpstreamMonitor(interfaceNames, interfaces, interfacesReceived, clients) {
+        return TetheringUpstreamMonitor(interfaceNames, interfaces, interfacesReceived, clients, clientsReceived) {
             runCatching { manager.unregisterTetheringEventCallback(callback) }
             changeExecutor.shutdownNow()
         }
@@ -161,6 +164,7 @@ internal object TetheringApi36 {
         private val tetheredInterfaces: AtomicReference<List<ActiveTetheringInterface>?>,
         private val interfacesReceived: CountDownLatch,
         private val clients: AtomicReference<List<TetheredClientInfo>>,
+        private val clientsReceived: AtomicBoolean,
         private val changeExecutor: ExecutorService,
         private val onChanged: () -> Unit,
     ) : TetheringManager.TetheringEventCallback {
@@ -184,12 +188,14 @@ internal object TetheringApi36 {
         @Suppress("unused")
         fun onClientsChanged(clientsList: Collection<*>) {
             clients.set(extractTetheredClients(clientsList))
+            clientsReceived.set(true)
         }
 
         @Keep
         @Suppress("unused")
         fun onTetheredClientsChanged(clientsList: Collection<*>) {
             clients.set(extractTetheredClients(clientsList))
+            clientsReceived.set(true)
         }
 
         private fun notifyChanged() {

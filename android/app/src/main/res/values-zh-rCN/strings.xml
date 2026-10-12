@@ -288,8 +288,6 @@
     <string name="device_info_destinations">当前活跃访问</string>
     <string name="device_destinations_empty">当前暂无活跃代理连接</string>
     <string name="device_hostname">设备名称</string>
-    <string name="device_os">推断系统 / 类型</string>
-    <string name="device_vendor">设备厂商</string>
     <string name="device_mac">MAC 地址</string>
     <string name="device_random_mac">随机 MAC (隐私保护)</string>
     <string name="device_standard_mac">标准物理 MAC</string>
@@ -322,4 +320,9 @@
     <string name="device_block_failed">拉黑操作失败</string>
     <string name="device_unblock_success">已解除设备拉黑</string>
     <string name="device_unblock_failed">解除拉黑失败</string>
+    <string name="net_tethering_tun_aggregate">多设备接入 · 内核统一转发</string>
+    <string name="net_tethering_external_device">热点外接设备</string>
+    <string name="net_tethering_pool">热点共享流量池</string>
+    <string name="net_tethering_device">热点共享设备</string>
+    <string name="device_fallback_name">热点设备</string>
 </resources>

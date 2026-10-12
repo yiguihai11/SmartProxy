@@ -275,6 +275,17 @@ func (m *Manager) restoreManualPins(states map[string]savedNodeState) {
 		restore(&p.health, state.pins[0], p.tcpDefaultDriven())
 		restore(&p.udpHealth, state.pins[1], p.udpDefaultDriven())
 	}
+	for _, entry := range m.staticProxies {
+		if p := m.aliasMap[entry.Alias]; p != nil {
+			if entry.IsDisabled() {
+				p.health.SetManualState(false)
+				p.udpHealth.SetManualState(false)
+			} else if (entry.Enable != nil && *entry.Enable) || (entry.Enabled != nil && *entry.Enabled) {
+				p.health.ClearManualState()
+				p.udpHealth.ClearManualState()
+			}
+		}
+	}
 }
 
 // rebuildLocked rebuilds aliasMap and defaultProxies from staticProxies + all providerProxies.
@@ -345,6 +356,11 @@ func (m *Manager) rebuildLocked() map[string]json.RawMessage {
 				proxy.health.SetInitialUnverified()
 				proxy.udpHealth.SetInitialUnverified()
 			}
+		}
+
+		if entry.IsDisabled() {
+			proxy.health.SetManualState(false)
+			proxy.udpHealth.SetManualState(false)
 		}
 
 		if entry.IPv6 != nil {
@@ -486,6 +502,23 @@ type ProxyEntry struct {
 	UDPInTCP bool
 	Provider string
 	IPv6     *bool
+	Enable   *bool
+	Enabled  *bool
+	Disabled bool
+}
+
+// IsDisabled reports whether this proxy entry is configured as disabled.
+func (p ProxyEntry) IsDisabled() bool {
+	if p.Disabled {
+		return true
+	}
+	if p.Enabled != nil && !*p.Enabled {
+		return true
+	}
+	if p.Enable != nil && !*p.Enable {
+		return true
+	}
+	return false
 }
 
 func (m *Manager) SelectProxy(ctx context.Context, targetIP string, targetPort int, domain string, engine *rules.Engine) (string, *Proxy) {
@@ -1216,6 +1249,7 @@ type ProxyInfo struct {
 	CountryCode    string              `json:"country_code,omitempty"`
 	ExitIP         string              `json:"exit_ip,omitempty"`
 	Provider       string              `json:"provider,omitempty"`
+	Enable         bool                `json:"enable"`
 }
 
 func (m *Manager) Proxies() []ProxyInfo {
@@ -1232,6 +1266,9 @@ func (m *Manager) Proxies() []ProxyInfo {
 	infos := make([]ProxyInfo, 0, len(m.defaultProxies))
 	for _, proxy := range m.defaultProxies {
 		alias := reverseMap[proxy]
+		hSnap := proxy.health.Snapshot()
+		uSnap := proxy.udpHealth.Snapshot()
+		isManualDown := (hSnap.Manual && !hSnap.Available) && (uSnap.Manual && !uSnap.Available)
 		infos = append(infos, ProxyInfo{
 			Alias:          alias,
 			URL:            proxy.URL,
@@ -1240,12 +1277,13 @@ func (m *Manager) Proxies() []ProxyInfo {
 			Port:           proxy.Port,
 			Scheme:         string(proxy.Scheme),
 			UDPInTCP:       proxy.UDPInTCP,
+			Enable:         !isManualDown,
 			Mode:           proxy.EffectiveMode(),
 			UDPCapability:  string(proxy.UDPCapability()),
 			IPv6Capability: string(proxy.IPv6Capability()),
 			SupportsIPv6:   proxy.SupportsIPv6(),
-			Health:         proxy.health.Snapshot(),
-			UDPHealth:      proxy.udpHealth.Snapshot(),
+			Health:         hSnap,
+			UDPHealth:      uSnap,
 			PingLatency:    proxy.PingLatency(),
 			CountryCode:    proxy.CountryCode(),
 			ExitIP:         proxy.ExitIP(),

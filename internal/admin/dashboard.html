@@ -228,6 +228,17 @@ tr:last-child td{border-bottom:none}
 .proxy-card .card-mgmt-bar{display:flex;align-items:center;justify-content:space-between;gap:6px;width:100%;flex-wrap:wrap}
 .proxy-card .card-mgmt-bar .mgmt-left{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .proxy-card .card-mgmt-bar .mgmt-right{display:flex;align-items:center;margin-left:auto}
+.dev-ip-copy{cursor:pointer;user-select:none;display:inline-flex;align-items:center;padding:1px 5px;border-radius:4px;transition:background .15s;line-height:1.4}
+.dev-ip-copy:hover{background:rgba(127,127,127,.18)}
+.dev-conns-box{margin-top:10px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;max-height:240px;overflow-y:auto}
+.dev-conns-header{font-size:.76rem;font-weight:600;color:var(--text3);margin-bottom:6px;display:flex;align-items:center;justify-content:space-between}
+.dev-conn-row{display:flex;align-items:center;gap:8px;font-size:.76rem;padding:4px 0;border-bottom:1px solid rgba(127,127,127,.12)}
+.dev-conn-row:last-child{border-bottom:none}
+.dev-proto-badge{font-size:.65rem;font-weight:700;padding:1px 5px;border-radius:3px;text-transform:uppercase;font-family:var(--mono);line-height:1.2}
+.dev-proto-badge.tcp{background:rgba(233,30,99,.15);color:#e91e63}
+.dev-proto-badge.udp{background:rgba(33,150,243,.15);color:#2196f3}
+.dev-conn-dest{font-family:var(--mono);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text1)}
+.dev-conn-traffic{font-family:var(--mono);font-size:.72rem;white-space:nowrap}
 .toggle-group{display:flex;gap:4px;margin-bottom:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px;width:fit-content}
 .toggle-btn{padding:5px 14px;border-radius:5px;font-size:.82rem;cursor:pointer;border:none;background:transparent;color:var(--text2);transition:all .15s;font-family:var(--font)}
 .toggle-btn.active{background:var(--accent);color:#fff}
@@ -364,6 +375,7 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
     <div class="nav-item" data-view="traffic"><span class="nav-icon">#</span><span>Traffic</span></div>
     <div class="nav-item section">Network</div>
     <div class="nav-item" data-view="health"><span class="nav-icon">@</span><span>Proxies</span></div>
+    <div class="nav-item" data-view="devices"><span class="nav-icon">H</span><span>Connected Devices</span></div>
     <div class="nav-item section">Security</div>
     <div class="nav-item" data-view="blacklist"><span class="nav-icon">B</span><span>Blacklist</span></div>
     <div class="nav-item section">System</div>
@@ -551,6 +563,56 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
   </div>
   <div id="proxy-cards"></div>
 </div>
+<div class="view" id="view-devices">
+  <div class="view-title">Connected Devices</div>
+  <div class="view-meta">
+    <span class="dot"></span><span id="devices-time"></span>
+    <button class="btn btn-sm active-auto" id="devices-auto-btn" onclick="toggleDevicesAuto()" style="margin-left:auto">Auto</button>
+    <button class="btn btn-sm" onclick="loadDevices()">Refresh</button>
+  </div>
+  <div class="cards-ov" id="devices-overview-cards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px">
+    <div class="card">
+      <div class="card-label">Active Devices</div>
+      <div class="card-value accent" id="dev-active-count">0</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Upload Rate</div>
+      <div class="card-value green" id="dev-total-up">0 B/s</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Download Rate</div>
+      <div class="card-value green" id="dev-total-down">0 B/s</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Blocked Devices</div>
+      <div class="card-value red" id="dev-blocked-count">0</div>
+    </div>
+  </div>
+  <div class="toolbar" style="margin-bottom:16px">
+    <input class="search-input" id="devices-search" placeholder="Search devices by name, IP, MAC..." oninput="devicesOnSearch()" style="max-width:320px;flex:1">
+  </div>
+  <div id="devices-list" class="proxy-grid" style="margin-bottom:24px"></div>
+  <div id="blocked-devices-section" style="margin-top:20px;display:none">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div style="font-weight:600;font-size:1rem;color:var(--text);display:flex;align-items:center;gap:8px">
+        <span>🚫</span><span id="blocked-devices-title">Blocked Devices</span>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Device Name</th>
+            <th>IP Address</th>
+            <th>MAC Address</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody id="blocked-devices-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
 <div class="view" id="view-blacklist">
   <div class="view-title">Blacklist</div>
   <div class="view-meta"><span class="dot"></span><span id="bl-time"></span><button class="btn btn-sm active-auto" id="bl-auto-btn" onclick="toggleBLAuto()" style="margin-left:auto">Auto</button></div>
@@ -564,7 +626,7 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
   <div class="table-wrap" id="bl-table"></div>
   <div class="pagination" id="bl-pagination" style="display:none">
     <button class="btn btn-sm" id="bl-prev" onclick="blGoToPage(-1)" disabled>Prev</button>
-    <input class="page-input" id="bl-page-input" type="number" min="1" value="1" onchange="blGoPage(this.value)">
+    <input class="page-input" id="bl-page-input" type="number" min="1" value="1" onchange="blGoPage(this.value)" onkeydown="if(event.key==='Enter')blGoPage(this.value)">
     <span class="page-info" id="bl-page-info"></span>
     <button class="btn btn-sm" id="bl-next" onclick="blGoToPage(1)">Next</button>
   </div>
@@ -612,7 +674,7 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
     <div id="cache-list" class="table-wrap">Loading...</div>
     <div class="pagination" id="cache-pagination" style="display:none">
       <button class="btn btn-sm" id="cache-prev" onclick="cacheGoToPage(-1)" disabled>Prev</button>
-      <input class="page-input" id="cache-page-input" type="number" min="1" value="1" onchange="cacheGoPage(this.value)">
+      <input class="page-input" id="cache-page-input" type="number" min="1" value="1" onchange="cacheGoPage(this.value)" onkeydown="if(event.key==='Enter')cacheGoPage(this.value)">
       <span class="page-info" id="cache-page-info"></span>
       <button class="btn btn-sm" id="cache-next" onclick="cacheGoToPage(1)">Next</button>
     </div>
@@ -653,7 +715,12 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
       so devices that already trust it keep working. A user-supplied
       <code>admin_ca.{crt,key}</code> next to the config overrides the embedded one; binaries
       built without any CA fall back to a single self-signed certificate.</p>
-    <a class="btn btn-sm primary" href="/admin.crt" download="admin.crt">Download admin.crt</a>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:16px">
+      <button class="btn btn-sm primary" id="btn-download-cert" onclick="downloadAdminCert(event)">Download admin.crt</button>
+      <button class="btn btn-sm" id="btn-copy-cert" onclick="copyAdminCert(event)">Copy Certificate (PEM)</button>
+      <button class="btn btn-sm" id="btn-view-cert" onclick="viewAdminCert(event)">View Certificate</button>
+      <a class="btn btn-sm ghost" id="link-http-cert" href="/admin.crt" download="admin.crt" target="_blank">Direct Link</a>
+    </div>
   </div>
 </div>
 <div class="app-footer">© 2026 <a href="https://gitlab.com/yiguihai" target="_blank" rel="noopener">爱翻墙的红杏</a></div>
@@ -750,7 +817,7 @@ function fmtNum(n){
   if(n>=1e3)return (n/1e3).toFixed(1)+' KB';
   return n+' B'
 }
-function ts2t(s){var d=new Date(s*1000);return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")+" "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")+":"+String(d.getSeconds()).padStart(2,"0")}
+function ts2t(s){if(!s||isNaN(s))return '-';var d=new Date(s*1000);if(isNaN(d.getTime()))return '-';return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")+" "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")+":"+String(d.getSeconds()).padStart(2,"0")}
 async function jf(u, opt){
   var c = new AbortController();
   var to = setTimeout(function(){ c.abort(); }, (opt && opt.timeout) || 10000);
@@ -783,7 +850,7 @@ function navTo(n){
   if(ni)ni.classList.add('active');
   var vi=document.getElementById('view-'+n);
   if(vi)vi.classList.add('active');
-  var ld={dashboard:loadDashboard,traffic:loadTraffic,health:loadHealth,blacklist:loadBlacklist,cache:loadDNS,config:loadConfig};
+  var ld={dashboard:loadDashboard,traffic:loadTraffic,health:loadHealth,devices:loadDevices,blacklist:loadBlacklist,cache:loadDNS,config:loadConfig};
   if(ld[n])ld[n]();
 }
 function ldash(d){
@@ -2362,6 +2429,7 @@ function openProxyDialog(i){
   document.getElementById('proxy-v2ray-servicename').value='GunService';
   document.getElementById('proxy-v2ray-certraw').value='';
   document.getElementById('proxy-udpintcp').checked=false;
+  if(document.getElementById('proxy-enable'))document.getElementById('proxy-enable').checked=(p&&p.enable!==undefined)?!!p.enable:true;
   var scheme='socks5';
   if(p){
     if(p.udp_in_tcp)document.getElementById('proxy-udpintcp').checked=true;
@@ -2467,14 +2535,15 @@ async function saveProxy(){
   if(plugin)url+='?plugin='+encodeURIComponent(plugin);
   try{var chk=new URL(url);if(!chk.hostname)throw new Error('bad host')}catch(e){alert(tf('Invalid server address: {0}',[server]));return}
   var udpintcp=document.getElementById('proxy-udpintcp').checked;
+  var proxyEnabled=document.getElementById('proxy-enable')?document.getElementById('proxy-enable').checked:true;
   var editing=document.getElementById('proxy-dialog').dataset.alias||'';
   try{
     await putProxyConfig(function(cfg){
       var ps=cfg.upstream.proxies;
-      function entry(){return {alias:alias,url:url,udp_in_tcp:udpintcp}}
+      function entry(){return {alias:alias,url:url,udp_in_tcp:udpintcp,enable:proxyEnabled}}
       if(editing){
         for(var i=0;i<ps.length;i++){
-          if(ps[i].alias===editing){ps[i].alias=alias;ps[i].url=url;ps[i].udp_in_tcp=udpintcp;return}
+          if(ps[i].alias===editing){ps[i].alias=alias;ps[i].url=url;ps[i].udp_in_tcp=udpintcp;ps[i].enable=proxyEnabled;return}
           if(ps[i].alias===alias){alert(tf('Alias "{0}" already exists',[alias]));throw new Error('dup')}
         }
         ps.push(entry());
@@ -3541,8 +3610,13 @@ function blGetFiltered(){
            (e.type&&e.type.toLowerCase().indexOf(q)!==-1)
   });
 }
-function blKey(e){return e.host+':'+e.type}
-function blSelKey(host,typ){return host+':'+typ}
+function blKey(e){return (e&&e.host?e.host:'')+':'+(e&&e.type?e.type:'')}
+function blSelKey(host,typ){return (host||'')+':'+(typ||'') }
+function blParseKey(k){
+  var idx=k.lastIndexOf(':');
+  if(idx===-1)return {host:k,type:''};
+  return {host:k.substring(0,idx),type:k.substring(idx+1)};
+}
 function rbl(f){
   blFilter=f;
   var allFl=blGetFiltered();
@@ -3558,7 +3632,7 @@ function rbl(f){
   blD.forEach(function(e){if(e&&e.type)types[e.type]=true});
   var existing=el.querySelector('table');
   if(!existing){
-    el.innerHTML='<table><thead><tr><th class="th-chk"><input class="cb-row" type="checkbox" id="bl-cb-all" onchange="blToggleAll(this.checked)"></th><th>Type</th><th>Host</th><th>Port</th><th>Reason</th><th>Expires</th><th></th></tr></thead><tbody id="bl-body"></tbody></table>';
+    el.innerHTML='<table><thead><tr><th class="th-chk"><input class="cb-row" type="checkbox" id="bl-cb-all" onchange="blToggleAll(this.checked)"></th><th>Type</th><th>Host</th><th>Port</th><th>Reason</th><th>Expires</th></tr></thead><tbody id="bl-body"></tbody></table>';
   }
   var dd=document.getElementById('bl-filter-dropdown');
   if(dd){
@@ -3572,12 +3646,22 @@ function rbl(f){
   var start=(blPage-1)*blPageSize;
   var pageItems=allFl.slice(start,start+blPageSize);
   var anyOnPage=false;
-  document.getElementById('bl-body').innerHTML=pageItems.map(function(e){
-    var k=blKey(e);
-    var checked=blSelected[k]?'checked':'';
-    if(blSelected[k])anyOnPage=true;
-    return '<tr><td class="td-chk"><input class="cb-row" type="checkbox" '+checked+' onchange="blToggleRow(\''+e.host.replace(/'/g,"\\'")+'\',\''+e.type+'\')"></td><td><span class="tag '+(e.type==='ip'?'green':'yellow')+'">'+e.type+'</span></td><td class="clickable" style="word-break:break-all" onclick="blOpenACL(\''+e.host.replace(/'/g,"\\'")+'\',\''+e.type+'\')">'+e.host+'</td><td>'+e.port+'</td><td>'+e.last_reason+'</td><td>'+ts2t(e.expires_at)+'</td></tr>'
-  }).join('');
+  var tbody=document.getElementById('bl-body');
+  if(tbody){
+    tbody.innerHTML=pageItems.map(function(e){
+      if(!e)return '';
+      var host=e.host||'';
+      var typ=e.type||'';
+      var k=blKey(e);
+      var checked=blSelected[k]?'checked':'';
+      if(blSelected[k])anyOnPage=true;
+      var hostEsc=escHtml(host);
+      var reasonEsc=escHtml(e.last_reason||'');
+      var safeHostAttr=escAttr(host);
+      var safeTypeAttr=escAttr(typ);
+      return '<tr><td class="td-chk"><input class="cb-row" type="checkbox" '+checked+' data-host="'+safeHostAttr+'" data-type="'+safeTypeAttr+'" onchange="blToggleRowEl(this)"></td><td><span class="tag '+(typ==='ip'?'green':'yellow')+'">'+escHtml(typ)+'</span></td><td class="clickable" style="word-break:break-all" data-host="'+safeHostAttr+'" data-type="'+safeTypeAttr+'" onclick="blOpenACLEl(this)">'+hostEsc+'</td><td>'+(e.port||0)+'</td><td>'+reasonEsc+'</td><td>'+ts2t(e.expires_at)+'</td></tr>';
+    }).join('');
+  }
   document.getElementById('bl-pagination').style.display='flex';
   document.getElementById('bl-prev').disabled=blPage<=1;
   document.getElementById('bl-next').disabled=blPage>=totalPages;
@@ -3587,6 +3671,12 @@ function rbl(f){
   var cbAll=document.getElementById('bl-cb-all');
   if(cbAll)cbAll.checked=anyOnPage&&pageItems.every(function(e){return blSelected[blKey(e)]});
   blUpdateBatchBar();
+}
+function blToggleRowEl(el){
+  blToggleRow(el.getAttribute('data-host')||'', el.getAttribute('data-type')||'');
+}
+function blOpenACLEl(el){
+  blOpenACL(el.getAttribute('data-host')||'', el.getAttribute('data-type')||'');
 }
 function blOnSearch(){
   blSearch=document.getElementById('bl-search').value;
@@ -3628,13 +3718,17 @@ function blExport(){
   setTimeout(function(){URL.revokeObjectURL(url);a.remove()},1000);
 }
 function blGoToPage(d){
-  blPage=Math.max(1,blPage+d);
+  var totalPages=Math.max(1,Math.ceil(blGetFiltered().length/blPageSize));
+  var cur=parseInt(blPage,10)||1;
+  blPage=Math.min(totalPages,Math.max(1,cur+d));
   rbl(blFilter);
+  var el=document.getElementById('bl-table');if(el)el.scrollTop=0;
 }
 function blGoPage(v){
   var totalPages=Math.max(1,Math.ceil(blGetFiltered().length/blPageSize));
-  blPage=Math.min(totalPages,Math.max(1,parseInt(v)||1));
+  blPage=Math.min(totalPages,Math.max(1,parseInt(v,10)||1));
   rbl(blFilter);
+  var el=document.getElementById('bl-table');if(el)el.scrollTop=0;
 }
 function blToggleAll(checked){
   var allFl=blGetFiltered();
@@ -3668,8 +3762,10 @@ function blBatchACL(){
   var valid={};blD.forEach(function(e){valid[blKey(e)]=true});
   var stale=[];var entries=[];
   Object.keys(blSelected).forEach(function(k){
-    if(valid[k]){var parts=k.split(':');entries.push({value:parts.slice(0,-1).join(':'),type:parts[parts.length-1],source:'blacklist'})}
-    else stale.push(k);
+    if(valid[k]){
+      var p=blParseKey(k);
+      entries.push({value:p.host,type:p.type,source:'blacklist'});
+    } else stale.push(k);
   });
   stale.forEach(function(k){delete blSelected[k]});
   if(!entries.length){alert('No valid entries selected (may have expired)');blUpdateBatchBar();rbl(blFilter);return}
@@ -3683,6 +3779,7 @@ function toggleBLFilter(){
 }
 function setBLFilter(v){
   blFilter=v;
+  blPage=1;
   closeAllFilterDropdowns();
   rbl(v);
 }
@@ -3695,7 +3792,13 @@ async function blDeleteSelected(){
   if(!keys.length)return;
   confirmDelete(tf('Delete {0} selected blacklist entr{1}?',[keys.length,keys.length>1?'ies':'y']),function(){
     var todo=keys.slice();
-    (function next(){var k=todo.shift();if(!k){loadBlacklist();return}delete blSelected[k];var p=k.split('||');fetch('/blacklist?host='+encodeURIComponent(p[0])+'&type='+p[1],{method:'DELETE'}).then(next).catch(next)})();
+    (function next(){
+      var k=todo.shift();
+      if(!k){loadBlacklist();return}
+      delete blSelected[k];
+      var p=blParseKey(k);
+      fetch('/blacklist?host='+encodeURIComponent(p.host)+'&type='+encodeURIComponent(p.type),{method:'DELETE'}).then(next).catch(next);
+    })();
   });
 }
 var trafficAuto=true;
@@ -3746,9 +3849,9 @@ function renderCache(){
     var checked=cacheSelected[k]?'checked':'';
     var ans=e.answers&&e.answers.length?e.answers.join('<br>'):'-';
     // A/AAAA rows carry editable IP answers; clicking pins a persistent static record.
-    var editable=(e.qtype===1||e.qtype===28);
+    var editable=(e.qtype===1||e.qtype===28)&&e.answers&&e.answers.length>0;
     var ansCell=editable
-      ?'<td class="clickable" title="Click to pin as static record" style="font-family:var(--mono);font-size:.8rem;word-break:break-all" onclick="openCachePinDialog(\''+e.qname.replace(/'/g,"\\'")+'\','+e.qtype+',\''+e.answers.join('\\n').replace(/'/g,"\\'")+'\')">'+ans+'</td>'
+      ?'<td class="clickable" title="Click to pin as static record" style="font-family:var(--mono);font-size:.8rem;word-break:break-all" onclick="openCachePinDialog(\''+e.qname.replace(/'/g,"\\'")+'\','+e.qtype+',\''+(e.answers||[]).join('\\n').replace(/'/g,"\\'")+'\')">'+ans+'</td>'
       :'<td style="font-family:var(--mono);font-size:.8rem;word-break:break-all">'+ans+'</td>';
     return '<tr><td class="td-chk"><input class="cb-row" type="checkbox" '+checked+' onchange="cacheToggleRow(\''+e.qname.replace(/'/g,"\\'")+'\','+e.qtype+')"></td><td class="clickable" style="word-break:break-all" onclick="cacheOpenACL(\''+e.qname.replace(/'/g,"\\'")+'\')">'+e.qname+'</td><td>'+(cacheTypes[e.qtype]||e.qtype)+'</td>'+ansCell+'<td>'+ts2t(e.expires)+'</td></tr>'
   }).join('');
@@ -4028,13 +4131,17 @@ function cacheOnSearch(){
   renderCache();
 }
 function cacheGoToPage(d){
-  cachePage=Math.max(1,cachePage+d);
+  var totalPages=Math.max(1,Math.ceil(cacheGetFiltered().length/cachePageSize));
+  var cur=parseInt(cachePage,10)||1;
+  cachePage=Math.min(totalPages,Math.max(1,cur+d));
   renderCache();
+  var el=document.getElementById('cache-list');if(el)el.scrollTop=0;
 }
 function cacheGoPage(v){
   var totalPages=Math.max(1,Math.ceil(cacheGetFiltered().length/cachePageSize));
-  cachePage=Math.min(totalPages,Math.max(1,parseInt(v)||1));
+  cachePage=Math.min(totalPages,Math.max(1,parseInt(v,10)||1));
   renderCache();
+  var el=document.getElementById('cache-list');if(el)el.scrollTop=0;
 }
 var aclDialogEntries=[];
 var aclUpstreamsLoaded=false;
@@ -4804,7 +4911,7 @@ document.querySelectorAll('.nav-item:not(.section)').forEach(function(item){
     item.classList.add('active');
     var vi=document.getElementById('view-'+item.dataset.view);
     if(vi)vi.classList.add('active');
-    var ld={dashboard:loadDashboard,traffic:loadTraffic,health:loadHealth,blacklist:loadBlacklist,cache:loadDNS,logs:loadLogs,config:loadConfig};
+    var ld={dashboard:loadDashboard,traffic:loadTraffic,health:loadHealth,devices:loadDevices,blacklist:loadBlacklist,cache:loadDNS,logs:loadLogs,config:loadConfig};
     if(ld[item.dataset.view])ld[item.dataset.view]();
   });
 });
@@ -4973,7 +5080,7 @@ function showProtoModal() {
     if (actBtn) {
       actBtn.textContent = isZh ? '下载根证书 (admin.crt)' : 'Download admin.crt';
       actBtn.onclick = function() {
-        window.location.href = '/admin.crt';
+        downloadAdminCert();
       };
     }
   }
@@ -4986,6 +5093,87 @@ function showProtoModal() {
 function closeProtoModal() {
   var overlay = document.getElementById('proto-overlay');
   if (overlay) overlay.classList.remove('show');
+}
+
+var _cachedCertPEM = '';
+async function fetchAdminCertPEM() {
+  if (_cachedCertPEM) return _cachedCertPEM;
+  var r = await fetch('/admin.crt');
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  _cachedCertPEM = await r.text();
+  return _cachedCertPEM;
+}
+
+async function downloadAdminCert(ev) {
+  if (ev && ev.preventDefault) ev.preventDefault();
+  try {
+    var pem = await fetchAdminCertPEM();
+    var blob = new Blob([pem], { type: 'application/x-x509-ca-cert' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'admin.crt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function() { URL.revokeObjectURL(url); }, 5000);
+    showCopyToast(document.getElementById('copy-toast'), t('Certificate downloaded'));
+  } catch (err) {
+    var fallbackUrl = 'http://' + location.hostname + ':' + (location.port || '9090') + '/admin.crt';
+    var a2 = document.createElement('a');
+    a2.href = fallbackUrl;
+    a2.download = 'admin.crt';
+    document.body.appendChild(a2);
+    a2.click();
+    document.body.removeChild(a2);
+  }
+}
+
+async function copyAdminCert(ev) {
+  if (ev && ev.preventDefault) ev.preventDefault();
+  try {
+    var pem = await fetchAdminCertPEM();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(pem);
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = pem;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    showCopyToast(document.getElementById('copy-toast'), t('Certificate copied to clipboard'));
+  } catch (err) {
+    alert('Failed to copy: ' + err.message);
+  }
+}
+
+async function viewAdminCert(ev) {
+  if (ev && ev.preventDefault) ev.preventDefault();
+  try {
+    var pem = await fetchAdminCertPEM();
+    var ta = document.getElementById('cert-modal-text');
+    if (ta) ta.value = pem;
+    var overlay = document.getElementById('cert-overlay');
+    if (overlay) overlay.classList.add('show');
+  } catch (err) {
+    alert('Failed to view certificate: ' + err.message);
+  }
+}
+
+function closeCertModal() {
+  var overlay = document.getElementById('cert-overlay');
+  if (overlay) overlay.classList.remove('show');
+}
+
+function updateCertLinks() {
+  var link = document.getElementById('link-http-cert');
+  if (link) {
+    link.href = 'http://' + location.hostname + ':' + (location.port || '9090') + '/admin.crt';
+  }
 }
 
 function loadVersion(){
@@ -5001,9 +5189,309 @@ function loadVersion(){
     if(el&&d.version)el.textContent=d.version;
   }).catch(function(){});
 }
+var devicesData = null;
+var devicesAuto = true;
+var devicesSearchTerm = '';
+var expandedDeviceConns = {};
+
+function toggleDevicesAuto() {
+  devicesAuto = !devicesAuto;
+  var b = document.getElementById('devices-auto-btn');
+  if (b) {
+    b.textContent = t(devicesAuto ? 'Auto' : 'Paused');
+    b.classList.toggle('active-auto', devicesAuto);
+  }
+}
+
+async function loadDevices() {
+  try {
+    var data = await jf('/api/devices');
+    devicesData = data;
+    renderDevices();
+    st('devices-time');
+  } catch(e) {
+    console.error('loadDevices err:', e);
+  }
+}
+
+function refreshDevices() {
+  var active = document.querySelector('.nav-item.active');
+  if (active && active.dataset.view === 'devices') {
+    loadDevices();
+  }
+}
+
+function devicesOnSearch() {
+  var el = document.getElementById('devices-search');
+  devicesSearchTerm = el ? el.value.toLowerCase().trim() : '';
+  renderDevices();
+}
+
+function toggleDeviceConns(key, e) {
+  if (e) {
+    if (e.stopPropagation) e.stopPropagation();
+    if (e.preventDefault) e.preventDefault();
+  }
+  if (!key) return;
+  expandedDeviceConns[key] = !expandedDeviceConns[key];
+  renderDevices();
+}
+
+function copyDeviceIP(ip, e) {
+  if (e) {
+    if (e.stopPropagation) e.stopPropagation();
+    if (e.preventDefault) e.preventDefault();
+  }
+  if (!ip || ip === '-') return;
+  var toast = document.getElementById('copy-toast');
+  var msg = t('Copied') + ': ' + ip;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(ip).then(function() {
+      if (toast) showCopyToast(toast, msg);
+    }).catch(function() {
+      fallbackCopy(ip, toast);
+    });
+  } else {
+    fallbackCopy(ip, toast);
+  }
+}
+
+function renderDevices() {
+  if (!devicesData) return;
+  var devList = devicesData.devices || [];
+  var blockedList = devicesData.blocked_devices || [];
+
+  var activeCount = 0;
+  var totalUpBps = 0;
+  var totalDownBps = 0;
+
+  devList.forEach(function(d) {
+    activeCount++;
+    totalUpBps += (d.up_bps || 0);
+    totalDownBps += (d.down_bps || 0);
+  });
+
+  var elActive = document.getElementById('dev-active-count');
+  if (elActive) elActive.textContent = activeCount;
+  var elUp = document.getElementById('dev-total-up');
+  if (elUp) elUp.textContent = fmtNum(totalUpBps) + '/s';
+  var elDown = document.getElementById('dev-total-down');
+  if (elDown) elDown.textContent = fmtNum(totalDownBps) + '/s';
+  var elBlocked = document.getElementById('dev-blocked-count');
+  if (elBlocked) elBlocked.textContent = blockedList.length;
+
+  var container = document.getElementById('devices-list');
+  if (!container) return;
+
+  var filtered = devList.filter(function(d) {
+    if (!devicesSearchTerm) return true;
+    var host = (d.hostname || '').toLowerCase();
+    var ip = (d.ip || '').toLowerCase();
+    var mac = (d.mac || '').toLowerCase();
+    return host.indexOf(devicesSearchTerm) !== -1 || ip.indexOf(devicesSearchTerm) !== -1 || mac.indexOf(devicesSearchTerm) !== -1;
+  });
+
+  if (filtered.length === 0) {
+    container.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px 20px;color:var(--text3);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)">' + t('No connected devices detected') + '</div>';
+  } else {
+    filtered.sort(function(a, b) {
+      if (a.is_current && !b.is_current) return -1;
+      if (!a.is_current && b.is_current) return 1;
+      return (b.up_bps + b.down_bps) - (a.up_bps + a.down_bps);
+    });
+
+    var html = '';
+    filtered.forEach(function(d) {
+      var isCur = !!d.is_current;
+      var name = d.hostname || (isCur ? t('Current Device') : (d.ip || t('Device')));
+      var mac = d.mac || '-';
+      if (mac && mac !== '-') mac = mac.toUpperCase();
+      var ip = d.ip || '-';
+      var devKey = d.mac || d.ip || '';
+      var isExpanded = !!expandedDeviceConns[devKey];
+      var upRate = fmtNum(d.up_bps || 0) + '/s';
+      var downRate = fmtNum(d.down_bps || 0) + '/s';
+      var upTotal = fmtNum(d.up_bytes || 0);
+      var downTotal = fmtNum(d.down_bytes || 0);
+      var conns = d.active_conns || 0;
+
+      var badge = '';
+      if (isCur) {
+        badge = '<span class="tag green" style="font-weight:600">' + t('Current Device (Protected)') + '</span>';
+      } else if (d.is_blocked) {
+        badge = '<span class="tag red">' + t('Blocked') + '</span>';
+      } else {
+        badge = '<span class="tag green">' + t('Live') + '</span>';
+      }
+
+      var actions = '';
+      if (isCur) {
+        actions = '<div style="font-size:.78rem;color:var(--text3);font-style:italic">' + t('Current Device (Protected)') + '</div>';
+      } else {
+        actions = '<button class="btn btn-sm" onclick="disconnectDevice(\'' + escAttr(ip) + '\')">' + t('Disconnect') + '</button>' +
+                  '<button class="btn btn-sm danger" onclick="blockDevice(\'' + escAttr(ip) + '\',\'' + escAttr(mac) + '\',\'' + escAttr(d.hostname || '') + '\')">' + t('Block') + '</button>';
+      }
+
+      var ipHtml = (ip && ip !== '-') ?
+        ('<span class="dev-ip-copy" onclick="copyDeviceIP(\'' + escAttr(ip) + '\', event)" title="' + escAttr(t('Click to copy')) + '" style="font-family:var(--mono);font-weight:600;color:var(--accent)">' + escHtml(ip) + '</span>') :
+        ('<span style="font-family:var(--mono);font-weight:600;color:var(--accent)">-</span>');
+
+      var macHtml = (mac && mac !== '-') ?
+        ('<span class="dev-ip-copy" onclick="copyDeviceIP(\'' + escAttr(mac) + '\', event)" title="' + escAttr(t('Click to copy')) + '" style="font-family:var(--mono)">' + escHtml(mac) + '</span>') :
+        ('<span style="font-family:var(--mono)">-</span>');
+
+      var extraIpsHtml = '';
+      if (d.extra_ips && d.extra_ips.length > 0) {
+        var eipSpans = d.extra_ips.map(function(eip) {
+          return '<span class="dev-ip-copy" onclick="copyDeviceIP(\'' + escAttr(eip) + '\', event)" title="' + escAttr(t('Click to copy')) + '" style="font-family:var(--mono);font-size:.76rem;font-weight:600;word-break:break-all;color:var(--accent);margin-right:6px">' + escHtml(eip) + '</span>';
+        }).join('');
+        extraIpsHtml = '<span style="color:var(--text3)">' + t('IPv6 / Extra IPs') + ':</span><div style="display:flex;flex-wrap:wrap;gap:4px">' + eipSpans + '</div>';
+      }
+
+      var connsBoxHtml = '';
+      if (isExpanded) {
+        var connList = d.conns || [];
+        var connsRows = '';
+        if (connList.length === 0) {
+          connsRows = '<div style="font-size:.75rem;color:var(--text3);text-align:center;padding:8px 0">' + t('No active connections') + '</div>';
+        } else {
+          connsRows = connList.map(function(c) {
+            var protoName = (c.proto === 17) ? 'UDP' : 'TCP';
+            var protoClass = (c.proto === 17) ? 'udp' : 'tcp';
+            var dest = (c.host || '-') + (c.port ? (':' + c.port) : '');
+            var cTraffic = '↑ ' + fmtNum(c.up || 0) + ' · ↓ ' + fmtNum(c.down || 0);
+            return '<div class="dev-conn-row">' +
+              '<span class="dev-proto-badge ' + protoClass + '">' + protoName + '</span>' +
+              '<span class="dev-conn-dest" title="' + escAttr(dest) + '">' + escHtml(dest) + '</span>' +
+              '<span class="dev-conn-traffic" style="color:var(--text2)">' + cTraffic + '</span>' +
+            '</div>';
+          }).join('');
+        }
+        connsBoxHtml = '<div class="dev-conns-box">' +
+          '<div class="dev-conns-header">' +
+            '<span>' + t('Active Visiting Connections') + ' (' + connList.length + ')</span>' +
+          '</div>' +
+          connsRows +
+        '</div>';
+      }
+
+      var toggleConnsBtn = '<button class="btn btn-sm" onclick="toggleDeviceConns(\'' + escAttr(devKey) + '\', event)" style="padding:1px 6px;font-size:.72rem;line-height:1.3;display:inline-flex;align-items:center;gap:3px" title="' + escAttr(isExpanded ? t('Hide active connections') : t('Show active connections')) + '">' +
+        '<span>' + (isExpanded ? '▲ ' + t('Hide active connections') : '▼ ' + t('Show active connections')) + '</span>' +
+      '</button>';
+
+      html += '<div class="proxy-card' + (isCur ? ' is-up' : '') + '">' +
+        '<div class="top">' +
+          '<div class="node-info">' +
+            '<div class="alias-row">' +
+              '<span class="alias">' + escHtml(name) + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<div>' + badge + '</div>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:.82rem;margin-top:2px">' +
+          '<span style="color:var(--text3)">' + t('IP Address') + ':</span>' + ipHtml +
+          extraIpsHtml +
+          '<span style="color:var(--text3)">' + t('MAC Address') + ':</span>' + macHtml +
+          '<span style="color:var(--text3)">' + t('Up Speed') + ':</span><span style="font-family:var(--mono);color:var(--green)">↑ ' + upRate + '</span>' +
+          '<span style="color:var(--text3)">' + t('Down Speed') + ':</span><span style="font-family:var(--mono);color:var(--green)">↓ ' + downRate + '</span>' +
+          '<span style="color:var(--text3)">' + t('Total Traffic') + ':</span><span style="font-family:var(--mono);color:var(--text2)">↑ ' + upTotal + ' / ↓ ' + downTotal + '</span>' +
+          '<span style="color:var(--text3)">' + t('Active Connections') + ':</span>' +
+          '<div style="display:flex;align-items:center;gap:8px">' +
+            '<span>' + conns + '</span>' +
+            toggleConnsBtn +
+          '</div>' +
+        '</div>' +
+        connsBoxHtml +
+        '<div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:8px;border-top:1px solid var(--border);padding-top:10px">' +
+          actions +
+        '</div>' +
+      '</div>';
+    });
+    container.innerHTML = html;
+  }
+
+  var blockedSec = document.getElementById('blocked-devices-section');
+  var blockedBody = document.getElementById('blocked-devices-body');
+  if (blockedSec && blockedBody) {
+    if (blockedList.length > 0) {
+      blockedSec.style.display = 'block';
+      var bHtml = '';
+      blockedList.forEach(function(b) {
+        var bMac = (b.mac || '-');
+        if (bMac && bMac !== '-') bMac = bMac.toUpperCase();
+        var bMacHtml = (bMac && bMac !== '-') ?
+          ('<span class="dev-ip-copy" onclick="copyDeviceIP(\'' + escAttr(bMac) + '\', event)" title="' + escAttr(t('Click to copy')) + '">' + escHtml(bMac) + '</span>') :
+          '-';
+        var bIpHtml = (b.ip && b.ip !== '-') ?
+          ('<span class="dev-ip-copy" onclick="copyDeviceIP(\'' + escAttr(b.ip) + '\', event)" title="' + escAttr(t('Click to copy')) + '" style="font-family:var(--mono);color:var(--accent)">' + escHtml(b.ip) + '</span>') :
+          '-';
+        bHtml += '<tr>' +
+          '<td>' + escHtml(b.hostname || '-') + '</td>' +
+          '<td style="font-family:var(--mono)">' + bIpHtml + '</td>' +
+          '<td style="font-family:var(--mono)">' + bMacHtml + '</td>' +
+          '<td><button class="btn btn-sm" onclick="unblockDevice(\'' + escAttr(b.ip || '') + '\',\'' + escAttr(b.mac || '') + '\')">' + t('Unblock') + '</button></td>' +
+        '</tr>';
+      });
+      blockedBody.innerHTML = bHtml;
+    } else {
+      blockedSec.style.display = 'none';
+      blockedBody.innerHTML = '';
+    }
+  }
+}
+
+async function disconnectDevice(ip) {
+  if (!ip) return;
+  if (!confirm(t('Are you sure you want to disconnect this device?'))) return;
+  try {
+    var res = await fetch('/api/devices/disconnect?ip=' + encodeURIComponent(ip), { method: 'POST' });
+    if (!res.ok) {
+      var txt = await res.text();
+      alert(t('Error') + ': ' + txt);
+      return;
+    }
+    loadDevices();
+  } catch(e) {
+    alert(t('Error') + ': ' + e.message);
+  }
+}
+
+async function blockDevice(ip, mac, hostname) {
+  if (!ip && !mac) return;
+  if (!confirm(t('Are you sure you want to block this device?'))) return;
+  try {
+    var url = '/api/devices/block?ip=' + encodeURIComponent(ip || '') + '&mac=' + encodeURIComponent(mac || '') + '&hostname=' + encodeURIComponent(hostname || '');
+    var res = await fetch(url, { method: 'POST' });
+    if (!res.ok) {
+      var txt = await res.text();
+      alert(t('Error') + ': ' + txt);
+      return;
+    }
+    loadDevices();
+  } catch(e) {
+    alert(t('Error') + ': ' + e.message);
+  }
+}
+
+async function unblockDevice(ip, mac) {
+  try {
+    var url = '/api/devices/unblock?ip=' + encodeURIComponent(ip || '') + '&mac=' + encodeURIComponent(mac || '');
+    var res = await fetch(url, { method: 'POST' });
+    if (!res.ok) {
+      var txt = await res.text();
+      alert(t('Error') + ': ' + txt);
+      return;
+    }
+    loadDevices();
+  } catch(e) {
+    alert(t('Error') + ': ' + e.message);
+  }
+}
+
 loadDashboard();
 loadVersion();
 updateProtoBadges();
+updateCertLinks();
 setTimeout(updateProtoBadges, 600);
 function setDot(ok){
   document.querySelectorAll('.view-meta .dot').forEach(function(d){d.style.background=ok?'var(--green)':'var(--red)'});
@@ -5023,6 +5511,7 @@ es.onmessage=function(e){
     if(v==='dashboard'){ldash(d);st('dash-time')}
     else if(v==='traffic'&&trafficAuto){ltraf(d);st('traffic-time')}
     else if(v==='health'){lhealth(d);st('health-time')}
+    else if(v==='devices'&&devicesAuto){refreshDevices();st('devices-time')}
     else if(v==='blacklist'&&blAuto)refreshBlacklist();
     else if(v==='cache'&&cacheAuto){if(dnsTab==='static')loadStatic();else refreshCache()}
     else if(v==='logs'&&logsAuto)refreshLogs();
@@ -5205,6 +5694,12 @@ es.onmessage=function(e){
       </label>
       <div class="dialog-desc" style="margin-top:4px">Carries this node's UDP datagrams framed over its TCP connection, so the node needs no UDP listener. Because the carrier is plaintext (GFW-fingerprintable), this node's TCP defaults to manually disabled; enable its TCP circuit on the node card to proxy TCP too. Only meaningful for SOCKS5/SOCKS5H servers running hev-socks5-server.</div>
     </div>
+    <div id="proxy-enable-row" style="margin-top:10px">
+      <label class="dialog-label" style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="proxy-enable" checked>
+        <span>Enable this proxy node</span>
+      </label>
+    </div>
     <div class="dialog-desc" id="proxy-preview" style="display:none;font-family:var(--mono);font-size:.8rem"></div>
     <div class="dialog-actions">
       <button class="btn btn-sm" onclick="closeProxyDialog()">Cancel</button>
@@ -5366,6 +5861,18 @@ es.onmessage=function(e){
     <div class="dialog-actions" style="margin-top:16px">
       <button class="btn btn-sm" onclick="closeProtoModal()">Close</button>
       <button class="btn btn-sm primary" id="proto-modal-action-btn" onclick="closeProtoModal()">Done</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="cert-overlay" onclick="if(event.target===this)closeCertModal()">
+  <div class="dialog" style="max-width:620px" onclick="event.stopPropagation()">
+    <div class="dialog-title" id="cert-modal-title">Root CA Certificate (admin.crt)</div>
+    <div style="font-size:0.8rem;color:var(--text2);margin-bottom:8px">Built-in root CA &amp; CA-signed leaf</div>
+    <textarea id="cert-modal-text" readonly style="width:100%;height:220px;font-family:var(--mono);font-size:0.75rem;padding:8px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;resize:vertical"></textarea>
+    <div class="dialog-actions" style="margin-top:16px">
+      <button class="btn btn-sm" onclick="closeCertModal()">Close</button>
+      <button class="btn btn-sm" onclick="copyAdminCert(event)">Copy PEM</button>
+      <button class="btn btn-sm primary" onclick="downloadAdminCert(event)">Download File</button>
     </div>
   </div>
 </div>

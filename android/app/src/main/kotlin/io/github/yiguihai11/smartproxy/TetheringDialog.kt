@@ -224,6 +224,13 @@ fun TetheringDialog(
     var connectedDevices by remember { mutableStateOf<List<TetheredDeviceDetail>>(emptyList()) }
     var selectedDeviceDetail by remember { mutableStateOf<TetheredDeviceDetail?>(null) }
 
+    DisposableEffect(Unit) {
+        ConnStatsGate.acquire()
+        onDispose {
+            ConnStatsGate.release()
+        }
+    }
+
     LaunchedEffect(tetheringService, state.hotspotEnabled, state.usbEnabled, state.routingActive) {
         val service = tetheringService ?: run {
             connectedDevices = emptyList()
@@ -246,7 +253,7 @@ fun TetheringDialog(
                     if (refreshed != null) selectedDeviceDetail = refreshed
                 }
             }
-            delay(2000L)
+            delay(1000L)
         }
     }
 
@@ -602,6 +609,7 @@ fun TetheringDialog(
                             return@withContext routingResult
                         }
                         routingStartedHere = true
+                        delay(500L)
                     }
 
                     val hotspotResult = service.setWifiHotspotEnabled(enable)
@@ -976,8 +984,14 @@ fun TetheringDialog(
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis
                                             )
+                                            val speedText = "↑ ${formatSpeed(dev.upBps)} · ↓ ${formatSpeed(dev.downBps)}"
+                                            val subText = listOf(
+                                                dev.ip.ifBlank { null },
+                                                if (dev.mac.isNotBlank()) "MAC: ${dev.mac}" else null,
+                                                speedText
+                                            ).filterNotNull().joinToString(" · ")
                                             Text(
-                                                text = listOf(dev.ip, dev.osGuess).filter { it.isNotBlank() }.joinToString(" · "),
+                                                text = subText,
                                                 fontSize = 11.sp,
                                                 color = greyText,
                                                 maxLines = 1,
@@ -1213,4 +1227,10 @@ private fun TetheringSectionCard(
             }
         }
     }
+}
+
+private fun formatSpeed(bps: Long): String = when {
+    bps >= 1048576 -> "%.1f MB/s".format(bps / 1048576.0)
+    bps >= 1024 -> "%.1f KB/s".format(bps / 1024.0)
+    else -> "$bps B/s"
 }

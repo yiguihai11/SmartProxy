@@ -11,4 +11,5 @@ interface ICoreTetheringLease {
     String assetFingerprint();
     String[] listAssetFiles();
     ParcelFileDescriptor openAssetFile(String name);
+    boolean updateAssetFile(String name, in ParcelFileDescriptor pfd);
 }

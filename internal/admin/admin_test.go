@@ -863,6 +863,48 @@ func TestAdmin_TCPOnlyNoSocket(t *testing.T) {
 	}
 }
 
+func TestAdmin_SetTCPHost_SpecificHost(t *testing.T) {
+	ct := chnroute.New()
+	mgr := newTestManager(t)
+	dh := dns.NewHandler(1000, 300, "1.1.1.1:53", "[2606:4700:4700::1111]:53",
+		ct, mgr, 3, "0.0.0.0", "::", false, "", nil, true)
+	rt := route.New(ct, mgr, false, 3*time.Second, []int{80, 443}, 300*time.Second)
+	s := New("", rt, mgr, dh, ct)
+	s.SetTCPHost("127.0.0.1")
+	s.SetTCPPort(19997)
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	t.Cleanup(s.Stop)
+
+	conn, err := net.DialTimeout("tcp", "127.0.0.1:19997", 1*time.Second)
+	if err != nil {
+		t.Fatalf("Dial 127.0.0.1:19997 failed: %v", err)
+	}
+	conn.Close()
+}
+
+func TestAdmin_SetTCPHost_MultiHosts(t *testing.T) {
+	ct := chnroute.New()
+	mgr := newTestManager(t)
+	dh := dns.NewHandler(1000, 300, "1.1.1.1:53", "[2606:4700:4700::1111]:53",
+		ct, mgr, 3, "0.0.0.0", "::", false, "", nil, true)
+	rt := route.New(ct, mgr, false, 3*time.Second, []int{80, 443}, 300*time.Second)
+	s := New("", rt, mgr, dh, ct)
+	s.SetTCPHost("127.0.0.1, ::1")
+	s.SetTCPPort(19996)
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	t.Cleanup(s.Stop)
+
+	conn, err := net.DialTimeout("tcp", "127.0.0.1:19996", 1*time.Second)
+	if err != nil {
+		t.Fatalf("Dial 127.0.0.1:19996 failed: %v", err)
+	}
+	conn.Close()
+}
+
 func TestAdmin_TCPPortDisabledByDefault(t *testing.T) {
 	s := newTestServer(t)
 	startServer(t, s)
@@ -1245,11 +1287,23 @@ func TestAdminCertDownload(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	if ct := rec.Header().Get("Content-Type"); ct != "application/x-pem-file" {
-		t.Errorf("Content-Type = %q, want application/x-pem-file", ct)
+	if ct := rec.Header().Get("Content-Type"); ct != "application/x-x509-ca-cert" {
+		t.Errorf("Content-Type = %q, want application/x-x509-ca-cert", ct)
 	}
 	if cd := rec.Header().Get("Content-Disposition"); !strings.Contains(cd, "admin.crt") {
 		t.Errorf("Content-Disposition = %q, want attachment filename admin.crt", cd)
+	}
+	// Verify HEAD request succeeds with empty body and proper headers.
+	recHead := httptest.NewRecorder()
+	s.handleAdminCert(recHead, httptest.NewRequest(http.MethodHead, "/admin.crt", nil))
+	if recHead.Code != http.StatusOK {
+		t.Fatalf("HEAD status = %d, want 200", recHead.Code)
+	}
+	if recHead.Body.Len() != 0 {
+		t.Errorf("HEAD body len = %d, want 0", recHead.Body.Len())
+	}
+	if ct := recHead.Header().Get("Content-Type"); ct != "application/x-x509-ca-cert" {
+		t.Errorf("HEAD Content-Type = %q, want application/x-x509-ca-cert", ct)
 	}
 	body := rec.Body.Bytes()
 	if !bytes.Contains(body, []byte("BEGIN CERTIFICATE")) {
@@ -1965,6 +2019,43 @@ func TestAdmin_APIPcol(t *testing.T) {
 	s.handleAPIIPConline(rec, req)
 	if rec.Code != http.StatusOK && rec.Code != http.StatusBadGateway && rec.Code != http.StatusInternalServerError {
 		t.Errorf("unexpected status code: %d", rec.Code)
+	}
+}
+
+func TestTLSDispatch_PlaintextAssetsAndHostPreservation(t *testing.T) {
+	s := &Server{
+		tcpPort:      9090,
+		tlsExtraSANs: []string{"smartproxy.lan", "192.168.43.1"},
+	}
+	s.certPEM = []byte("TEST_CERT_PEM")
+	called := false
+	dummyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+	dispatch := s.tlsDispatch(dummyHandler)
+
+	// 1. Plaintext GET /admin.crt should pass through directly to handler without redirect
+	called = false
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin.crt", nil)
+	dispatch.ServeHTTP(rec, req)
+	if !called || rec.Code != http.StatusOK {
+		t.Errorf("expected /admin.crt to pass through over plaintext, called=%v, code=%d", called, rec.Code)
+	}
+
+	// 2. Plaintext GET /dashboard with Host smartproxy.lan:9090 should redirect to https://smartproxy.lan:9090/dashboard
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	req.Host = "smartproxy.lan:9090"
+	dispatch.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMovedPermanently {
+		t.Fatalf("expected 301, got %d", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if loc != "https://smartproxy.lan:9090/dashboard" {
+		t.Errorf("expected redirect to https://smartproxy.lan:9090/dashboard, got %q", loc)
 	}
 }
 

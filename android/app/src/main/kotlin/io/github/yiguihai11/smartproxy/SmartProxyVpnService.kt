@@ -1,17 +1,25 @@
 package io.github.yiguihai11.smartproxy
 
+import android.content.ComponentName
 import android.content.Intent
+import android.content.ServiceConnection
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Handler
+import android.os.IBinder
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.widget.Toast
 import androidx.core.app.ServiceCompat
+import io.github.yiguihai11.smartproxy.shizuku.IShizukuTetheringService
+import io.github.yiguihai11.smartproxy.shizuku.ShizukuTetheringService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import org.json.JSONArray
+import rikka.shizuku.Shizuku
 import java.util.concurrent.Executors
 
 private val Log = AppLog
@@ -170,6 +178,69 @@ class SmartProxyVpnService : VpnService() {
     private var currentUnderlyingNetwork: Network? = null
     private var hasInitialNetwork = false
     private var hadNetworkLost = false
+
+    private var tetheringService: IShizukuTetheringService? = null
+    private val tetheringConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+            tetheringService = IShizukuTetheringService.Stub.asInterface(binder)
+            Log.i(TAG, "Connected to ShizukuTetheringService via AIDL")
+        }
+        override fun onServiceDisconnected(name: ComponentName) {
+            tetheringService = null
+            Log.i(TAG, "Disconnected from ShizukuTetheringService")
+        }
+    }
+
+    private fun bindTetheringServiceIfNeeded() {
+        if (tetheringService != null) return
+        if (Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
+            runCatching {
+                Shizuku.bindUserService(ShizukuTetheringService.createUserServiceArgs(), tetheringConnection)
+            }.onFailure { Log.w(TAG, "Failed to bind ShizukuTetheringService", it) }
+        }
+    }
+
+    private fun unbindTetheringService() {
+        if (tetheringService != null) {
+            runCatching {
+                Shizuku.unbindUserService(ShizukuTetheringService.createUserServiceArgs(), tetheringConnection, false)
+            }
+            tetheringService = null
+        }
+    }
+
+    private val tetheringBridge = object : smartproxy.mobile.TetheringBridge {
+        override fun getTetheredClients(): String {
+            bindTetheringServiceIfNeeded()
+            val svc = tetheringService ?: return ""
+            val statsJson = runCatching { svc.tetheringConnectionStats }.getOrNull()
+            if (!statsJson.isNullOrBlank() && statsJson != "{\"apps\":[]}") {
+                val json = TetheringDeviceParser.parseToJson(statsJson)
+                if (json != "[]") return json
+            }
+            return runCatching { svc.tetheredClients }.getOrNull().orEmpty()
+        }
+        override fun blockClient(mac: String): Boolean {
+            bindTetheringServiceIfNeeded()
+            val svc = tetheringService ?: return false
+            return runCatching { svc.blockClient(mac) }.getOrDefault(false)
+        }
+        override fun unblockClient(mac: String): Boolean {
+            bindTetheringServiceIfNeeded()
+            val svc = tetheringService ?: return false
+            return runCatching { svc.unblockClient(mac) }.getOrDefault(false)
+        }
+        override fun getBlockedClients(): String {
+            bindTetheringServiceIfNeeded()
+            val svc = tetheringService ?: return "[]"
+            return runCatching {
+                val list = svc.blockedClientList
+                val arr = JSONArray()
+                for (m in list) arr.put(m)
+                arr.toString()
+            }.getOrDefault("[]")
+        }
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
@@ -506,6 +577,8 @@ class SmartProxyVpnService : VpnService() {
                 // 连接所属 UID,命中 tun.blocked_uids 即丢弃。传 applicationContext 防 Service 泄漏。
                 // 必须在 startRouter 前注册,引擎启动时注入 TUN handler。
                 smartproxy.mobile.Mobile.setUIDResolver(UIDResolver(applicationContext))
+                bindTetheringServiceIfNeeded()
+                smartproxy.mobile.Mobile.setTetheringBridge(tetheringBridge)
                 smartproxy.mobile.Mobile.startRouter(configPath, goFd.toLong(), true)
                 Log.i(TAG, "[establishVpn] Mobile.startRouter() returned successfully in ${System.currentTimeMillis() - t0} ms. (goFd=$goFd, kotlinPfd=${pfd.fd}, tunFds=${tunFdCount()})")
                 tunPfd = pfd
@@ -543,6 +616,8 @@ class SmartProxyVpnService : VpnService() {
             val configPath = ConfigProvider.configPath(this)
             Log.i(TAG, "[startSocksOnly] Step 2: Calling Go Mobile.startRouter(configPath, fd=0, tunEnabled=false)...")
             val t0 = System.currentTimeMillis()
+            bindTetheringServiceIfNeeded()
+            smartproxy.mobile.Mobile.setTetheringBridge(tetheringBridge)
             smartproxy.mobile.Mobile.startRouter(configPath, 0L, false)
             Log.i(TAG, "[startSocksOnly] Mobile.startRouter() returned successfully in ${System.currentTimeMillis() - t0} ms.")
             true
@@ -775,6 +850,12 @@ class SmartProxyVpnService : VpnService() {
             } catch (t: Throwable) {
                 Log.w(TAG, "[shutdown] setUIDResolver(null) failed: ${t.message}")
             }
+            try {
+                smartproxy.mobile.Mobile.setTetheringBridge(null)
+            } catch (t: Throwable) {
+                Log.w(TAG, "[shutdown] setTetheringBridge(null) failed: ${t.message}")
+            }
+            unbindTetheringService()
         } else {
             Log.i(TAG, "[shutdown] Step 1/6: startedEngine is false, skipping Mobile.stopRouter().")
         }
@@ -892,6 +973,7 @@ class SmartProxyVpnService : VpnService() {
         // 不会拖住进程退出。
         enqueueEngineWork("onDestroy") { shutdown() }
         engineExecutor.shutdown()
+        unbindTetheringService()
         super.onDestroy()
         Log.i(TAG, "[onDestroy] Service onDestroy() completed.")
     }

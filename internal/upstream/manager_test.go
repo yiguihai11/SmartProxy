@@ -1935,3 +1935,69 @@ func TestManager_IPv6Selection(t *testing.T) {
 		t.Fatalf("expected ssNode TCP health failures == 0, got %d", ssNode.health.consecutiveFailures)
 	}
 }
+
+func TestManager_DisabledProxyOnStartupAndReload(t *testing.T) {
+	disabledFalse := false
+	enabledTrue := true
+
+	m, err := NewManager(UpstreamConfig{
+		Default: "failover",
+		Proxies: []ProxyEntry{
+			{Alias: "p-disabled", URL: "socks5://127.0.0.1:1080", Enable: &disabledFalse},
+			{Alias: "p-enabled", URL: "socks5://127.0.0.1:1081", Enable: &enabledTrue},
+			{Alias: "p-flag-disabled", URL: "socks5://127.0.0.1:1082", Disabled: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	proxies := m.Proxies()
+	for _, p := range proxies {
+		switch p.Alias {
+		case "p-disabled":
+			if p.Enable {
+				t.Errorf("expected p-disabled to have Enable == false")
+			}
+			if p.Health.Available {
+				t.Errorf("expected p-disabled TCP circuit to be unavailable")
+			}
+			if p.UDPHealth.Available {
+				t.Errorf("expected p-disabled UDP circuit to be unavailable")
+			}
+		case "p-flag-disabled":
+			if p.Enable {
+				t.Errorf("expected p-flag-disabled to have Enable == false")
+			}
+		case "p-enabled":
+			if !p.Enable {
+				t.Errorf("expected p-enabled to have Enable == true")
+			}
+		}
+	}
+
+	// Hot reload: toggle p-disabled to enabled, and p-enabled to disabled
+	m.Reload(UpstreamConfig{
+		Default: "failover",
+		Proxies: []ProxyEntry{
+			{Alias: "p-disabled", URL: "socks5://127.0.0.1:1080", Enable: &enabledTrue},
+			{Alias: "p-enabled", URL: "socks5://127.0.0.1:1081", Enable: &disabledFalse},
+		},
+	})
+
+	proxies = m.Proxies()
+	for _, p := range proxies {
+		switch p.Alias {
+		case "p-disabled":
+			if !p.Enable {
+				t.Errorf("expected p-disabled to have Enable == true after reload")
+			}
+		case "p-enabled":
+			if p.Enable {
+				t.Errorf("expected p-enabled to have Enable == false after reload")
+			}
+		}
+	}
+}
+

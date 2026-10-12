@@ -379,6 +379,20 @@ func TestConnStatsPin_UnpinFades(t *testing.T) {
 	assert.Empty(t, apps, "解除 pin 后 idle 连接应淡出")
 }
 
+func TestConnStatsTethering_NoUID_IdleRemoval(t *testing.T) {
+	cs := NewConnStats()
+	cs.SetEnabled(true)
+	defer cs.SetEnabled(false)
+
+	// 热点共享连接 UID 恒为 -1(无对应本机应用 UID)。默认 pin 亦为 -1(无 pin)。
+	// 绝不能因 r.uid == pin (-1 == -1) 导致热点连接被误判为被 pin 而永久不被清扫。
+	rec := cs.begin(-1, 6, "192.0.2.2", "1.2.3.4", 443)
+	rec.lastSeen.Store(time.Now().Add(-2 * connStatsIdleRemove).Unix())
+
+	apps := parseSnapshot(t, cs.Snapshot())
+	assert.Empty(t, apps, "默认状态下热点连接(uid=-1)应正常按 idle 淡出，不得被误判为 pin=-1 保留")
+}
+
 func TestConnStatsPin_ResetOnDisable(t *testing.T) {
 	cs := NewConnStats()
 	cs.SetEnabled(true)
@@ -417,3 +431,50 @@ func TestConnStatsEviction_PinnedSurvives(t *testing.T) {
 	cs.mu.Unlock()
 	assert.True(t, found, "被 pin 的连接不应被逐出")
 }
+
+func TestConnStatsClientTraffic_MonotonicAcrossConns(t *testing.T) {
+	cs := NewConnStats()
+	cs.SetEnabled(true)
+	defer cs.SetEnabled(false)
+
+	clientIP := "192.168.43.15"
+
+	// 连接 1: 传输 500 上行, 1500 下行
+	rec1 := cs.begin(-1, 6, clientIP, "1.1.1.1", 443)
+	require.NotNil(t, rec1)
+	w1 := cs.wrapTCP(&fakeNetConn{readN: 500, writeN: 1500}, rec1)
+	buf := make([]byte, 2048)
+	_, _ = w1.Read(buf)
+	_, _ = w1.Write(buf)
+
+	// 连接 2: 传输 200 上行, 800 下行
+	rec2 := cs.begin(-1, 6, clientIP, "2.2.2.2", 80)
+	require.NotNil(t, rec2)
+	w2 := cs.wrapTCP(&fakeNetConn{readN: 200, writeN: 800}, rec2)
+	_, _ = w2.Read(buf)
+	_, _ = w2.Write(buf)
+
+	// 检查快照: client_traffic 应该有 700 上行, 2300 下行, 2 条活跃连接
+	snap := cs.Snapshot()
+	var parsed struct {
+		ClientTraffic []clientTrafficJSONRec `json:"client_traffic"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(snap), &parsed))
+	require.Len(t, parsed.ClientTraffic, 1)
+	assert.Equal(t, clientIP, parsed.ClientTraffic[0].IP)
+	assert.Equal(t, int64(700), parsed.ClientTraffic[0].Up)
+	assert.Equal(t, int64(2300), parsed.ClientTraffic[0].Down)
+	assert.Equal(t, 2, parsed.ClientTraffic[0].ActiveConns)
+
+	// 连接 1 关闭并移除
+	cs.Remove(rec1)
+
+	// 再次检查快照: client_traffic 的累计字节不得丢失, 活跃连接变为 1
+	snapAfter := cs.Snapshot()
+	require.NoError(t, json.Unmarshal([]byte(snapAfter), &parsed))
+	require.Len(t, parsed.ClientTraffic, 1)
+	assert.Equal(t, int64(700), parsed.ClientTraffic[0].Up, "连接关闭后单 IP 累计上行不得清零")
+	assert.Equal(t, int64(2300), parsed.ClientTraffic[0].Down, "连接关闭后单 IP 累计下行不得清零")
+	assert.Equal(t, 1, parsed.ClientTraffic[0].ActiveConns)
+}
+

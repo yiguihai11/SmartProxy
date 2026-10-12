@@ -288,8 +288,6 @@
     <string name="device_info_destinations">Active Destinations</string>
     <string name="device_destinations_empty">No active connections for this device</string>
     <string name="device_hostname">Device name</string>
-    <string name="device_os">Inferred OS / Type</string>
-    <string name="device_vendor">Brand / Vendor</string>
     <string name="device_mac">MAC address</string>
     <string name="device_random_mac">Randomized MAC (Privacy)</string>
     <string name="device_standard_mac">Physical MAC</string>
@@ -322,4 +320,9 @@
     <string name="device_block_failed">Failed to block device</string>
     <string name="device_unblock_success">Device unblocked</string>
     <string name="device_unblock_failed">Failed to unblock device</string>
+    <string name="net_tethering_tun_aggregate">Multiple devices · Kernel forwarding</string>
+    <string name="net_tethering_external_device">Hotspot connected device</string>
+    <string name="net_tethering_pool">Shared tethering pool</string>
+    <string name="net_tethering_device">Shared tethering device</string>
+    <string name="device_fallback_name">Hotspot device</string>
 </resources>

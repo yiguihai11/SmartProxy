@@ -3,6 +3,7 @@ package tun
 import (
 	"encoding/json"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -52,6 +53,17 @@ type connRecord struct {
 	evicted   atomic.Bool
 	evictUp   atomic.Int64
 	evictDown atomic.Int64
+
+	srcStats *srcIPStats // 指向客户端源 IP 累计统计（外接设备/热点下挂设备按真实源 IP 单独记账）
+}
+
+// srcIPStats 记录特定客户端源 IP（局域网/热点外接设备）的累计流量与当前活跃连接数。
+// 不随单条连接超时而清空，跨连接保持单调递增，供控制面板精准获取累计流量与实时速率。
+type srcIPStats struct {
+	ip          string
+	up          atomic.Int64
+	down        atomic.Int64
+	activeConns atomic.Int32
 }
 
 // uidStats 汇总某 app(uid)的累计流量 + 它当前存活/未淘汰的连接。
@@ -73,15 +85,19 @@ type ConnStats struct {
 	// 解除 pin 后按 connStatsIdleRemove 正常淡出。页面关闭时一并复位。
 	pinUID atomic.Int32
 
-	mu    sync.Mutex
-	byUID map[int32]*uidStats
-	total int // 存活记录数(上限 connStatsMaxRecords)
+	mu      sync.Mutex
+	byUID   map[int32]*uidStats
+	bySrcIP map[string]*srcIPStats
+	total   int // 存活记录数(上限 connStatsMaxRecords)
 }
 
 // NewConnStats 返回共享实例指针:ConnStats 含 atomic.Bool/Int32(noCopy),按值返回
 // 会被 go vet 拒(copylocks),且本就要求 handler 与 liveTCP 共享同一张表。
 func NewConnStats() *ConnStats {
-	cs := &ConnStats{byUID: make(map[int32]*uidStats)}
+	cs := &ConnStats{
+		byUID:   make(map[int32]*uidStats),
+		bySrcIP: make(map[string]*srcIPStats),
+	}
 	cs.pinUID.Store(-1)
 	return cs
 }
@@ -93,8 +109,8 @@ func (cs *ConnStats) Enabled() bool { return cs.enabled.Load() }
 // 按 5s 宽限淡出。
 func (cs *ConnStats) SetPin(uid int32) { cs.pinUID.Store(uid) }
 
-// SetEnabled 开/关监控。关闭时清空全部记录 + 复位 pin:页面重新打开 = 干净重来,
-// 防过期 pin 误保留下个会话的连接。
+// SetEnabled 开/关监控。关闭时清空 UID 活跃记录与连接表 + 复位 pin,
+// 但保留 bySrcIP 的单调累计总账（供下挂设备/热点统计跨会话查询）。
 func (cs *ConnStats) SetEnabled(on bool) {
 	if on {
 		cs.enabled.Store(true)
@@ -104,6 +120,9 @@ func (cs *ConnStats) SetEnabled(on bool) {
 	cs.pinUID.Store(-1)
 	cs.mu.Lock()
 	cs.byUID = make(map[int32]*uidStats)
+	for _, s := range cs.bySrcIP {
+		s.activeConns.Store(0)
+	}
 	cs.total = 0
 	cs.mu.Unlock()
 }
@@ -113,12 +132,22 @@ func (cs *ConnStats) begin(uid, proto int32, srcIP, ip string, port int) *connRe
 	if !cs.enabled.Load() {
 		return nil
 	}
-	rec := &connRecord{proto: proto, uid: uid, srcIP: srcIP, ip: ip, port: port}
+	cleanSrc := strings.TrimSpace(srcIP)
+	rec := &connRecord{proto: proto, uid: uid, srcIP: cleanSrc, ip: ip, port: port}
 	rec.lastSeen.Store(time.Now().Unix())
 
 	cs.mu.Lock()
 	if cs.total >= connStatsMaxRecords {
 		cs.evictOneLocked()
+	}
+	if cleanSrc != "" && cleanSrc != "127.0.0.1" && cleanSrc != "::1" {
+		sStats := cs.bySrcIP[cleanSrc]
+		if sStats == nil {
+			sStats = &srcIPStats{ip: cleanSrc}
+			cs.bySrcIP[cleanSrc] = sStats
+		}
+		sStats.activeConns.Add(1)
+		rec.srcStats = sStats
 	}
 	us := cs.byUID[uid]
 	if us == nil {
@@ -154,6 +183,9 @@ func (cs *ConnStats) setHost(rec *connRecord, host string) {
 // Snapshot 返回按 app(uid)分组的连接快照 JSON,供 UI 每秒轮询。顺带做懒清扫:
 // idle 超时连接移除并并入 app 累计(调用方 = 轮询,天然只在页面打开时发生)。
 func (cs *ConnStats) Snapshot() string {
+	if !cs.enabled.Load() {
+		return `{"apps":[]}`
+	}
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
@@ -164,7 +196,7 @@ func (cs *ConnStats) Snapshot() string {
 		us.mu.Lock()
 		kept := us.conns[:0]
 		for _, r := range us.conns {
-			if r.uid == pin {
+			if pin >= 0 && r.uid == pin {
 				kept = append(kept, r) // 正在查看的 app:无流量也不淡出
 				continue
 			}
@@ -175,6 +207,11 @@ func (cs *ConnStats) Snapshot() string {
 				idleLimit = int64(connStatsUdpTransientIdleRemove.Seconds())
 			}
 			if now-r.lastSeen.Load() > idleLimit {
+				if !r.evicted.Swap(true) {
+					if r.srcStats != nil {
+						r.srcStats.activeConns.Add(-1)
+					}
+				}
 				us.up.Add(r.up.Load())
 				us.down.Add(r.down.Load())
 				cs.total--
@@ -208,6 +245,22 @@ func (cs *ConnStats) Snapshot() string {
 		out.Apps = append(out.Apps, app)
 	}
 
+	if len(cs.bySrcIP) > 0 {
+		out.ClientTraffic = make([]clientTrafficJSONRec, 0, len(cs.bySrcIP))
+		for _, s := range cs.bySrcIP {
+			act := int(s.activeConns.Load())
+			if act < 0 {
+				act = 0
+			}
+			out.ClientTraffic = append(out.ClientTraffic, clientTrafficJSONRec{
+				IP:          s.ip,
+				Up:          s.up.Load(),
+				Down:        s.down.Load(),
+				ActiveConns: act,
+			})
+		}
+	}
+
 	b, err := json.Marshal(out)
 	if err != nil {
 		return `{"apps":[]}`
@@ -233,7 +286,7 @@ func (cs *ConnStats) evictOneLocked() {
 				oldestAny = ls
 				any, anyUs = r, us
 			}
-			if r.uid == pin {
+			if pin >= 0 && r.uid == pin {
 				continue // 正在查看的 app 不参与逐出
 			}
 			if ls < oldest {
@@ -256,7 +309,11 @@ func (cs *ConnStats) evictOneLocked() {
 	// 与计数 goroutine 的交错由「先 Store evictUp 再…」保证不会把 evict 前字节漏并。
 	victim.evictUp.Store(victim.up.Load())
 	victim.evictDown.Store(victim.down.Load())
-	victim.evicted.Store(true)
+	if !victim.evicted.Swap(true) {
+		if victim.srcStats != nil {
+			victim.srcStats.activeConns.Add(-1)
+		}
+	}
 	victimUs.up.Add(victim.up.Load())
 	victimUs.down.Add(victim.down.Load())
 	for i, r := range victimUs.conns {
@@ -281,6 +338,11 @@ func (cs *ConnStats) Remove(rec *connRecord) {
 		return
 	}
 	evicted := rec.evicted.Load()
+	if !rec.evicted.Swap(true) {
+		if rec.srcStats != nil {
+			rec.srcStats.activeConns.Add(-1)
+		}
+	}
 	cs.mu.Lock()
 	us := cs.byUID[rec.uid]
 	if us == nil {
@@ -323,6 +385,9 @@ func (c *countingConn) Read(p []byte) (int, error) {
 	if n > 0 {
 		c.rec.up.Add(int64(n))
 		c.rec.lastSeen.Store(time.Now().Unix())
+		if c.rec.srcStats != nil {
+			c.rec.srcStats.up.Add(int64(n))
+		}
 	}
 	return n, err
 }
@@ -332,6 +397,9 @@ func (c *countingConn) Write(p []byte) (int, error) {
 	if n > 0 {
 		c.rec.down.Add(int64(n))
 		c.rec.lastSeen.Store(time.Now().Unix())
+		if c.rec.srcStats != nil {
+			c.rec.srcStats.down.Add(int64(n))
+		}
 	}
 	return n, err
 }
@@ -376,6 +444,9 @@ func (c *countingPacketConn) ReadPacket(buffer *buf.Buffer) (M.Socksaddr, error)
 	if n := buffer.Len(); n > 0 {
 		c.rec.up.Add(int64(n))
 		c.rec.lastSeen.Store(time.Now().Unix())
+		if c.rec.srcStats != nil {
+			c.rec.srcStats.up.Add(int64(n))
+		}
 	}
 	return addr, err
 }
@@ -385,14 +456,25 @@ func (c *countingPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socks
 	if n := buffer.Len(); n > 0 {
 		c.rec.down.Add(int64(n))
 		c.rec.lastSeen.Store(time.Now().Unix())
+		if c.rec.srcStats != nil {
+			c.rec.srcStats.down.Add(int64(n))
+		}
 	}
 	return err
 }
 
 // ── JSON 快照结构 ─────────────────────────────────────────────────────────
 
+type clientTrafficJSONRec struct {
+	IP          string `json:"ip"`
+	Up          int64  `json:"up"`
+	Down        int64  `json:"down"`
+	ActiveConns int    `json:"active_conns"`
+}
+
 type connStatsJSON struct {
-	Apps []appStatsJSON `json:"apps"`
+	Apps          []appStatsJSON         `json:"apps"`
+	ClientTraffic []clientTrafficJSONRec `json:"client_traffic,omitempty"`
 }
 
 type appStatsJSON struct {

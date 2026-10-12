@@ -57,13 +57,22 @@ type Server struct {
 	refreshSubscription func(context.Context, string) (int, error)
 	subscriptionsStatus func() []subscription.ItemState
 	removeSubNodes      func([]string) int
-	refreshInt          int
+	deviceMgr             *deviceManager
+	connStatsSrc          func() string
+	setConnStatsEnabled   func(bool)
+	killClientConnections func(ip string) int
+	blockClientIP         func(ip string)
+	unblockClientIP       func(ip string)
+	isClientIPBlocked     func(ip string) bool
+	tetheringBridge       TetheringBridge
+	refreshInt            int
 	statsMu             sync.Mutex
 	stats               cachedStats
 
 	stopCh    chan struct{}
 	listener  net.Listener
 	tcpLn     net.Listener
+	tcpHost   string
 	server    *http.Server
 	tcpServer *http.Server
 	h3Server  *http3.Server
@@ -181,6 +190,117 @@ func (s *Server) getSubscriptionsStatus() []subscription.ItemState {
 func (s *Server) SetRemoveSubscriptionNodes(fn func([]string) int) {
 	s.removeSubNodes = fn
 }
+
+func (s *Server) SetDeviceHooks(
+	connStatsSrc func() string,
+	killClientConnections func(ip string) int,
+	blockClientIP func(ip string),
+	unblockClientIP func(ip string),
+	isClientIPBlocked func(ip string) bool,
+) {
+	s.connStatsSrc = connStatsSrc
+	s.killClientConnections = killClientConnections
+	s.blockClientIP = blockClientIP
+	s.unblockClientIP = unblockClientIP
+	s.isClientIPBlocked = isClientIPBlocked
+}
+
+func (s *Server) SetConnStatsEnabledHook(fn func(bool)) {
+	s.setConnStatsEnabled = fn
+}
+
+func (s *Server) SetTetheringBridge(b TetheringBridge) {
+	s.tetheringBridge = b
+}
+
+func (s *Server) getDeviceManager() *deviceManager {
+	if s.deviceMgr == nil {
+		cfgDir := ""
+		if s.configPath != "" {
+			cfgDir = filepath.Dir(s.configPath)
+		}
+		s.deviceMgr = newDeviceManager(cfgDir)
+		if s.blockClientIP != nil {
+			for _, b := range s.deviceMgr.getBlockedList() {
+				if b.IP != "" {
+					s.blockClientIP(b.IP)
+				}
+			}
+		}
+	}
+	return s.deviceMgr
+}
+
+type multiListener struct {
+	listeners []net.Listener
+	conns     chan net.Conn
+	errs      chan error
+	closeOnce sync.Once
+	closed    chan struct{}
+}
+
+func newMultiListener(listeners []net.Listener) *multiListener {
+	m := &multiListener{
+		listeners: listeners,
+		conns:     make(chan net.Conn),
+		errs:      make(chan error, len(listeners)),
+		closed:    make(chan struct{}),
+	}
+	for _, ln := range listeners {
+		go func(l net.Listener) {
+			for {
+				conn, err := l.Accept()
+				if err != nil {
+					select {
+					case <-m.closed:
+						return
+					case m.errs <- err:
+					}
+					return
+				}
+				select {
+				case <-m.closed:
+					conn.Close()
+					return
+				case m.conns <- conn:
+				}
+			}
+		}(ln)
+	}
+	return m
+}
+
+func (m *multiListener) Accept() (net.Conn, error) {
+	select {
+	case <-m.closed:
+		return nil, net.ErrClosed
+	case conn := <-m.conns:
+		return conn, nil
+	case err := <-m.errs:
+		return nil, err
+	}
+}
+
+func (m *multiListener) Close() error {
+	var firstErr error
+	m.closeOnce.Do(func() {
+		close(m.closed)
+		for _, ln := range m.listeners {
+			if err := ln.Close(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+	})
+	return firstErr
+}
+
+func (m *multiListener) Addr() net.Addr {
+	if len(m.listeners) > 0 {
+		return m.listeners[0].Addr()
+	}
+	return nil
+}
+
 func (s *Server) Start() error {
 	mux := s.setupMux()
 	// Auth + request-body cap are the same for every transport (unix socket, plain
@@ -228,31 +348,66 @@ func (s *Server) Start() error {
 	})
 
 	if s.tcpPort > 0 {
-		addr := fmt.Sprintf(":%d", s.tcpPort)
-		exposed := s.authEnabled()
-		if !exposed {
-			// No authentication configured: an open panel bound to all interfaces would let
-			// anyone on the LAN (or via port forwarding) write config, change ACLs/chnroute,
-			// create files and flip circuits. Force loopback so it is only reachable from
-			// this host.
-			addr = fmt.Sprintf("127.0.0.1:%d", s.tcpPort)
-			slog.Warn("admin panel has no auth configured; binding TCP to loopback only", "port", s.tcpPort)
-		}
-		tcpLn, err := net.Listen("tcp", addr)
-		if err != nil {
-			slog.Error("admin TCP listen failed", "port", s.tcpPort, "error", err)
-			return fmt.Errorf("admin TCP listen failed on %s: %w", addr, err)
+		var (
+			tcpLn       net.Listener
+			exposed     bool
+			primaryAddr string
+		)
+		if s.tcpHost != "" {
+			hosts := strings.Split(s.tcpHost, ",")
+			var listeners []net.Listener
+			for _, h := range hosts {
+				h = strings.TrimSpace(h)
+				if h == "" {
+					continue
+				}
+				addr := net.JoinHostPort(h, strconv.Itoa(s.tcpPort))
+				ln, err := net.Listen("tcp", addr)
+				if err != nil {
+					slog.Warn("admin TCP listen failed on specific host", "addr", addr, "error", err)
+					continue
+				}
+				listeners = append(listeners, ln)
+				if primaryAddr == "" {
+					primaryAddr = addr
+				}
+			}
+			if len(listeners) == 0 {
+				return fmt.Errorf("admin TCP listen failed on all configured hosts in %q (port %d)", s.tcpHost, s.tcpPort)
+			}
+			if len(listeners) == 1 {
+				tcpLn = listeners[0]
+			} else {
+				tcpLn = newMultiListener(listeners)
+			}
+			for _, h := range hosts {
+				h = strings.TrimSpace(h)
+				if h != "" && h != "127.0.0.1" && h != "::1" && h != "localhost" {
+					exposed = true
+					break
+				}
+			}
+			slog.Info("admin panel listening on configured hosts", "hosts", s.tcpHost, "port", s.tcpPort, "exposed", exposed)
+		} else {
+			addr := fmt.Sprintf(":%d", s.tcpPort)
+			exposed = s.authEnabled()
+			if !exposed {
+				addr = fmt.Sprintf("127.0.0.1:%d", s.tcpPort)
+				slog.Warn("admin panel has no auth configured; binding TCP to loopback only", "port", s.tcpPort)
+			}
+			var err error
+			tcpLn, err = net.Listen("tcp", addr)
+			if err != nil {
+				slog.Error("admin TCP listen failed", "port", s.tcpPort, "error", err)
+				return fmt.Errorf("admin TCP listen failed on %s: %w", addr, err)
+			}
+			primaryAddr = addr
 		}
 		s.tcpLn = tcpLn
 		s.tcpExposed = exposed
 		if s.tlsEnabled {
 			tlsCfg, err := s.buildTLSConfig()
 			if err != nil {
-				// fail-closed: TLS is what protects Basic Auth on the all-interfaces
-				// bind. If the cert won't load, serving plain HTTP there broadcasts the
-				// credentials and every request to the LAN — shut the listener instead
-				// of silently downgrading. Plain-HTTP fallback is only acceptable on the
-				// loopback bind (no auth, local host only).
 				if exposed {
 					slog.Error("admin TLS setup failed with auth enabled; refusing to serve plaintext on all interfaces", "port", s.tcpPort, "error", err)
 					tcpLn.Close()
@@ -265,36 +420,35 @@ func (s *Server) Start() error {
 					go s.tcpServer.Serve(tcpLn)
 				}
 			} else {
-				// One port, two protocols: TLS handshakes are served as HTTPS,
-				// plaintext requests are 301-redirected to https (see tls.go).
 				s.tcpServer = newHTTPServer(s.tlsDispatch(tcpHandler))
 				s.tcpServer.TLSConfig = tlsCfg
 				slog.Info("admin HTTPS server started (HTTP/2 & HTTP/1.1, HTTP redirects to https)", "port", s.tcpPort)
 				go s.tcpServer.Serve(&splitListener{Listener: tcpLn, tlsCfg: tlsCfg})
 
-				// HTTP/3 (QUIC) over UDP on the same port
-				udpLn, err := net.ListenPacket("udp", addr)
-				if err != nil {
-					slog.Warn("admin HTTP/3 (QUIC) UDP listen failed", "addr", addr, "error", err)
-				} else {
-					s.udpLn = udpLn
-					h3TLS := http3.ConfigureTLSConfig(tlsCfg.Clone())
-					s.h3Server = &http3.Server{
-						Addr:      addr,
-						Port:      s.tcpPort,
-						TLSConfig: h3TLS,
-						Handler:   tcpHandler,
-					}
-					slog.Info("admin HTTP/3 (QUIC) server started", "port", s.tcpPort)
-					safego.Go("admin.http3Server", func() {
-						if err := s.h3Server.Serve(udpLn); err != nil && err != http.ErrServerClosed {
-							slog.Debug("admin HTTP/3 server stopped", "error", err)
+				// HTTP/3 (QUIC) over UDP on the primary port
+				if primaryAddr != "" {
+					udpLn, err := net.ListenPacket("udp", primaryAddr)
+					if err != nil {
+						slog.Warn("admin HTTP/3 (QUIC) UDP listen failed", "addr", primaryAddr, "error", err)
+					} else {
+						s.udpLn = udpLn
+						h3TLS := http3.ConfigureTLSConfig(tlsCfg.Clone())
+						s.h3Server = &http3.Server{
+							Addr:      primaryAddr,
+							Port:      s.tcpPort,
+							TLSConfig: h3TLS,
+							Handler:   tcpHandler,
 						}
-					})
+						slog.Info("admin HTTP/3 (QUIC) server started", "addr", primaryAddr)
+						safego.Go("admin.http3Server", func() {
+							if err := s.h3Server.Serve(udpLn); err != nil && err != http.ErrServerClosed {
+								slog.Debug("admin HTTP/3 server stopped", "error", err)
+							}
+						})
+					}
 				}
 			}
 		} else {
-			// The TCP port requires authentication
 			s.tcpServer = newHTTPServer(tcpHandler)
 			slog.Info("admin HTTP server started", "port", s.tcpPort)
 			go s.tcpServer.Serve(tcpLn)
@@ -316,14 +470,21 @@ func (s *Server) tlsDispatch(handler http.Handler) http.Handler {
 			handler.ServeHTTP(w, r)
 			return
 		}
-		// Build the https authority from the server-side local address (the interface the
-		// peer actually reached), never from the client-supplied Host header: a forged /
-		// rebound Host would turn this 301 into an open redirect to an attacker host.
+		// Allow public trust anchor and branding assets over plaintext HTTP so clients
+		// that haven't installed the root CA yet can fetch them without TLS errors.
+		if (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
+			(r.URL.Path == "/admin.crt" || r.URL.Path == "/logo.png" || r.URL.Path == "/favicon.ico") {
+			handler.ServeHTTP(w, r)
+			return
+		}
 		host := ""
-		// LocalAddrContextKey holds the net.Addr the connection arrived on (the interface
-		// the peer actually reached); it is server-populated, unlike the client-controlled
-		// Host header. "ip:port" (IPv6 already bracketed).
-		if addr, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
+		reqHost := r.Host
+		if h, _, err := net.SplitHostPort(reqHost); err == nil {
+			reqHost = h
+		}
+		if s.isKnownPanelHost(reqHost) {
+			host = net.JoinHostPort(reqHost, strconv.Itoa(s.tcpPort))
+		} else if addr, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
 			host = addr.String()
 		}
 		if host == "" {
@@ -331,6 +492,29 @@ func (s *Server) tlsDispatch(handler http.Handler) http.Handler {
 		}
 		http.Redirect(w, r, "https://"+host+r.URL.RequestURI(), http.StatusMovedPermanently)
 	})
+}
+
+func (s *Server) isKnownPanelHost(h string) bool {
+	if h == "" {
+		return false
+	}
+	h = strings.ToLower(h)
+	if h == "smartproxy.lan" || h == "localhost" || h == "127.0.0.1" || h == "::1" {
+		return true
+	}
+	if s.tcpHost != "" {
+		for _, configured := range strings.Split(s.tcpHost, ",") {
+			if strings.EqualFold(strings.TrimSpace(configured), h) {
+				return true
+			}
+		}
+	}
+	for _, san := range s.tlsExtraSANs {
+		if strings.EqualFold(strings.TrimSpace(san), h) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) Stop() {
@@ -406,6 +590,10 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/", s.handleRoot)
 	mux.HandleFunc("/events", s.handleEvents)
 	mux.HandleFunc("/api/pcol", s.handleAPIIPConline)
+	mux.HandleFunc("/api/devices", s.handleDevices)
+	mux.HandleFunc("/api/devices/disconnect", s.handleDevicesDisconnect)
+	mux.HandleFunc("/api/devices/block", s.handleDevicesBlock)
+	mux.HandleFunc("/api/devices/unblock", s.handleDevicesUnblock)
 
 	return mux
 }
@@ -446,7 +634,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// navigations, but exempting it is harmless and consistent everywhere.
 		// Similarly, /logo.png and /favicon.ico are public branding assets needed by browsers
 		// before authentication (e.g. basic auth login prompts and tab favicons).
-		if r.Method == http.MethodGet && (r.URL.Path == "/admin.crt" || r.URL.Path == "/logo.png" || r.URL.Path == "/favicon.ico") {
+		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && (r.URL.Path == "/admin.crt" || r.URL.Path == "/logo.png" || r.URL.Path == "/favicon.ico") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -550,6 +738,10 @@ func newHTTPServer(handler http.Handler) *http.Server {
 		IdleTimeout:       adminIdleTimeout,
 		MaxHeaderBytes:    adminMaxHeaderBytes,
 	}
+}
+
+func (s *Server) SetTCPHost(host string) {
+	s.tcpHost = strings.TrimSpace(host)
 }
 
 func (s *Server) SetTCPPort(port int) {
@@ -962,6 +1154,28 @@ func (s *Server) handleHealthProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("admin: proxy health set", "alias", alias, "circuit", circuit, "action", action)
+	if (circuit == "both" || circuit == "") && s.configSrc != nil && s.configPath != "" {
+		var enableVal *bool
+		if action == "disable" {
+			f := false
+			enableVal = &f
+		} else if action == "enable" || action == "auto" {
+			t := true
+			enableVal = &t
+		}
+		if enableVal != nil {
+			_, _, _ = s.saveConfig(func(c *config.Config) {
+				for i := range c.Upstream.Proxies {
+					if c.Upstream.Proxies[i].Alias == alias {
+						c.Upstream.Proxies[i].Enable = enableVal
+						c.Upstream.Proxies[i].Enabled = enableVal
+						c.Upstream.Proxies[i].Disabled = !*enableVal
+						break
+					}
+				}
+			})
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -1686,18 +1900,35 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 // (auto-generated or custom cert files); 404 with a hint when HTTPS is off (buildTLSConfig
 // never ran) so the panel stays plain HTTP.
 func (s *Server) handleAdminCert(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if len(s.certPEM) == 0 {
+	pemData := s.certPEM
+	if len(pemData) == 0 && s.tlsEnabled {
+		dir := ""
+		if s.configPath != "" {
+			dir = filepath.Dir(s.configPath)
+		}
+		if ca, ok := bakedCA(dir); ok {
+			pemData = pemLeaf(ca)
+		} else if dir != "" {
+			if data, err := os.ReadFile(filepath.Join(dir, "admin.crt")); err == nil {
+				pemData = data
+			}
+		}
+	}
+	if len(pemData) == 0 {
 		http.Error(w, "admin HTTPS is not enabled (admin_https=false or TLS setup failed); no certificate to download", http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.Header().Set("Content-Type", "application/x-x509-ca-cert")
 	w.Header().Set("Content-Disposition", `attachment; filename="admin.crt"`)
-	w.Header().Set("Content-Length", strconv.Itoa(len(s.certPEM)))
-	w.Write(s.certPEM)
+	w.Header().Set("Content-Length", strconv.Itoa(len(pemData)))
+	if r.Method == http.MethodHead {
+		return
+	}
+	w.Write(pemData)
 }
 
 // ---- file browser ----

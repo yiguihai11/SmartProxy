@@ -302,6 +302,40 @@ internal class CoreTetheringLease : ICoreTetheringLease.Stub() {
         return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
     }
 
+    @Synchronized
+    override fun updateAssetFile(name: String, pfd: ParcelFileDescriptor): Boolean {
+        require(name.isNotBlank() && File(name).name == name) { "Invalid asset name" }
+        val allowed = setOf("config.json", "acl.txt", "chnroute.txt")
+        if (name !in allowed) {
+            Log.w("CoreTetheringLease", "updateAssetFile rejected unapproved file: $name")
+            return false
+        }
+        val targetDir = if (name == "config.json") assetDirectory ?: return false else assetCacheDirectory ?: return false
+        val targetFile = File(targetDir, name)
+        val tempFile = File(targetDir, ".$name.tmp")
+        return runCatching {
+            ParcelFileDescriptor.AutoCloseInputStream(pfd).use { input ->
+                tempFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            if (name == "config.json") {
+                val content = tempFile.readText(Charsets.UTF_8)
+                org.json.JSONObject(content)
+                coreConfig = content
+            }
+            check(tempFile.renameTo(targetFile) || (targetFile.delete() && tempFile.renameTo(targetFile))) {
+                "Failed to replace $name"
+            }
+            Log.i("CoreTetheringLease", "updateAssetFile successfully updated $name from tethering core")
+            true
+        }.getOrElse { e ->
+            tempFile.delete()
+            Log.e("CoreTetheringLease", "updateAssetFile failed for $name", e)
+            false
+        }
+    }
+
     private fun resolveAsset(name: String): File? {
         listOfNotNull(assetDirectory, assetCacheDirectory).forEach { dir ->
             val file = File(dir, name)

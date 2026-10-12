@@ -57,6 +57,8 @@ type TUNHandler struct {
 	// 与 connStats 共享同一 ConnStats,掐断时可即时移除统计记录。
 	liveTCP *liveTCP
 
+	blockedClientIPs sync.Map
+
 	udpSessions     sync.Map
 	udpSessionCount atomic.Int64
 	cleanerOnce     sync.Once
@@ -214,6 +216,62 @@ func (h *TUNHandler) ResetActiveConnections() {
 	slog.Info("TUN reset all active TCP connections and UDP sessions due to network change")
 }
 
+// BlockClientIP blocks all traffic from client IP and kills its existing connections.
+func (h *TUNHandler) BlockClientIP(ip string) {
+	if ip == "" {
+		return
+	}
+	h.blockedClientIPs.Store(ip, struct{}{})
+	h.KillBySrcIP(ip)
+}
+
+// UnblockClientIP removes client IP from block list.
+func (h *TUNHandler) UnblockClientIP(ip string) {
+	if ip == "" {
+		return
+	}
+	h.blockedClientIPs.Delete(ip)
+}
+
+// IsClientIPBlocked checks if client IP is blocked.
+func (h *TUNHandler) IsClientIPBlocked(ip string) bool {
+	if ip == "" {
+		return false
+	}
+	_, blocked := h.blockedClientIPs.Load(ip)
+	return blocked
+}
+
+// KillBySrcIP terminates all active TCP connections and UDP sessions originating from srcIP.
+func (h *TUNHandler) KillBySrcIP(srcIP string) int {
+	if srcIP == "" {
+		return 0
+	}
+	count := 0
+	if h.liveTCP != nil {
+		for _, hd := range h.liveTCP.snapshot() {
+			if hd.rec != nil && hd.rec.srcIP == srcIP {
+				hd.kill()
+				h.liveTCP.remove(hd)
+				count++
+			}
+		}
+	}
+	prefix := srcIP + ":"
+	h.udpSessions.Range(func(key, value any) bool {
+		k, ok := key.(string)
+		if ok && strings.HasPrefix(k, prefix) {
+			if sess, ok := value.(*tunUdpSession); ok {
+				sess.signalClose()
+				count++
+			}
+		}
+		return true
+	})
+	slog.Info("TUN killed connections for client srcIP", "src_ip", srcIP, "count", count)
+	return count
+}
+
 func (h *TUNHandler) JudgeFlow(network uint8, source netip.AddrPort, destination netip.AddrPort, firstPacket []byte) singtun.FlowVerdict {
 	return singtun.FlowVerdict{Action: singtun.ActionAccept}
 }
@@ -238,6 +296,15 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 		conn.Close()
 		if onClose != nil {
 			onClose(fmt.Errorf("handler not initialized"))
+		}
+		return
+	}
+
+	if h.IsClientIPBlocked(source.Addr.String()) {
+		ll.Info("TUN blocked connection from blocked client IP", "src", source.Addr.String())
+		netutil.SendEnhancedBlock(conn, port)
+		if onClose != nil {
+			onClose(nil)
 		}
 		return
 	}
@@ -471,6 +538,14 @@ func (h *TUNHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketCon
 				onClose(nil)
 			}
 		})
+		return
+	}
+
+	if h.IsClientIPBlocked(source.Addr.String()) {
+		conn.Close()
+		if onClose != nil {
+			onClose(nil)
+		}
 		return
 	}
 

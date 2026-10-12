@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -119,7 +120,7 @@ private data class AppItem(
     val pkg: String?, // 长按跳系统应用信息页;共享 uid 取第一个包,拿不到为 null
     val upBps: Long,
     val downBps: Long,
-    val conns: List<ConnStatsRec>
+    val conns: List<ConnStatsRec>,
 )
 @Immutable
 private data class AppMeta(val label: String, val icon: ImageBitmap?, val pkg: String?)
@@ -183,7 +184,7 @@ class NetworkStatusActivity : ComponentActivity() {
     private fun unbindTethering() {
         if (tetheringService != null) {
             runCatching {
-                Shizuku.unbindUserService(ShizukuTetheringService.createUserServiceArgs(), tetheringConnection, true)
+                Shizuku.unbindUserService(ShizukuTetheringService.createUserServiceArgs(), tetheringConnection, false)
             }
             tetheringService = null
         }
@@ -438,28 +439,23 @@ class NetworkStatusActivity : ComponentActivity() {
                 // 连接详情页仅展示有实际连接或流量记录的设备，无连接/无流量的设备不在实时连接列表中占位
                 if (conns.isEmpty() && up == 0L && down == 0L) continue
 
-                val synthUid = -1000 - (Math.abs(dev.ip.hashCode()) % 10000)
+                val uidKey = if (dev.mac.isNotBlank()) dev.mac.lowercase() else dev.ip
+                val synthUid = -1000 - (Math.abs(uidKey.hashCode()) % 10000)
 
-                val label = buildString {
-                    append("📱 ")
-                    if (dev.hostname.isNotBlank()) {
-                        append(dev.hostname)
-                        append(" (").append(dev.ip).append(")")
-                    } else {
-                        append(dev.ip)
-                    }
+                val label = if (dev.hostname.isNotBlank()) {
+                    "${dev.hostname} (${dev.ip})"
+                } else {
+                    dev.ip
                 }
                 val pkgDesc = when {
                     dev.mac.isNotBlank() -> "MAC: ${dev.mac}"
-                    dev.ip == io.github.yiguihai11.smartproxy.shizuku.HotspotRoutingConfig.SHIZUKU_TUN_IP_V4 -> "多设备接入 · 内核统一转发"
-                    else -> "热点外接设备"
+                    dev.ip == io.github.yiguihai11.smartproxy.shizuku.HotspotRoutingConfig.SHIZUKU_TUN_IP_V4 ->
+                        getString(R.string.net_tethering_tun_aggregate)
+                    else -> getString(R.string.net_tethering_external_device)
                 }
                 metaCache[synthUid] = AppMeta(label, null, pkgDesc)
 
-                tetheredDevices[synthUid] = dev.copy(
-                    upBps = 0L,
-                    downBps = 0L,
-                )
+                tetheredDevices[synthUid] = dev
 
                 out += AppStats(
                     uid = synthUid,
@@ -480,8 +476,10 @@ class NetworkStatusActivity : ComponentActivity() {
         tetheredDevices.keys.retainAll(currentUids)
         return apps.map { app ->
             val prev = prevTotals[app.uid]
-            val upBps = if (prev == null) 0L else (app.up - prev.first).coerceAtLeast(0L)
-            val downBps = if (prev == null) 0L else (app.down - prev.second).coerceAtLeast(0L)
+            val devUp = tetheredDevices[app.uid]?.upBps ?: 0L
+            val devDown = tetheredDevices[app.uid]?.downBps ?: 0L
+            val upBps = if (devUp > 0) devUp else (if (prev == null) 0L else (app.up - prev.first).coerceAtLeast(0L))
+            val downBps = if (devDown > 0) devDown else (if (prev == null) 0L else (app.down - prev.second).coerceAtLeast(0L))
             prevTotals[app.uid] = app.up to app.down
 
             tetheredDevices[app.uid]?.let { existing ->
@@ -519,7 +517,7 @@ class NetworkStatusActivity : ComponentActivity() {
 
     /** 长按应用行 → 打开其系统「应用信息」页(ACTION_APPLICATION_DETAILS)。 */
     private fun openAppInfo(pkg: String?) {
-        if (pkg == null || pkg.startsWith("MAC:") || pkg == "热点外接设备") return
+        if (pkg.isNullOrBlank()) return
         runCatching {
             startActivity(
                 Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", pkg, null))
