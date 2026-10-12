@@ -313,7 +313,7 @@ class TetheringDeviceParserTest {
         """.trimIndent()
 
         val devices = TetheringDeviceParser.parse(statsJson)
-        assertEquals(3, devices.size)
+        assertEquals(2, devices.size)
 
         val devA = devices.firstOrNull { it.mac == "da:a1:19:22:33:44" }
         assertNotNull(devA)
@@ -327,10 +327,7 @@ class TetheringDeviceParserTest {
         assertEquals(400L, devB.downBytes)
         assertEquals(1, devB.conns.size)
 
-        val pool = devices.firstOrNull { it.ip == HotspotRoutingConfig.SHIZUKU_TUN_IP_V4 }
-        assertNotNull(pool)
-        assertEquals(500L, pool!!.upBytes)
-        assertEquals(600L, pool.downBytes)
+        assertTrue(devices.none { it.ip == HotspotRoutingConfig.SHIZUKU_TUN_IP_V4 })
     }
 
     @Test
