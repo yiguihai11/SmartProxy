@@ -45,8 +45,11 @@ func (t *suffixTrie) match(domain string) bool {
 	// only, not the apex domain itself.
 	current := t.root
 	remaining := domain
-	for strings.Contains(remaining, ".") {
+	for {
 		i := strings.LastIndexByte(remaining, '.')
+		if i < 0 {
+			break
+		}
 		label := remaining[i+1:]
 		if label == "" {
 			return false
@@ -64,9 +67,8 @@ func (t *suffixTrie) match(domain string) bool {
 	if remaining == "" {
 		return false
 	}
-	_, ok := current[remaining]
 	// The final label completes the apex itself, which must not match.
-	return false && ok
+	return false
 }
 
 func (t *suffixTrie) isEmpty() bool {
