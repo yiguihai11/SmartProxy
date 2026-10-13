@@ -4247,7 +4247,18 @@ function confirmACL(){
         var v=document.querySelector('.nav-item.active').dataset.view;
         if(v==='blacklist'){blSelected={};loadBlacklist()}
         else if(v==='cache'){cacheSelected={};loadCache()}
-        else if(v==='devices'){loadDevices()}
+        else if(v==='devices'){
+          if(action==='block'){
+            entries.forEach(function(ent){
+              for (var k in deviceConnsAccumulator) {
+                deviceConnsAccumulator[k] = (deviceConnsAccumulator[k] || []).filter(function(item) {
+                  return item.host !== ent.value;
+                });
+              }
+            });
+          }
+          loadDevices();
+        }
         closeACLDialog();
         if(data.skipped>0)setTimeout(function(){alert(tf('{0} added, {1} skipped (duplicates)',[data.count,data.skipped]))},100);
       });
@@ -5198,6 +5209,7 @@ var devicesData = null;
 var devicesAuto = true;
 var devicesSearchTerm = '';
 var expandedDeviceConns = {};
+var deviceConnsAccumulator = {};
 
 function toggleDevicesAuto() {
   devicesAuto = !devicesAuto;
@@ -5238,7 +5250,11 @@ function toggleDeviceConns(key, e) {
     if (e.preventDefault) e.preventDefault();
   }
   if (!key) return;
-  expandedDeviceConns[key] = !expandedDeviceConns[key];
+  var nextState = !expandedDeviceConns[key];
+  expandedDeviceConns[key] = nextState;
+  if (!nextState) {
+    delete deviceConnsAccumulator[key];
+  }
   renderDevices();
 }
 
@@ -5358,6 +5374,11 @@ function connActionQuickBlock() {
         } else {
           var toast = document.getElementById('copy-toast');
           if (toast) showCopyToast(toast, tf('Blocked: {0}', [target]));
+        }
+        for (var k in deviceConnsAccumulator) {
+          deviceConnsAccumulator[k] = (deviceConnsAccumulator[k] || []).filter(function(item) {
+            return item.host !== target;
+          });
         }
         loadDevices();
       });
@@ -5479,7 +5500,36 @@ function renderDevices() {
 
       var connsBoxHtml = '';
       if (isExpanded) {
-        var connList = d.conns || [];
+        var currentConns = d.conns || [];
+        var acc = deviceConnsAccumulator[devKey];
+        if (!acc) {
+          acc = [];
+          deviceConnsAccumulator[devKey] = acc;
+        }
+        var map = {};
+        acc.forEach(function(item) {
+          var k = (item.proto || 0) + ':' + (item.host || '') + ':' + (item.port || 0);
+          map[k] = item;
+        });
+        currentConns.forEach(function(c) {
+          var k = (c.proto || 0) + ':' + (c.host || '') + ':' + (c.port || 0);
+          if (map[k]) {
+            map[k].up = Math.max(map[k].up || 0, c.up || 0);
+            map[k].down = Math.max(map[k].down || 0, c.down || 0);
+          } else {
+            var copy = {
+              proto: c.proto,
+              host: c.host,
+              port: c.port,
+              up: c.up,
+              down: c.down
+            };
+            map[k] = copy;
+            acc.push(copy);
+          }
+        });
+
+        var connList = acc;
         var connsRows = '';
         if (connList.length === 0) {
           connsRows = '<div style="font-size:.75rem;color:var(--text3);text-align:center;padding:8px 0">' + t('No active connections') + '</div>';

@@ -66,8 +66,9 @@ type Server struct {
 	isClientIPBlocked     func(ip string) bool
 	tetheringBridge       TetheringBridge
 	refreshInt            int
-	statsMu             sync.Mutex
-	stats               cachedStats
+	devMu                 sync.Mutex
+	statsMu               sync.Mutex
+	stats                 cachedStats
 
 	stopCh    chan struct{}
 	listener  net.Listener
@@ -214,6 +215,8 @@ func (s *Server) SetTetheringBridge(b TetheringBridge) {
 }
 
 func (s *Server) getDeviceManager() *deviceManager {
+	s.devMu.Lock()
+	defer s.devMu.Unlock()
 	if s.deviceMgr == nil {
 		cfgDir := ""
 		if s.configPath != "" {
