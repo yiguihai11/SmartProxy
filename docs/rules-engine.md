@@ -51,7 +51,7 @@ allow 严格优先于 block；匹配 proxy 规则前先做 allow 判定，命中
 - `IsDomainBlocked(domain)`：`allowedDomains` → false；`allowedSuffixes.match` → false；`allowedGlobs`（`path.Match`）→ false；否则 `blockedDomains` → true / `blockedSuffixes.match` / `blockedGlobs`（`path.Match`）。
 - `MatchProxyRule(ip, port, domain)` 的检查顺序为 **allow（port→ip→cidr→domain/suffix/glob）→ proxy（port→ip→domain→suffix→glob→cidr）**；allow 命中直接返回 `("", false)`。
 
-`*.example.com` 走高性能前缀树（Trie），只匹配其子域（`www.example.com`），不匹配 `example.com` 本身（见 `TestSuffixTrie_NoMatchExactDomain`）。含 `*` 或 `?` 的非纯子域规则（如 `*ads*-*.zijieapi.com`）自动进入 Glob 匹配器。
+`*.example.com` 走高性能前缀树（Trie），匹配其全部子域（`www.example.com`）**以及 apex 本身（`example.com`）**（见 `TestSuffixTrie_MatchApexDomain`）。多条后缀规则同时命中时取最深的一条（`*.api.example.com` 优先于 `*.example.com`）。含 `*` 或 `?` 的非纯子域规则（如 `*ads*-*.zijieapi.com`）自动进入 Glob 匹配器。
 
 ## §3 数据结构
 

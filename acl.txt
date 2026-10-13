@@ -17,7 +17,7 @@
 # ─────────────────────────────────────────
 # 域名控制（广告拦截 / 强制代理）
 # ─────────────────────────────────────────
-#block domain *.adnetwork.com           # 拦截广告域名（含所有子域名）
+#block domain *.adnetwork.com           # 拦截广告域名（含所有子域名与 adnetwork.com 本身）
 #block domain tracker.example.com       # 拦截精确域名
 
 # ── vivo 浏览器隐私上报/云查拦截(逆向 v30.7.0.0 实测) ──
@@ -115,6 +115,7 @@ block domain *.zijieapi.net
 block domain *.pstatp.com
 
 # 4. 第三方广告聚合 SDK (快手/腾讯/穿山甲联盟)
+# 注意: *.X 现已同时覆盖 apex X 本身, 故 *.kuaishou.com 会一并拦截 kuaishou.com 主站
 block domain *.kuaishou.com
 block domain *.e.kuaishou.com
 block domain *.e.kuaishouzt.com

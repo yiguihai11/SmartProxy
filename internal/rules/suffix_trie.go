@@ -41,16 +41,17 @@ func (t *suffixTrie) insert(suffix string) {
 
 func (t *suffixTrie) match(domain string) bool {
 	// Walk labels from right to left without strings.Split or a temporary
-	// reversed slice. Keep the existing rule that a suffix matches subdomains
-	// only, not the apex domain itself.
+	// reversed slice. A "*.a.com" rule covers a.com itself as well as every
+	// subdomain below it, so the walk also tests the final (leftmost) label.
 	current := t.root
 	remaining := domain
-	for {
-		i := strings.LastIndexByte(remaining, '.')
-		if i < 0 {
-			break
+	for remaining != "" {
+		label := remaining
+		if i := strings.LastIndexByte(remaining, '.'); i >= 0 {
+			label, remaining = remaining[i+1:], remaining[:i]
+		} else {
+			remaining = ""
 		}
-		label := remaining[i+1:]
 		if label == "" {
 			return false
 		}
@@ -62,12 +63,7 @@ func (t *suffixTrie) match(domain string) bool {
 			return true
 		}
 		current = node.children
-		remaining = remaining[:i]
 	}
-	if remaining == "" {
-		return false
-	}
-	// The final label completes the apex itself, which must not match.
 	return false
 }
 

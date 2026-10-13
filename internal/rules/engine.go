@@ -595,18 +595,19 @@ func (t *proxySuffixTrie) match(domain string) (proxyTarget, bool) {
 	// reversed slice. Two rules differ from suffixTrie.match: a deeper target
 	// overrides a shallower one, so the walk must not stop at the first hit,
 	// and a missing label ends the walk while keeping whatever matched above
-	// it. The apex never matches, which falls out of the loop shape: it stops
-	// once only the leftmost label is left.
+	// it. Like suffixTrie, a "*.a.com" rule covers a.com itself.
 	current := t.root
 	remaining := domain
 	var bestTarget proxyTarget
 	var matched bool
-	for {
-		i := strings.LastIndexByte(remaining, '.')
-		if i < 0 {
-			break
+	for remaining != "" {
+		label := remaining
+		if i := strings.LastIndexByte(remaining, '.'); i >= 0 {
+			label, remaining = remaining[i+1:], remaining[:i]
+		} else {
+			remaining = ""
 		}
-		node, ok := current[remaining[i+1:]]
+		node, ok := current[label]
 		if !ok {
 			break
 		}
@@ -615,7 +616,6 @@ func (t *proxySuffixTrie) match(domain string) (proxyTarget, bool) {
 			matched = true
 		}
 		current = node.children
-		remaining = remaining[:i]
 	}
 	return bestTarget, matched
 }

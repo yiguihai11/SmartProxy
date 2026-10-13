@@ -19,11 +19,11 @@ func TestSuffixTrie_InsertAndMatch(t *testing.T) {
 	}
 }
 
-func TestSuffixTrie_NoMatchExactDomain(t *testing.T) {
+func TestSuffixTrie_MatchApexDomain(t *testing.T) {
 	st := newSuffixTrie()
 	st.insert(".example.com")
-	if st.match("example.com") {
-		t.Error("example.com should NOT match .example.com")
+	if !st.match("example.com") {
+		t.Error("example.com should match .example.com: a *.a.com rule covers its own apex")
 	}
 }
 
@@ -62,8 +62,8 @@ func TestSuffixTrie_SubdomainChain(t *testing.T) {
 	if !st.match("a.b.c.google.com") {
 		t.Error("a.b.c.google.com should match")
 	}
-	if st.match("google.com") {
-		t.Error("google.com should not match")
+	if !st.match("google.com") {
+		t.Error("google.com should match: *.google.com covers its own apex")
 	}
 }
 
@@ -296,8 +296,8 @@ func TestEngine_BlockDomainSuffix(t *testing.T) {
 	if !e.IsDomainBlocked("analytics.tracker.com") {
 		t.Error("analytics.tracker.com should be blocked by suffix")
 	}
-	if e.IsDomainBlocked("tracker.com") {
-		t.Error("tracker.com itself should NOT be blocked by *.tracker.com")
+	if !e.IsDomainBlocked("tracker.com") {
+		t.Error("tracker.com should be blocked: *.tracker.com covers its own apex")
 	}
 }
 
@@ -371,9 +371,9 @@ func TestEngine_ProxyRuleWildcardDomain(t *testing.T) {
 	if !matched || alias != "proxy1" {
 		t.Errorf("expected proxy1, got %q (matched=%v)", alias, matched)
 	}
-	_, matched = e.MatchProxyRule("", 0, "google.com")
-	if matched {
-		t.Error("google.com should not match *.google.com")
+	alias, matched = e.MatchProxyRule("", 0, "google.com")
+	if !matched || alias != "proxy1" {
+		t.Errorf("google.com should match *.google.com (apex included), got %q (matched=%v)", alias, matched)
 	}
 }
 
@@ -607,8 +607,8 @@ allow domain *.google.com
 		t.Error("analytics.tracker.net should be blocked")
 	}
 
-	if e.IsDomainBlocked("adnetwork.com") {
-		t.Error("adnetwork.com should NOT be blocked (exact domain)")
+	if !e.IsDomainBlocked("adnetwork.com") {
+		t.Error("adnetwork.com should be blocked: *.adnetwork.com covers its own apex")
 	}
 	if e.IsDomainBlocked("google.com") {
 		t.Error("google.com should NOT be blocked")
@@ -880,7 +880,8 @@ proxy domain *.com shallow
 	for _, c := range []struct{ domain, alias string }{
 		{"v.api.example.com", "deepest"},
 		{"w.example.com", "middle"},
-		{"example.com", "shallow"},
+		// *.example.com covers its own apex, and *.com does too; the deeper rule wins.
+		{"example.com", "middle"},
 	} {
 		alias, matched := e.MatchProxyRule("", 0, c.domain)
 		if !matched || alias != c.alias {
@@ -890,9 +891,9 @@ proxy domain *.com shallow
 }
 
 // proxySuffixTrie.match walks labels right to left without strings.Split. These
-// cases pin the semantics the walk has to keep: subdomains only (never the rule
-// apex), deepest target wins, multi-label rules, and a missing label ending the
-// walk while keeping the shallower match.
+// cases pin the semantics the walk has to keep: a "*.a.com" rule covers the apex
+// a.com as well as every subdomain below it, deepest target wins, multi-label
+// rules, and a missing label ending the walk while keeping the shallower match.
 func TestProxySuffixTrie_MatchSemantics(t *testing.T) {
 	trie := newProxySuffixTrie()
 	trie.insert(".com", proxyTarget{alias: "general", index: 0})
@@ -905,11 +906,11 @@ func TestProxySuffixTrie_MatchSemantics(t *testing.T) {
 		ok     bool
 	}{
 		{"v.api.example.com", "deepest", true}, // a label deeper than any rule
-		{"api.example.com", "specific", true},  // the .api.example.com apex itself
-		{"example.com", "general", true},
+		{"api.example.com", "deepest", true},   // the .api.example.com apex itself
+		{"example.com", "specific", true},      // apex of .example.com beats the .com rule
 		{"other.com", "general", true},
-		{"com", "", false}, // apex of the rule, not a subdomain
-		{"", "", false},    // no labels at all
+		{"com", "general", true}, // apex of the .com rule
+		{"", "", false},          // no labels at all
 		{"unrelated.net", "", false},
 	}
 	for _, c := range cases {
@@ -927,16 +928,16 @@ func TestProxySuffixTrie_MatchSemantics(t *testing.T) {
 		t.Errorf("missing mid-label should keep the parent match, got (%q, %v)", got.alias, ok)
 	}
 
-	// Multi-label rules hang off the same walk.
+	// Multi-label rules hang off the same walk, apex included.
 	multi := newProxySuffixTrie()
 	multi.insert(".a.b.com", proxyTarget{alias: "multi", index: 0})
-	for _, d := range []string{"x.a.b.com", "y.x.a.b.com"} {
+	for _, d := range []string{"a.b.com", "x.a.b.com", "y.x.a.b.com"} {
 		if got, ok := multi.match(d); !ok || got.alias != "multi" {
 			t.Errorf("match(%q) = (%q, %v), want multi", d, got.alias, ok)
 		}
 	}
-	if _, ok := multi.match("a.b.com"); ok {
-		t.Error("a.b.com is the apex of *.a.b.com and must not match")
+	if _, ok := multi.match("b.com"); ok {
+		t.Error("b.com is a parent of *.a.b.com and must not match")
 	}
 }
 

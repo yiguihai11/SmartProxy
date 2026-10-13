@@ -159,12 +159,12 @@ go build -tags "with_gvisor,with_lwip" -o build/smartproxy ./cmd/smartproxy
 规则文件按行解析，格式为 `<action> <type> <value> [alias]`：
 
 - **动作 (action)**：`allow`（放行直连）、`block`（阻断拦截）、`proxy`（经指定代理节点）。
-- **类型 (type)**：`port`（端口）、`ip`（单个 IP）、`cidr`（IP 网段）、`domain`（域名，支持 `*.example.com` 子域匹配）。
+- **类型 (type)**：`port`（端口）、`ip`（单个 IP）、`cidr`（IP 网段）、`domain`（域名，支持 `*.example.com`，匹配其子域与 `example.com` 本身）。
 - **优先级**：`allow` > `block` > `proxy` > 默认路由分流。
 
 ```text
 # 常用规则示例
-block domain *.adservice.com         # 拦截广告域名
+block domain *.adservice.com         # 拦截广告域名（含 adservice.com 本身）
 proxy domain *.google.com primary    # 指定域名走 primary 代理
 proxy cidr 198.51.100.0/24 backup    # 指定海外网段走 backup
 allow port 22                        # SSH 流量放行直连
