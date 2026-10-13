@@ -95,12 +95,13 @@ object NetworkRecoveryManager {
         val activeNet = cm?.activeNetwork
         val caps = activeNet?.let { cm.getNetworkCapabilities(it) }
         val hasInternet = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
-        if (!hasInternet) {
-            Log.i(TAG, "attemptRestore deferred: active network has no internet capability yet.")
+        val hasPhysical = NetworkUtils.checkPhysicalNetworkAddresses(app).isAnyAvailable
+        if (!hasInternet && !hasPhysical) {
+            Log.i(TAG, "attemptRestore deferred: active network has no internet and no physical addresses yet.")
             return
         }
 
-        Log.i(TAG, "Network verified available (activeNet=$activeNet). Restoring SmartProxyVpnService...")
+        Log.i(TAG, "Network verified available (activeNet=$activeNet, hasInternet=$hasInternet, hasPhysical=$hasPhysical). Restoring SmartProxyVpnService...")
         cancelRecovery(app)
         runCatching {
             SmartProxyVpnService.start(app)
@@ -121,21 +122,31 @@ object NetworkRecoveryManager {
             }
 
             override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
-                if (networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                val hasInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                val isDataBearing = networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                    networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
+                    networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+                if (hasInternet || isDataBearing) {
                     mainHandler.post { attemptRestore(context) }
                 }
             }
         }
 
         try {
-            val req = NetworkRequest.Builder()
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                .build()
-            cm.registerNetworkCallback(req, callback)
+            cm.registerDefaultNetworkCallback(callback)
             networkCallback = callback
-            Log.i(TAG, "Registered NetworkCallback for internet capability.")
+            Log.i(TAG, "Registered default NetworkCallback for network restore.")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to register NetworkCallback", e)
+            Log.e(TAG, "Failed to register default NetworkCallback, trying NetworkRequest", e)
+            try {
+                val req = NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .build()
+                cm.registerNetworkCallback(req, callback)
+                networkCallback = callback
+            } catch (ex: Exception) {
+                Log.e(TAG, "Failed to register NetworkCallback", ex)
+            }
         }
     }
 

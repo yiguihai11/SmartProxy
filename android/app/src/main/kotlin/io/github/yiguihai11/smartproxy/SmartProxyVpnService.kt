@@ -188,6 +188,34 @@ class SmartProxyVpnService : VpnService() {
             }
         }
     }
+
+    /** 连续断网 10s 自动被动停服的延迟任务:避免网络短暂抖动频繁重启,超时仍无物理网络则拆除 VPN 清除状态栏钥匙图标。 */
+    private val noNetworkShutdownRunnable = Runnable {
+        if (!startedEngine) return@Runnable
+        val netStatus = NetworkUtils.checkPhysicalNetworkAddresses(this)
+        if (!netStatus.isAnyAvailable) {
+            Log.w(TAG, "[NoNetworkShutdown] No physical network available for 10s. Initiating passive shutdown & wait for network recovery.")
+            // 保持 vpnDesired=true (非人为主动关闭),激活 NetworkRecoveryManager 等待网络恢复
+            NetworkRecoveryManager.startRecovery(applicationContext)
+            enqueueEngineWork("noNetworkShutdown") { shutdown() }
+        } else {
+            Log.i(TAG, "[NoNetworkShutdown] Physical network restored within 10s (v4=${netStatus.hasV4}, v6=${netStatus.hasV6}). Countdown cancelled.")
+        }
+    }
+
+    private fun scheduleNoNetworkShutdown() {
+        val netStatus = NetworkUtils.checkPhysicalNetworkAddresses(this)
+        if (!netStatus.isAnyAvailable) {
+            Log.w(TAG, "[NetworkCallback] No physical network available. Scheduling 10s shutdown countdown...")
+            mainHandler.removeCallbacks(noNetworkShutdownRunnable)
+            mainHandler.postDelayed(noNetworkShutdownRunnable, 10_000L)
+        }
+    }
+
+    private fun cancelNoNetworkShutdown() {
+        mainHandler.removeCallbacks(noNetworkShutdownRunnable)
+    }
+
     private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private var pendingNetworkChangeRunnable: Runnable? = null
     private var currentUnderlyingNetwork: Network? = null
@@ -265,6 +293,7 @@ class SmartProxyVpnService : VpnService() {
             // 圆球 / 通知停止 = 用户显式停止:静默停,后续 onRevoke 不误报被动。
             // stopSelf() 在 shutdown(fullTeardown=true) 内部先于关 fd 调用(v2rayNG 顺序)。
             // 阻塞拆机丢引擎线程,主线程立即返回。
+            cancelNoNetworkShutdown()
             userInitiatedStop = true
             AppPrefs.setVpnDesired(this, false)
             AppPrefs.setVpnSuspended(this, false)
@@ -709,6 +738,7 @@ class SmartProxyVpnService : VpnService() {
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 Log.i(TAG, "[NetworkCallback] Default network available: $network")
+                mainHandler.post { cancelNoNetworkShutdown() }
                 handleUnderlyingNetworkChanged(network)
             }
 
@@ -717,6 +747,7 @@ class SmartProxyVpnService : VpnService() {
                 val isValidated = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
                 Log.i(TAG, "[NetworkCallback] Default network capabilities changed: $network, internet=$hasInternet, validated=$isValidated")
                 if (hasInternet) {
+                    mainHandler.post { cancelNoNetworkShutdown() }
                     handleUnderlyingNetworkChanged(network)
                 }
             }
@@ -731,6 +762,7 @@ class SmartProxyVpnService : VpnService() {
                 } catch (e: Exception) {
                     Log.w(TAG, "[NetworkCallback] Failed to setUnderlyingNetworks(null): ${e.message}")
                 }
+                mainHandler.post { scheduleNoNetworkShutdown() }
             }
         }
 
@@ -837,6 +869,7 @@ class SmartProxyVpnService : VpnService() {
             Log.i(TAG, "[shutdown] Already torn down (tornDown=true), skipping.")
             return
         }
+        cancelNoNetworkShutdown()
         unregisterDefaultNetworkListener()
         mainHandler.removeCallbacks(notificationRefreshRunnable)
         pendingNetworkChangeRunnable?.let { mainHandler.removeCallbacks(it) }
@@ -995,6 +1028,7 @@ class SmartProxyVpnService : VpnService() {
     override fun onDestroy() {
         Log.i(TAG, "[onDestroy] Service onDestroy() entered.")
         restartNeeded.set(0)
+        cancelNoNetworkShutdown()
         unregisterDefaultNetworkListener()
         mainHandler.removeCallbacks(notificationRefreshRunnable)
         pendingNetworkChangeRunnable?.let { mainHandler.removeCallbacks(it) }
