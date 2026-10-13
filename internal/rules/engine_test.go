@@ -864,6 +864,93 @@ proxy domain *.example.com specific
 	}
 }
 
+// Three levels of nesting, declared deepest-first: the deeper rule wins whatever
+// the file order is, because the walk keeps going past a hit instead of
+// returning on the first one.
+func TestEngine_ProxyRuleWildcardDomain_DeepestWinsRegardlessOfOrder(t *testing.T) {
+	path := writeTempRuleFile(t, strings.TrimSpace(`
+proxy domain *.api.example.com deepest
+proxy domain *.example.com middle
+proxy domain *.com shallow
+	`))
+	e, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ domain, alias string }{
+		{"v.api.example.com", "deepest"},
+		{"w.example.com", "middle"},
+		{"example.com", "shallow"},
+	} {
+		alias, matched := e.MatchProxyRule("", 0, c.domain)
+		if !matched || alias != c.alias {
+			t.Errorf("MatchProxyRule(%q) = (%q, %v), want (%q)", c.domain, alias, matched, c.alias)
+		}
+	}
+}
+
+// proxySuffixTrie.match walks labels right to left without strings.Split. These
+// cases pin the semantics the walk has to keep: subdomains only (never the rule
+// apex), deepest target wins, multi-label rules, and a missing label ending the
+// walk while keeping the shallower match.
+func TestProxySuffixTrie_MatchSemantics(t *testing.T) {
+	trie := newProxySuffixTrie()
+	trie.insert(".com", proxyTarget{alias: "general", index: 0})
+	trie.insert(".example.com", proxyTarget{alias: "specific", index: 1})
+	trie.insert(".api.example.com", proxyTarget{alias: "deepest", index: 2})
+
+	cases := []struct {
+		domain string
+		alias  string
+		ok     bool
+	}{
+		{"v.api.example.com", "deepest", true}, // a label deeper than any rule
+		{"api.example.com", "specific", true},  // the .api.example.com apex itself
+		{"example.com", "general", true},
+		{"other.com", "general", true},
+		{"com", "", false}, // apex of the rule, not a subdomain
+		{"", "", false},    // no labels at all
+		{"unrelated.net", "", false},
+	}
+	for _, c := range cases {
+		got, ok := trie.match(c.domain)
+		if ok != c.ok || got.alias != c.alias {
+			t.Errorf("match(%q) = (%q, %v), want (%q, %v)", c.domain, got.alias, ok, c.alias, c.ok)
+		}
+	}
+
+	// A label absent under a matched node ends the walk; the shallower target
+	// still applies. (break, not an early false return.)
+	shallow := newProxySuffixTrie()
+	shallow.insert(".com", proxyTarget{alias: "general", index: 0})
+	if got, ok := shallow.match("x.not-a-node.com"); !ok || got.alias != "general" {
+		t.Errorf("missing mid-label should keep the parent match, got (%q, %v)", got.alias, ok)
+	}
+
+	// Multi-label rules hang off the same walk.
+	multi := newProxySuffixTrie()
+	multi.insert(".a.b.com", proxyTarget{alias: "multi", index: 0})
+	for _, d := range []string{"x.a.b.com", "y.x.a.b.com"} {
+		if got, ok := multi.match(d); !ok || got.alias != "multi" {
+			t.Errorf("match(%q) = (%q, %v), want multi", d, got.alias, ok)
+		}
+	}
+	if _, ok := multi.match("a.b.com"); ok {
+		t.Error("a.b.com is the apex of *.a.b.com and must not match")
+	}
+}
+
+// The rewritten walk must not allocate: no label slice, no reversed copy.
+func TestProxySuffixTrie_MatchNoAllocs(t *testing.T) {
+	trie := newProxySuffixTrie()
+	trie.insert(".com", proxyTarget{alias: "general", index: 0})
+	trie.insert(".example.com", proxyTarget{alias: "specific", index: 1})
+	const domain = "v.api.example.com"
+	if n := testing.AllocsPerRun(200, func() { trie.match(domain) }); n != 0 {
+		t.Errorf("proxySuffixTrie.match allocated %v times per call, want 0", n)
+	}
+}
+
 func TestEngine_ProxyRuleFirstMatch_DomainBeforePort(t *testing.T) {
 	path := writeTempRuleFile(t, strings.TrimSpace(`
 proxy domain example.com proxy_domain

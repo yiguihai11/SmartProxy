@@ -591,26 +591,31 @@ func (t *proxySuffixTrie) insert(suffix string, target proxyTarget) {
 }
 
 func (t *proxySuffixTrie) match(domain string) (proxyTarget, bool) {
-	labels := strings.Split(domain, ".")
-	if len(labels) == 0 {
-		return proxyTarget{}, false
-	}
-	for i, j := 0, len(labels)-1; i < j; i, j = i+1, j-1 {
-		labels[i], labels[j] = labels[j], labels[i]
-	}
+	// Walk labels from right to left without strings.Split or a temporary
+	// reversed slice. Two rules differ from suffixTrie.match: a deeper target
+	// overrides a shallower one, so the walk must not stop at the first hit,
+	// and a missing label ends the walk while keeping whatever matched above
+	// it. The apex never matches, which falls out of the loop shape: it stops
+	// once only the leftmost label is left.
 	current := t.root
+	remaining := domain
 	var bestTarget proxyTarget
 	var matched bool
-	for i, label := range labels {
-		node, ok := current[label]
+	for {
+		i := strings.LastIndexByte(remaining, '.')
+		if i < 0 {
+			break
+		}
+		node, ok := current[remaining[i+1:]]
 		if !ok {
 			break
 		}
-		if node.hasTarget && i < len(labels)-1 {
+		if node.hasTarget {
 			bestTarget = node.target
 			matched = true
 		}
 		current = node.children
+		remaining = remaining[:i]
 	}
 	return bestTarget, matched
 }
