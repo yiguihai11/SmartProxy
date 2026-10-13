@@ -1245,27 +1245,8 @@ func TestUDPAssociate_UDPOnlyAutoRaw(t *testing.T) {
 // established and frames flow end-to-end.
 func TestUDPAssociate_Rep7Fallback(t *testing.T) {
 	// A UDP echo and a rep=0x07 SOCKS5 server bound to the SAME port.
-	echo, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
-	if err != nil {
-		t.Fatal(err)
-	}
+	ln, echo, port := startTCPEchoPair(t, net.IPv4(127, 0, 0, 1))
 	defer echo.Close()
-	port := echo.LocalAddr().(*net.UDPAddr).Port
-	go func() {
-		buf := make([]byte, 2048)
-		for {
-			n, addr, err := echo.ReadFromUDP(buf)
-			if err != nil {
-				return
-			}
-			echo.WriteToUDP(buf[:n], addr)
-		}
-	}()
-
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer ln.Close()
 	go func() {
 		for {
@@ -1466,12 +1447,8 @@ func TestUDPCapability_Detection(t *testing.T) {
 	t.Run("raw-only node", func(t *testing.T) {
 		// A frame DNS server (answers raw UDP frames with a valid DNS response) and a SOCKS5
 		// TCP server that rejects ASSOCIATE with rep=0x07, both on the SAME port.
-		fdns, dnsPort := startFrameDNSServer(t)
+		ln, fdns, dnsPort := startTCPFrameDNSPair(t, net.IPv4(127, 0, 0, 1))
 		defer fdns.Close()
-		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", dnsPort))
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer ln.Close()
 		go func() {
 			for {
@@ -1564,15 +1541,11 @@ func TestUDPCapability_Detection(t *testing.T) {
 // ASSOCIATE handshake entirely: UDP frames flow over the raw relay and no TCP connection is
 // ever attempted.
 func TestUDPCapability_RawRoutingOptimization(t *testing.T) {
-	echo, port := startUDPEcho(t)
+	ln, echo, port := startTCPEchoPair(t, net.IPv4(127, 0, 0, 1))
 	defer echo.Close()
+	defer ln.Close()
 
 	var tcpAttempts int32
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
 	go func() {
 		for {
 			conn, err := ln.Accept()
@@ -1772,12 +1745,8 @@ func TestUDPCapability_DetectionIPv6(t *testing.T) {
 		// The SOCKS5 TCP reject listener and the UDP frame DNS server must share the SAME port
 		// (like shadowsocks-android: TCP-only SOCKS5 + a raw UDP relay on the same host:port),
 		// so the raw fallback's dial to Host:Port finds the UDP relay there.
-		fdns, dnsPort := startFrameDNSServerOn(t, net.IPv6loopback)
+		ln, fdns, dnsPort := startTCPFrameDNSPair(t, net.IPv6loopback)
 		defer fdns.Close()
-		ln, err := net.Listen("tcp", net.JoinHostPort("::1", strconv.Itoa(dnsPort)))
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer ln.Close()
 		go func() {
 			for {

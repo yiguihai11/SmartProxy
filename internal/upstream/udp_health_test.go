@@ -129,6 +129,67 @@ func startGarbageUDPServer(t *testing.T) (*net.UDPConn, int) {
 	return pc, pc.LocalAddr().(*net.UDPAddr).Port
 }
 
+// listenTCPAndUDP binds both a TCP listener and a UDP socket on the SAME port on the given IP.
+// It tries TCP first (allocating an ephemeral port) and verifies UDP is also free on that port,
+// retrying if there's a collision. This eliminates the race/conflict where ListenUDP(:0) picks a
+// port whose TCP counterpart is already bound or in TIME_WAIT.
+func listenTCPAndUDP(t *testing.T, ip net.IP) (net.Listener, *net.UDPConn, int) {
+	t.Helper()
+	ipStr := ip.String()
+	for i := 0; i < 50; i++ {
+		ln, err := net.Listen("tcp", net.JoinHostPort(ipStr, "0"))
+		if err != nil {
+			continue
+		}
+		port := ln.Addr().(*net.TCPAddr).Port
+		uconn, err := net.ListenUDP("udp", &net.UDPAddr{IP: ip, Port: port})
+		if err != nil {
+			ln.Close()
+			continue
+		}
+		return ln, uconn, port
+	}
+	t.Fatalf("listenTCPAndUDP: failed to bind both TCP and UDP on %s after 50 attempts", ipStr)
+	return nil, nil, 0
+}
+
+// startTCPEchoPair binds a TCP listener and a UDP echo socket on the same port.
+func startTCPEchoPair(t *testing.T, ip net.IP) (net.Listener, *net.UDPConn, int) {
+	t.Helper()
+	ln, pc, port := listenTCPAndUDP(t, ip)
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, addr, err := pc.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			pc.WriteToUDP(buf[:n], addr)
+		}
+	}()
+	return ln, pc, port
+}
+
+// startTCPFrameDNSPair binds a TCP listener and a SOCKS5-UDP-frame DNS server on the same port.
+func startTCPFrameDNSPair(t *testing.T, ip net.IP) (net.Listener, *net.UDPConn, int) {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		ln, err := net.Listen("tcp", net.JoinHostPort(ip.String(), "0"))
+		if err != nil {
+			continue
+		}
+		port := ln.Addr().(*net.TCPAddr).Port
+		fdns, err := startFrameDNSServerAt(t, ip, port)
+		if err != nil {
+			ln.Close()
+			continue
+		}
+		return ln, fdns, port
+	}
+	t.Fatalf("startTCPFrameDNSPair: failed to bind both TCP and Frame DNS on %s after 50 attempts", ip.String())
+	return nil, nil, 0
+}
+
 // startTunnelSOCKS5Mock is a real SOCKS5 proxy for loopback: CONNECT is tunneled to the
 // target (so an HTTP health probe succeeds end to end), while UDP ASSOCIATE is rejected
 // with rep=0x07 so the client falls back to raw UDP (which nothing answers here).

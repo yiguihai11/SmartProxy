@@ -172,12 +172,10 @@ func TestUDPAssociate_UnverifiedRawNotFalseSuccess(t *testing.T) {
 // 不能退回 10s 兜底:raw 回落假成功 + 10s 等待是用户实际咬到的卡顿组合。
 func TestUDPAssociate_UnverifiedRawBlackHoleBounded(t *testing.T) {
 	// 与 shadowsocks-android 布局一致:SOCKS5 TCP 拒绝 ASSOCIATE,同 host:port 上有个
-	// 只吞不回的 UDP 中继。TCP/UDP 端口空间独立,先占住 UDP 端口再在同一个号上开 TCP。
-	udpPC, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := udpPC.LocalAddr().(*net.UDPAddr).Port
+	// 只吞不回的 UDP 中继。双栈同步绑定同一个端口,杜绝 CI 端口竞争。
+	ln, udpPC, port := listenTCPAndUDP(t, net.IPv4(127, 0, 0, 1))
+	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { udpPC.Close() })
 	go func() {
 		buf := make([]byte, 2048)
 		for {
@@ -187,13 +185,6 @@ func TestUDPAssociate_UnverifiedRawBlackHoleBounded(t *testing.T) {
 			// 故意不应答:模拟被 DROP 的黑洞中继。
 		}
 	}()
-	t.Cleanup(func() { udpPC.Close() })
-
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		t.Fatalf("cannot bind SOCKS5 TCP on the UDP relay port: %v", err)
-	}
-	t.Cleanup(func() { ln.Close() })
 	go func() {
 		for {
 			c, err := ln.Accept()
@@ -271,19 +262,8 @@ func TestUDPAssociate_UnverifiedRawDeadThenHealthy(t *testing.T) {
 // TestUDPAssociate_RawFastPathStillTrusted 对照用例:udp_only/已知 raw 节点的快路径本地
 // 拨号不算"未验证回落",不能被新增的端到端验证拦下来(否则纯 raw 节点彻底不可用)。
 func TestUDPAssociate_RawFastPathStillTrusted(t *testing.T) {
-// 同一 host:port 上:先绑定 TCP，再让裸 UDP 中继复用这个端口。
-	// 这样避免部分 CI 内核/网络栈在 UDP 已监听后再建立同端口 TCP 时出现
-	// 偶发的 EADDRINUSE。
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
+	ln, fdns, dnsPort := startTCPFrameDNSPair(t, net.IPv4(127, 0, 0, 1))
 	defer ln.Close()
-	dnsPort := ln.Addr().(*net.TCPAddr).Port
-	fdns, err := startFrameDNSServerAt(t, net.IPv4(127, 0, 0, 1), dnsPort)
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer fdns.Close()
 	go func() {
 		for {
