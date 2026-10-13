@@ -36,6 +36,11 @@ type proxyGlobRule struct {
 // current snapshot through Engine.rules and never mutate it; writers build a
 // fresh snapshot and atomically swap the pointer, so hot paths take no locks.
 type ruleSet struct {
+	// CIDR prefixes are accumulated while loading and inserted in one batch,
+	// avoiding a full trie clone for every ACL line.
+	pendingAllowedCIDR []netip.Prefix
+	pendingBlockedCIDR []netip.Prefix
+
 	allowedPorts    map[int]bool
 	allowedIPs      map[string]bool
 	allowedCIDR     *chnroute.Trie
@@ -206,6 +211,13 @@ func (rs *ruleSet) load(path string) error {
 	if err := scanner.Err(); err != nil {
 		return err
 	}
+	// Build each CIDR trie once after parsing the file. InsertBatch clones the
+	// current roots once, unlike Insert which clones the entire trie per prefix.
+	rs.allowedCIDR.InsertBatch(rs.pendingAllowedCIDR)
+	rs.blockedCIDR.InsertBatch(rs.pendingBlockedCIDR)
+	rs.pendingAllowedCIDR = nil
+	rs.pendingBlockedCIDR = nil
+
 	slog.Info("rules loaded",
 		"allowPorts", len(rs.allowedPorts),
 		"blockPorts", len(rs.blockedPorts),
@@ -372,9 +384,9 @@ func (rs *ruleSet) parseCIDRInto(value string, isAllow bool) {
 		prefix = netip.PrefixFrom(addr, addr.BitLen())
 	}
 	if isAllow {
-		rs.allowedCIDR.Insert(prefix)
+		rs.pendingAllowedCIDR = append(rs.pendingAllowedCIDR, prefix)
 	} else {
-		rs.blockedCIDR.Insert(prefix)
+		rs.pendingBlockedCIDR = append(rs.pendingBlockedCIDR, prefix)
 	}
 }
 
