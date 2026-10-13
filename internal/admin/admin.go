@@ -65,6 +65,11 @@ type Server struct {
 	unblockClientIP       func(ip string)
 	isClientIPBlocked     func(ip string) bool
 	tetheringBridge       TetheringBridge
+	// fdMode records whether the TUN device was handed to the engine as an
+	// external file descriptor (Android VpnService / Shizuku hotspot core)
+	// instead of being created by the core itself. Fixed for the engine's
+	// lifetime; the panel serves a trimmed variant when it is false (embed.go).
+	fdMode                bool
 	refreshInt            int
 	devMu                 sync.Mutex
 	statsMu               sync.Mutex
@@ -212,6 +217,13 @@ func (s *Server) SetConnStatsEnabledHook(fn func(bool)) {
 
 func (s *Server) SetTetheringBridge(b TetheringBridge) {
 	s.tetheringBridge = b
+}
+
+// SetFDMode records whether the TUN device comes from an external file
+// descriptor. The panel reads it to hide the views that can only ever be empty
+// without one (see embed.go); it never changes while the engine runs.
+func (s *Server) SetFDMode(v bool) {
+	s.fdMode = v
 }
 
 func (s *Server) getDeviceManager() *deviceManager {

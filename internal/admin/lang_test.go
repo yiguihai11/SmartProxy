@@ -72,6 +72,7 @@ func TestDashboardVariantInjection(t *testing.T) {
 
 func TestHandleDashboardServesLangVariants(t *testing.T) {
 	s := &Server{}
+	s.SetFDMode(true) // 语言选择与 fd 裁剪正交,这里固定为 fd 模式看纯语言变体
 	do := func(accept, cookie string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		if accept != "" {
@@ -101,6 +102,72 @@ func TestHandleDashboardServesLangVariants(t *testing.T) {
 	}
 	if rec := do("", ""); rec.Header().Get("Cache-Control") != "no-store" {
 		t.Error("dashboard responses must be Cache-Control: no-store (lang variant is per-request)")
+	}
+}
+
+// 非 fd 模式(仅代理 SOCKS5 / 桌面自建 TUN)下挂设备列表恒空,面板隐藏其菜单项:
+// fd 变体完全不带标记,非 fd 变体带标记且客户端摘除脚本成对存在。
+func TestDashboardNoFDVariantHidesDevicesEntry(t *testing.T) {
+	// 注入的赋值语句带分号,与客户端读数处的 "===false" 不混淆。
+	const flag = "window.SP_FD_MODE=false;"
+	for name, doc := range map[string]string{"en": dashboardHTML, "zh": zhDashboardHTML} {
+		if strings.Contains(doc, flag) {
+			t.Errorf("%s fd-mode document must not carry the non-fd flag", name)
+		}
+		if !strings.Contains(doc, `data-view="devices"`) {
+			t.Errorf("%s fd-mode document must keep the Connected Devices entry", name)
+		}
+	}
+	for name, doc := range map[string]string{"en": dashboardHTMLNoFD, "zh": zhDashboardHTMLNoFD} {
+		at := strings.Index(doc, flag)
+		head := strings.Index(doc, "</head>")
+		if at < 0 {
+			t.Errorf("%s non-fd document must carry the flag", name)
+			continue
+		}
+		if head < 0 || at > head {
+			t.Errorf("%s: flag must sit inside <head>, before </head>", name)
+		}
+		if n := strings.Count(doc, "</head>"); n != 1 {
+			t.Errorf("%s document must keep exactly one </head>, got %d", name, n)
+		}
+	}
+	// 摘除发生在客户端:标记要与摘除脚本配对,否则菜单项在非 fd 模式照样显示。
+	if !strings.Contains(dashboardHTML, "window.SP_FD_MODE===false") {
+		t.Error("dashboard.html must drop the entry when window.SP_FD_MODE===false")
+	}
+	// zh 变体除标记外与 zhDashboardHTML 一致(仍带 zh boot 字典)。
+	if !strings.Contains(zhDashboardHTMLNoFD, `window.SP_LANG='zh'`) {
+		t.Error("non-fd zh variant must keep the zh boot dict")
+	}
+	if strings.Contains(dashboardHTMLNoFD, `window.SP_LANG='zh'`) {
+		t.Error("non-fd English variant must not carry the zh boot dict")
+	}
+	// 面板无关的入口只有 sidebar 一处:菜单项被摘后 devices 视图不可达。
+	if n := strings.Count(dashboardHTML, `<div class="nav-item" data-view="devices">`); n != 1 {
+		t.Errorf("dashboard.html must have exactly one Connected Devices nav item, got %d", n)
+	}
+	if strings.Contains(dashboardHTML, "navTo('devices')") {
+		t.Error("devices view must not be reachable from another view (hiding the nav item would leave a dead entry point)")
+	}
+}
+
+func TestHandleDashboardServesNoFDVariant(t *testing.T) {
+	s := &Server{} // 缺省非 fd:引擎起面板前必先 SetFDMode
+	get := func() string {
+		rec := httptest.NewRecorder()
+		s.handleDashboard(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d", rec.Code)
+		}
+		return rec.Body.String()
+	}
+	if !strings.Contains(get(), "window.SP_FD_MODE=false;") {
+		t.Error("non-fd server must serve the variant that hides Connected Devices")
+	}
+	s.SetFDMode(true)
+	if body := get(); strings.Contains(body, "window.SP_FD_MODE=false;") {
+		t.Error("fd-mode server must serve the untrimmed variant")
 	}
 }
 

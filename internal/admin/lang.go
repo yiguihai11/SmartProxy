@@ -578,20 +578,31 @@ window.SP_I18N_HTML=` + mustJSON(zhHTML) + `;
 // zhDashboardHTML is the pre-built zh variant of dashboardHTML.
 var zhDashboardHTML string
 
-func init() {
-	zhDashboardHTML = strings.Replace(dashboardHTML, `<html lang="en">`, `<html lang="zh-CN">`, 1)
-	// 注入点必须落在真正闭合 <head> 的那个 </head> 上 —— 即首个 <body> 之前的最后一个
-	// "</head>"。绝不能按"第一处字面 </head>"替换:dashboard.html 里 JS 注释中若出现
-	// "</head>" 字样(曾有过),会把 zhBoot 整段塞进注释中间、由其自带 </script> 提前终结
-	// 外层 <script>,剩余 boot 源码便以纯文本喷到页面(表现为"乱码")。
-	body := strings.Index(zhDashboardHTML, "<body")
+// headInject inserts snippet at the very end of <head> of doc — right before the
+// "</head>" that actually closes it, i.e. the last one before <body>. It must
+// never target the first literal "</head>": dashboard.html's JS comments may
+// contain that text (they once did), and injecting there buries the snippet in a
+// comment whose own </script> closes the enclosing <script> early, spilling the
+// rest of the snippet onto the page as text (乱码). Both documents are built at
+// init, so a missing anchor is a build-time bug — panic beats serving a broken
+// panel.
+func headInject(doc, snippet string) string {
+	body := strings.Index(doc, "<body")
 	if body < 0 {
 		panic("dashboard.html: <body> not found")
 	}
-	closeHead := strings.LastIndex(zhDashboardHTML[:body], "</head>")
+	closeHead := strings.LastIndex(doc[:body], "</head>")
 	if closeHead < 0 {
 		panic("dashboard.html: closing </head> not found before <body>")
 	}
-	// 插到 </head> 起始之前,zhBoot 因此仍在 <head> 内(紧随静态 boot script)。
-	zhDashboardHTML = zhDashboardHTML[:closeHead] + zhBoot + "\n" + zhDashboardHTML[closeHead:]
+	// 插到 </head> 起始之前,片段因此仍在 <head> 内(zhBoot 紧随静态 boot script)。
+	return doc[:closeHead] + snippet + "\n" + doc[closeHead:]
+}
+
+func init() {
+	zhDashboardHTML = strings.Replace(dashboardHTML, `<html lang="en">`, `<html lang="zh-CN">`, 1)
+	zhDashboardHTML = headInject(zhDashboardHTML, zhBoot)
+	// 非 fd 模式变体:同一文档 + 隐藏下挂设备菜单项的标记(见 embed.go noFDBoot)。
+	dashboardHTMLNoFD = headInject(dashboardHTML, noFDBoot)
+	zhDashboardHTMLNoFD = headInject(zhDashboardHTML, noFDBoot)
 }

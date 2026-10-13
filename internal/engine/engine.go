@@ -327,6 +327,9 @@ func (e *Engine) Start(ctx context.Context) error {
 	lc := e.Config.Load().Listen
 	if sockPath := lc.AdminSocket; sockPath != "" || lc.AdminPort > 0 {
 		e.adminServer = admin.New(sockPath, e.Router, e.UpstreamMgr, e.DNSHandler, e.Chnroute)
+		// 面板按 fd 模式裁剪菜单:下挂设备列表由 TUN 按源 IP 记账供给,只有 TUN 由
+		// 外部 fd 提供(VpnService / Shizuku 热点核)时才可能有数据,非 fd 模式隐藏。
+		e.adminServer.SetFDMode(isFdMode)
 		if auth := lc.AdminAuth; auth != nil {
 			e.adminServer.SetAdminAuth(auth)
 		}
