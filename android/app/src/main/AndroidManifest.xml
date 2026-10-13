@@ -106,6 +106,12 @@
             </intent-filter>
         </service>
 
+        <!-- 网络断开恢复:JobScheduler 调起,系统豁免后台拉起 FGS 官方通道 -->
+        <service
+            android:name=".NetworkRestoreJobService"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="false" />
+
         <!-- 开机自启(§4.3):exported=false 仍能收系统广播(BOOT_COMPLETED / 升级重发),
              但对外部 app 关闭。 -->
         <receiver

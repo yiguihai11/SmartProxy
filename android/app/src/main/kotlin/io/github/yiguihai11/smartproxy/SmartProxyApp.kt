@@ -70,6 +70,13 @@ class SmartProxyApp : Application() {
         runCatching {
             ShizukuForegroundRecovery.register(this)
         }
+
+        // 若进程重启时处于等待网络恢复态，尝试立即恢复或激活恢复监听
+        if (isMainProcess() && AppPrefs.vpnDesired(this) && AppPrefs.vpnSuspended(this)) {
+            runCatching {
+                NetworkRecoveryManager.attemptRestore(this)
+            }
+        }
     }
 
     /** 主进程判定(API 28+ 用 Application.getProcessName(),minSdk 31 原生可用)。 */

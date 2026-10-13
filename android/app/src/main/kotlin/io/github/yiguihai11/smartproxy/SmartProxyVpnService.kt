@@ -85,6 +85,9 @@ class SmartProxyVpnService : VpnService() {
         /** 启动 VPN(外部调用,如 MainActivity 的启动按钮)。 */
         fun start(context: android.content.Context) {
             Log.i(TAG, "[Companion] start() requested by caller")
+            AppPrefs.setVpnDesired(context, true)
+            AppPrefs.setVpnSuspended(context, false)
+            NetworkRecoveryManager.cancelRecovery(context)
             context.startForegroundService(
                 Intent(context, SmartProxyVpnService::class.java).setAction(ACTION_START)
             )
@@ -93,6 +96,9 @@ class SmartProxyVpnService : VpnService() {
         /** 用户主动停止(§4.5 userInitiatedStop:静默,不弹"已被断开")。 */
         fun stop(context: android.content.Context) {
             Log.i(TAG, "[Companion] stop() requested by caller (User initiate stop)")
+            AppPrefs.setVpnDesired(context, false)
+            AppPrefs.setVpnSuspended(context, false)
+            NetworkRecoveryManager.cancelRecovery(context)
             context.startService(
                 Intent(context, SmartProxyVpnService::class.java)
                     .setAction(NotificationHelper.ACTION_STOP)
@@ -251,6 +257,9 @@ class SmartProxyVpnService : VpnService() {
             // stopSelf() 在 shutdown(fullTeardown=true) 内部先于关 fd 调用(v2rayNG 顺序)。
             // 阻塞拆机丢引擎线程,主线程立即返回。
             userInitiatedStop = true
+            AppPrefs.setVpnDesired(this, false)
+            AppPrefs.setVpnSuspended(this, false)
+            NetworkRecoveryManager.cancelRecovery(this)
             restartNeeded.set(0)
             Log.i(TAG, "[onStartCommand] ACTION_STOP is user stop; enqueue full shutdown.")
             enqueueEngineWork("ACTION_STOP") { shutdown() }
@@ -375,6 +384,9 @@ class SmartProxyVpnService : VpnService() {
             startedEngine = true
             _isRunning.value = true
             startedAt = System.currentTimeMillis()
+            AppPrefs.setVpnDesired(this, true)
+            AppPrefs.setVpnSuspended(this, false)
+            NetworkRecoveryManager.cancelRecovery(this)
             registerDefaultNetworkListener()
             io.github.yiguihai11.smartproxy.shizuku.TetheringCoreSync.onStarted(this, ConfigProvider.readConfig(this).toString())
             // 悬浮网速计:仅 VPN 隧道模式有按 UID 统计(TUN 数据路径),SOCKS5 模式无数据可显。
@@ -931,13 +943,17 @@ class SmartProxyVpnService : VpnService() {
         super.onRevoke()
         restartNeeded.set(0)
         val passive = !userInitiatedStop
-        Log.w(TAG, "[onRevoke] Triggered by system! userInitiatedStop=$userInitiatedStop, passive=$passive")
+        val willAutoResume = passive && AppPrefs.vpnDesired(this)
+        Log.w(TAG, "[onRevoke] Triggered by system! userInitiatedStop=$userInitiatedStop, passive=$passive, willAutoResume=$willAutoResume")
         enqueueEngineWork("onRevoke") { shutdown() }
         // §4.5:被动断开弹一次性通知(仅提示,不违背保活通知极简原则);主动停止则静默。
         // 通知本身是轻量调用,留在主线程立刻弹,不必等引擎线程拆机。
         if (passive) {
-            Log.i(TAG, "[onRevoke] Passive disconnect. Displaying notification...")
-            NotificationHelper.notifyDisconnected(this)
+            Log.i(TAG, "[onRevoke] Passive disconnect. Displaying notification (willAutoResume=$willAutoResume)...")
+            NotificationHelper.notifyDisconnected(this, willAutoResume)
+            if (willAutoResume) {
+                NetworkRecoveryManager.startRecovery(applicationContext)
+            }
         }
         Log.i(TAG, "[onRevoke] Completed.")
     }
@@ -952,7 +968,7 @@ class SmartProxyVpnService : VpnService() {
             level >= android.content.ComponentCallbacks2.TRIM_MEMORY_COMPLETE ||
             level == android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> 2
             level >= android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND ||
-            level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> 1
+            level == android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> 1
             else -> 0
         }
         try {
@@ -969,6 +985,10 @@ class SmartProxyVpnService : VpnService() {
         unregisterDefaultNetworkListener()
         pendingNetworkChangeRunnable?.let { mainHandler.removeCallbacks(it) }
         pendingNetworkChangeRunnable = null
+        if (!userInitiatedStop && AppPrefs.vpnDesired(this)) {
+            Log.i(TAG, "[onDestroy] Non-user stop and vpnDesired is true; ensuring NetworkRecoveryManager is listening.")
+            NetworkRecoveryManager.startRecovery(applicationContext)
+        }
         // 最终拆机排队跑完后再关执行器(shutdown 不中断已排队/在跑任务);daemon 线程,
         // 不会拖住进程退出。
         enqueueEngineWork("onDestroy") { shutdown() }

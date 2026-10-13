@@ -24,6 +24,10 @@ class BootReceiver : BroadcastReceiver() {
             return
         }
         if (!AppPrefs.bootAutoStart(context)) return
+        if (!AppPrefs.vpnDesired(context)) {
+            android.util.Log.i("SmartProxyBoot", "BootReceiver: bootAutoStart enabled but VPN was manually stopped before reboot, skipping auto-start.")
+            return
+        }
         val needsVpnAuth = AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN
         if (needsVpnAuth && VpnService.prepare(context) != null) return
         SmartProxyVpnService.start(context)

@@ -57,6 +57,14 @@ block domain feedscontent-hot-dst.vivo.com.cn
 block domain fc-news-detail.vivo.com.cn
 block domain contentstatic.vivo.com.cn
 
+# ── vivo 软件包安装程序深度检测 / 云查杀 / 拦截策略 ──
+block domain isecure.vivo.com.cn         # 深度检测接口: /secure/app/check
+block domain httpdns.vivo.com.cn         # vivo HttpDNS (防直连绕过)
+block domain vcardsdkservice.vivo.com.cn # 拦截策略与云端风控规则下发
+block domain az.appstore.vivo.com.cn     # 应用商店防欺诈与云查杀比对
+block domain stinmmtn.vivo.com.cn        # 安装检测日志与行为上报
+
+
 #allow domain internal.corp             # 公司内部域名放行（不拦截、不代理）
 
 # ─────────────────────────────────────────

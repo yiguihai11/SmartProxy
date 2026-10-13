@@ -223,13 +223,18 @@ class MainActivity : ComponentActivity() {
             )
             SmartProxyVpnService.refreshForeground(this)
         }
+        if (!SmartProxyVpnService.isRunning.value && NetworkRecoveryManager.isSuspended(this)) {
+            android.util.Log.i("SmartProxyVpn", "[MainActivity] onResume: VPN is suspended waiting for network, checking restore...")
+            NetworkRecoveryManager.attemptRestore(this)
+        }
         io.github.yiguihai11.smartproxy.shizuku.TetheringCoreSync.onAppForegrounded(this)
     }
 
     private fun onToggleClicked() {
         val currentRunning = SmartProxyVpnService.isRunning.value
-        android.util.Log.i("SmartProxyVpn", "[MainActivity] onToggleClicked() called. Current isRunning=$currentRunning")
-        if (currentRunning) {
+        val isSuspended = NetworkRecoveryManager.isSuspended(this)
+        android.util.Log.i("SmartProxyVpn", "[MainActivity] onToggleClicked() called. Current isRunning=$currentRunning, isSuspended=$isSuspended")
+        if (currentRunning || isSuspended) {
             android.util.Log.i("SmartProxyVpn", "[MainActivity] User requested STOP. Calling SmartProxyVpnService.stop(this)...")
             SmartProxyVpnService.stop(this)
             return

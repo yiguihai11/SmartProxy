@@ -6,6 +6,7 @@
     <string name="notification_channel_vpn">VPN service</string>
     <string name="notification_running">Running</string>
     <string name="notification_disconnected">VPN disconnected by system</string>
+    <string name="notification_waiting_network">Network disconnected, will resume when connected</string>
     <string name="notification_stop">Stop</string>
     <string name="notification_action_strategy">Switch Strategy</string>
     <string name="notification_detail_strategy">Strategy: %1$s</string>

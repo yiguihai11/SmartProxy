@@ -61,6 +61,8 @@ object AppPrefs {
     private const val KEY_SPEED_METER_DOWN_COLOR = "speed_meter_down_color"
     private const val KEY_SPEED_METER_SWAP_ORDER = "speed_meter_swap_order"
     private const val KEY_SPEED_METER_LOCKED = "speed_meter_locked"
+    private const val KEY_VPN_DESIRED = "vpn_desired"
+    private const val KEY_VPN_SUSPENDED = "vpn_suspended"
 
     private fun sp(context: Context) =
         context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
@@ -78,6 +80,21 @@ object AppPrefs {
 
     fun setBootAutoStart(context: Context, value: Boolean) {
         sp(context).edit().putBoolean(KEY_BOOT_AUTO_START, value).apply()
+    }
+
+    /** 用户期望的 VPN 运行状态:true=开启;false=用户主动停止。
+     *  用于开机自启判断(重启前手动关闭则不自启)与网络断开自动恢复。 */
+    fun vpnDesired(context: Context): Boolean = sp(context).getBoolean(KEY_VPN_DESIRED, false)
+
+    fun setVpnDesired(context: Context, value: Boolean) {
+        sp(context).edit().putBoolean(KEY_VPN_DESIRED, value).apply()
+    }
+
+    /** 记录 VPN 是否因无网络/系统断开等被动原因暂时挂起等待恢复。 */
+    fun vpnSuspended(context: Context): Boolean = sp(context).getBoolean(KEY_VPN_SUSPENDED, false)
+
+    fun setVpnSuspended(context: Context, value: Boolean) {
+        sp(context).edit().putBoolean(KEY_VPN_SUSPENDED, value).apply()
     }
 
     fun setGlobalMode(context: Context, value: Boolean) {

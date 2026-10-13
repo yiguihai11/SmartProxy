@@ -190,17 +190,41 @@ object NotificationHelper {
     }
 
     /** §4.5 被动断连提示:一次性(auto-cancel)通知,非 ongoing,点掉即消失。 */
-    fun notifyDisconnected(context: Context) {
+    fun notifyDisconnected(context: Context, willAutoResume: Boolean = false) {
         ensureChannel(context)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val n = android.app.Notification.Builder(context, CHANNEL_ID)
+        val content = if (willAutoResume) {
+            context.getString(R.string.notification_waiting_network)
+        } else {
+            context.getString(R.string.notification_disconnected)
+        }
+        val builder = android.app.Notification.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_vpn)
             .setContentTitle(context.getString(R.string.app_name))
-            .setContentText(context.getString(R.string.notification_disconnected))
+            .setContentText(content)
             .setAutoCancel(true)
             .setShowWhen(false)
-            .build()
-        nm.notify(NOTIFICATION_ID_DISCONNECTED, n)
+        if (willAutoResume) {
+            val stopIntent = Intent(context, SmartProxyVpnService::class.java)
+                .setAction(ACTION_STOP)
+            val stopPi = PendingIntent.getService(
+                context, 10, stopIntent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            val stopAction = android.app.Notification.Action.Builder(
+                null,
+                context.getString(R.string.notification_stop),
+                stopPi
+            ).build()
+            builder.addAction(stopAction)
+        }
+        nm.notify(NOTIFICATION_ID_DISCONNECTED, builder.build())
+    }
+
+    /** 清理等待网络重连的提示通知。 */
+    fun cancelWaitingNotification(context: Context) {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(NOTIFICATION_ID_DISCONNECTED)
     }
 
     /** 启动前台并带 specialUse 类型。注意 `vpn` 不是合法的 manifest 属性 flag
