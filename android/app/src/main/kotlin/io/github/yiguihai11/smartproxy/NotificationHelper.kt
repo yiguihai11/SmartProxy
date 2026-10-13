@@ -126,8 +126,10 @@ object NotificationHelper {
             bigDetailLines.add(contentText)
         } else if (isDualStackNode && v4Node.isNotBlank()) {
             val latSuffix = fmtLatencySuffix(v4Latency)
+            val v4Suffix = fmtLatencyParens(v4Latency)
             contentText = context.getString(R.string.notification_node_dual, v4Node, latSuffix)
-            bigDetailLines.add(contentText)
+            bigDetailLines.add("IPv4: $v4Node$v4Suffix")
+            bigDetailLines.add("IPv6: $v4Node$v4Suffix")
         } else if (v4Node.isNotBlank() && v6Node.isNotBlank()) {
             val v4Suffix = fmtLatencyParens(v4Latency)
             val v6Suffix = fmtLatencyParens(v6Latency)
@@ -182,9 +184,17 @@ object NotificationHelper {
         return content.build()
     }
 
-    /** 原地更新前台保活通知(不重启服务)。 */
-    fun refresh(context: Context) {
+    @Volatile
+    private var lastNotificationSignature: String? = null
+
+    /** 原地更新前台保活通知(不重启服务)。支持变更检测过滤,避免无谓的通知栏重绘。 */
+    fun refresh(context: Context, force: Boolean = false) {
         ensureChannel(context)
+        val sig = runCatching { smartproxy.mobile.Mobile.getActiveNodeStatus() }.getOrDefault("") + "|" + AppPrefs.speedMeterLocked(context)
+        if (!force && sig.isNotBlank() && sig == lastNotificationSignature) {
+            return
+        }
+        lastNotificationSignature = sig
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(NOTIFICATION_ID, build(context))
     }
@@ -233,6 +243,7 @@ object NotificationHelper {
      *  subtype;运行期类型必须与 manifest 声明一致,否则 Android 14+ 抛异常。 */
     fun startForeground(service: Service) {
         ensureChannel(service)
+        lastNotificationSignature = runCatching { smartproxy.mobile.Mobile.getActiveNodeStatus() }.getOrDefault("") + "|" + AppPrefs.speedMeterLocked(service)
         ServiceCompat.startForeground(
             service,
             NOTIFICATION_ID,

@@ -179,6 +179,15 @@ class SmartProxyVpnService : VpnService() {
     private var userInitiatedStop = false
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    /** 前台保活通知周期性刷新 Runnable:引擎在跑时每 20s 自动检查一次选路与延迟状态,静默更新通知。 */
+    private val notificationRefreshRunnable = object : Runnable {
+        override fun run() {
+            if (startedEngine) {
+                NotificationHelper.refresh(this@SmartProxyVpnService)
+                mainHandler.postDelayed(this, 20_000L)
+            }
+        }
+    }
     private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private var pendingNetworkChangeRunnable: Runnable? = null
     private var currentUnderlyingNetwork: Network? = null
@@ -288,11 +297,13 @@ class SmartProxyVpnService : VpnService() {
             enqueueEngineWork("REFRESH_NODES") {
                 smartproxy.mobile.Mobile.triggerNodeReprobe()
             }
-            NotificationHelper.refresh(this)
+            NotificationHelper.refresh(this, force = true)
             mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this) }, 800)
             mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this) }, 1600)
             mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this) }, 3000)
             mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this) }, 5000)
+            mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this) }, 10000)
+            mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this) }, 15000)
             return START_STICKY
         }
 
@@ -392,11 +403,12 @@ class SmartProxyVpnService : VpnService() {
             // 悬浮网速计:仅 VPN 隧道模式有按 UID 统计(TUN 数据路径),SOCKS5 模式无数据可显。
             // autoShow 内部按开关 + 悬浮窗权限自门控,未开/未授权均为 no-op。
             if (!socksOnly) SpeedMeterOverlay.autoShow(applicationContext)
-            mainHandler.postDelayed({
-                if (startedEngine) {
-                    NotificationHelper.refresh(this@SmartProxyVpnService)
-                }
-            }, 1500L)
+            mainHandler.removeCallbacks(notificationRefreshRunnable)
+            mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this@SmartProxyVpnService) }, 1500L)
+            mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this@SmartProxyVpnService) }, 4000L)
+            mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this@SmartProxyVpnService) }, 8000L)
+            mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this@SmartProxyVpnService) }, 15000L)
+            mainHandler.postDelayed(notificationRefreshRunnable, 20_000L)
             Log.i(TAG, "[startInternal] Start SUCCESS (socks=$socksOnly)! startedEngine=true, _isRunning=true. Returning START_STICKY.")
             return START_STICKY
         }
@@ -826,6 +838,7 @@ class SmartProxyVpnService : VpnService() {
             return
         }
         unregisterDefaultNetworkListener()
+        mainHandler.removeCallbacks(notificationRefreshRunnable)
         pendingNetworkChangeRunnable?.let { mainHandler.removeCallbacks(it) }
         pendingNetworkChangeRunnable = null
         currentUnderlyingNetwork = null
@@ -983,6 +996,7 @@ class SmartProxyVpnService : VpnService() {
         Log.i(TAG, "[onDestroy] Service onDestroy() entered.")
         restartNeeded.set(0)
         unregisterDefaultNetworkListener()
+        mainHandler.removeCallbacks(notificationRefreshRunnable)
         pendingNetworkChangeRunnable?.let { mainHandler.removeCallbacks(it) }
         pendingNetworkChangeRunnable = null
         if (!userInitiatedStop && AppPrefs.vpnDesired(this)) {

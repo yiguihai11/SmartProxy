@@ -214,14 +214,17 @@ class MainActivity : ComponentActivity() {
         // Android 13+ 需通知权限,未授权时通知本就被压住,补挂无意义,交给授权回调。
         if (SmartProxyVpnService.isRunning.value &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                == PackageManager.PERMISSION_GRANTED &&
-            !NotificationHelper.isForegroundNotificationVisible(this)
+                == PackageManager.PERMISSION_GRANTED
         ) {
-            android.util.Log.i(
-                "SmartProxyVpn",
-                "[MainActivity] onResume: VPN running but keepalive notification gone, reposting foreground."
-            )
-            SmartProxyVpnService.refreshForeground(this)
+            if (!NotificationHelper.isForegroundNotificationVisible(this)) {
+                android.util.Log.i(
+                    "SmartProxyVpn",
+                    "[MainActivity] onResume: VPN running but keepalive notification gone, reposting foreground."
+                )
+                SmartProxyVpnService.refreshForeground(this)
+            } else {
+                NotificationHelper.refresh(this)
+            }
         }
         if (!SmartProxyVpnService.isRunning.value && NetworkRecoveryManager.isSuspended(this)) {
             android.util.Log.i("SmartProxyVpn", "[MainActivity] onResume: VPN is suspended waiting for network, checking restore...")
