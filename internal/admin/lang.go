@@ -57,6 +57,13 @@ var zhStrings = map[string]string{
 	"Are you sure you want to disconnect this device?": "确定要断开此设备的连接吗？",
 	"Are you sure you want to block this device?": "确定要拉黑此设备吗？被拉黑的设备将无法通过热点/代理联网。",
 	"Enable this proxy node": "启用此代理节点",
+	"Connection Action": "连接操作",
+	"Copy Domain / Host": "复制域名 / 主机名",
+	"Copy Full Address": "复制完整地址",
+	"Quick Block": "一键屏蔽",
+	"Click for actions (copy, block, ACL)": "点击查看操作 (复制、屏蔽、添加ACL规则)",
+	"Blocked: {0}": "已屏蔽：{0}",
+	"Are you sure you want to block \"{0}\"?": "确定要屏蔽目标「{0}」吗？命中目标的现有连接将被立即掐断。",
 
 	// header buttons / status words
 	"Auto": "自动", "Paused": "已暂停", "Auto Refresh": "自动刷新",

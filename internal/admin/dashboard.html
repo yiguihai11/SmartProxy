@@ -240,6 +240,8 @@ tr:last-child td{border-bottom:none}
 .dev-conn-dest{font-family:var(--mono);flex:1;min-width:0;word-break:break-all;white-space:normal;line-height:1.35;color:var(--text1);cursor:pointer;border-radius:3px;padding:0 2px;transition:background .15s,color .15s}
 .dev-conn-dest:hover{background:rgba(127,127,127,.15);color:var(--accent)}
 .dev-conn-traffic{font-family:var(--mono);font-size:.72rem;white-space:nowrap;margin-top:2px;flex-shrink:0}
+.dev-conn-btn{display:inline-flex;align-items:center;justify-content:center;padding:1px 5px;font-size:.75rem;line-height:1.2;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--surface2);color:var(--text2);cursor:pointer;flex-shrink:0;margin-top:1px;transition:all .15s}
+.dev-conn-btn:hover{background:var(--border);color:var(--text)}
 .toggle-group{display:flex;gap:4px;margin-bottom:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px;width:fit-content}
 .toggle-btn{padding:5px 14px;border-radius:5px;font-size:.82rem;cursor:pointer;border:none;background:transparent;color:var(--text2);transition:all .15s;font-family:var(--font)}
 .toggle-btn.active{background:var(--accent);color:#fff}
@@ -4237,6 +4239,7 @@ function confirmACL(){
           var v=document.querySelector('.nav-item.active').dataset.view;
           if(v==='blacklist'){blSelected={};loadBlacklist()}
           else if(v==='cache'){cacheSelected={};loadCache()}
+          else if(v==='devices'){loadDevices()}
           closeACLDialog();
           setTimeout(function(){alert(data.notice)},100);
           return;
@@ -4244,6 +4247,7 @@ function confirmACL(){
         var v=document.querySelector('.nav-item.active').dataset.view;
         if(v==='blacklist'){blSelected={};loadBlacklist()}
         else if(v==='cache'){cacheSelected={};loadCache()}
+        else if(v==='devices'){loadDevices()}
         closeACLDialog();
         if(data.skipped>0)setTimeout(function(){alert(tf('{0} added, {1} skipped (duplicates)',[data.count,data.skipped]))},100);
       });
@@ -5276,6 +5280,106 @@ function copyDeviceDest(dest, e) {
   }
 }
 
+var curConnHost = '', curConnPort = 0, curConnProto = '';
+
+function openConnActionDialog(host, port, proto, e) {
+  if (e) {
+    if (e.stopPropagation) e.stopPropagation();
+    if (e.preventDefault) e.preventDefault();
+  }
+  if (!host || host === '-') return;
+  curConnHost = host.trim().replace(/^\[|\]$/g, '');
+  curConnPort = port || 0;
+  curConnProto = proto || '';
+
+  var fullAddr = (curConnHost.indexOf(':') !== -1 && !curConnHost.startsWith('[')) ?
+    ('[' + curConnHost + ']' + (curConnPort ? (':' + curConnPort) : '')) :
+    (curConnHost + (curConnPort ? (':' + curConnPort) : ''));
+
+  var infoEl = document.getElementById('conn-action-info');
+  if (infoEl) {
+    var pBadge = proto ? ('<span class="dev-proto-badge ' + (proto.toLowerCase() === 'udp' ? 'udp' : 'tcp') + '" style="margin-right:6px">' + proto + '</span>') : '';
+    infoEl.innerHTML = pBadge + '<span>' + escHtml(fullAddr) + '</span>';
+  }
+
+  var overlay = document.getElementById('conn-action-overlay');
+  if (overlay) overlay.classList.add('show');
+}
+
+function closeConnActionDialog() {
+  var overlay = document.getElementById('conn-action-overlay');
+  if (overlay) overlay.classList.remove('show');
+}
+
+function connActionCopy(which) {
+  var text = '';
+  if (which === 'host') {
+    text = curConnHost;
+  } else {
+    text = (curConnHost.indexOf(':') !== -1 && !curConnHost.startsWith('[')) ?
+      ('[' + curConnHost + ']' + (curConnPort ? (':' + curConnPort) : '')) :
+      (curConnHost + (curConnPort ? (':' + curConnPort) : ''));
+  }
+  if (!text) return;
+  copyDeviceDest(text);
+  closeConnActionDialog();
+}
+
+function isConnIPAddress(s) {
+  if (!s) return false;
+  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(s)) return true;
+  if (s.indexOf(':') !== -1) return true;
+  return false;
+}
+
+function connActionQuickBlock() {
+  if (!curConnHost) return;
+  var target = curConnHost;
+  var isIP = isConnIPAddress(target);
+  var typ = isIP ? 'ip' : 'domain';
+
+  if (!confirm(tf('Are you sure you want to block \"{0}\"?', [target]))) return;
+  closeConnActionDialog();
+  var entry = {
+    type: typ,
+    value: target,
+    action: 'block',
+    upstream: ''
+  };
+  fetch('/acl/add', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({entries: [entry]})
+  }).then(function(r) {
+    if (r.ok) {
+      return r.json().then(function(data) {
+        if (data.notice) {
+          setTimeout(function() { alert(data.notice); }, 100);
+        } else {
+          var toast = document.getElementById('copy-toast');
+          if (toast) showCopyToast(toast, tf('Blocked: {0}', [target]));
+        }
+        loadDevices();
+      });
+    } else {
+      return r.text().then(function(err) {
+        alert('Error: ' + err);
+      });
+    }
+  }).catch(function(e) {
+    alert('Error: ' + e.message);
+  });
+}
+
+function connActionOpenACL() {
+  if (!curConnHost) return;
+  var target = curConnHost;
+  var isIP = isConnIPAddress(target);
+  var typ = isIP ? 'ip' : 'domain';
+  closeConnActionDialog();
+  openACLDialog([{value: target, type: typ, source: 'devices'}], 'block');
+}
+
 function renderDevices() {
   if (!devicesData) return;
   var devList = (devicesData.devices || []).filter(function(d) {
@@ -5387,8 +5491,9 @@ function renderDevices() {
             var cTraffic = '↑ ' + fmtNum(c.up || 0) + ' · ↓ ' + fmtNum(c.down || 0);
             return '<div class="dev-conn-row">' +
               '<span class="dev-proto-badge ' + protoClass + '">' + protoName + '</span>' +
-              '<span class="dev-conn-dest" onclick="copyDeviceDest(\'' + escAttr(dest) + '\', event)" title="' + escAttr(t('Click to copy') + ': ' + dest) + '">' + escHtml(dest) + '</span>' +
+              '<span class="dev-conn-dest" onclick="openConnActionDialog(\'' + escAttr(c.host || '') + '\',' + (c.port || 0) + ',\'' + protoName + '\', event)" title="' + escAttr(t('Click for actions (copy, block, ACL)') + ': ' + dest) + '">' + escHtml(dest) + '</span>' +
               '<span class="dev-conn-traffic" style="color:var(--text2)">' + cTraffic + '</span>' +
+              '<button class="dev-conn-btn" onclick="openConnActionDialog(\'' + escAttr(c.host || '') + '\',' + (c.port || 0) + ',\'' + protoName + '\', event)" title="' + escAttr(t('Connection Action')) + '">⋮</button>' +
             '</div>';
           }).join('');
         }
@@ -5578,6 +5683,29 @@ es.onmessage=function(e){
         <button class="btn btn-sm" id="acl-audit-cancel-btn" onclick="closeACLAuditDialog()">Dismiss</button>
         <button class="btn btn-sm primary" id="acl-audit-confirm-btn" onclick="applyACLAuditFixes()">Apply &amp; Save to ACL</button>
       </div>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="conn-action-overlay" onclick="if(event.target===this)closeConnActionDialog()">
+  <div class="dialog" style="max-width:380px" onclick="event.stopPropagation()">
+    <div class="dialog-title">Connection Action</div>
+    <div class="dialog-desc" id="conn-action-info" style="font-family:var(--mono);background:var(--bg);padding:8px 10px;border-radius:var(--radius-sm);border:1px solid var(--border);word-break:break-all;margin-bottom:14px;color:var(--text1);display:flex;align-items:center;gap:8px"></div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
+      <button class="btn btn-sm" onclick="connActionCopy('host')" style="justify-content:flex-start">
+        <span style="font-size:0.9rem">📋</span> <span>Copy Domain / Host</span>
+      </button>
+      <button class="btn btn-sm" onclick="connActionCopy('addr')" style="justify-content:flex-start">
+        <span style="font-size:0.9rem">📋</span> <span>Copy Full Address</span>
+      </button>
+      <button class="btn btn-sm danger" id="conn-action-block-btn" onclick="connActionQuickBlock()" style="justify-content:flex-start">
+        <span style="font-size:0.9rem">🚫</span> <span>Quick Block</span>
+      </button>
+      <button class="btn btn-sm primary" onclick="connActionOpenACL()" style="justify-content:flex-start">
+        <span style="font-size:0.9rem">🛡️</span> <span>Add ACL Rule</span>
+      </button>
+    </div>
+    <div class="dialog-actions">
+      <button class="btn btn-sm" onclick="closeConnActionDialog()">Close</button>
     </div>
   </div>
 </div>
