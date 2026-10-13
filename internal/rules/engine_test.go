@@ -97,7 +97,7 @@ func TestSuffixTrie_CaseSensitivity(t *testing.T) {
 	}
 }
 
-func writeTempRuleFile(t *testing.T, content string) string {
+func writeTempRuleFile(t testing.TB, content string) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "rules.txt")

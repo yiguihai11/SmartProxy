@@ -147,17 +147,8 @@ func (r *Router) BypassLAN() bool {
 	return false
 }
 
-func (r *Router) isDomestic(ip string) bool {
-	if r == nil || r.chnroute == nil {
-		return false
-	}
-	addr, err := net.ResolveIPAddr("ip", ip)
-	if err != nil {
-		return false
-	}
-	return r.chnroute.Contains(addr.IP)
-}
-
+// IsDomesticByIP reports whether the given IP literal belongs to the domestic
+// (chnroute) space. Non-IP input yields false.
 func (r *Router) IsDomesticByIP(ipStr string) bool {
 	if r == nil || r.chnroute == nil {
 		return false

@@ -54,6 +54,14 @@ jobs:
       - name: Vet
         run: go vet -tags with_gvisor ./...
 
+      # ACL / chnroute 热点纯计算路径的基准。真正的回归门禁是这两个包里用
+      # testing.AllocsPerRun 写的普通测试(上面 go test 已经跑到,分配数一变就红);
+      # 这一步额外把基准跑一遍有两个作用:一是保证基准本身不会因为 fixture 路径
+      # 或签名变化悄悄失效(改坏了只会静默不跑),二是把 ns/op 打进 CI 日志,
+      # 便于改动前后人工对比。
+      - name: Benchmarks (ACL / chnroute hot paths)
+        run: go test -tags with_gvisor -run=^$ -bench=. -benchmem -benchtime=20000x ./internal/rules/ ./internal/chnroute/
+
       - name: Build
         run: go build -tags with_gvisor ./...
 

@@ -32,6 +32,107 @@ type proxyGlobRule struct {
 	target  proxyTarget
 }
 
+// globBucket 是 glob 规则的下标分桶:把「逐条 path.Match 全量线性扫描」压成
+// 「只扫可能命中的那几条」。生产 ACL 里 14 条中缀 glob(*ads*-*.zijieapi.com 之类)
+// 全靠它从每次域名匹配里消掉。
+//
+// 依据:path.Match 要求整个名字与整个模式匹配,所以模式里最后一个 '*' 之后的部分
+// 必须逐字出现在名字的末尾 ——「名字以该字面后缀结尾」是命中的必要条件。
+// 分桶只做排除,候选仍然要跑真正的 path.Match,所以不会凭空多出命中。
+//
+// 后缀不以 '.' 开头(没法按标签边界查表)、含模式元字符(* ? [ \)或最后一个 '*'
+// 之后没有字面后缀的规则,一律进 always 逐条扫描:兜底方向是宁可多扫,绝不漏命中。
+type globBucket struct {
+	bySuffix map[string][]int // 字面后缀(含前导 '.')→ 规则下标
+	always   []int
+}
+
+// bucketSuffix 取出 pattern 里能当桶键的字面后缀。ok=false 表示这条规则只能兜底扫描。
+func bucketSuffix(pattern string) (string, bool) {
+	star := strings.LastIndexByte(pattern, '*')
+	if star < 0 {
+		// 没有 '*' 的 glob(? 或 [):模式尾部不是确定字面量,分不了桶。
+		return "", false
+	}
+	tail := pattern[star+1:]
+	if len(tail) < 1 || tail[0] != '.' {
+		// 不以 '.' 开头就无法用「按标签边界查 map」定位,空尾部则等于没有约束。
+		return "", false
+	}
+	if strings.ContainsAny(tail, `*?[\`) {
+		return "", false
+	}
+	return tail, true
+}
+
+// newGlobBucket 为 patterns 建索引(patterns[i] 是第 i 条规则的模式)。
+func newGlobBucket(patterns []string) globBucket {
+	var gb globBucket
+	for i, p := range patterns {
+		key, ok := bucketSuffix(p)
+		if !ok {
+			gb.always = append(gb.always, i)
+			continue
+		}
+		if gb.bySuffix == nil {
+			gb.bySuffix = make(map[string][]int)
+		}
+		gb.bySuffix[key] = append(gb.bySuffix[key], i)
+	}
+	return gb
+}
+
+// matchAny 判断 domain 是否命中 patterns 里的任意一条。
+func (gb *globBucket) matchAny(patterns []string, domain string) bool {
+	for _, i := range gb.always {
+		if ok, _ := path.Match(patterns[i], domain); ok {
+			return true
+		}
+	}
+	// 桶键以 '.' 开头,所以在 domain 的每个标签边界上各查一次 map 就能覆盖全部
+	// 可能的后缀:查找次数是域名标签数(常数级),与规则条数无关。
+	for i := len(domain) - 1; i >= 0; i-- {
+		if domain[i] != '.' {
+			continue
+		}
+		for _, j := range gb.bySuffix[domain[i:]] {
+			if ok, _ := path.Match(patterns[j], domain); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// bestMatchingGlob 返回命中 domain 的规则里 target.index 最小的那条;ok=false 表示没命中。
+// ACL 的语义是「靠前的规则优先」,所以必须比较全部命中项,不能命中一条就返回:
+// 分桶只是把不可能命中的规则排除掉,会命中哪些仍然由 path.Match 决定。
+//
+// 这里把扫描体写了两遍而不是抽成回调:回调闭包捕获 best 后每次调用都可能让
+// best 逃逸到堆(1 alloc/op),而这条路径每次流建立都会走。
+func (gb *globBucket) bestMatchingGlob(globs []proxyGlobRule, domain string) (proxyGlobRule, bool) {
+	var best proxyGlobRule
+	found := false
+	for _, i := range gb.always {
+		pg := globs[i]
+		if ok, _ := path.Match(pg.pattern, domain); ok && (!found || pg.target.index < best.target.index) {
+			best, found = pg, true
+		}
+	}
+	for i := len(domain) - 1; i >= 0; i-- {
+		if domain[i] != '.' {
+			continue
+		}
+		for _, j := range gb.bySuffix[domain[i:]] {
+			pg := globs[j]
+			if ok, _ := path.Match(pg.pattern, domain); ok && (!found || pg.target.index < best.target.index) {
+				best, found = pg, true
+			}
+		}
+	}
+	return best, found
+}
+
 // ruleSet is an immutable snapshot of the effective ACL data. Readers load the
 // current snapshot through Engine.rules and never mutate it; writers build a
 // fresh snapshot and atomically swap the pointer, so hot paths take no locks.
@@ -47,6 +148,7 @@ type ruleSet struct {
 	allowedDomains  map[string]bool
 	allowedSuffixes *suffixTrie
 	allowedGlobs    []string
+	allowedGlobIdx  globBucket
 
 	blockedPorts    map[int]bool
 	blockedIPs      map[string]bool
@@ -54,6 +156,7 @@ type ruleSet struct {
 	blockedDomains  map[string]bool
 	blockedSuffixes *suffixTrie
 	blockedGlobs    []string
+	blockedGlobIdx  globBucket
 
 	proxyPorts    map[int]proxyTarget
 	proxyIPs      map[string]proxyTarget
@@ -61,6 +164,7 @@ type ruleSet struct {
 	proxyDomains  map[string]proxyTarget
 	proxySuffixes *proxySuffixTrie
 	proxyGlobs    []proxyGlobRule
+	proxyGlobIdx  globBucket
 
 	proxyRules []ProxyRule
 }
@@ -112,6 +216,7 @@ func (rs *ruleSet) reset() {
 	rs.allowedDomains = make(map[string]bool)
 	rs.allowedSuffixes = newSuffixTrie()
 	rs.allowedGlobs = nil
+	rs.allowedGlobIdx = globBucket{}
 
 	rs.blockedPorts = make(map[int]bool)
 	rs.blockedIPs = make(map[string]bool)
@@ -119,6 +224,7 @@ func (rs *ruleSet) reset() {
 	rs.blockedDomains = make(map[string]bool)
 	rs.blockedSuffixes = newSuffixTrie()
 	rs.blockedGlobs = nil
+	rs.blockedGlobIdx = globBucket{}
 
 	rs.proxyPorts = make(map[int]proxyTarget)
 	rs.proxyIPs = make(map[string]proxyTarget)
@@ -126,6 +232,7 @@ func (rs *ruleSet) reset() {
 	rs.proxyDomains = make(map[string]proxyTarget)
 	rs.proxySuffixes = newProxySuffixTrie()
 	rs.proxyGlobs = nil
+	rs.proxyGlobIdx = globBucket{}
 	rs.proxyRules = nil
 }
 
@@ -217,6 +324,16 @@ func (rs *ruleSet) load(path string) error {
 	rs.blockedCIDR.InsertBatch(rs.pendingBlockedCIDR)
 	rs.pendingAllowedCIDR = nil
 	rs.pendingBlockedCIDR = nil
+
+	// glob 分桶也在解析完成后建一次:桶只依赖模式本身,建完之后整份 ruleSet 就是
+	// 只读快照,热路径上不再有任何索引维护。
+	rs.allowedGlobIdx = newGlobBucket(rs.allowedGlobs)
+	rs.blockedGlobIdx = newGlobBucket(rs.blockedGlobs)
+	proxyGlobPatterns := make([]string, len(rs.proxyGlobs))
+	for i, pg := range rs.proxyGlobs {
+		proxyGlobPatterns[i] = pg.pattern
+	}
+	rs.proxyGlobIdx = newGlobBucket(proxyGlobPatterns)
 
 	slog.Info("rules loaded",
 		"allowPorts", len(rs.allowedPorts),
@@ -456,10 +573,8 @@ func (rs *ruleSet) isDomainBlocked(domain string) bool {
 	if rs.allowedSuffixes.match(domain) {
 		return false
 	}
-	for _, pattern := range rs.allowedGlobs {
-		if matched, _ := path.Match(pattern, domain); matched {
-			return false
-		}
+	if rs.allowedGlobIdx.matchAny(rs.allowedGlobs, domain) {
+		return false
 	}
 	if rs.blockedDomains[domain] {
 		return true
@@ -467,10 +582,8 @@ func (rs *ruleSet) isDomainBlocked(domain string) bool {
 	if rs.blockedSuffixes.match(domain) {
 		return true
 	}
-	for _, pattern := range rs.blockedGlobs {
-		if matched, _ := path.Match(pattern, domain); matched {
-			return true
-		}
+	if rs.blockedGlobIdx.matchAny(rs.blockedGlobs, domain) {
+		return true
 	}
 	return false
 }
@@ -495,10 +608,8 @@ func (e *Engine) MatchProxyRule(targetIP string, targetPort int, domain string) 
 		if rs.allowedDomains[d] || rs.allowedSuffixes.match(d) {
 			return "", false
 		}
-		for _, pattern := range rs.allowedGlobs {
-			if matched, _ := path.Match(pattern, d); matched {
-				return "", false
-			}
+		if rs.allowedGlobIdx.matchAny(rs.allowedGlobs, d) {
+			return "", false
 		}
 	}
 
@@ -531,12 +642,11 @@ func (e *Engine) MatchProxyRule(targetIP string, targetPort int, domain string) 
 				bestAlias = t.alias
 			}
 		}
-		for _, pg := range rs.proxyGlobs {
-			if matched, _ := path.Match(pg.pattern, d); matched {
-				if bestIndex == -1 || pg.target.index < bestIndex {
-					bestIndex = pg.target.index
-					bestAlias = pg.target.alias
-				}
+		// 命中多条时取 index 最小(ACL 靠前优先),所以按 index 而不是按别名比较。
+		if pg, ok := rs.proxyGlobIdx.bestMatchingGlob(rs.proxyGlobs, d); ok {
+			if bestIndex == -1 || pg.target.index < bestIndex {
+				bestIndex = pg.target.index
+				bestAlias = pg.target.alias
 			}
 		}
 	}

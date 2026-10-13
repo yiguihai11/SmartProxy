@@ -522,29 +522,35 @@ func (p ProxyEntry) IsDisabled() bool {
 }
 
 func (m *Manager) SelectProxy(ctx context.Context, targetIP string, targetPort int, domain string, engine *rules.Engine) (string, *Proxy) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
 	// 选路发生在某条流的会话建立里:日志必须带 flow id(TUN/SOCKS5 入口注入的 ctx 一路
 	// 传到这里),否则 "proxy rule matched" 这条最关键的选路日志会掉号,破坏 grep flow=N
 	// 从入口追到转出的整条链。测试传 context.Background() 时 trace.Log 退回 slog.Default。
 	ll := trace.Log(ctx)
+
+	// ACL 匹配与选路锁解耦:MatchProxyRule 要扫域名后缀/glob 规则,命中时下面还要落一条
+	// 同步日志 —— 把它放在 m.mu.RLock 里面,等于让每条流的建立都要等 ACL 匹配 + 日志
+	// I/O 走完才能读 m.proxies,读锁被撑成串行点。匹配结果不依赖任何被锁保护的状态,
+	// 所以先算出来,取锁之后只做 alias → *Proxy 的查表。
+	alias, matched := "", false
 	if engine != nil {
-		alias, matched := engine.MatchProxyRule(targetIP, targetPort, domain)
-		if matched {
-			ll.Info("proxy rule matched", "alias", alias)
-			if strings.EqualFold(alias, "direct") {
-				return "direct", nil
-			}
-			if strings.EqualFold(alias, "default") {
-				return "proxy_default", nil
-			}
-			proxy, _ := m.findProxyLocked(alias)
-			if proxy != nil {
-				return "", proxy
-			}
-			ll.Warn("alias not found, falling back to default proxy", "alias", alias)
+		alias, matched = engine.MatchProxyRule(targetIP, targetPort, domain)
+	}
+	if matched {
+		ll.Info("proxy rule matched", "alias", alias)
+		if strings.EqualFold(alias, "direct") {
+			return "direct", nil
+		}
+		if strings.EqualFold(alias, "default") {
 			return "proxy_default", nil
 		}
+		m.mu.RLock()
+		proxy, _ := m.findProxyLocked(alias)
+		m.mu.RUnlock()
+		if proxy != nil {
+			return "", proxy
+		}
+		ll.Warn("alias not found, falling back to default proxy", "alias", alias)
+		return "proxy_default", nil
 	}
 	return "fallback", nil
 }

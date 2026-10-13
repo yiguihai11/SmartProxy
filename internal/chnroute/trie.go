@@ -153,7 +153,8 @@ func split(old *node, newAddr netip.Addr, newPlen, diffBit, maxBits int) *node {
 }
 
 func firstDiffBit(a1, a2 netip.Addr, plen1, plen2, maxBits int) int {
-	b1, b2 := addrBytes(a1), addrBytes(a2)
+	var buf1, buf2 [16]byte
+	b1, b2 := addrBytesInto(a1, &buf1), addrBytesInto(a2, &buf2)
 	minLen := plen1
 	if plen2 < minLen {
 		minLen = plen2
@@ -173,7 +174,8 @@ func firstDiffBit(a1, a2 netip.Addr, plen1, plen2, maxBits int) int {
 }
 
 func commonPrefix(a1, a2 netip.Addr, bits int) bool {
-	b1, b2 := addrBytes(a1), addrBytes(a2)
+	var buf1, buf2 [16]byte
+	b1, b2 := addrBytesInto(a1, &buf1), addrBytesInto(a2, &buf2)
 	for i := 0; i < bits; i++ {
 		if getBitRaw(b1, i) != getBitRaw(b2, i) {
 			return false
@@ -186,7 +188,8 @@ func getBit(addr netip.Addr, pos, maxBits int) byte {
 	if pos < 0 || pos >= maxBits {
 		return 0
 	}
-	return getBitRaw(addrBytes(addr), pos)
+	var buf [16]byte
+	return getBitRaw(addrBytesInto(addr, &buf), pos)
 }
 
 func getBitRaw(b []byte, pos int) byte {
@@ -196,13 +199,22 @@ func getBitRaw(b []byte, pos int) byte {
 	return (b[pos/8] >> (7 - (pos % 8))) & 1
 }
 
-func addrBytes(addr netip.Addr) []byte {
+// addrBytesInto 把 addr 的原始字节写进调用方提供的缓冲区,并返回有效前缀
+// (IPv4 为前 4 字节)。buf 必须至少 16 字节,返回的切片是 buf 的别名。
+//
+// 这里刻意不用「按值接收 netip.Addr,直接 return As4()[:] / As16()[:]」的写法:
+// As4/As16 返回的是按值传递的数组,一旦把它切片返回,数组就必须逃逸到堆上,
+// 于是每一次调用都是 1 次分配 —— 而这条路径在 TUN/SOCKS5 的每个包、每个 DNS
+// 应答记录上都要走(Contains → matchKey/getBit)。缓冲区放调用方的栈上就没有分配。
+func addrBytesInto(addr netip.Addr, buf *[16]byte) []byte {
 	if addr.Is4() {
 		a := addr.As4()
-		return a[:]
+		copy(buf[:4], a[:])
+		return buf[:4]
 	}
 	a := addr.As16()
-	return a[:]
+	copy(buf[:], a[:])
+	return buf[:16]
 }
 
 func (t *Trie) Contains(ip net.IP) bool {
@@ -259,7 +271,8 @@ func matchKey(ip net.IP, key netip.Addr, plen int) bool {
 		return true
 	}
 
-	kb := addrBytes(key)
+	var buf [16]byte
+	kb := addrBytesInto(key, &buf)
 	fullBytes := plen / 8
 	if fullBytes > len(ip) || fullBytes > len(kb) {
 		return false

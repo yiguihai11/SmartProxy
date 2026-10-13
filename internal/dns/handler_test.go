@@ -185,22 +185,22 @@ func TestParseHostPort_OpenBracketOnly(t *testing.T) {
 
 func TestExtractIP_A(t *testing.T) {
 	rr := &dns.A{Hdr: dns.RR_Header{Rrtype: dns.TypeA}, A: net.ParseIP("1.2.3.4")}
-	if got := extractIP(rr); got != "1.2.3.4" {
-		t.Errorf("expected '1.2.3.4', got %q", got)
+	if got := extractIPAddr(rr); got == nil || got.String() != "1.2.3.4" {
+		t.Errorf("expected '1.2.3.4', got %v", got)
 	}
 }
 
 func TestExtractIP_AAAA(t *testing.T) {
 	rr := &dns.AAAA{Hdr: dns.RR_Header{Rrtype: dns.TypeAAAA}, AAAA: net.ParseIP("2001:db8::1")}
-	if got := extractIP(rr); got != "2001:db8::1" {
-		t.Errorf("expected '2001:db8::1', got %q", got)
+	if got := extractIPAddr(rr); got == nil || got.String() != "2001:db8::1" {
+		t.Errorf("expected '2001:db8::1', got %v", got)
 	}
 }
 
 func TestExtractIP_OtherType(t *testing.T) {
 	rr := &dns.CNAME{Hdr: dns.RR_Header{Rrtype: dns.TypeCNAME}}
-	if got := extractIP(rr); got != "" {
-		t.Errorf("expected empty, got %q", got)
+	if got := extractIPAddr(rr); got != nil {
+		t.Errorf("expected nil, got %v", got)
 	}
 }
 

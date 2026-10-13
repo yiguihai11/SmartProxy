@@ -643,8 +643,8 @@ func (h *Handler) isDNSClean(ll *slog.Logger, wire []byte) bool {
 	for _, rr := range msg.Answer {
 		switch rr.Header().Rrtype {
 		case dns.TypeA, dns.TypeAAAA:
-			ip := extractIP(rr)
-			if ip != "" && !h.chnroute.Contains(net.ParseIP(ip)) {
+			ip := extractIPAddr(rr)
+			if ip != nil && !h.chnroute.Contains(ip) {
 				ll.Debug("polluted DNS response found foreign IP", "ip", ip)
 				return false
 			}
@@ -653,14 +653,21 @@ func (h *Handler) isDNSClean(ll *slog.Logger, wire []byte) bool {
 	return true
 }
 
-func extractIP(rr dns.RR) string {
+// extractIPAddr returns the address carried by an A/AAAA record, or nil for any
+// other record type. It hands back the net.IP itself rather than a formatted
+// string: every caller (chnroute containment / LAN filtering) wants the address,
+// so going through String() and back costs a pointless allocation per answer
+// record on every DNS response.
+// It reads the record's field directly, so the returned slice aliases the parsed
+// message and must not be mutated.
+func extractIPAddr(rr dns.RR) net.IP {
 	switch r := rr.(type) {
 	case *dns.A:
-		return r.A.String()
+		return r.A
 	case *dns.AAAA:
-		return r.AAAA.String()
+		return r.AAAA
 	}
-	return ""
+	return nil
 }
 
 // staticRecordTTL is the TTL for answers synthesized from static records.
@@ -766,8 +773,7 @@ func sanitizeResponse(wire []byte, filterAAAA bool, filterLAN bool) []byte {
 			break
 		}
 		if filterLAN && (rr.Header().Rrtype == dns.TypeA || rr.Header().Rrtype == dns.TypeAAAA) {
-			ip := extractIP(rr)
-			if ip != "" && netutil.IsLAN(ip) {
+			if ip := extractIPAddr(rr); ip != nil && netutil.IsLANIP(ip) {
 				needsFilter = true
 				break
 			}
@@ -783,8 +789,7 @@ func sanitizeResponse(wire []byte, filterAAAA bool, filterLAN bool) []byte {
 			continue
 		}
 		if filterLAN && (rr.Header().Rrtype == dns.TypeA || rr.Header().Rrtype == dns.TypeAAAA) {
-			ip := extractIP(rr)
-			if ip != "" && netutil.IsLAN(ip) {
+			if ip := extractIPAddr(rr); ip != nil && netutil.IsLANIP(ip) {
 				continue
 			}
 		}
@@ -877,8 +882,8 @@ func (h *Handler) isDNSCleanAndPrefer(ctx context.Context, wire []byte, qname st
 		for _, rr := range msg.Answer {
 			switch rr.Header().Rrtype {
 			case dns.TypeA, dns.TypeAAAA:
-				ip := extractIP(rr)
-				if ip != "" && !h.chnroute.Contains(net.ParseIP(ip)) {
+				ip := extractIPAddr(rr)
+				if ip != nil && !h.chnroute.Contains(ip) {
 					ll.Debug("polluted DNS response found foreign IP", "ip", ip)
 					return wire, false, false
 				}

@@ -575,7 +575,7 @@ func (e *Engine) handleConnect(ctx context.Context, conn net.Conn, req *socks5.R
 		// ATYP=0x03),必须作为 domain 传给规则匹配,否则 block/proxy domain 规则在这里
 		// 永不命中(之前恒传 "" 是缺口)。拦截语义与上面的 IP/port 分支一致。
 		domain := ""
-		if net.ParseIP(host) == nil {
+		if ip == nil {
 			domain = host
 			if e.RuleEng.IsDomainBlocked(host) {
 				ll.Info("blocked domain by rule", "domain", host)

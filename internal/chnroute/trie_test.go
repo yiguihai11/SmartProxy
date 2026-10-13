@@ -4,8 +4,145 @@ import (
 	"math/rand"
 	"net"
 	"net/netip"
+	"os"
 	"testing"
 )
+
+// sink 接住被测函数的返回值。没有它,编译器可以把「结果没人用」的调用整个优化掉,
+// 于是 AllocsPerRun 量到的是空循环的 0 分配 —— 门禁会假绿。
+var sink bool
+
+// testdataChnroute 是仓库里真实下发的那份 chnroute(android assets,10k+ 前缀,
+// 由 CI 每月更新)。基准与分配门禁都跑它,不跑手写的小表:前缀条数决定树的深度、
+// 分支和缓存局部性,在 36 条前缀上量出来的 ns/op 比真实值低一个数量级,拿它做
+// 回归对比没有意义。
+const testdataChnroute = "../../android/app/src/main/assets/chnroute.txt"
+
+func loadTestdataTrie(tb testing.TB) *Trie {
+	tb.Helper()
+	tr, err := Load(testdataChnroute)
+	if err != nil {
+		tb.Fatalf("load %s: %v", testdataChnroute, err)
+	}
+	// 空树会让基准和门禁静默通过(恒 false、零分配),必须显式失败。
+	if tr.IsEmpty() {
+		tb.Fatalf("%s contains no prefixes", testdataChnroute)
+	}
+	return tr
+}
+
+// benchProbes 从真实 chnroute 里派生命中地址(前半段取 v4、后半段取 v6),再混入
+// 一组境外地址作为未命中样本。命中/未命中各占一半:全部命中会只测到树的一侧,
+// 而真实流量里境外目标(未命中)同样常见。
+func benchProbes(tb testing.TB) []net.IP {
+	tb.Helper()
+	data, err := os.ReadFile(testdataChnroute)
+	if err != nil {
+		tb.Fatalf("read %s: %v", testdataChnroute, err)
+	}
+	prefixes, err := parsePrefixes(data)
+	if err != nil {
+		tb.Fatalf("parse %s: %v", testdataChnroute, err)
+	}
+
+	var probes []net.IP
+	// 按跨度取样而不是取前 N 条:表里前段集中在小网段,只取开头会让探针全落在树的
+	// 一侧,量不到真实分布。
+	const wantPerFamily = 4
+	for _, v4 := range []bool{true, false} {
+		stride := len(prefixes) / (wantPerFamily * 2)
+		if stride < 1 {
+			stride = 1
+		}
+		taken := 0
+		for i := 0; i < len(prefixes) && taken < wantPerFamily; i += stride {
+			p := prefixes[i]
+			if p.Addr().Is4() != v4 {
+				continue
+			}
+			probes = append(probes, net.IP(p.Masked().Addr().AsSlice()))
+			taken++
+		}
+	}
+	// 境外未命中样本:公共 DNS / CDN / 大门户,都是真实流量里会出现的目标。
+	for _, s := range []string{
+		"8.8.8.8", "1.1.1.1", "9.9.9.9", "208.67.222.222",
+		"151.101.1.69", "91.198.174.192", "23.1.36.10", "104.16.132.229",
+		"2606:4700:4700::1111", "2001:4860:4860::8888",
+	} {
+		if ip := net.ParseIP(s); ip != nil {
+			probes = append(probes, ip)
+		}
+	}
+	if len(probes) == 0 {
+		tb.Fatal("no probes derived from chnroute testdata")
+	}
+	return probes
+}
+
+// BenchmarkTrieContains 量的是「一次域名/IP 分流判定」的成本 —— 它在每个 TUN/SOCKS5
+// 包、每次 DNS 应答记录上都会走,是这条流水线上最热的纯计算函数。
+func BenchmarkTrieContains(b *testing.B) {
+	tr := loadTestdataTrie(b)
+	probes := benchProbes(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	// 一轮一次查找:b.Loop() 把总耗时除以 b.N,旧版一轮做 8 次查找,等于把 ns/op
+	// 报大 8 倍,跟任何单次查找的基线都没法比。
+	i := 0
+	for b.Loop() {
+		sink = tr.Contains(probes[i])
+		i++
+		if i == len(probes) {
+			i = 0
+		}
+	}
+}
+
+// BenchmarkTrieContainsParallel 走并发路径:快照是 atomic.Pointer 读的,真实运行
+// 时有多个入口(TUN / SOCKS5 / UDP / DNS)同时查表,单线程基准测不到这条。
+func BenchmarkTrieContainsParallel(b *testing.B) {
+	tr := loadTestdataTrie(b)
+	probes := benchProbes(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			sink = tr.Contains(probes[i])
+			i++
+			if i == len(probes) {
+				i = 0
+			}
+		}
+	})
+}
+
+// TestContainsNoAlloc 是分配门禁:Contains 在热路径上,每次多一次堆分配就是每包
+// 一次 GC 压力。§6.4 修掉的正是 addrBytes 把 As4/As16 的数组切片返回导致数组逃逸
+// (1 alloc/op),这条测试把「不许再退化」钉在 CI 上。
+func TestContainsNoAlloc(t *testing.T) {
+	tr := loadTestdataTrie(t)
+	probes := benchProbes(t)
+
+	cases := []struct {
+		name string
+		ip   net.IP
+	}{
+		{"domestic hit", probes[0]},
+		{"foreign miss", net.ParseIP("8.8.8.8")},
+		{"ipv6 miss", net.ParseIP("2606:4700:4700::1111")},
+	}
+	for _, tc := range cases {
+		ip := tc.ip
+		if ip == nil {
+			t.Fatalf("%s: nil probe", tc.name)
+		}
+		if avg := testing.AllocsPerRun(200, func() { sink = tr.Contains(ip) }); avg != 0 {
+			t.Errorf("Contains(%s) allocates %v objects per call, want 0", tc.name, avg)
+		}
+	}
+}
 
 func TestTrieBasic(t *testing.T) {
 	tr := New()
@@ -622,46 +759,6 @@ func TestTrieLongestPrefixMatch(t *testing.T) {
 	}
 	if !tr2.Contains(net.ParseIP("192.168.2.1")) {
 		t.Error("192.168.2.1 should match 192.168.0.0/16")
-	}
-}
-
-func BenchmarkTrieContains(b *testing.B) {
-	tr := New()
-
-	prefixes := []string{
-		"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
-		"1.0.1.0/24", "1.0.2.0/23", "1.0.8.0/21",
-		"14.0.0.0/8", "27.0.0.0/8", "36.0.0.0/8",
-		"42.0.0.0/8", "49.0.0.0/8", "58.0.0.0/8",
-		"60.0.0.0/8", "101.0.0.0/8", "110.0.0.0/8",
-		"111.0.0.0/8", "112.0.0.0/8", "113.0.0.0/8",
-		"114.0.0.0/8", "115.0.0.0/8", "116.0.0.0/8",
-		"117.0.0.0/8", "118.0.0.0/8", "119.0.0.0/8",
-		"120.0.0.0/8", "121.0.0.0/8", "122.0.0.0/8",
-		"123.0.0.0/8", "124.0.0.0/8", "125.0.0.0/8",
-		"202.0.0.0/8", "210.0.0.0/8", "218.0.0.0/8",
-		"220.0.0.0/8", "222.0.0.0/8", "223.0.0.0/8",
-	}
-	for _, p := range prefixes {
-		tr.Insert(netip.MustParsePrefix(p))
-	}
-
-	ips := []net.IP{
-		net.ParseIP("10.0.0.1"),
-		net.ParseIP("8.8.8.8"),
-		net.ParseIP("192.168.1.1"),
-		net.ParseIP("1.2.3.4"),
-		net.ParseIP("202.96.0.1"),
-		net.ParseIP("35.1.0.1"),
-		net.ParseIP("223.255.255.1"),
-		net.ParseIP("123.123.123.123"),
-	}
-
-	b.ResetTimer()
-	for b.Loop() {
-		for _, ip := range ips {
-			tr.Contains(ip)
-		}
 	}
 }
 
