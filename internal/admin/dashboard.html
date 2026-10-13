@@ -5681,6 +5681,7 @@ es.onopen=function(){setDot(true)};
 es.onerror=function(){setDot(false)};
 es.onmessage=function(e){
   try{
+    if(document.hidden)return;
     var d=JSON.parse(e.data);
     setDot(true);
     updateHealthBanner(d);
@@ -5697,6 +5698,16 @@ es.onmessage=function(e){
     else if(v==='logs'&&logsAuto)refreshLogs();
   }catch(ex){log('SSE err: '+ex.message)}
 };
+document.addEventListener('visibilitychange',function(){
+  if(!document.hidden){
+    var act=document.querySelector('.nav-item.active');
+    var v=act?act.dataset.view:'';
+    if(v==='devices'&&devicesAuto)refreshDevices();
+    else if(v==='blacklist'&&blAuto)refreshBlacklist();
+    else if(v==='cache'&&cacheAuto){if(dnsTab==='static')loadStatic();else refreshCache()}
+    else if(v==='logs'&&logsAuto)refreshLogs();
+  }
+});
 </script>
 <div class="overlay" id="acl-overlay" onclick="if(event.target===this)closeACLDialog()">
   <div class="dialog" onclick="event.stopPropagation()">
