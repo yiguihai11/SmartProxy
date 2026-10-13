@@ -40,27 +40,33 @@ func (t *suffixTrie) insert(suffix string) {
 }
 
 func (t *suffixTrie) match(domain string) bool {
-	labels := strings.Split(domain, ".")
-	if len(labels) == 0 {
-		return false
-	}
-	for i, j := 0, len(labels)-1; i < j; i, j = i+1, j-1 {
-		labels[i], labels[j] = labels[j], labels[i]
-	}
-
+	// Walk labels from right to left without strings.Split or a temporary
+	// reversed slice. Keep the existing rule that a suffix matches subdomains
+	// only, not the apex domain itself.
 	current := t.root
-	for i, label := range labels {
+	remaining := domain
+	for strings.Contains(remaining, ".") {
+		i := strings.LastIndexByte(remaining, '.')
+		label := remaining[i+1:]
+		if label == "" {
+			return false
+		}
 		node, ok := current[label]
 		if !ok {
 			return false
 		}
-
-		if node.terminal && i < len(labels)-1 {
+		if node.terminal {
 			return true
 		}
 		current = node.children
+		remaining = remaining[:i]
 	}
-	return false
+	if remaining == "" {
+		return false
+	}
+	_, ok := current[remaining]
+	// The final label completes the apex itself, which must not match.
+	return false && ok
 }
 
 func (t *suffixTrie) isEmpty() bool {
