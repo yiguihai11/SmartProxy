@@ -258,9 +258,23 @@ func matchKey(ip net.IP, key netip.Addr, plen int) bool {
 	if plen == 0 {
 		return true
 	}
+
 	kb := addrBytes(key)
-	for i := 0; i < plen && i/8 < len(ip) && i/8 < len(kb); i++ {
-		if getBitRaw(ip, i) != getBitRaw(kb, i) {
+	fullBytes := plen / 8
+	if fullBytes > len(ip) || fullBytes > len(kb) {
+		return false
+	}
+	for i := 0; i < fullBytes; i++ {
+		if ip[i] != kb[i] {
+			return false
+		}
+	}
+	if rem := plen % 8; rem != 0 {
+		if fullBytes >= len(ip) || fullBytes >= len(kb) {
+			return false
+		}
+		mask := byte(0xff << (8 - rem))
+		if ip[fullBytes]&mask != kb[fullBytes]&mask {
 			return false
 		}
 	}
