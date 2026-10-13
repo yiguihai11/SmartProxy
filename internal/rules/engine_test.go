@@ -118,6 +118,31 @@ func TestEngine_LoadEmpty(t *testing.T) {
 	}
 }
 
+func TestEngine_LoadCIDRsInBatch(t *testing.T) {
+	path := writeTempRuleFile(t, strings.Join([]string{
+		"block cidr 10.0.0.0/8",
+		"block cidr 192.168.1.0/24",
+		"allow cidr 10.1.0.0/16",
+		"allow ip 192.168.1.10",
+	}, "\n"))
+	e, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !e.IsIPBlocked("10.2.0.1") {
+		t.Fatal("10.2.0.1 should be blocked by 10.0.0.0/8")
+	}
+	if e.IsIPBlocked("10.1.2.3") {
+		t.Fatal("allow CIDR should override the broader block CIDR")
+	}
+	if e.IsIPBlocked("192.168.1.10") {
+		t.Fatal("allow exact IP should override block CIDR")
+	}
+	if !e.IsIPBlocked("192.168.1.11") {
+		t.Fatal("neighboring IP should remain blocked")
+	}
+}
+
 func TestEngine_CommentsAndBlankLines(t *testing.T) {
 	path := writeTempRuleFile(t, "# comment\n\nallow port 80\n# another comment\n\n")
 	e, err := New(path)
