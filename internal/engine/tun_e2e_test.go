@@ -379,4 +379,3 @@ func TestEngineTUN_BlockUDP(t *testing.T) {
 		t.Fatal("expected TUN block to drop the UDP packet, but got a reply")
 	}
 }
-

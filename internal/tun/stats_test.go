@@ -477,4 +477,3 @@ func TestConnStatsClientTraffic_MonotonicAcrossConns(t *testing.T) {
 	assert.Equal(t, int64(2300), parsed.ClientTraffic[0].Down, "连接关闭后单 IP 累计下行不得清零")
 	assert.Equal(t, 1, parsed.ClientTraffic[0].ActiveConns)
 }
-

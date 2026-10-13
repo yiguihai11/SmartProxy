@@ -285,4 +285,3 @@ proxies:
 		t.Errorf("expected Clash-HTTP, got %s", entries[8].Alias)
 	}
 }
-

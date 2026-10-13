@@ -218,15 +218,15 @@ func (ph *ProxyHealth) Snapshot() ProxyHealthSnapshot {
 }
 
 type HealthChecker struct {
-	mu                sync.RWMutex
-	running           bool
-	cfg               atomic.Pointer[config.HealthCheckConf]
-	proxies           []*Proxy
-	stopCh            chan struct{}
-	wg                *sync.WaitGroup
-	ctx               context.Context
-	cancel            context.CancelFunc
-	probeSem          chan struct{}
+	mu       sync.RWMutex
+	running  bool
+	cfg      atomic.Pointer[config.HealthCheckConf]
+	proxies  []*Proxy
+	stopCh   chan struct{}
+	wg       *sync.WaitGroup
+	ctx      context.Context
+	cancel   context.CancelFunc
+	probeSem chan struct{}
 	// firstProbeDone 是"任意电路"的聚合闸门(任一探测成功或初始探测全部结束即关闭)。
 	// firstTCPProbeDone/firstUDPProbeDone 按电路分别关门:ConnectDefault 必须等 TCP 闸门,
 	// UDP ASSOCIATE 必须等 UDP 闸门。早期共用一个 firstProbeDone 时,checkProxy 先探 UDP
@@ -672,7 +672,7 @@ func (hc *HealthChecker) checkLoop(ctx context.Context, stopCh <-chan struct{}, 
 	} else if idx < 16 {
 		initialDelay = time.Duration(idx*10) * time.Millisecond
 	} else {
-		initialDelay = time.Duration(160 + (idx%20)*50) * time.Millisecond
+		initialDelay = time.Duration(160+(idx%20)*50) * time.Millisecond
 	}
 
 	if initialDelay > 0 {

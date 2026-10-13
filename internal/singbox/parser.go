@@ -13,11 +13,11 @@ import (
 
 // ParsedOutbound contains the sing-box outbound configuration and metadata.
 type ParsedOutbound struct {
-	Tag      string
-	Type     string
-	Server   string
-	Port     int
-	RawJSON  []byte
+	Tag     string
+	Type    string
+	Server  string
+	Port    int
+	RawJSON []byte
 }
 
 // ParseLink parses a proxy sharing link (vless, hysteria2/hy2, trojan, tuic, vmess)

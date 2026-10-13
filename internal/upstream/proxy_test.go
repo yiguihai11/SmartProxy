@@ -2562,5 +2562,3 @@ func TestProxy_IPv6URLQuery(t *testing.T) {
 		t.Errorf("p2(?ipv6=0) IsIPv6Pinned = false, want true")
 	}
 }
-
-

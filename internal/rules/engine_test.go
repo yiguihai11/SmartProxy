@@ -1227,5 +1227,3 @@ proxy domain *proxy*.custom.org proxy_node
 		t.Errorf("allowed domain should not match proxy, got alias=%s", alias)
 	}
 }
-
-

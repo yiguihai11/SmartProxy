@@ -361,12 +361,12 @@ func assertUpstreamDirect(t testing.TB, before pathCounters, udpPath bool) {
 
 // engineSpec 描述一个引擎实例的装配:路由文件内容 + 上游节点。
 type engineSpec struct {
-	chnroute string              // chnroute.txt 内容(空 = 无国内段,目标都算非国内)
-	acl      string              // acl.txt 内容(proxy/allow/block 规则)
-	upstream []config.ProxyEntry // 上游节点;空 = 纯直连引擎
-	strategy string              // upstream.default 策略(默认代理走谁)
-	listen   string              // SOCKS5 监听地址,默认 127.0.0.1;IPv6 测试用 "::1"
-	tun      *config.TUNConfig   // 非 nil = 启用真实 TUN 设备(tun_e2e_test.go 用)
+	chnroute string                     // chnroute.txt 内容(空 = 无国内段,目标都算非国内)
+	acl      string                     // acl.txt 内容(proxy/allow/block 规则)
+	upstream []config.ProxyEntry        // 上游节点;空 = 纯直连引擎
+	strategy string                     // upstream.default 策略(默认代理走谁)
+	listen   string                     // SOCKS5 监听地址,默认 127.0.0.1;IPv6 测试用 "::1"
+	tun      *config.TUNConfig          // 非 nil = 启用真实 TUN 设备(tun_e2e_test.go 用)
 	quic     *config.SmartProxyQuicConf // 非 nil = 启用 QUIC 被动识别 + 判死自愈(quic_blackhole_e2e_test.go 用)
 }
 

@@ -489,6 +489,6 @@ type connStatsJSONRec struct {
 	SrcIP string `json:"src_ip,omitempty"` // 客户端源 IP(热点外接设备识别用)
 	Host  string `json:"host"`             // 域名(smart TCP)或目标 IP
 	Port  int    `json:"port"`
-	Up    int64  `json:"up"`               // 该连接累计上行
-	Down  int64  `json:"down"`             // 该连接累计下行
+	Up    int64  `json:"up"`   // 该连接累计上行
+	Down  int64  `json:"down"` // 该连接累计下行
 }

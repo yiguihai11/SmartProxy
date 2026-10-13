@@ -26,7 +26,6 @@ func formatThreshold(bytes int64) string {
 	return fmt.Sprintf("%dB", bytes)
 }
 
-
 // StallCallback is invoked when a watchdog detects a silent drop / GFW stall or early reset.
 type StallCallback func(host string, port int, domain, reason string)
 

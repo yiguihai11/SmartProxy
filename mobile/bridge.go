@@ -19,9 +19,9 @@ import (
 )
 
 var (
-	globalEngine  *engine.Engine
-	engineMu      sync.Mutex
-	lifecycleMu   sync.Mutex
+	globalEngine    *engine.Engine
+	engineMu        sync.Mutex
+	lifecycleMu     sync.Mutex
 	cancelFunc      context.CancelFunc
 	routerWatcher   *config.Watcher
 	uidResolver     UIDResolver

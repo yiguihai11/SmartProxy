@@ -269,4 +269,3 @@ func TestManager_FindProxyLocked_Fallback_SingBox(t *testing.T) {
 		t.Fatalf("ProxyInfo fallback failed: ok=%v, info.Alias=%q", ok, info.Alias)
 	}
 }
-

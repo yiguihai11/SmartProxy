@@ -87,9 +87,9 @@ var inPacketPool = sync.Pool{
 
 // Engine manages the lwIP stack and runs the single owner goroutine.
 type Engine struct {
-	id        uint64
-	cfg       Config
-	lw        *C.struct_sp_lwip
+	id         uint64
+	cfg        Config
+	lw         *C.struct_sp_lwip
 	inputChan  chan inPacket
 	cmdChan    chan any
 	udpCmdChan chan *udpSendReq

@@ -278,4 +278,3 @@ func TestCloseSession_ConcurrentCalls_Idempotent(t *testing.T) {
 		t.Errorf("sessionCount should be 0, got %d", h.sessionCount.Load())
 	}
 }
-

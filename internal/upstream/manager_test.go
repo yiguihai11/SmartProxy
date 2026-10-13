@@ -2000,4 +2000,3 @@ func TestManager_DisabledProxyOnStartupAndReload(t *testing.T) {
 		}
 	}
 }
-

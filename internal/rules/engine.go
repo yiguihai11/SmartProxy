@@ -350,10 +350,10 @@ func (rs *ruleSet) load(path string) error {
 // It supports:
 //   - Comments (# ...)
 //   - Spaces, unicode, emojis, and quotes in aliases:
-//       proxy domain google.com "Hong Kong 01"
-//       proxy domain google.com 'Hong Kong 01'
-//       proxy domain google.com Hong Kong 01
-//       proxy domain google.com [v2rayfree] 未知 SS-01 | free-nodes # remark
+//     proxy domain google.com "Hong Kong 01"
+//     proxy domain google.com 'Hong Kong 01'
+//     proxy domain google.com Hong Kong 01
+//     proxy domain google.com [v2rayfree] 未知 SS-01 | free-nodes # remark
 //   - Preserves original case for alias, while action, objType, and domain value are lowercased.
 func parseRuleTokens(line string) (action, objType, value, alias string, ok bool) {
 	line = strings.TrimSpace(line)
@@ -877,4 +877,3 @@ func aclLineExists(path, want string) (bool, error) {
 	}
 	return false, sc.Err()
 }
-

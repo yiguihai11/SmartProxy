@@ -29,10 +29,10 @@ type Sniff struct {
 	started time.Time // 首个 QUIC datagram 的时刻(hold 窗口起点)
 	dcid    []byte    // 首个包的 DCID(供外层判死观察对齐)
 
-	quic   bool // 见过客户端 Initial
-	ready  bool // 判定已固化
-	sni    string
-	ech    *dpi.ECHInfo
+	quic  bool // 见过客户端 Initial
+	ready bool // 判定已固化
+	sni   string
+	ech   *dpi.ECHInfo
 }
 
 // NewSniff 建一个 HoldMs 窗口、Assembler 预算 maxBuffered 字节的嗅探器。hold<=0 时

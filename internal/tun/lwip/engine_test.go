@@ -82,7 +82,7 @@ func buildIPv6TCP(srcIP, dstIP net.IP, srcPort, dstPort uint16, seq, ack uint32,
 	// IPv6 Header
 	pkt[0] = 0x60 // Version 6
 	binary.BigEndian.PutUint16(pkt[4:6], uint16(tcpLen))
-	pkt[6] = 6 // Next header: TCP
+	pkt[6] = 6  // Next header: TCP
 	pkt[7] = 64 // Hop limit
 	copy(pkt[8:24], srcIP.To16())
 	copy(pkt[24:40], dstIP.To16())
@@ -1288,9 +1288,9 @@ func TestEngine_TCP_MTU_1400_MSS(t *testing.T) {
 func BenchmarkEngine_UDP_WritePacket(b *testing.B) {
 	connCh := make(chan *PacketConn, 1)
 	cfg := Config{
-		IPv4:    net.IPv4(10, 0, 0, 2),
-		Mask:    net.IPv4(255, 255, 255, 0),
-		Gateway: net.IPv4(10, 0, 0, 1),
+		IPv4:     net.IPv4(10, 0, 0, 2),
+		Mask:     net.IPv4(255, 255, 255, 0),
+		Gateway:  net.IPv4(10, 0, 0, 1),
 		OutputFn: func(packet []byte) {},
 		UDPHandler: func(conn *PacketConn) {
 			connCh <- conn
@@ -1331,9 +1331,9 @@ func BenchmarkEngine_UDP_WritePacket(b *testing.B) {
 func BenchmarkEngine_UDP_WriteTo(b *testing.B) {
 	connCh := make(chan *PacketConn, 1)
 	cfg := Config{
-		IPv4:    net.IPv4(10, 0, 0, 2),
-		Mask:    net.IPv4(255, 255, 255, 0),
-		Gateway: net.IPv4(10, 0, 0, 1),
+		IPv4:     net.IPv4(10, 0, 0, 2),
+		Mask:     net.IPv4(255, 255, 255, 0),
+		Gateway:  net.IPv4(10, 0, 0, 1),
 		OutputFn: func(packet []byte) {},
 		UDPHandler: func(conn *PacketConn) {
 			connCh <- conn
@@ -1369,8 +1369,3 @@ func BenchmarkEngine_UDP_WriteTo(b *testing.B) {
 		}
 	}
 }
-
-
-
-
-

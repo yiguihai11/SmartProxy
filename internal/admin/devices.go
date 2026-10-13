@@ -495,16 +495,16 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		rawJSON := s.tetheringBridge.GetTetheredClients()
 		if rawJSON != "" {
 			var bridgeClients []struct {
-				MAC         string   `json:"mac"`
-				IP          string   `json:"ip"`
-				Hostname    string   `json:"hostname"`
-				Type        int      `json:"type"`
-				IsRandomMAC bool     `json:"is_random_mac"`
-				AssignedIPs []string `json:"assigned_ips"`
-				ExtraIPs    []string `json:"extra_ips"`
-				UpBytes     int64    `json:"up_bytes"`
-				DownBytes   int64    `json:"down_bytes"`
-				ActiveConns int      `json:"active_conns"`
+				MAC         string       `json:"mac"`
+				IP          string       `json:"ip"`
+				Hostname    string       `json:"hostname"`
+				Type        int          `json:"type"`
+				IsRandomMAC bool         `json:"is_random_mac"`
+				AssignedIPs []string     `json:"assigned_ips"`
+				ExtraIPs    []string     `json:"extra_ips"`
+				UpBytes     int64        `json:"up_bytes"`
+				DownBytes   int64        `json:"down_bytes"`
+				ActiveConns int          `json:"active_conns"`
 				UpBps       int64        `json:"up_bps"`
 				DownBps     int64        `json:"down_bps"`
 				IsBlocked   bool         `json:"is_blocked"`

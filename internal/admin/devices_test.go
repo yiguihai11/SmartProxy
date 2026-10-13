@@ -263,7 +263,7 @@ func TestAdmin_TetheringBridgeIntegration(t *testing.T) {
 	s.configPath = filepath.Join(tmpDir, "config.json")
 
 	bridge := &mockTetheringBridge{
-		clients: `[{"mac":"aa:bb:cc:dd:ee:ff","ip":"192.168.43.101","hostname":"Laptop","assigned_ips":["192.168.43.101"]}]`,
+		clients:        `[{"mac":"aa:bb:cc:dd:ee:ff","ip":"192.168.43.101","hostname":"Laptop","assigned_ips":["192.168.43.101"]}]`,
 		blockedClients: `["99:88:77:66:55:44"]`,
 	}
 	s.SetTetheringBridge(bridge)
@@ -585,5 +585,3 @@ func TestDevices_VirtualGatewayProtection(t *testing.T) {
 		}
 	}
 }
-
-

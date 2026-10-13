@@ -220,4 +220,3 @@ func TestResetConn(t *testing.T) {
 	defer c2.Close()
 	ResetConn(c1)
 }
-

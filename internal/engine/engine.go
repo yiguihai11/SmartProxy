@@ -719,7 +719,7 @@ func getInterfaceIPv6() net.IP {
 // QoS dual-priority queuing: small latency-sensitive packets (gaming inputs, DNS, ACK frames)
 // bypass large throughput packets (QUIC video streams, downloads) to eliminate bufferbloat and lag spikes.
 const (
-	udpWorkerCount        = 8   // number of workers: determines how many blocking operations (DNS/session setup) can be tolerated at once
+	udpWorkerCount       = 8   // number of workers: determines how many blocking operations (DNS/session setup) can be tolerated at once
 	udpHighPrioThreshold = 256 // packets <= 256 bytes (MOBA gaming, DNS, ACK) use the high-priority queue
 	udpHighPrioQueueSize = 128 // dedicated queue for latency-sensitive small packets (gaming / DNS)
 	udpLowPrioQueueSize  = 256 // queue for throughput-heavy large packets (streaming / download)

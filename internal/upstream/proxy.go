@@ -331,8 +331,6 @@ func isAlphaNum(b byte) bool {
 	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
 }
 
-
-
 // SchemeSupportsUDP reports whether the upstream's protocol can carry UDP at all. This is a
 // static property of the scheme and never changes: only SOCKS5 / SOCKS5h / SS have a UDP
 // relay concept; http/https/socks4 are TCP-only and are never UDP-probed. An SS node with a

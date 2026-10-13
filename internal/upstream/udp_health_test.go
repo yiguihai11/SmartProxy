@@ -698,4 +698,3 @@ func TestManager_TestProxy_TripsBreakerOnError(t *testing.T) {
 		t.Error("expected TestProxy(tcp) error to trip TCP breaker")
 	}
 }
-

@@ -20,7 +20,7 @@ type tcpHandle struct {
 	ip   string                 // 目标 IP(恒非空)
 	port int
 
-	app    net.Conn // 应用侧(gVisor 栈)连接
+	app    net.Conn                 // 应用侧(gVisor 栈)连接
 	remote atomic.Pointer[net.Conn] // outbound 连接(直连或代理);未建立前 nil
 	rec    *connRecord
 	stats  *ConnStats // 掐断时移除统计记录(rec 非 nil 才用)

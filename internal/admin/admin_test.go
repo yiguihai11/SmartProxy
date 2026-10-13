@@ -2058,5 +2058,3 @@ func TestTLSDispatch_PlaintextAssetsAndHostPreservation(t *testing.T) {
 		t.Errorf("expected redirect to https://smartproxy.lan:9090/dashboard, got %q", loc)
 	}
 }
-
-

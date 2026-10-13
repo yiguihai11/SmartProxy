@@ -2,12 +2,12 @@ package dns
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
-	"log/slog"
 	"testing"
 	"time"
 
@@ -1378,5 +1378,3 @@ func TestSanitizeResponse_FilterBogonLAN(t *testing.T) {
 		t.Errorf("expected 1 answer preserved when filterLAN=false, got %d", len(preservedMsg.Answer))
 	}
 }
-
-

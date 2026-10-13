@@ -495,8 +495,8 @@ type UpstreamConfig struct {
 }
 
 type ProxyEntry struct {
-	Alias    string
-	URL      string
+	Alias string
+	URL   string
 	// UDPInTCP carries the node's udp_in_tcp switch from the config entry (see
 	// Proxy.UDPInTCP). It is OR-ed with whatever the URL's ?udp_in_tcp=1 query set.
 	UDPInTCP bool
@@ -1360,7 +1360,6 @@ func (m *Manager) ProxyInfo(alias string) (ProxyInfo, bool) {
 	}, true
 }
 
-
 // SetCircuitHealth pins or releases one (or both) of a proxy's circuits. circuit is
 // "tcp", "udp" or "both"; action is "enable" (force up), "disable" (force down) or
 // "auto" (release back to automatic health-check control). Pinned circuits stay put
@@ -1718,4 +1717,3 @@ func (m *Manager) probeInitialGeo() {
 		wg.Wait()
 	})
 }
-

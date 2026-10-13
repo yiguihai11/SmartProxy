@@ -269,4 +269,3 @@ func TestResetActiveConnections(t *testing.T) {
 		t.Fatal("sess2 should be closed")
 	}
 }
-

@@ -40,23 +40,23 @@ import (
 )
 
 type Server struct {
-	sockPath     string
-	tcpPort      int
-	router       *route.Router
-	mgr          *upstream.Manager
-	dns          *dns.Handler
-	chnroute     *chnroute.Trie
-	logBuf       *logbuf.RingBuffer
-	adminAuth    atomic.Pointer[config.AdminAuthConf]
-	startTime    time.Time
-	reloadConfig        func()
-	configSrc           func() *config.Config
-	configPath          string
-	refreshLantern      func(context.Context) (int, error)
-	lanternStatus       func() map[string]interface{}
-	refreshSubscription func(context.Context, string) (int, error)
-	subscriptionsStatus func() []subscription.ItemState
-	removeSubNodes      func([]string) int
+	sockPath              string
+	tcpPort               int
+	router                *route.Router
+	mgr                   *upstream.Manager
+	dns                   *dns.Handler
+	chnroute              *chnroute.Trie
+	logBuf                *logbuf.RingBuffer
+	adminAuth             atomic.Pointer[config.AdminAuthConf]
+	startTime             time.Time
+	reloadConfig          func()
+	configSrc             func() *config.Config
+	configPath            string
+	refreshLantern        func(context.Context) (int, error)
+	lanternStatus         func() map[string]interface{}
+	refreshSubscription   func(context.Context, string) (int, error)
+	subscriptionsStatus   func() []subscription.ItemState
+	removeSubNodes        func([]string) int
 	deviceMgr             *deviceManager
 	connStatsSrc          func() string
 	setConnStatsEnabled   func(bool)
@@ -69,11 +69,11 @@ type Server struct {
 	// external file descriptor (Android VpnService / Shizuku hotspot core)
 	// instead of being created by the core itself. Fixed for the engine's
 	// lifetime; the panel serves a trimmed variant when it is false (embed.go).
-	fdMode                bool
-	refreshInt            int
-	devMu                 sync.Mutex
-	statsMu               sync.Mutex
-	stats                 cachedStats
+	fdMode     bool
+	refreshInt int
+	devMu      sync.Mutex
+	statsMu    sync.Mutex
+	stats      cachedStats
 
 	stopCh    chan struct{}
 	listener  net.Listener
@@ -1395,7 +1395,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// config.json holds the panel password and upstream node credentials: owner-only.
-	if err := atomicWriteFile(s.configPath, indented, 0o600); err != nil {
+		if err := atomicWriteFile(s.configPath, indented, 0o600); err != nil {
 			http.Error(w, "write failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}

@@ -28,7 +28,6 @@ var recvedCmdPool = sync.Pool{
 	New: func() any { return new(recvedCmd) },
 }
 
-
 type closeCmd struct {
 	connID uint64
 }
@@ -148,7 +147,6 @@ func (e *Engine) handleInput(pkt inPacket) {
 		inPacketPool.Put(pkt.buf)
 	}
 }
-
 
 func (e *Engine) handleCmd(cmd any) {
 	switch v := cmd.(type) {

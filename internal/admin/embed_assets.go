@@ -98,4 +98,3 @@ func (s *Server) handleLogo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.Write(logoPNG)
 }
-
