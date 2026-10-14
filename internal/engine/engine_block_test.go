@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"smartproxy/internal/config"
+	"smartproxy/internal/socks5"
 
 	mdns "github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
@@ -305,4 +307,46 @@ func TestEngine_ACL_Adblock_Interaction(t *testing.T) {
 	assert.True(t, blocked)
 	assert.Contains(t, ips, "0.0.0.0")
 }
+
+func TestEngine_SOCKS5_UnroutableDestination(t *testing.T) {
+	eng := startEngine(t, engineSpec{})
+	defer eng.Stop()
+
+	// 1. Port 80/443 to 0.0.0.0 gets enhanced block (closes or returns RST/403)
+	c := socks5Greeting(t, eng.listener.Addr().String())
+	defer c.Close()
+	req := append([]byte{0x05, 0x01, 0x00}, socks5Addr("0.0.0.0", 80)...)
+	_, err := c.Write(req)
+	require.NoError(t, err)
+	c.SetDeadline(time.Now().Add(2 * time.Second))
+	b := make([]byte, 10)
+	_, _ = io.ReadFull(c, b) // succeeds with enhanced block / RST
+
+	// 2. Port non-80/443 (e.g. 8080) to unroutable 0.0.0.0 gets ReplyHostUnreachable (0x04)
+	c2 := socks5Greeting(t, eng.listener.Addr().String())
+	defer c2.Close()
+	req2 := append([]byte{0x05, 0x01, 0x00}, socks5Addr("0.0.0.0", 8080)...)
+	_, err = c2.Write(req2)
+	require.NoError(t, err)
+	c2.SetDeadline(time.Now().Add(2 * time.Second))
+	replyBuf := make([]byte, 4)
+	_, err = io.ReadFull(c2, replyBuf)
+	require.NoError(t, err)
+	assert.Equal(t, byte(0x05), replyBuf[0])
+	assert.Equal(t, byte(socks5.ReplyHostUnreachable), replyBuf[1])
+
+	// 3. Port non-80/443 to unroutable IPv6 :: gets ReplyHostUnreachable (0x04)
+	c3 := socks5Greeting(t, eng.listener.Addr().String())
+	defer c3.Close()
+	req3 := append([]byte{0x05, 0x01, 0x00}, socks5Addr("::", 8080)...)
+	_, err = c3.Write(req3)
+	require.NoError(t, err)
+	c3.SetDeadline(time.Now().Add(2 * time.Second))
+	replyBuf3 := make([]byte, 4)
+	_, err = io.ReadFull(c3, replyBuf3)
+	require.NoError(t, err)
+	assert.Equal(t, byte(0x05), replyBuf3[0])
+	assert.Equal(t, byte(socks5.ReplyHostUnreachable), replyBuf3[1])
+}
+
 

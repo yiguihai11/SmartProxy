@@ -557,6 +557,16 @@ func (e *Engine) handleConnect(ctx context.Context, conn net.Conn, req *socks5.R
 	port := req.Port
 	localIP := conn.LocalAddr().(*net.TCPAddr).IP.String()
 
+	if netutil.IsUnroutableDestination(host) {
+		ll.Warn("dropping connection to unroutable destination", "host", host, "port", port)
+		if port == 80 || port == 443 {
+			socks5.SendReply(conn, socks5.ReplySuccess, localIP, 0)
+			netutil.SendEnhancedBlock(conn, port)
+			return
+		}
+		socks5.SendReply(conn, socks5.ReplyHostUnreachable, localIP, 0)
+		return
+	}
 	if e.RuleEng.IsPortBlocked(port) {
 		ll.Info("blocked port by rule", "port", port)
 		if port == 80 || port == 443 {
