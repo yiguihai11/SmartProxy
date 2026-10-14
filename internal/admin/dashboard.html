@@ -3054,7 +3054,7 @@ function renderSubscriptions(subs){
         '</div>'+
         '<div style="font-size:0.8rem;color:var(--text2)">'+tf('{0} nodes',[s.node_count||0])+ipCountHtml+'</div>'+
       '</div>'+
-      '<div style="font-size:0.78rem;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+escAttr(s.url)+'">'+escHtml(s.url)+'</div>';
+      '<div style="font-size:0.78rem;color:var(--primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer" title="'+escAttr(s.url)+'" onclick="openUrlActionCard(this.getAttribute(\'title\'))">'+escHtml(s.url)+'</div>';
 
     if(totalTraffic>0){
       html+='<div style="margin-top:2px">'+
@@ -3128,6 +3128,40 @@ function openSubscriptionDialog(name){
 }
 function closeSubscriptionDialog(){
   document.getElementById('sub-overlay').classList.remove('show');
+}
+var _currentActionUrl = '';
+function openUrlActionCard(url, title){
+  _currentActionUrl = url || '';
+  var modal = document.getElementById('url-action-overlay');
+  if(!modal) return;
+  var titleEl = document.getElementById('url-action-title');
+  if(titleEl) titleEl.textContent = title || t('Subscription Link');
+  var subEl = document.getElementById('url-action-subtitle');
+  if(subEl) subEl.textContent = t('Click Visit to open in a new tab or Copy to copy the link.');
+  var dispEl = document.getElementById('url-action-display');
+  if(dispEl) dispEl.textContent = _currentActionUrl;
+  modal.classList.add('show');
+}
+function closeUrlActionCard(){
+  var modal = document.getElementById('url-action-overlay');
+  if(modal) modal.classList.remove('show');
+  _currentActionUrl = '';
+}
+function copyCurrentActionUrl(){
+  if(!_currentActionUrl) return;
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(_currentActionUrl).then(function(){
+      showToast(t('Copied!'));
+    }).catch(function(){
+      fallbackCopy(_currentActionUrl, document.getElementById('copy-toast'));
+    });
+  } else {
+    fallbackCopy(_currentActionUrl, document.getElementById('copy-toast'));
+  }
+}
+function visitCurrentActionUrl(){
+  if(!_currentActionUrl) return;
+  window.open(_currentActionUrl, '_blank', 'noopener,noreferrer');
 }
 async function saveSubscriptionBtn(){
   var name=document.getElementById('sub-name').value.trim();
@@ -4211,7 +4245,7 @@ function renderAdblock(){
       }
       return '<tr>' +
         '<td><b>' + esc(item.name) + '</b></td>' +
-        '<td style="max-width:260px;overflow-wrap:anywhere">' + esc(item.url) + '</td>' +
+        '<td style="max-width:260px;overflow-wrap:anywhere"><a href="javascript:void(0)" onclick="openUrlActionCard(this.dataset.url)" data-url="' + escAttr(item.url) + '" style="color:var(--primary);text-decoration:none;cursor:pointer;word-break:break-all">' + esc(item.url) + '</a></td>' +
         '<td>' + (item.enabled ? 'On' : 'Off') + '</td>' +
         '<td>' + (item.use_proxy !== false ? 'Proxy' : 'Direct') + '</td>' +
         '<td>' + Number(item.kept || 0) + '</td>' +
@@ -6328,6 +6362,18 @@ document.addEventListener('visibilitychange',function(){
     <div class="dialog-actions">
       <button class="btn btn-sm" onclick="closeSubscriptionDialog()">Cancel</button>
       <button class="btn btn-sm primary" id="sub-confirm-btn" onclick="saveSubscriptionBtn()">Save</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="url-action-overlay" onclick="if(event.target===this)closeUrlActionCard()">
+  <div class="dialog" style="max-width:520px" onclick="event.stopPropagation()">
+    <div class="dialog-title" id="url-action-title">Subscription Link</div>
+    <div style="font-size:0.8rem;color:var(--text2);margin-bottom:8px" id="url-action-subtitle">Click Visit to open in a new tab or Copy to copy the link.</div>
+    <div id="url-action-display" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-family:var(--mono);font-size:0.8rem;word-break:break-all;user-select:all;max-height:120px;overflow-y:auto;color:var(--text1);margin-bottom:16px"></div>
+    <div class="dialog-actions" style="display:flex;justify-content:flex-end;gap:8px">
+      <button type="button" class="btn btn-sm" onclick="copyCurrentActionUrl()">Copy Link</button>
+      <button type="button" class="btn btn-sm primary" onclick="visitCurrentActionUrl()">Visit URL</button>
+      <button type="button" class="btn btn-sm" onclick="closeUrlActionCard()">Close</button>
     </div>
   </div>
 </div>

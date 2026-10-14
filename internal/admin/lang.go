@@ -54,6 +54,9 @@ var zhStrings = map[string]string{
 	"Delete failed: {0}": "删除失败：{0}", "Refresh failed: {0}": "刷新失败：{0}",
 	"Add whitelist failed: {0}": "添加白名单失败：{0}", "Remove {0} from whitelist?": "确定从白名单移除 {0}？",
 	"Remove whitelist failed: {0}": "移除白名单失败：{0}",
+	"Subscription Link": "订阅链接",
+	"Click Visit to open in a new tab or Copy to copy the link.": "点击访问将在新标签页中打开，点击复制将链接写入剪贴板。",
+	"Copy Link": "复制链接", "Visit URL": "访问网址",
 	"DNS": "DNS", "Configuration": "配置", "TLS Certificate": "TLS 证书",
 	"Live": "实时", "Devices": "设备",
 
