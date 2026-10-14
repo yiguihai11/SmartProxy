@@ -319,3 +319,49 @@ func TestManagerCacheItemStateRoundtrip(t *testing.T) {
 	}
 }
 
+func TestManagerReloadDeletesRemovedSubscriptions(t *testing.T) {
+	tmpDir := t.TempDir()
+	conf := config.AdblockConf{
+		Enabled:   true,
+		CacheFile: "adblock_cache.txt",
+		Lists: []config.AdblockListConf{
+			{Name: "list1", URL: "http://example.com/1", Enabled: true},
+			{Name: "list2", URL: "http://example.com/2", Enabled: true},
+		},
+	}
+
+	mgr := NewManager(tmpDir, conf, nil, nil)
+	defer mgr.Stop()
+
+	st := mgr.Status()
+	if len(st.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(st.Items))
+	}
+
+	// Reload with only list1
+	newConf := config.AdblockConf{
+		Enabled:   true,
+		CacheFile: "adblock_cache.txt",
+		Lists: []config.AdblockListConf{
+			{Name: "list1", URL: "http://example.com/1", Enabled: true},
+		},
+	}
+	mgr.Reload(newConf)
+
+	st = mgr.Status()
+	if len(st.Items) != 1 {
+		t.Fatalf("expected 1 item after reload, got %d", len(st.Items))
+	}
+	if st.Items[0].Name != "list1" {
+		t.Fatalf("expected remaining item to be list1, got %s", st.Items[0].Name)
+	}
+
+	mgr.mu.RLock()
+	_, exists := mgr.items["list2"]
+	mgr.mu.RUnlock()
+	if exists {
+		t.Fatal("deleted list2 must not remain in m.items map")
+	}
+}
+
+

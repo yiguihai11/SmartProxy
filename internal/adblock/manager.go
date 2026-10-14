@@ -416,6 +416,14 @@ func (m *Manager) RefreshAll(ctx context.Context) map[string]error {
 	ch := make(chan fetchResult, len(targets))
 	for _, tg := range targets {
 		go func(t target) {
+			defer func() {
+				if r := recover(); r != nil {
+					ch <- fetchResult{
+						name: t.name,
+						err:  fmt.Errorf("panic during fetch: %v", r),
+					}
+				}
+			}()
 			sList, aList, bfs, st, etag, notMod, err := m.fetchAndParse(ctx, t.url, t.useProxy, t.etag)
 			ch <- fetchResult{
 				name:        t.name,
@@ -571,6 +579,17 @@ func (m *Manager) Reload(conf config.AdblockConf) {
 	}
 	m.itemsOrder = newOrder
 
+	// 移除已被删除的清单
+	currentSet := make(map[string]struct{}, len(newOrder))
+	for _, name := range newOrder {
+		currentSet[name] = struct{}{}
+	}
+	for name := range m.items {
+		if _, keep := currentSet[name]; !keep {
+			delete(m.items, name)
+		}
+	}
+
 	if !conf.Enabled {
 		if m.sink != nil {
 			m.sink(nil)
@@ -690,8 +709,9 @@ func (m *Manager) RemoveWhitelist(domain string) error {
 
 func (m *Manager) countActiveRulesLocked() int {
 	seen := make(map[string]struct{})
-	for _, it := range m.items {
-		if it.Enabled {
+	for _, name := range m.itemsOrder {
+		it := m.items[name]
+		if it != nil && it.Enabled {
 			for _, s := range it.suffixes {
 				seen[s] = struct{}{}
 			}
@@ -709,8 +729,9 @@ func (m *Manager) rebuildAndPublishLocked() {
 	}
 
 	disabledBadfilters := make(map[string]struct{})
-	for _, it := range m.items {
-		if it.Enabled {
+	for _, name := range m.itemsOrder {
+		it := m.items[name]
+		if it != nil && it.Enabled {
 			for _, bf := range it.badfilters {
 				disabledBadfilters[bf] = struct{}{}
 			}
