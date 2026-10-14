@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	"smartproxy/internal/adblock"
 	"smartproxy/internal/chnroute"
 	"smartproxy/internal/fwmark"
 	"smartproxy/internal/netutil"
@@ -54,6 +55,7 @@ type Handler struct {
 	// checked before block rules and cache). The whole map is swapped atomically on
 	// config reload so readers always see a consistent snapshot.
 	staticRecords atomic.Pointer[map[string][]net.IP]
+	adblockMgr    atomic.Pointer[adblock.Manager]
 }
 
 func NewHandler(cacheSize, cacheTTL int,
@@ -179,6 +181,9 @@ func isPrivateIP(ipStr string) bool {
 	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()
 }
 
+// SetAdBlockManager installs the optional DNS subscription manager.
+func (h *Handler) SetAdBlockManager(m *adblock.Manager) { h.adblockMgr.Store(m) }
+
 func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP string, targetPort int, engine *rules.Engine) []byte {
 	cfg := h.cfg.Load()
 	if !cfg.enabled {
@@ -220,6 +225,13 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 
 	if engine != nil && engine.IsDomainBlocked(qname) {
 		ll.Info("blocked DNS query", "domain", qname)
+		return h.buildFakeResponse(queryWire)
+	}
+
+	// AdBlock is a separate policy layer: ACL allow rules do not bypass it. Static DNS
+	// records above intentionally remain authoritative and are never adblock-filtered.
+	if m := h.adblockMgr.Load(); m != nil && m.Blocked(qname) {
+		ll.Debug("adblock blocked DNS query", "domain", qname)
 		return h.buildFakeResponse(queryWire)
 	}
 

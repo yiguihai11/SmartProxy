@@ -384,6 +384,7 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
     <div class="nav-item section">System</div>
     <div class="nav-item" data-view="logs"><span class="nav-icon">L</span><span>Logs</span></div>
     <div class="nav-item" data-view="cache"><span class="nav-icon">D</span><span>DNS Cache</span></div>
+    <div class="nav-item" data-view="adblock"><span class="nav-icon">A</span><span>DNS AdBlock</span></div>
     <div class="nav-item" data-view="tls"><span class="nav-icon">🔐</span><span>TLS Cert</span></div>
     <div class="nav-item" data-view="config"><span class="nav-icon">C</span><span>Config</span></div>
   </div>
@@ -659,6 +660,30 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
     <div id="logs-box" style="height:620px;overflow-y:auto;padding:8px 10px;background:#0b0d14;border:1px solid rgba(255,255,255,.08);border-radius:var(--radius-sm)"></div>
   </div>
 </div>
+<div class="view" id="view-adblock">
+  <div class="view-title">DNS AdBlock</div>
+  <div class="view-meta"><span class="dot"></span><span id="adblock-summary">DNS-level domain filtering</span><button class="btn btn-sm" onclick="loadAdBlock()">Refresh status</button></div>
+  <div class="card" style="margin-bottom:14px;padding:16px">
+    <div class="toolbar" style="gap:12px">
+      <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="adblock-enabled" onchange="toggleAdBlock(this.checked)"> Enable DNS ad filtering</label>
+      <button class="btn btn-sm primary" onclick="refreshAdBlock()">Refresh subscriptions</button>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-top:8px">Filters DNS answers by domain. Existing ACL routing rules and static DNS records keep their current priority.</div>
+  </div>
+  <div class="card" style="margin-bottom:14px;padding:16px">
+    <div class="view-title" style="font-size:15px;margin-bottom:12px">Add / update subscription</div>
+    <div class="toolbar" style="gap:8px;flex-wrap:wrap">
+      <input class="search-input" id="adblock-name" placeholder="Name" style="min-width:120px">
+      <input class="search-input" id="adblock-url" placeholder="https://example.com/hosts.txt" style="flex:1;min-width:220px">
+      <label style="display:flex;align-items:center;gap:5px"><input type="checkbox" id="adblock-sub-enabled" checked> Enabled</label>
+      <button class="btn btn-sm primary" onclick="saveAdBlockSubscription()">Save</button>
+    </div>
+  </div>
+  <div class="card" style="padding:16px">
+    <div class="view-title" style="font-size:15px;margin-bottom:12px">Subscriptions and parser status</div>
+    <div id="adblock-list" class="table-wrap">Loading...</div>
+  </div>
+</div>
 <div class="view" id="view-cache">
   <div class="view-title">DNS</div>
   <div class="view-meta"><span class="dot"></span><span id="cache-time"></span><button class="btn btn-sm active-auto" id="cache-auto-btn" onclick="toggleCacheAuto()" style="margin-left:auto">Auto</button></div>
@@ -853,7 +878,7 @@ function navTo(n){
   if(ni)ni.classList.add('active');
   var vi=document.getElementById('view-'+n);
   if(vi)vi.classList.add('active');
-  var ld={dashboard:loadDashboard,traffic:loadTraffic,health:loadHealth,devices:loadDevices,blacklist:loadBlacklist,cache:loadDNS,config:loadConfig};
+  var ld={dashboard:loadDashboard,traffic:loadTraffic,health:loadHealth,devices:loadDevices,blacklist:loadBlacklist,cache:loadDNS,adblock:loadAdBlock,config:loadConfig};
   if(ld[n])ld[n]();
 }
 function ldash(d){
@@ -4102,6 +4127,40 @@ function cacheBatchACL(){
   stale.forEach(function(k){delete cacheSelected[k]});
   if(!entries.length){alert('No valid entries selected (may have expired)');cacheUpdateBatchBar();renderCache();return}
   openACLDialog(entries,document.getElementById('cache-batch-action').value);
+}
+async function loadAdBlock(){
+  var list=document.getElementById('adblock-list');
+  try{
+    var r=await fetch('/adblock/status');var d=await r.json();
+    document.getElementById('adblock-enabled').checked=!!d.enabled;
+    document.getElementById('adblock-summary').textContent=d.enabled?'Filtering enabled':'Filtering disabled';
+    var subs=d.subscriptions||[], states=d.sources||[];
+    if(!subs.length){list.innerHTML='<div class="empty-state">No subscriptions configured. Add a source above.</div>';return}
+    var rows=subs.map(function(sub){
+      var st=states.find(function(x){return x.name===sub.name})||{};
+      return '<tr><td>'+esc(sub.name)+'</td><td style="max-width:260px;overflow-wrap:anywhere">'+esc(sub.url)+'</td><td>'+(sub.enabled?'On':'Off')+'</td><td>'+Number(st.active_rules||0)+'</td><td>'+Number(st.ignored_rules||0)+'</td><td style="color:var(--danger)">'+esc(st.last_error||'')+'</td><td><button class="btn btn-sm" data-name="'+esc(sub.name)+'" onclick="refreshAdBlock(this.dataset.name)">Refresh</button> <button class="btn btn-sm danger" data-name="'+esc(sub.name)+'" onclick="deleteAdBlockSubscription(this.dataset.name)">Delete</button></td></tr>';
+    }).join('');
+    list.innerHTML='<table><thead><tr><th>Name</th><th>URL</th><th>Enabled</th><th>Active rules</th><th>Ignored</th><th>Last error</th><th>Actions</th></tr></thead><tbody>'+rows+'</tbody></table>';
+  }catch(e){list.textContent='Error: '+e.message}
+}
+async function toggleAdBlock(enabled){
+  try{var r=await fetch('/adblock/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:enabled})});if(!r.ok)throw new Error(await r.text());await loadAdBlock()}
+  catch(e){alert('AdBlock toggle failed: '+e.message);document.getElementById('adblock-enabled').checked=!enabled}
+}
+async function saveAdBlockSubscription(){
+  var name=document.getElementById('adblock-name').value.trim(),url=document.getElementById('adblock-url').value.trim();
+  if(!name||!url){alert('Name and URL are required');return}
+  try{var r=await fetch('/adblock/subscriptions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,url:url,enabled:document.getElementById('adblock-sub-enabled').checked})});if(!r.ok)throw new Error(await r.text());document.getElementById('adblock-name').value='';document.getElementById('adblock-url').value='';await loadAdBlock()}
+  catch(e){alert('Save failed: '+e.message)}
+}
+async function deleteAdBlockSubscription(name){
+  if(!confirm('Delete subscription '+name+'?'))return;
+  try{var r=await fetch('/adblock/subscriptions?name='+encodeURIComponent(name),{method:'DELETE'});if(!r.ok)throw new Error(await r.text());await loadAdBlock()}
+  catch(e){alert('Delete failed: '+e.message)}
+}
+async function refreshAdBlock(name){
+  try{var r=await fetch('/adblock/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(name?{name:name}:{})});if(!r.ok)throw new Error(await r.text());await loadAdBlock()}
+  catch(e){alert('Refresh failed: '+e.message)}
 }
 async function loadCache(){
   try{

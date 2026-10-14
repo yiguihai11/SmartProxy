@@ -624,3 +624,6 @@ curl --unix-socket /tmp/admin.sock 'http://localhost/logs?level=INFO'
 |---|---|
 | 405 | 只接受 GET |
 
+### DNS AdBlock subscriptions
+
+See [DNS AdBlock](adblock.md) for the subscription API endpoints (`/adblock/status`, `/adblock/toggle`, `/adblock/subscriptions`, and `/adblock/refresh`) and supported rule syntax.

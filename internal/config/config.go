@@ -222,6 +222,19 @@ type DNSConf struct {
 	// The same host may appear multiple times to attach both an IPv4 and an IPv6
 	// address. Edited by hand in the config file.
 	StaticRecords []StaticRecord `json:"static_records"`
+	AdBlock        AdBlockConf `json:"adblock"`
+}
+
+// AdBlockConf controls optional DNS-level advertising/tracker domain filtering.
+type AdBlockConf struct {
+	Enabled       bool                  `json:"enabled"`
+	Subscriptions []AdBlockSubscription `json:"subscriptions"`
+}
+
+type AdBlockSubscription struct {
+	Name    string `json:"name"`
+	URL     string `json:"url"`
+	Enabled bool   `json:"enabled"`
 }
 
 // StaticRecord is a single host→IP(s) static DNS entry. The same host may carry

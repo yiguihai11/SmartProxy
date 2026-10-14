@@ -24,6 +24,7 @@ import (
 	mdns "github.com/miekg/dns"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/text/encoding/simplifiedchinese"
+	"smartproxy/internal/adblock"
 	"smartproxy/internal/chnroute"
 
 	"smartproxy/internal/config"
@@ -45,6 +46,7 @@ type Server struct {
 	router                *route.Router
 	mgr                   *upstream.Manager
 	dns                   *dns.Handler
+	adblockMgr            *adblock.Manager
 	chnroute              *chnroute.Trie
 	logBuf                *logbuf.RingBuffer
 	adminAuth             atomic.Pointer[config.AdminAuthConf]
@@ -136,6 +138,8 @@ func (s *Server) SetAdminAuth(auth *config.AdminAuthConf) {
 func (s *Server) AdminAuth() *config.AdminAuthConf {
 	return s.adminAuth.Load()
 }
+
+func (s *Server) SetAdBlockManager(m *adblock.Manager) { s.adblockMgr = m }
 
 func (s *Server) SetReloadConfig(fn func()) {
 	s.reloadConfig = fn
@@ -563,6 +567,10 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/cache", s.handleCache)
 	mux.HandleFunc("/dns/static", s.handleDNSStatic)
+	mux.HandleFunc("/adblock/status", s.handleAdBlockStatus)
+	mux.HandleFunc("/adblock/toggle", s.handleAdBlockToggle)
+	mux.HandleFunc("/adblock/refresh", s.handleAdBlockRefresh)
+	mux.HandleFunc("/adblock/subscriptions", s.handleAdBlockSubscriptions)
 	mux.HandleFunc("/route", s.handleRoute)
 	mux.HandleFunc("/dashboard", s.handleDashboard)
 	mux.HandleFunc("/cache/flush", s.handleCacheFlush)

@@ -75,3 +75,5 @@ Unpack 一次 → 污染检查（A/AAAA 是否都在 chnroute 内）
 - `queryUDP(ctx, wire, host, port)`：直连 UDP 查询，复用 `relay.PacketPool` 缓冲、按 `cfg.queryTimeout` 设 deadline；`queryUDPVerifyID` 在其上多校验一步响应 TXID。
 - `queryViaProxy(ctx, wire, dnsHost, dnsPort)`：走 `Manager.AcquireDNSUDP` 拿到 UDP 会话 → 前置 SOCKS5 UDP 头（`encodeSOCKS5Addr` 编码 ATYP）→ 写查询 → 按响应 ATYP 剥离头部取 DNS payload；成功 `ReleaseDNSUDP`、失败 `DiscardDNSUDP`。`queryViaProxyVerifyID` 同样校验 TXID。
 - 对外可访问器：`QueryUDP`、`IsDNSClean`、`BuildFakeResponse`、`CacheGet/CacheSet/CacheLen/CacheClear/CacheRemove/CacheEntries`、`Enabled`、`IsDomestic`、`UpdateConfig`（热重载时由 config watcher 调用）。
+
+Optional DNS ad filtering subscriptions are documented in [DNS AdBlock](adblock.md). The feature is disabled by default and runs after ACL block checks but before DNS cache lookup; configured static DNS records remain authoritative.

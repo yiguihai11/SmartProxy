@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"smartproxy/internal/admin"
+	"smartproxy/internal/adblock"
 	"smartproxy/internal/safego"
 
 	"smartproxy/internal/chnroute"
@@ -56,6 +57,7 @@ type Engine struct {
 	clientSem       chan struct{}
 	lanternProvider *lantern.Provider
 	subscriptionMgr *subscription.Manager
+	adblockMgr      *adblock.Manager
 	tetheringBridge admin.TetheringBridge
 }
 
@@ -115,6 +117,20 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 	dnsHandler.SetStaticRecords(cfg.DNS.StaticRecordsMap())
 	dnsHandler.SetFilterAAAA(shouldFilterAAAA(cfg))
 
+	adblockSubs := make([]adblock.Subscription, 0, len(cfg.DNS.AdBlock.Subscriptions))
+	for _, sub := range cfg.DNS.AdBlock.Subscriptions {
+		adblockSubs = append(adblockSubs, adblock.Subscription{Name: sub.Name, URL: sub.URL, Enabled: sub.Enabled})
+	}
+	adblockDir := cfgDir
+	if adblockDir == "" && filepath.IsAbs(cfg.Routing.ACLFile) {
+		adblockDir = filepath.Dir(cfg.Routing.ACLFile)
+	}
+	if adblockDir == "" { adblockDir = "." }
+	adblockMgr := adblock.NewManager(adblockDir, adblockSubs)
+	adblockMgr.SetEnabled(cfg.DNS.AdBlock.Enabled)
+	dnsHandler.SetAdBlockManager(adblockMgr)
+	if cfg.DNS.AdBlock.Enabled { adblockMgr.Start() }
+
 	var lanternProvider *lantern.Provider
 	if cfg.Lantern.Enabled {
 		dataDir := cfg.Lantern.DataDir
@@ -151,6 +167,7 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 		clientSem:       make(chan struct{}, maxConcurrentClients),
 		lanternProvider: lanternProvider,
 		subscriptionMgr: subMgr,
+		adblockMgr:      adblockMgr,
 	}
 	eng.Config.Store(cfg)
 	return eng, nil
@@ -327,6 +344,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	lc := e.Config.Load().Listen
 	if sockPath := lc.AdminSocket; sockPath != "" || lc.AdminPort > 0 {
 		e.adminServer = admin.New(sockPath, e.Router, e.UpstreamMgr, e.DNSHandler, e.Chnroute)
+		e.adminServer.SetAdBlockManager(e.adblockMgr)
 		// 面板按 fd 模式裁剪菜单:下挂设备列表由 TUN 按源 IP 记账供给,只有 TUN 由
 		// 外部 fd 提供(VpnService / Shizuku 热点核)时才可能有数据,非 fd 模式隐藏。
 		e.adminServer.SetFDMode(isFdMode)
@@ -943,6 +961,7 @@ func (e *Engine) handleUDPAssociate(ctx context.Context, conn net.Conn, clientIP
 }
 
 func (e *Engine) Stop() {
+	if e.adblockMgr != nil { e.adblockMgr.Stop() }
 	e.stopOnce.Do(func() {
 		slog.Info("[Go-Engine] Engine.Stop() entered")
 		if e.cancel != nil {
