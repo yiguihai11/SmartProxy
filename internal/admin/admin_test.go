@@ -2113,6 +2113,16 @@ func TestAdmin_AdblockAPI(t *testing.T) {
 	resp.Body.Close()
 
 	// 3. POST /adblock/whitelist
+	badWlBody := `{"action":"add","domain":"localhost"}`
+	resp, err = client.Post("http://unix/adblock/whitelist", "application/json", strings.NewReader(badWlBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 on single label domain, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+
 	wlBody := `{"action":"add","domain":"safe.com"}`
 	resp, err = client.Post("http://unix/adblock/whitelist", "application/json", strings.NewReader(wlBody))
 	if err != nil {
@@ -2122,7 +2132,15 @@ func TestAdmin_AdblockAPI(t *testing.T) {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("whitelist failed: %s", b)
 	}
+	var wlResp struct {
+		Status    string   `json:"status"`
+		Whitelist []string `json:"whitelist"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&wlResp)
 	resp.Body.Close()
+	if len(wlResp.Whitelist) != 1 || wlResp.Whitelist[0] != "safe.com" {
+		t.Fatalf("expected whitelist [safe.com], got %v", wlResp.Whitelist)
+	}
 
 	// 4. POST /adblock/toggle
 	toggleBody := `{"enabled":false}`

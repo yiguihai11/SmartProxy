@@ -1,6 +1,7 @@
 package adblock
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -26,6 +27,17 @@ const (
 	httpTimeout           = 30 * time.Second
 	maxSubscriptionBytes  = 32 << 20 // 32 MB
 )
+
+type countReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
 
 // ItemState 代表单条订阅清单的运行时状态。
 type ItemState struct {
@@ -310,13 +322,24 @@ func (m *Manager) Refresh(ctx context.Context, name string) (int, error) {
 	etag := it.etag
 	m.mu.RUnlock()
 
-	suffixes, allow, badfilters, stats, newEtag, err := m.fetchAndParse(ctx, url, useProxy, etag)
+	suffixes, allow, badfilters, stats, newEtag, notModified, err := m.fetchAndParse(ctx, url, useProxy, etag)
 
 	m.mu.Lock()
 	it = m.items[name]
 	if it == nil {
 		m.mu.Unlock()
 		return 0, fmt.Errorf("subscription %q deleted during refresh", name)
+	}
+
+	if notModified {
+		it.LastError = ""
+		it.LastUpdate = time.Now().Unix()
+		if newEtag != "" {
+			it.etag = newEtag
+		}
+		total := m.countActiveRulesLocked()
+		m.mu.Unlock()
+		return total, nil
 	}
 
 	if err != nil {
@@ -380,27 +403,29 @@ func (m *Manager) RefreshAll(ctx context.Context) map[string]error {
 	m.mu.RUnlock()
 
 	type fetchResult struct {
-		name       string
-		suffixes   []string
-		allow      []string
-		badfilters []string
-		stats      ParseStats
-		etag       string
-		err        error
+		name        string
+		suffixes    []string
+		allow       []string
+		badfilters  []string
+		stats       ParseStats
+		etag        string
+		notModified bool
+		err         error
 	}
 
 	ch := make(chan fetchResult, len(targets))
 	for _, tg := range targets {
 		go func(t target) {
-			sList, aList, bfs, st, etag, err := m.fetchAndParse(ctx, t.url, t.useProxy, t.etag)
+			sList, aList, bfs, st, etag, notMod, err := m.fetchAndParse(ctx, t.url, t.useProxy, t.etag)
 			ch <- fetchResult{
-				name:       t.name,
-				suffixes:   sList,
-				allow:      aList,
-				badfilters: bfs,
-				stats:      st,
-				etag:       etag,
-				err:        err,
+				name:        t.name,
+				suffixes:    sList,
+				allow:       aList,
+				badfilters:  bfs,
+				stats:       st,
+				etag:        etag,
+				notModified: notMod,
+				err:         err,
 			}
 		}(tg)
 	}
@@ -413,6 +438,15 @@ func (m *Manager) RefreshAll(ctx context.Context) map[string]error {
 		res := <-ch
 		it := m.items[res.name]
 		if it == nil {
+			continue
+		}
+		if res.notModified {
+			it.LastError = ""
+			it.LastUpdate = time.Now().Unix()
+			if res.etag != "" {
+				it.etag = res.etag
+			}
+			anySuccess = true
 			continue
 		}
 		if res.err != nil {
@@ -451,10 +485,10 @@ func (m *Manager) RefreshAll(ctx context.Context) map[string]error {
 	return errMap
 }
 
-func (m *Manager) fetchAndParse(ctx context.Context, url string, useProxy bool, etag string) (suffixes, allow, badfilters []string, stats ParseStats, newEtag string, err error) {
+func (m *Manager) fetchAndParse(ctx context.Context, url string, useProxy bool, etag string) (suffixes, allow, badfilters []string, stats ParseStats, newEtag string, notModified bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, nil, nil, ParseStats{}, "", fmt.Errorf("create request: %w", err)
+		return nil, nil, nil, ParseStats{}, "", false, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("User-Agent", "SmartProxy-DNS-AdBlock/1.0")
 	if etag != "" {
@@ -468,26 +502,34 @@ func (m *Manager) fetchAndParse(ctx context.Context, url string, useProxy bool, 
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, nil, nil, ParseStats{}, "", fmt.Errorf("http fetch: %w", err)
+		return nil, nil, nil, ParseStats{}, "", false, fmt.Errorf("http fetch: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotModified {
 		// 未修改, 保留既有数据
-		return nil, nil, nil, ParseStats{}, etag, nil
+		return nil, nil, nil, ParseStats{}, etag, true, nil
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, nil, nil, ParseStats{}, "", fmt.Errorf("http status %d", resp.StatusCode)
+		return nil, nil, nil, ParseStats{}, "", false, fmt.Errorf("http status %d", resp.StatusCode)
 	}
 
-	limitReader := io.LimitReader(resp.Body, maxSubscriptionBytes+1)
+	if resp.ContentLength > maxSubscriptionBytes {
+		return nil, nil, nil, ParseStats{}, "", false, fmt.Errorf("subscription exceeds maximum size limit of %d MB", maxSubscriptionBytes>>20)
+	}
+
+	cr := &countReader{r: resp.Body}
+	limitReader := io.LimitReader(cr, maxSubscriptionBytes+1)
 	sList, aList, bfs, st, parseErr := ParseList(limitReader)
 	if parseErr != nil {
-		return nil, nil, nil, st, "", fmt.Errorf("parse: %w", parseErr)
+		return nil, nil, nil, st, "", false, fmt.Errorf("parse: %w", parseErr)
+	}
+	if cr.n > maxSubscriptionBytes {
+		return nil, nil, nil, st, "", false, fmt.Errorf("subscription exceeds maximum size limit of %d MB", maxSubscriptionBytes>>20)
 	}
 
-	return sList, aList, bfs, st, resp.Header.Get("ETag"), nil
+	return sList, aList, bfs, st, resp.Header.Get("ETag"), false, nil
 }
 
 // Reload 处理配置变更。
@@ -694,6 +736,9 @@ func (m *Manager) rebuildAndPublishLocked() {
 				continue
 			}
 			if _, exists := seenSuffix[s]; !exists {
+				if len(seenSuffix) >= maxTotalRules {
+					break
+				}
 				seenSuffix[s] = struct{}{}
 				allSuffixes = append(allSuffixes, s)
 			}
@@ -722,20 +767,43 @@ func (m *Manager) saveDiskCacheLocked() {
 		return
 	}
 
+	if dir := filepath.Dir(m.cachePath); dir != "" {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+
 	var sb strings.Builder
 	sb.WriteString("# SmartProxy adblock compact cache\n")
-	for _, it := range m.items {
-		if it.Enabled {
-			for _, a := range it.allow {
-				sb.WriteString("@@||")
-				sb.WriteString(a)
-				sb.WriteString("^\n")
-			}
-			for _, s := range it.suffixes {
-				sb.WriteString("||")
-				sb.WriteString(s)
-				sb.WriteString("^\n")
-			}
+	for _, name := range m.itemsOrder {
+		it := m.items[name]
+		if it == nil || !it.Enabled {
+			continue
+		}
+		sb.WriteString("# [item: ")
+		sb.WriteString(it.Name)
+		sb.WriteString("]\n")
+		if it.LastUpdate > 0 {
+			sb.WriteString(fmt.Sprintf("# last_update: %d\n", it.LastUpdate))
+		}
+		if it.etag != "" {
+			sb.WriteString("# etag: ")
+			sb.WriteString(it.etag)
+			sb.WriteString("\n")
+		}
+		if it.Lines > 0 {
+			sb.WriteString(fmt.Sprintf("# lines: %d\n", it.Lines))
+		}
+		if it.Skipped > 0 {
+			sb.WriteString(fmt.Sprintf("# skipped: %d\n", it.Skipped))
+		}
+		for _, a := range it.allow {
+			sb.WriteString("@@||")
+			sb.WriteString(a)
+			sb.WriteString("^\n")
+		}
+		for _, s := range it.suffixes {
+			sb.WriteString("||")
+			sb.WriteString(s)
+			sb.WriteString("^\n")
 		}
 	}
 
@@ -744,7 +812,10 @@ func (m *Manager) saveDiskCacheLocked() {
 		slog.Warn("write adblock disk cache failed", "path", tmp, "error", err)
 		return
 	}
-	_ = os.Rename(tmp, m.cachePath)
+	if err := os.Rename(tmp, m.cachePath); err != nil {
+		_ = os.Remove(tmp)
+		slog.Warn("rename adblock disk cache failed", "error", err)
+	}
 }
 
 // loadFromDiskCache 启动时从紧凑缓存文件恢复快照。
@@ -755,17 +826,113 @@ func (m *Manager) loadFromDiskCache() bool {
 	}
 	defer f.Close()
 
-	suffixes, allow, _, _, err := ParseList(f)
-	if err != nil || (len(suffixes) == 0 && len(allow) == 0) {
+	type cachedItem struct {
+		lastUpdate int64
+		etag       string
+		lines      int
+		skipped    int
+		suffixes   []string
+		allow      []string
+	}
+
+	itemMap := make(map[string]*cachedItem)
+	var curItem *cachedItem
+	var allSuffixes []string
+	var allAllow []string
+
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "# [item: ") && strings.HasSuffix(line, "]") {
+			name := strings.TrimSuffix(strings.TrimPrefix(line, "# [item: "), "]")
+			curItem = &cachedItem{}
+			itemMap[name] = curItem
+			continue
+		}
+		if curItem != nil && strings.HasPrefix(line, "# ") {
+			rest := strings.TrimPrefix(line, "# ")
+			if strings.HasPrefix(rest, "last_update: ") {
+				val, _ := strconv.ParseInt(strings.TrimPrefix(rest, "last_update: "), 10, 64)
+				curItem.lastUpdate = val
+			} else if strings.HasPrefix(rest, "etag: ") {
+				curItem.etag = strings.TrimPrefix(rest, "etag: ")
+			} else if strings.HasPrefix(rest, "lines: ") {
+				val, _ := strconv.Atoi(strings.TrimPrefix(rest, "lines: "))
+				curItem.lines = val
+			} else if strings.HasPrefix(rest, "skipped: ") {
+				val, _ := strconv.Atoi(strings.TrimPrefix(rest, "skipped: "))
+				curItem.skipped = val
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, "!") {
+			continue
+		}
+		if strings.HasPrefix(line, "@@||") {
+			domainPart := strings.TrimSuffix(strings.TrimPrefix(line, "@@||"), "^")
+			if norm, _, ok := normalizeRuleDomain(domainPart); ok {
+				allAllow = append(allAllow, norm)
+				if curItem != nil {
+					curItem.allow = append(curItem.allow, norm)
+				}
+			}
+		} else if strings.HasPrefix(line, "||") {
+			domainPart := strings.TrimSuffix(strings.TrimPrefix(line, "||"), "^")
+			if norm, _, ok := normalizeRuleDomain(domainPart); ok {
+				allSuffixes = append(allSuffixes, norm)
+				if curItem != nil {
+					curItem.suffixes = append(curItem.suffixes, norm)
+				}
+			}
+		}
+	}
+
+	if len(allSuffixes) == 0 && len(allAllow) == 0 {
 		return false
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	var fileMtime int64
+	if fi, err := f.Stat(); err == nil {
+		fileMtime = fi.ModTime().Unix()
+	}
+
+	if len(itemMap) > 0 {
+		for name, ci := range itemMap {
+			if it, ok := m.items[name]; ok {
+				it.suffixes = ci.suffixes
+				it.allow = ci.allow
+				it.Kept = len(ci.suffixes) + len(ci.allow)
+				it.Lines = ci.lines
+				it.Skipped = ci.skipped
+				it.LastUpdate = ci.lastUpdate
+				if it.LastUpdate == 0 {
+					it.LastUpdate = fileMtime
+				}
+				it.etag = ci.etag
+			}
+		}
+	} else if len(m.itemsOrder) == 1 {
+		// 兼容旧格式无 item 头的单订阅缓存
+		if it, ok := m.items[m.itemsOrder[0]]; ok {
+			it.suffixes = allSuffixes
+			it.allow = allAllow
+			it.Kept = len(allSuffixes) + len(allAllow)
+			it.LastUpdate = fileMtime
+		}
+	}
+
 	// 整合白名单
-	allow = append(allow, m.whitelist...)
-	set := NewSet(suffixes, allow, m.stats)
+	allAllow = append(allAllow, m.whitelist...)
+	set := NewSet(allSuffixes, allAllow, m.stats)
 	if m.conf.Enabled && m.sink != nil {
 		m.sink(set)
 	}

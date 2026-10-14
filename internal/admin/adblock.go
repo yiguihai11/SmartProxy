@@ -244,11 +244,29 @@ func (s *Server) handleAdblockWhitelist(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "domain must not be empty", http.StatusBadRequest)
 		return
 	}
+	if !config.IsValidAdblockDomain(domain) {
+		http.Error(w, "invalid domain for whitelist (must be a valid 2-8 label ASCII domain)", http.StatusBadRequest)
+		return
+	}
 
 	action := strings.ToLower(strings.TrimSpace(req.Action))
 	if action != "add" && action != "remove" {
 		http.Error(w, "action must be 'add' or 'remove'", http.StatusBadRequest)
 		return
+	}
+
+	if s.adblockMgr != nil {
+		if action == "add" {
+			if err := s.adblockMgr.AddWhitelist(domain); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		} else {
+			if err := s.adblockMgr.RemoveWhitelist(domain); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 	}
 
 	_, valErr, writeErr := s.saveConfig(func(c *config.Config) {

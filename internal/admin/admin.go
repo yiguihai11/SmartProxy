@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1714,7 +1715,14 @@ func (s *Server) handleProxiesCleanDead(w http.ResponseWriter, r *http.Request) 
 // reloadConfig call happens here. Returns the updated copy plus two errors:
 // validationErr (client-facing, 400) and writeErr (server-facing, 500).
 func (s *Server) saveConfig(mutate func(c *config.Config)) (*config.Config, error, error) {
-	next := s.configSrc().Clone()
+	if s.configSrc == nil || s.configPath == "" {
+		return nil, nil, errors.New("config persistence not configured")
+	}
+	src := s.configSrc()
+	if src == nil {
+		return nil, nil, errors.New("config not available")
+	}
+	next := src.Clone()
 	mutate(next)
 	if err := next.Validate(); err != nil {
 		return nil, err, nil

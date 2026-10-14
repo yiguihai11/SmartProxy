@@ -546,22 +546,27 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(c.DNS.Adblock.CacheFile) == "" {
 			errs = append(errs, "dns.adblock.cache_file must not be empty when enabled")
 		}
-		if len(c.DNS.Adblock.Lists) > 32 {
-			errs = append(errs, "dns.adblock.lists exceeds maximum limit of 32")
-		}
-		for i, l := range c.DNS.Adblock.Lists {
-			if l.Enabled {
-				if strings.TrimSpace(l.Name) == "" {
-					errs = append(errs, fmt.Sprintf("dns.adblock.lists[%d].name must not be empty", i))
-				}
-				u := strings.TrimSpace(l.URL)
-				if u == "" || !(strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")) {
-					errs = append(errs, fmt.Sprintf("dns.adblock.lists[%d].url must be a valid http(s) URL", i))
-				}
+	}
+	if len(c.DNS.Adblock.Lists) > 32 {
+		errs = append(errs, "dns.adblock.lists exceeds maximum limit of 32")
+	}
+	for i, l := range c.DNS.Adblock.Lists {
+		if l.Enabled {
+			if strings.TrimSpace(l.Name) == "" {
+				errs = append(errs, fmt.Sprintf("dns.adblock.lists[%d].name must not be empty", i))
+			}
+			u := strings.TrimSpace(l.URL)
+			if u == "" || !(strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")) {
+				errs = append(errs, fmt.Sprintf("dns.adblock.lists[%d].url must be a valid http(s) URL", i))
 			}
 		}
-		if len(c.DNS.Adblock.Whitelist) > 5000 {
-			errs = append(errs, "dns.adblock.whitelist exceeds maximum limit of 5000")
+	}
+	if len(c.DNS.Adblock.Whitelist) > 5000 {
+		errs = append(errs, "dns.adblock.whitelist exceeds maximum limit of 5000")
+	}
+	for j, d := range c.DNS.Adblock.Whitelist {
+		if !IsValidAdblockDomain(d) {
+			errs = append(errs, fmt.Sprintf("dns.adblock.whitelist[%d] %q is not a valid domain (must be 2-8 labels)", j, d))
 		}
 	}
 	if len(errs) == 0 {
@@ -821,3 +826,34 @@ func DefaultConfig() *Config {
 		},
 	}
 }
+
+// IsValidAdblockDomain checks whether d is a valid 2..8 label ASCII domain name.
+func IsValidAdblockDomain(d string) bool {
+	d = strings.TrimSpace(strings.ToLower(d))
+	d = strings.TrimPrefix(d, "*.")
+	d = strings.TrimPrefix(d, ".")
+	d = strings.TrimSuffix(d, ".")
+	if len(d) == 0 || len(d) > 253 {
+		return false
+	}
+	labels := 0
+	start := 0
+	for i := 0; i <= len(d); i++ {
+		if i == len(d) || d[i] == '.' {
+			part := d[start:i]
+			if len(part) == 0 || len(part) > 63 || part[0] == '-' || part[len(part)-1] == '-' {
+				return false
+			}
+			for j := 0; j < len(part); j++ {
+				c := part[j]
+				if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+					return false
+				}
+			}
+			labels++
+			start = i + 1
+		}
+	}
+	return labels >= 2 && labels <= 8
+}
+

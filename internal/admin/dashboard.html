@@ -911,7 +911,7 @@ function navTo(n){
   if(ni)ni.classList.add('active');
   var vi=document.getElementById('view-'+n);
   if(vi)vi.classList.add('active');
-  var ld={dashboard:loadDashboard,traffic:loadTraffic,health:loadHealth,devices:loadDevices,blacklist:loadBlacklist,cache:loadDNS,adblock:loadAdBlock,config:loadConfig};
+  var ld={dashboard:loadDashboard,traffic:loadTraffic,health:loadHealth,devices:loadDevices,blacklist:loadBlacklist,cache:loadDNS,adblock:loadAdblock,config:loadConfig};
   if(ld[n])ld[n]();
 }
 function ldash(d){

@@ -195,3 +195,127 @@ func TestManagerCompactCacheRestoration(t *testing.T) {
 		t.Fatal("safe.cached-ad.com should be exempt by restored cache allow rule")
 	}
 }
+
+func TestManagerHTTP304NotModifiedPreservesRules(t *testing.T) {
+	etag := `"v1-etag"`
+	content := "||ad1.example.com^\n||ad2.example.com^\n"
+	requestCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(content))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	conf := config.AdblockConf{
+		Enabled:   true,
+		CacheFile: "adblock_cache.txt",
+		Lists: []config.AdblockListConf{
+			{Name: "304-list", URL: server.URL, Enabled: true},
+		},
+	}
+
+	var currentSet atomic.Pointer[Set]
+	sink := func(s *Set) { currentSet.Store(s) }
+
+	mgr := NewManager(tmpDir, conf, nil, sink)
+	defer mgr.Stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 1st request -> 200 OK, rules loaded
+	kept, err := mgr.Refresh(ctx, "304-list")
+	if err != nil {
+		t.Fatalf("1st refresh failed: %v", err)
+	}
+	if kept != 2 {
+		t.Fatalf("expected 2 kept rules, got %d", kept)
+	}
+	s := currentSet.Load()
+	if s == nil || !s.Blocked("ad1.example.com") {
+		t.Fatal("ad1.example.com should be blocked")
+	}
+
+	// 2nd request -> 304 Not Modified, rules must be preserved!
+	kept, err = mgr.Refresh(ctx, "304-list")
+	if err != nil {
+		t.Fatalf("2nd refresh failed: %v", err)
+	}
+	if kept != 2 {
+		t.Fatalf("expected 2 kept rules preserved on 304, got %d", kept)
+	}
+	s = currentSet.Load()
+	if s == nil || !s.Blocked("ad1.example.com") || !s.Blocked("ad2.example.com") {
+		t.Fatal("rules must remain active after 304 response")
+	}
+	st := mgr.Status()
+	if st.Items[0].Kept != 2 {
+		t.Fatalf("item kept count should be 2, got %d", st.Items[0].Kept)
+	}
+	if requestCount < 2 {
+		t.Fatalf("expected at least 2 requests, got %d", requestCount)
+	}
+}
+
+func TestManagerCacheItemStateRoundtrip(t *testing.T) {
+	content := "||tracker1.com^\n||tracker2.com^\n"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"etag-xyz"`)
+		_, _ = w.Write([]byte(content))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	conf := config.AdblockConf{
+		Enabled:   true,
+		CacheFile: "adblock_cache.txt",
+		Lists: []config.AdblockListConf{
+			{Name: "my-sub", URL: server.URL, Enabled: true},
+		},
+	}
+
+	var currentSet atomic.Pointer[Set]
+	sink := func(s *Set) { currentSet.Store(s) }
+
+	mgr1 := NewManager(tmpDir, conf, nil, sink)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := mgr1.Refresh(ctx, "my-sub")
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	mgr1.Stop()
+
+	// New manager starting with the saved cache
+	var set2 atomic.Pointer[Set]
+	sink2 := func(s *Set) { set2.Store(s) }
+	mgr2 := NewManager(tmpDir, conf, nil, sink2)
+	defer mgr2.Stop()
+
+	mgr2.Start()
+	time.Sleep(100 * time.Millisecond)
+
+	s := set2.Load()
+	if s == nil || !s.Blocked("tracker1.com") {
+		t.Fatal("tracker1.com should be blocked from restored cache")
+	}
+	st := mgr2.Status()
+	if len(st.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(st.Items))
+	}
+	if st.Items[0].Kept != 2 {
+		t.Fatalf("expected kept 2 restored from cache, got %d", st.Items[0].Kept)
+	}
+	if mgr2.needInitialRefresh() {
+		t.Fatal("needInitialRefresh should be false when valid cache was loaded")
+	}
+}
+
