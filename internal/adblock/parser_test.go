@@ -1,6 +1,9 @@
 package adblock
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseDomainAndExceptions(t *testing.T) {
 	rules, stats, err := Parse("||ads.example^\n@@||safe.ads.example^\n127.0.0.1 tracker.test\n")
@@ -40,4 +43,47 @@ func itoa(n int) string {
 	i := len(b)
 	for n > 0 { i--; b[i] = byte('0' + n%10); n /= 10 }
 	return string(b[i:])
+}
+
+
+func TestParseHostsAllAliases(t *testing.T) {
+	rules, stats, err := Parse("0.0.0.0 first.example second.example third.example # comment\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Accepted != 3 || len(rules) != 3 {
+		t.Fatalf("expected all three hosts aliases, got rules=%v stats=%+v", rules, stats)
+	}
+	set := NewSet(rules)
+	for _, domain := range []string{"first.example", "second.example", "third.example"} {
+		if !set.Blocked(domain) {
+			t.Errorf("%s should be blocked", domain)
+		}
+	}
+}
+
+func TestParseBadfilterOrderIndependent(t *testing.T) {
+	for _, input := range []string{
+		"||ads.example^\n||ads.example^$badfilter\n||keep.example^\n",
+		"||ads.example^$badfilter\n||ads.example^\n||keep.example^\n",
+	} {
+		rules, _, err := Parse(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		set := NewSet(rules)
+		if set.Blocked("ads.example") {
+			t.Fatal("$badfilter should disable its matching block rule")
+		}
+		if !set.Blocked("keep.example") {
+			t.Fatal("unrelated rules should remain active")
+		}
+	}
+}
+
+func TestParseRejectsMoreThanMaxLines(t *testing.T) {
+	input := strings.Repeat("! comment\n", maxRuleLines+1)
+	if _, _, err := Parse(input); err == nil {
+		t.Fatal("expected line limit error")
+	}
 }

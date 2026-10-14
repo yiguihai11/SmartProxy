@@ -153,9 +153,10 @@ func (m *Manager) refreshOne(ctx context.Context, sub Subscription) error {
 		return m.activateCached(sub, cached, path)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 { return m.setError(sub, fmt.Errorf("HTTP %d", resp.StatusCode)) }
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	const maxSubscriptionBytes = 32 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSubscriptionBytes+1))
 	if err != nil { return m.setError(sub, err) }
-	if len(body) >= 16<<20 { return m.setError(sub, fmt.Errorf("subscription exceeds 16 MiB limit")) }
+	if len(body) > maxSubscriptionBytes { return m.setError(sub, fmt.Errorf("subscription exceeds 32 MiB limit")) }
 	rules, stats, err := Parse(string(body))
 	if err != nil { return m.setError(sub, err) }
 	cached = diskCache{ETag: resp.Header.Get("ETag"), Body: string(body), Updated: time.Now()}
