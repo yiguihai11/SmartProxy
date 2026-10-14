@@ -1,89 +1,173 @@
 package adblock
 
 import (
+	"io"
 	"strings"
 	"testing"
 )
 
-func TestParseDomainAndExceptions(t *testing.T) {
-	rules, stats, err := Parse("||ads.example^\n@@||safe.ads.example^\n127.0.0.1 tracker.test\n")
-	if err != nil { t.Fatal(err) }
-	if stats.Accepted != 3 || stats.Exceptions != 1 { t.Fatalf("unexpected stats: %+v", stats) }
-	set := NewSet(rules)
-	for _, d := range []string{"ads.example", "x.ads.example"} {
-		if !set.Blocked(d) { t.Errorf("%s should be blocked", d) }
-	}
-	if set.Blocked("safe.ads.example") || set.Blocked("x.safe.ads.example") { t.Fatal("exception should override parent block") }
-	if set.Blocked("example") { t.Fatal("parent domain should not be blocked") }
-}
-
-func TestParseSkipsUnsupportedAndLocal(t *testing.T) {
-	_, stats, err := Parse("||ads.example^\n||ads.example^$third-party\n127.0.0.1 localhost\n")
-	if err != nil { t.Fatal(err) }
-	if stats.Ignored != 2 { t.Fatalf("ignored=%d", stats.Ignored) }
-}
-
-func TestParseRejectsEmptyOrUnsupported(t *testing.T) {
-	if _, _, err := Parse("! comment only"); err == nil { t.Fatal("expected empty list error") }
-	if _, _, err := Parse("||example.com^$dnsrewrite=NOERROR"); err == nil { t.Fatal("expected unsupported-only list error") }
-}
-
-func BenchmarkSet_Blocked_100k(b *testing.B) {
-	rules := make([]Rule, 100000)
-	for i := range rules { rules[i] = Rule{Domain: "ads" + itoa(i) + ".example"} }
-	set := NewSet(rules)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ { set.Blocked("x.ads99999.example") }
-}
-
-func itoa(n int) string {
-	if n == 0 { return "0" }
-	var b [20]byte
-	i := len(b)
-	for n > 0 { i--; b[i] = byte('0' + n%10); n /= 10 }
-	return string(b[i:])
-}
-
-
-func TestParseHostsAllAliases(t *testing.T) {
-	rules, stats, err := Parse("0.0.0.0 first.example second.example third.example # comment\n")
+func TestParseHostsAllCases(t *testing.T) {
+	input := `
+# System hosts file with adblock lines
+127.0.0.1 localhost
+0.0.0.0 broadcasthost
+::1 ip6-localhost
+0.0.0.0 first.ad.com second.ad.com # inline comment
+127.0.0.1 third.ad.com
+1.2.3.4 legitimate-override.com
+`
+	suffixes, allow, _, stats, err := ParseList(strings.NewReader(input))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if stats.Accepted != 3 || len(rules) != 3 {
-		t.Fatalf("expected all three hosts aliases, got rules=%v stats=%+v", rules, stats)
+
+	if len(allow) != 0 {
+		t.Fatalf("expected 0 allow rules, got %d", len(allow))
 	}
-	set := NewSet(rules)
-	for _, domain := range []string{"first.example", "second.example", "third.example"} {
-		if !set.Blocked(domain) {
-			t.Errorf("%s should be blocked", domain)
+
+	// 应该包含 first.ad.com, second.ad.com, third.ad.com
+	expected := map[string]bool{
+		"first.ad.com":  true,
+		"second.ad.com": true,
+		"third.ad.com":  true,
+	}
+	for _, s := range suffixes {
+		if !expected[s] {
+			t.Errorf("unexpected suffix %q", s)
 		}
+		delete(expected, s)
+	}
+	if len(expected) != 0 {
+		t.Errorf("missing expected suffixes: %v", expected)
+	}
+
+	// 真实 IP 应该被跳过
+	if stats.Reasons["real_ip_host"] != 1 {
+		t.Errorf("expected 1 real_ip_host skip, got %d", stats.Reasons["real_ip_host"])
+	}
+	// localhost 等噪音应该被跳过
+	if stats.Reasons["noise_hosts"] < 3 {
+		t.Errorf("expected at least 3 noise_hosts skips, got %d", stats.Reasons["noise_hosts"])
+	}
+}
+
+func TestParseABPAndPlainDomains(t *testing.T) {
+	input := `
+! Comment line
+[Adblock Plus 2.0]
+||adservice.com^
+||analytics.com^$important
+@@||safe.analytics.com^
+plain-tracker.net
+`
+	suffixes, allow, _, stats, err := ParseList(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if stats.Kept != 4 {
+		t.Fatalf("expected 4 kept rules, got %d", stats.Kept)
+	}
+
+	set := NewSet(suffixes, allow, nil)
+	if !set.Blocked("adservice.com") {
+		t.Error("adservice.com should be blocked")
+	}
+	if !set.Blocked("analytics.com") {
+		t.Error("analytics.com should be blocked ($important preserved)")
+	}
+	if set.Blocked("safe.analytics.com") {
+		t.Error("safe.analytics.com should be exempt by allow rule")
+	}
+	if !set.Blocked("plain-tracker.net") {
+		t.Error("plain-tracker.net from bare-domain list should be blocked")
+	}
+}
+
+func TestParseOrderTrapCosmeticVsComment(t *testing.T) {
+	// 顺序陷阱: ## 开头的元素隐藏规则绝不能被当成 # 注释跳过
+	input := `
+##.ad-banner
+#?#div.sponsored
+# Real comment
+`
+	_, _, _, stats, err := ParseList(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Reasons["cosmetic"] != 2 {
+		t.Fatalf("expected 2 cosmetic skips, got %d", stats.Reasons["cosmetic"])
+	}
+}
+
+func TestParseUnsupportedABPFeatures(t *testing.T) {
+	input := `
+||ads.com^$third-party
+||ads.com^$dnsrewrite=NOERROR
+/ads[0-9]+\.com/
+https://example.com/ad/banner.js
+*.wildcard.org
+`
+	_, _, _, stats, err := ParseList(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Reasons["option"] < 2 {
+		t.Errorf("expected >=2 option skips, got %d", stats.Reasons["option"])
+	}
+	if stats.Reasons["regex"] != 1 {
+		t.Errorf("expected 1 regex skip, got %d", stats.Reasons["regex"])
+	}
+	if stats.Reasons["url_path"] != 1 {
+		t.Errorf("expected 1 url_path skip, got %d", stats.Reasons["url_path"])
+	}
+	if stats.Reasons["wildcard"] != 1 {
+		t.Errorf("expected 1 wildcard skip, got %d", stats.Reasons["wildcard"])
 	}
 }
 
 func TestParseBadfilterOrderIndependent(t *testing.T) {
-	for _, input := range []string{
-		"||ads.example^\n||ads.example^$badfilter\n||keep.example^\n",
-		"||ads.example^$badfilter\n||ads.example^\n||keep.example^\n",
-	} {
-		rules, _, err := Parse(input)
+	// 两个清单, 分别测试 badfilter 在前和在后的情况
+	inputs := []struct {
+		desc string
+		list string
+	}{
+		{
+			desc: "badfilter after rule",
+			list: "||bad.com^\n||bad.com^$badfilter\n||keep.com^\n",
+		},
+		{
+			desc: "badfilter before rule",
+			list: "||bad.com^$badfilter\n||bad.com^\n||keep.com^\n",
+		},
+	}
+
+	for _, tc := range inputs {
+		readers := map[string]io.Reader{
+			tc.desc: strings.NewReader(tc.list),
+		}
+		suffixes, _, _, err := ParseLists(readers)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("%s: unexpected error: %v", tc.desc, err)
 		}
-		set := NewSet(rules)
-		if set.Blocked("ads.example") {
-			t.Fatal("$badfilter should disable its matching block rule")
+		set := NewSet(suffixes, nil, nil)
+		if set.Blocked("bad.com") {
+			t.Errorf("%s: bad.com should have been canceled by $badfilter", tc.desc)
 		}
-		if !set.Blocked("keep.example") {
-			t.Fatal("unrelated rules should remain active")
+		if !set.Blocked("keep.com") {
+			t.Errorf("%s: keep.com should remain blocked", tc.desc)
 		}
 	}
 }
 
-func TestParseRejectsMoreThanMaxLines(t *testing.T) {
-	input := strings.Repeat("! comment\n", maxRuleLines+1)
-	if _, _, err := Parse(input); err == nil {
-		t.Fatal("expected line limit error")
+func TestParseMaxLinesLimit(t *testing.T) {
+	// 构建超过 50 万行的清单
+	input := strings.Repeat("! comment\n", maxLinesPerList+5)
+	_, _, _, stats, err := ParseList(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Reasons["line_limit_exceeded"] != 1 {
+		t.Fatal("expected line_limit_exceeded flag in stats")
 	}
 }

@@ -1557,6 +1557,8 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
 
             // 内置 DNS 静态记录将 smartproxy.lan 解析到热点网关/TUN 虚拟 IP
             val dns = json.optJSONObject("dns") ?: JSONObject().also { json.put("dns", it) }
+            val adblock = dns.optJSONObject("adblock") ?: JSONObject().also { dns.put("adblock", it) }
+            adblock.put("cache_file", File(SHELL_RUNTIME_DIR, "smartproxy-tethering-state/adblock_cache.txt").absolutePath)
             val records = dns.optJSONArray("static_records") ?: JSONArray().also { dns.put("static_records", it) }
             var found = -1
             for (i in 0 until records.length()) {

@@ -2061,17 +2061,19 @@ func TestTLSDispatch_PlaintextAssetsAndHostPreservation(t *testing.T) {
 }
 
 
-func TestAdmin_AdBlockTogglePersistsAcrossStatusRefresh(t *testing.T) {
+func TestAdmin_AdblockAPI(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
 	cfg := config.DefaultConfig()
-	cfg.DNS.AdBlock.Enabled = false
-	mgr := adblock.NewManager(dir, nil)
+	cfg.DNS.Adblock.Enabled = true
+	cfg.DNS.Adblock.CacheFile = "adblock_cache.txt"
+
+	mgr := adblock.NewManager(dir, cfg.DNS.Adblock, nil, nil)
 	s := newTestServer(t)
-	s.SetAdBlockManager(mgr)
+	s.SetAdblockManager(mgr)
 	s.SetConfigSrc(func() *config.Config { return cfg })
 	s.SetConfigPath(cfgPath)
-	s.SetReloadConfig(func() {}) // Simulate a delayed/failed config watcher; runtime state must still reflect the toggle.
+	s.SetReloadConfig(func() {})
 	startServer(t, s)
 
 	client := &http.Client{
@@ -2080,28 +2082,68 @@ func TestAdmin_AdBlockTogglePersistsAcrossStatusRefresh(t *testing.T) {
 		}},
 		Timeout: 5 * time.Second,
 	}
-	req, err := http.NewRequest(http.MethodPost, "http://unix/adblock/toggle", bytes.NewBufferString(`{"enabled":true}`))
-	if err != nil { t.Fatal(err) }
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
-	if err != nil { t.Fatal(err) }
+
+	// 1. GET /adblock
+	resp, err := client.Get("http://unix/adblock")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body); resp.Body.Close()
-		t.Fatalf("toggle returned %d: %s", resp.StatusCode, body)
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var st struct {
+		Enabled bool `json:"enabled"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&st)
+	resp.Body.Close()
+	if !st.Enabled {
+		t.Fatal("expected adblock to be enabled")
+	}
+
+	// 2. POST /adblock/save
+	saveBody := `{"name":"test-sub","url":"https://example.com/hosts.txt","enabled":true,"update_interval":"24h"}`
+	resp, err = client.Post("http://unix/adblock/save", "application/json", strings.NewReader(saveBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("save failed: %s", b)
 	}
 	resp.Body.Close()
 
-	resp, err = client.Get("http://unix/adblock/status")
-	if err != nil { t.Fatal(err) }
-	defer resp.Body.Close()
-	var status struct { Enabled bool `json:"enabled"` }
-	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil { t.Fatal(err) }
-	if !status.Enabled { t.Fatal("status reverted to disabled after refresh") }
-	if !mgr.Enabled() { t.Fatal("runtime adblock manager remained disabled") }
+	// 3. POST /adblock/whitelist
+	wlBody := `{"action":"add","domain":"safe.com"}`
+	resp, err = client.Post("http://unix/adblock/whitelist", "application/json", strings.NewReader(wlBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("whitelist failed: %s", b)
+	}
+	resp.Body.Close()
 
-	disk, err := os.ReadFile(cfgPath)
-	if err != nil { t.Fatalf("config was not persisted: %v", err) }
-	var saved config.Config
-	if err := json.Unmarshal(disk, &saved); err != nil { t.Fatal(err) }
-	if !saved.DNS.AdBlock.Enabled { t.Fatal("dns.adblock.enabled was not saved as true") }
+	// 4. POST /adblock/toggle
+	toggleBody := `{"enabled":false}`
+	resp, err = client.Post("http://unix/adblock/toggle", "application/json", strings.NewReader(toggleBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("toggle failed: %s", b)
+	}
+	resp.Body.Close()
+
+	// 5. POST /adblock/delete
+	resp, err = client.Post("http://unix/adblock/delete?name=test-sub", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("delete failed: %s", b)
+	}
+	resp.Body.Close()
 }

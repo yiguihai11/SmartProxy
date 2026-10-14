@@ -626,4 +626,4 @@ curl --unix-socket /tmp/admin.sock 'http://localhost/logs?level=INFO'
 
 ### DNS AdBlock subscriptions
 
-See [DNS AdBlock](adblock.md) for the subscription API endpoints (`/adblock/status`, `/adblock/toggle`, `/adblock/subscriptions`, and `/adblock/refresh`) and supported rule syntax.
+See [DNS AdBlock](adblock.md) for the complete subscription API endpoints (`/adblock`, `/adblock/refresh`, `/adblock/save`, `/adblock/delete`, `/adblock/toggle`, and `/adblock/whitelist`) and rule syntax.

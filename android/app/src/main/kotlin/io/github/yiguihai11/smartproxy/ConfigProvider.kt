@@ -257,6 +257,8 @@ object ConfigProvider {
         // 与证书 SAN 无关,见上)。每次启动用当前 IP 刷新,不保留旧 IP。
         val lanIp = PanelUrl.lanIpv4()
         val dns = base.optJSONObject("dns") ?: JSONObject().also { base.put("dns", it) }
+        val adblock = dns.optJSONObject("adblock") ?: JSONObject().also { dns.put("adblock", it) }
+        adblock.put("cache_file", File(context.cacheDir, "adblock/adblock_cache.txt").absolutePath)
         val records = dns.optJSONArray("static_records")
             ?: JSONArray().also { dns.put("static_records", it) }
         var found = -1

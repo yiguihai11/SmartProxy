@@ -57,6 +57,14 @@ func (c *Config) applyDefaults() {
 	if c.DNS.QueryTimeout == 0 {
 		c.DNS.QueryTimeout = 3
 	}
+	if c.DNS.Adblock.CacheFile == "" {
+		c.DNS.Adblock.CacheFile = "adblock_cache.txt"
+	}
+	for i := range c.DNS.Adblock.Lists {
+		if c.DNS.Adblock.Lists[i].UpdateInterval == "" {
+			c.DNS.Adblock.Lists[i].UpdateInterval = "24h"
+		}
+	}
 	if c.SmartProxy.Timeout == 0 && c.SmartProxy.TimeoutMs == 0 {
 		c.SmartProxy.Timeout = 2
 	}

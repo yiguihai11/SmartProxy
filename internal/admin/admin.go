@@ -139,6 +139,7 @@ func (s *Server) AdminAuth() *config.AdminAuthConf {
 	return s.adminAuth.Load()
 }
 
+func (s *Server) SetAdblockManager(m *adblock.Manager) { s.adblockMgr = m }
 func (s *Server) SetAdBlockManager(m *adblock.Manager) { s.adblockMgr = m }
 
 func (s *Server) SetReloadConfig(fn func()) {
@@ -567,10 +568,12 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/cache", s.handleCache)
 	mux.HandleFunc("/dns/static", s.handleDNSStatic)
-	mux.HandleFunc("/adblock/status", s.handleAdBlockStatus)
-	mux.HandleFunc("/adblock/toggle", s.handleAdBlockToggle)
-	mux.HandleFunc("/adblock/refresh", s.handleAdBlockRefresh)
-	mux.HandleFunc("/adblock/subscriptions", s.handleAdBlockSubscriptions)
+	mux.HandleFunc("/adblock", s.handleAdblock)
+	mux.HandleFunc("/adblock/refresh", s.handleAdblockRefresh)
+	mux.HandleFunc("/adblock/save", s.handleAdblockSave)
+	mux.HandleFunc("/adblock/delete", s.handleAdblockDelete)
+	mux.HandleFunc("/adblock/toggle", s.handleAdblockToggle)
+	mux.HandleFunc("/adblock/whitelist", s.handleAdblockWhitelist)
 	mux.HandleFunc("/route", s.handleRoute)
 	mux.HandleFunc("/dashboard", s.handleDashboard)
 	mux.HandleFunc("/cache/flush", s.handleCacheFlush)

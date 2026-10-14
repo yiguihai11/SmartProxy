@@ -38,6 +38,11 @@ class TetheringConfigRelocationTest {
         assertEquals(0, listen.getInt("port"))
 
         val dns = json.getJSONObject("dns")
+        val adblock = dns.getJSONObject("adblock")
+        assertEquals(
+            "/data/local/tmp/smartproxy-tethering-state/adblock_cache.txt",
+            adblock.getString("cache_file")
+        )
         val records = dns.getJSONArray("static_records")
         assertEquals(1, records.length())
         assertEquals("smartproxy.lan", records.getJSONObject(0).getString("host"))
@@ -58,5 +63,11 @@ class TetheringConfigRelocationTest {
         )
         assertEquals("", listen.getString("admin_socket"))
         assertEquals(0, listen.getInt("port"))
+
+        val adblock = json.getJSONObject("dns").getJSONObject("adblock")
+        assertEquals(
+            "/data/local/tmp/smartproxy-tethering-state/adblock_cache.txt",
+            adblock.getString("cache_file")
+        )
     }
 }

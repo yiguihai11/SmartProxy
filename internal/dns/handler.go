@@ -55,7 +55,7 @@ type Handler struct {
 	// checked before block rules and cache). The whole map is swapped atomically on
 	// config reload so readers always see a consistent snapshot.
 	staticRecords atomic.Pointer[map[string][]net.IP]
-	adblockMgr    atomic.Pointer[adblock.Manager]
+	adFilter      atomic.Pointer[adblock.Set]
 }
 
 func NewHandler(cacheSize, cacheTTL int,
@@ -181,8 +181,9 @@ func isPrivateIP(ipStr string) bool {
 	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()
 }
 
-// SetAdBlockManager installs the optional DNS subscription manager.
-func (h *Handler) SetAdBlockManager(m *adblock.Manager) { h.adblockMgr.Store(m) }
+// SetAdFilter 原子替换广告过滤快照;传 nil 表示未启用(立即全放行)。
+// 只由 adblock.Manager 在订阅刷新 / 白名单变更 / 停用时调用。
+func (h *Handler) SetAdFilter(s *adblock.Set) { h.adFilter.Store(s) }
 
 func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP string, targetPort int, engine *rules.Engine) []byte {
 	cfg := h.cfg.Load()
@@ -228,10 +229,10 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 		return h.buildFakeResponse(queryWire)
 	}
 
-	// AdBlock is a separate policy layer: ACL allow rules do not bypass it. Static DNS
-	// records above intentionally remain authoritative and are never adblock-filtered.
-	if m := h.adblockMgr.Load(); m != nil && m.Blocked(qname) {
-		ll.Debug("adblock blocked DNS query", "domain", qname)
+	if s := h.adFilter.Load(); s != nil && s.Blocked(qname) {
+		// 刻意用 Debug:广告过滤命中率高,Info 会把 logbuf 与面板 SSE 打爆(§2 决策 9)。
+		// 命中计数由 Set.Blocked 内部完成,这里不重复统计。
+		ll.Debug("blocked DNS query by ad filter", "domain", qname)
 		return h.buildFakeResponse(queryWire)
 	}
 

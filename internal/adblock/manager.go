@@ -2,338 +2,781 @@ package adblock
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"smartproxy/internal/config"
+	"smartproxy/internal/safego"
 	"smartproxy/internal/upstream"
 )
 
-type Subscription struct {
-	Name     string `json:"name"`
-	URL      string `json:"url"`
-	Enabled  bool   `json:"enabled"`
-	// nil preserves compatibility with older configs and defaults to proxy fetch.
-	UseProxy *bool `json:"use_proxy,omitempty"`
+const (
+	defaultUpdateInterval = 24 * time.Hour
+	minUpdateInterval     = 10 * time.Minute
+	httpTimeout           = 30 * time.Second
+	maxSubscriptionBytes  = 32 << 20 // 32 MB
+)
+
+// ItemState 代表单条订阅清单的运行时状态。
+type ItemState struct {
+	Name       string         `json:"name"`
+	URL        string         `json:"url"`
+	Enabled    bool           `json:"enabled"`
+	Interval   string         `json:"update_interval"`
+	UseProxy   bool           `json:"use_proxy"`
+	Kept       int            `json:"kept"`        // 生效条数 (该清单贡献)
+	Lines      int            `json:"lines"`
+	Skipped    int            `json:"skipped"`     // 被忽略条数
+	SkipDetail map[string]int `json:"skip_detail,omitempty"`
+	LastUpdate int64          `json:"last_update"` // unix 秒
+	LastError  string         `json:"last_error,omitempty"`
+	etag       string
+	suffixes   []string
+	allow      []string
+	badfilters []string
 }
 
-func (s Subscription) UsesProxy() bool { return s.UseProxy == nil || *s.UseProxy }
-
-type SourceState struct {
-	Name string `json:"name"`
-	URL string `json:"url"`
-	Enabled bool `json:"enabled"`
-	UseProxy bool `json:"use_proxy"`
-	ActiveRules int `json:"active_rules"`
-	IgnoredRules int `json:"ignored_rules"`
-	Hits uint64 `json:"hits"`
-	Refreshing bool `json:"refreshing"`
-	LastUpdated time.Time `json:"last_updated,omitempty"`
-	LastError string `json:"last_error,omitempty"`
+// Status 描述整体广告过滤模块的状态, 供控制面板呈现。
+type Status struct {
+	Enabled    bool        `json:"enabled"`
+	Items      []ItemState `json:"items"`
+	TotalHits  int64       `json:"total_hits"`
+	Since      int64       `json:"since"`
+	TopDomains []DomainHit `json:"top_domains"`
+	CacheCount int         `json:"cache_count"`
+	CacheMtime int64       `json:"cache_mtime"`
 }
 
-type diskCache struct {
-	ETag string `json:"etag,omitempty"`
-	Body string `json:"body"`
-	Updated time.Time `json:"updated"`
-}
-
+// Manager 管理 DNS 广告过滤订阅、抓取、白名单与快照发布。
 type Manager struct {
-	mu sync.Mutex
-	refreshAllMu sync.Mutex
-	refreshLocks sync.Map
-	hits map[string]uint64
-	refreshing map[string]bool
-	refreshingAll bool
-	dir string
-	subs []Subscription
-	client        *http.Client
+	mu          sync.RWMutex
+	cfgDir      string
+	conf        config.AdblockConf
+	cachePath   string
+	upstreamMgr *upstream.Manager
+	sink        func(*Set)
+	stats       *Stats
+
+	items      map[string]*ItemState
+	itemsOrder []string
+	whitelist  []string
+
+	httpClient    *http.Client
 	proxiedClient *http.Client
-	upstreamMgr   *upstream.Manager
-	active        atomic.Pointer[Set]
-	enabled atomic.Bool
-	states []SourceState
-	startOnce sync.Once
-	stop chan struct{}
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+
+	refreshMu sync.Mutex
+	stopped   bool
 }
 
-func NewManager(dir string, subs []Subscription, upstreamManagers ...*upstream.Manager) *Manager {
-	cp := append([]Subscription(nil), subs...)
+// NewManager 构造 Manager 实例。
+func NewManager(cfgDir string, conf config.AdblockConf, upstreamMgr *upstream.Manager, sink func(*Set)) *Manager {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	cacheFile := conf.CacheFile
+	if cacheFile == "" {
+		cacheFile = "adblock_cache.txt"
+	}
+	resolvedCache := cacheFile
+	if !filepath.IsAbs(resolvedCache) {
+		resolvedCache = filepath.Join(cfgDir, resolvedCache)
+	}
+
 	m := &Manager{
-		dir: dir, subs: cp, hits: make(map[string]uint64), refreshing: make(map[string]bool),
-		client: &http.Client{Timeout: 20 * time.Second},
-		stop: make(chan struct{}),
+		cfgDir:      cfgDir,
+		conf:        conf,
+		cachePath:   resolvedCache,
+		upstreamMgr: upstreamMgr,
+		sink:        sink,
+		stats:       NewStats(),
+		items:       make(map[string]*ItemState),
+		whitelist:   append([]string(nil), conf.Whitelist...),
+		httpClient: &http.Client{
+			Timeout: httpTimeout,
+		},
+		ctx:    ctx,
+		cancel: cancel,
 	}
-	if len(upstreamManagers) > 0 {
-		m.upstreamMgr = upstreamManagers[0]
-	}
-	if m.upstreamMgr != nil {
+
+	if upstreamMgr != nil {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		transport.Proxy = nil
-		transport.DialContext = func(ctx context.Context, _, addr string) (net.Conn, error) {
-			host, portText, err := net.SplitHostPort(addr)
+		transport.DialContext = func(dialCtx context.Context, _, addr string) (net.Conn, error) {
+			host, portStr, err := net.SplitHostPort(addr)
 			if err != nil {
 				return nil, fmt.Errorf("invalid adblock target address %q: %w", addr, err)
 			}
-			port, err := strconv.Atoi(portText)
+			port, err := strconv.Atoi(portStr)
 			if err != nil {
-				return nil, fmt.Errorf("invalid adblock target port %q: %w", portText, err)
+				return nil, fmt.Errorf("invalid adblock target port %q: %w", portStr, err)
 			}
-			return m.upstreamMgr.ConnectDefault(ctx, host, port)
+			return m.upstreamMgr.ConnectDefault(dialCtx, host, port)
 		}
-		m.proxiedClient = &http.Client{Transport: transport, Timeout: 20 * time.Second}
+		m.proxiedClient = &http.Client{
+			Transport: transport,
+			Timeout:   httpTimeout,
+		}
 	}
-	m.active.Store(NewSet(nil))
-	m.enabled.Store(true)
+
+	for _, l := range conf.Lists {
+		name := strings.TrimSpace(l.Name)
+		if name == "" {
+			continue
+		}
+		interval := strings.TrimSpace(l.UpdateInterval)
+		if interval == "" {
+			interval = "24h"
+		}
+		item := &ItemState{
+			Name:     name,
+			URL:      strings.TrimSpace(l.URL),
+			Enabled:  l.Enabled,
+			Interval: interval,
+			UseProxy: l.UsesProxy(),
+		}
+		m.items[name] = item
+		m.itemsOrder = append(m.itemsOrder, name)
+	}
+
 	return m
 }
 
-// Configure replaces the configured source list and atomically rebuilds from any
-// valid cached snapshots before fetching the new configuration.
-func (m *Manager) Configure(subs []Subscription) {
-	m.mu.Lock()
-	m.subs = append([]Subscription(nil), subs...)
-	m.mu.Unlock()
-	m.rebuild()
-	go m.refreshAll()
-}
-
-func (m *Manager) RefreshAll() {
-	m.mu.Lock()
-	m.refreshingAll = true
-	m.mu.Unlock()
-	go m.refreshAll()
-}
-
+// Start 启动后台任务: 读缓存建表 + 起定时刷新。不阻塞引擎构造。
 func (m *Manager) Start() {
-	m.startOnce.Do(func() {
-		go m.refreshAll()
-		go func() {
-			t := time.NewTicker(12*time.Hour)
-			defer t.Stop()
-			for { select { case <-t.C: m.refreshAll(); case <-m.stop: return } }
-		}()
-	})
-}
-
-func (m *Manager) Stop() { select { case <-m.stop: default: close(m.stop) } }
-
-func (m *Manager) SetEnabled(enabled bool) { m.enabled.Store(enabled) }
-
-// Enabled reports whether DNS ad filtering is active at runtime.
-func (m *Manager) Enabled() bool { return m.enabled.Load() }
-
-func (m *Manager) Blocked(domain string) bool {
-	if !m.enabled.Load() { return false }
-	s := m.active.Load()
-	blocked, sourceURL := s.BlockedBy(domain)
-	if blocked && sourceURL != "" {
-		m.mu.Lock()
-		m.hits[sourceURL]++
-		m.mu.Unlock()
-	}
-	return blocked
-}
-
-func (m *Manager) Status() []SourceState {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]SourceState, 0, len(m.subs))
-	for _, sub := range m.subs {
-		state := SourceState{Name: sub.Name, URL: sub.URL, Enabled: sub.Enabled, UseProxy: sub.UsesProxy(), Hits: m.hits[sub.URL]}
-		for _, existing := range m.states {
-			if existing.URL == sub.URL {
-				state = existing
-				state.Name, state.URL, state.Enabled, state.UseProxy = sub.Name, sub.URL, sub.Enabled, sub.UsesProxy()
-				state.Hits = m.hits[sub.URL]
+	if m.stopped {
+		m.mu.Unlock()
+		return
+	}
+	m.wg.Add(1)
+	m.mu.Unlock()
+
+	safego.Go("adblock.startup", func() {
+		defer m.wg.Done()
+
+		// 确保缓存目录存在
+		if dir := filepath.Dir(m.cachePath); dir != "" {
+			_ = os.MkdirAll(dir, 0o755)
+		}
+
+		// 1. 尝试从本地紧凑缓存加载并发布快照
+		loaded := m.loadFromDiskCache()
+
+		m.mu.RLock()
+		enabled := m.conf.Enabled
+		hasEnabledLists := false
+		for _, it := range m.items {
+			if it.Enabled {
+				hasEnabledLists = true
 				break
 			}
 		}
-		state.Refreshing = m.refreshing[sub.URL] || (m.refreshingAll && sub.Enabled)
-		out = append(out, state)
-	}
-	return out
+		m.mu.RUnlock()
+
+		if !enabled {
+			if m.sink != nil {
+				m.sink(nil)
+			}
+		}
+
+		// 2. 缓存缺失且启用了清单: 立即触发一次全量刷新
+		if enabled && hasEnabledLists && (!loaded || m.needInitialRefresh()) {
+			ctx, cancel := context.WithTimeout(m.ctx, 60*time.Second)
+			_ = m.RefreshAll(ctx)
+			cancel()
+		}
+
+		// 3. 定时刷新 ticker
+		m.runTicker()
+	})
 }
 
-func (m *Manager) Refresh(ctx context.Context, name string) error {
+// Stop 停止 Manager 并发布 nil 快照全放行。
+func (m *Manager) Stop() {
 	m.mu.Lock()
-	subs := append([]Subscription(nil), m.subs...)
+	if m.stopped {
+		m.mu.Unlock()
+		return
+	}
+	m.stopped = true
 	m.mu.Unlock()
-	for _, sub := range subs {
-		if sub.Name == name || sub.URL == name {
-			if !sub.Enabled { return fmt.Errorf("subscription %q is disabled", name) }
-			return m.refreshOne(ctx, sub)
+
+	m.cancel()
+	if m.sink != nil {
+		m.sink(nil)
+	}
+	m.wg.Wait()
+}
+
+func (m *Manager) needInitialRefresh() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, it := range m.items {
+		if it.Enabled && it.Kept == 0 && it.LastError == "" {
+			return true
 		}
 	}
-	return fmt.Errorf("subscription %q not found", name)
+	return false
 }
 
-func (m *Manager) refreshAll() {
-	m.refreshAllMu.Lock()
-	defer m.refreshAllMu.Unlock()
-	m.mu.Lock()
-	m.refreshingAll = true
-	subs := append([]Subscription(nil), m.subs...)
-	m.mu.Unlock()
-	defer func() { m.mu.Lock(); m.refreshingAll = false; m.mu.Unlock() }()
-	for _, sub := range subs {
-		if !sub.Enabled { continue }
-		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-		if err := m.refreshOne(ctx, sub); err != nil { slog.Warn("adblock subscription refresh failed", "name", sub.Name, "error", err) }
+func (m *Manager) runTicker() {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case now := <-ticker.C:
+			m.checkAutoRefresh(now)
+		}
+	}
+}
+
+func (m *Manager) checkAutoRefresh(now time.Time) {
+	m.mu.RLock()
+	if !m.conf.Enabled || !m.conf.AutoUpdateEnabled() {
+		m.mu.RUnlock()
+		return
+	}
+	var toRefresh []string
+	for _, name := range m.itemsOrder {
+		it := m.items[name]
+		if !it.Enabled {
+			continue
+		}
+		interval := parseInterval(it.Interval)
+		last := time.Unix(it.LastUpdate, 0)
+		if now.Sub(last) >= interval {
+			toRefresh = append(toRefresh, name)
+		}
+	}
+	m.mu.RUnlock()
+
+	for _, name := range toRefresh {
+		if m.ctx.Err() != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(m.ctx, 45*time.Second)
+		_, _ = m.Refresh(ctx, name)
 		cancel()
 	}
-	m.rebuild()
 }
 
-func (m *Manager) cachePath(sub Subscription) string {
-	// URL-derived names survive subscription reorder/removal and do not expose names
-	// as filesystem path components.
-	sum := sha256.Sum256([]byte(sub.URL))
-	return filepath.Join(m.dir, "adblock-"+hex.EncodeToString(sum[:8])+".json")
-}
+// Refresh 刷新指定清单 (空 name 表示全部)。返回本次生效总条数与可能发生的错误。
+func (m *Manager) Refresh(ctx context.Context, name string) (int, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		errMap := m.RefreshAll(ctx)
+		var errs []string
+		for n, err := range errMap {
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", n, err))
+			}
+		}
+		m.mu.RLock()
+		total := m.countActiveRulesLocked()
+		m.mu.RUnlock()
+		if len(errs) > 0 {
+			return total, errors.New(strings.Join(errs, "; "))
+		}
+		return total, nil
+	}
 
-func (m *Manager) refreshOne(ctx context.Context, sub Subscription) error {
-	lockValue, _ := m.refreshLocks.LoadOrStore(sub.URL, &sync.Mutex{})
-	refreshLock := lockValue.(*sync.Mutex)
-	refreshLock.Lock()
-	defer refreshLock.Unlock()
+	m.refreshMu.Lock()
+	defer m.refreshMu.Unlock()
+
+	m.mu.RLock()
+	it, ok := m.items[name]
+	if !ok {
+		m.mu.RUnlock()
+		return 0, fmt.Errorf("subscription %q not found", name)
+	}
+	url := it.URL
+	useProxy := it.UseProxy
+	etag := it.etag
+	m.mu.RUnlock()
+
+	suffixes, allow, badfilters, stats, newEtag, err := m.fetchAndParse(ctx, url, useProxy, etag)
+
 	m.mu.Lock()
-	m.refreshing[sub.URL] = true
+	it = m.items[name]
+	if it == nil {
+		m.mu.Unlock()
+		return 0, fmt.Errorf("subscription %q deleted during refresh", name)
+	}
+
+	if err != nil {
+		it.LastError = err.Error()
+		slog.Warn("adblock subscription refresh failed", "name", name, "error", err)
+		m.mu.Unlock()
+		return m.countActiveRulesLocked(), err
+	}
+
+	if len(suffixes) == 0 && len(allow) == 0 && stats.Lines > 0 {
+		it.LastError = "no valid rules parsed; preserved last good data"
+		m.mu.Unlock()
+		return m.countActiveRulesLocked(), errors.New(it.LastError)
+	}
+
+	it.LastError = ""
+	it.LastUpdate = time.Now().Unix()
+	if newEtag != "" {
+		it.etag = newEtag
+	}
+	it.Kept = len(suffixes) + len(allow)
+	it.Lines = stats.Lines
+	it.Skipped = stats.Skipped
+	it.SkipDetail = stats.Reasons
+	it.suffixes = suffixes
+	it.allow = allow
+	it.badfilters = badfilters
+
+	m.rebuildAndPublishLocked()
+	m.saveDiskCacheLocked()
+	total := m.countActiveRulesLocked()
 	m.mu.Unlock()
-	defer func() { m.mu.Lock(); m.refreshing[sub.URL] = false; m.mu.Unlock() }()
-	path := m.cachePath(sub)
-	var cached diskCache
-	if b, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(b, &cached)
+
+	return total, nil
+}
+
+// RefreshAll 并发刷新所有启用的清单。
+func (m *Manager) RefreshAll(ctx context.Context) map[string]error {
+	m.refreshMu.Lock()
+	defer m.refreshMu.Unlock()
+
+	m.mu.RLock()
+	type target struct {
+		name     string
+		url      string
+		useProxy bool
+		etag     string
 	}
-	if cached.Body != "" {
-		if _, stats, err := Parse(cached.Body); err == nil {
-			m.setState(SourceState{Name: sub.Name, URL: sub.URL, Enabled: sub.Enabled, UseProxy: sub.UsesProxy(), ActiveRules: stats.Accepted, IgnoredRules: stats.Ignored, LastUpdated: cached.Updated})
+	var targets []target
+	for _, name := range m.itemsOrder {
+		it := m.items[name]
+		if it.Enabled {
+			targets = append(targets, target{
+				name:     name,
+				url:      it.URL,
+				useProxy: it.UseProxy,
+				etag:     it.etag,
+			})
 		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sub.URL, nil)
-	if err != nil { return m.setError(sub, err) }
+	m.mu.RUnlock()
+
+	type fetchResult struct {
+		name       string
+		suffixes   []string
+		allow      []string
+		badfilters []string
+		stats      ParseStats
+		etag       string
+		err        error
+	}
+
+	ch := make(chan fetchResult, len(targets))
+	for _, tg := range targets {
+		go func(t target) {
+			sList, aList, bfs, st, etag, err := m.fetchAndParse(ctx, t.url, t.useProxy, t.etag)
+			ch <- fetchResult{
+				name:       t.name,
+				suffixes:   sList,
+				allow:      aList,
+				badfilters: bfs,
+				stats:      st,
+				etag:       etag,
+				err:        err,
+			}
+		}(tg)
+	}
+
+	errMap := make(map[string]error)
+	anySuccess := false
+
+	m.mu.Lock()
+	for i := 0; i < len(targets); i++ {
+		res := <-ch
+		it := m.items[res.name]
+		if it == nil {
+			continue
+		}
+		if res.err != nil {
+			it.LastError = res.err.Error()
+			errMap[res.name] = res.err
+			slog.Warn("adblock list refresh failed", "name", res.name, "error", res.err)
+			continue
+		}
+		if len(res.suffixes) == 0 && len(res.allow) == 0 && res.stats.Lines > 0 {
+			it.LastError = "no valid rules found; preserved last good data"
+			errMap[res.name] = errors.New(it.LastError)
+			continue
+		}
+
+		it.LastError = ""
+		it.LastUpdate = time.Now().Unix()
+		if res.etag != "" {
+			it.etag = res.etag
+		}
+		it.Kept = len(res.suffixes) + len(res.allow)
+		it.Lines = res.stats.Lines
+		it.Skipped = res.stats.Skipped
+		it.SkipDetail = res.stats.Reasons
+		it.suffixes = res.suffixes
+		it.allow = res.allow
+		it.badfilters = res.badfilters
+		anySuccess = true
+	}
+
+	if anySuccess || len(targets) == 0 {
+		m.rebuildAndPublishLocked()
+		m.saveDiskCacheLocked()
+	}
+	m.mu.Unlock()
+
+	return errMap
+}
+
+func (m *Manager) fetchAndParse(ctx context.Context, url string, useProxy bool, etag string) (suffixes, allow, badfilters []string, stats ParseStats, newEtag string, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, nil, nil, ParseStats{}, "", fmt.Errorf("create request: %w", err)
+	}
 	req.Header.Set("User-Agent", "SmartProxy-DNS-AdBlock/1.0")
-	if cached.ETag != "" { req.Header.Set("If-None-Match", cached.ETag) }
-	client := m.client
-	if sub.UsesProxy() {
-		if m.proxiedClient == nil {
-			return m.setError(sub, fmt.Errorf("subscription is configured to use proxy, but no upstream manager is available"))
-		}
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
+
+	client := m.httpClient
+	if useProxy && m.proxiedClient != nil {
 		client = m.proxiedClient
 	}
+
 	resp, err := client.Do(req)
-	if err != nil { return m.setError(sub, err) }
+	if err != nil {
+		return nil, nil, nil, ParseStats{}, "", fmt.Errorf("http fetch: %w", err)
+	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotModified && cached.Body != "" {
-		return m.activateCached(sub, cached, path)
+
+	if resp.StatusCode == http.StatusNotModified {
+		// 未修改, 保留既有数据
+		return nil, nil, nil, ParseStats{}, etag, nil
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 { return m.setError(sub, fmt.Errorf("HTTP %d", resp.StatusCode)) }
-	const maxSubscriptionBytes = 32 << 20
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSubscriptionBytes+1))
-	if err != nil { return m.setError(sub, err) }
-	if len(body) > maxSubscriptionBytes { return m.setError(sub, fmt.Errorf("subscription exceeds 32 MiB limit")) }
-	rules, stats, err := Parse(string(body))
-	if err != nil { return m.setError(sub, err) }
-	cached = diskCache{ETag: resp.Header.Get("ETag"), Body: string(body), Updated: time.Now()}
-	if path != "" {
-		if err := os.MkdirAll(m.dir, 0755); err != nil { return m.setError(sub, fmt.Errorf("create cache directory: %w", err)) }
-		data, err := json.Marshal(cached)
-		if err != nil { return m.setError(sub, fmt.Errorf("encode cache: %w", err)) }
-		if err := atomicWrite(path, data); err != nil { return m.setError(sub, fmt.Errorf("write cache: %w", err)) }
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, nil, nil, ParseStats{}, "", fmt.Errorf("http status %d", resp.StatusCode)
 	}
-	m.setState(SourceState{Name: sub.Name, URL: sub.URL, Enabled: true, UseProxy: sub.UsesProxy(), ActiveRules: stats.Accepted, IgnoredRules: stats.Ignored, LastUpdated: cached.Updated})
-	_ = rules
-	m.rebuild()
-	return nil
+
+	limitReader := io.LimitReader(resp.Body, maxSubscriptionBytes+1)
+	sList, aList, bfs, st, parseErr := ParseList(limitReader)
+	if parseErr != nil {
+		return nil, nil, nil, st, "", fmt.Errorf("parse: %w", parseErr)
+	}
+
+	return sList, aList, bfs, st, resp.Header.Get("ETag"), nil
 }
 
-func (m *Manager) activateCached(sub Subscription, cached diskCache, path string) error {
-	rules, stats, err := Parse(cached.Body)
-	if err != nil { return m.setError(sub, err) }
-	m.setState(SourceState{Name: sub.Name, URL: sub.URL, Enabled: true, ActiveRules: stats.Accepted, IgnoredRules: stats.Ignored, LastUpdated: cached.Updated})
-	_ = rules
-	m.rebuild()
-	return nil
-}
-
-func (m *Manager) setError(sub Subscription, err error) error {
+// Reload 处理配置变更。
+func (m *Manager) Reload(conf config.AdblockConf) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for i := range m.states { if m.states[i].Name == sub.Name { m.states[i].LastError = err.Error(); return err } }
-	m.states = append(m.states, SourceState{Name: sub.Name, URL: sub.URL, Enabled: sub.Enabled, UseProxy: sub.UsesProxy(), LastError: err.Error()})
-	return err
-}
 
-func (m *Manager) setState(state SourceState) {
-	m.mu.Lock(); defer m.mu.Unlock()
-	for i := range m.states { if m.states[i].Name == state.Name { m.states[i] = state; return } }
-	m.states = append(m.states, state)
-}
+	oldEnabled := m.conf.Enabled
+	m.conf = conf
+	m.whitelist = append([]string(nil), conf.Whitelist...)
 
-func (m *Manager) rebuild() {
-	all := make([]Rule, 0)
-	m.mu.Lock()
-	subs := append([]Subscription(nil), m.subs...)
-	m.mu.Unlock()
-	for _, sub := range subs {
-		if !sub.Enabled { continue }
-		path := m.cachePath(sub)
-		if path == "" { continue }
-		b, err := os.ReadFile(path); if err != nil { continue }
-		var c diskCache; if json.Unmarshal(b, &c) != nil { continue }
-		rules, _, err := Parse(c.Body); if err == nil { for i := range rules { rules[i].SourceURL = sub.URL }; all = append(all, rules...) }
+	// 更新或增加清单配置
+	newOrder := make([]string, 0, len(conf.Lists))
+	for _, l := range conf.Lists {
+		name := strings.TrimSpace(l.Name)
+		if name == "" {
+			continue
+		}
+		newOrder = append(newOrder, name)
+		interval := strings.TrimSpace(l.UpdateInterval)
+		if interval == "" {
+			interval = "24h"
+		}
+
+		if existing, ok := m.items[name]; ok {
+			existing.URL = strings.TrimSpace(l.URL)
+			existing.Enabled = l.Enabled
+			existing.Interval = interval
+			existing.UseProxy = l.UsesProxy()
+		} else {
+			m.items[name] = &ItemState{
+				Name:     name,
+				URL:      strings.TrimSpace(l.URL),
+				Enabled:  l.Enabled,
+				Interval: interval,
+				UseProxy: l.UsesProxy(),
+			}
+		}
 	}
-	m.active.Store(NewSet(all))
+	m.itemsOrder = newOrder
+
+	if !conf.Enabled {
+		if m.sink != nil {
+			m.sink(nil)
+		}
+		return
+	}
+
+	// 白名单或清单配置变更: 立即根据现有好数据重建快照
+	m.rebuildAndPublishLocked()
+
+	// 若从停用变为启用, 且没有数据, 异步触发一次刷新
+	if !oldEnabled && conf.Enabled {
+		safego.Go("adblock.reload_refresh", func() {
+			ctx, cancel := context.WithTimeout(m.ctx, 60*time.Second)
+			_ = m.RefreshAll(ctx)
+			cancel()
+		})
+	}
 }
 
-func atomicWrite(path string, data []byte) error {
-	f, err := os.CreateTemp(filepath.Dir(path), ".adblock-*")
-	if err != nil { return err }
-	name := f.Name()
-	defer os.Remove(name)
-	if _, err = f.Write(data); err != nil { f.Close(); return err }
-	if err = f.Sync(); err != nil { f.Close(); return err }
-	if err = f.Close(); err != nil { return err }
-	return os.Rename(name, path)
+// Status 返回整体状态快照。
+func (m *Manager) Status() Status {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	items := make([]ItemState, 0, len(m.itemsOrder))
+	for _, name := range m.itemsOrder {
+		if it, ok := m.items[name]; ok {
+			cp := *it
+			// 深拷贝避免外部修改
+			if it.SkipDetail != nil {
+				cp.SkipDetail = make(map[string]int, len(it.SkipDetail))
+				for k, v := range it.SkipDetail {
+					cp.SkipDetail[k] = v
+				}
+			}
+			items = append(items, cp)
+		}
+	}
+
+	snap := m.stats.Snapshot(50)
+
+	var cacheCount int
+	var cacheMtime int64
+	if fi, err := os.Stat(m.cachePath); err == nil {
+		cacheMtime = fi.ModTime().Unix()
+	}
+	cacheCount = m.countActiveRulesLocked()
+
+	return Status{
+		Enabled:    m.conf.Enabled,
+		Items:      items,
+		TotalHits:  snap.Total,
+		Since:      snap.Since,
+		TopDomains: snap.Top,
+		CacheCount: cacheCount,
+		CacheMtime: cacheMtime,
+	}
 }
 
-// RemoveSubscription drops a source from this manager and rebuilds the snapshot.
-func (m *Manager) RemoveSubscription(name string) bool {
+// Whitelist 返回当前白名单列表。
+func (m *Manager) Whitelist() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]string(nil), m.whitelist...)
+}
+
+// AddWhitelist 添加一条白名单域名, 立即重建快照。
+func (m *Manager) AddWhitelist(domain string) error {
+	norm, _, ok := normalizeRuleDomain(domain)
+	if !ok {
+		return fmt.Errorf("invalid domain %q for whitelist", domain)
+	}
+
 	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, d := range m.whitelist {
+		if d == norm {
+			return nil // 已存在
+		}
+	}
+	if len(m.whitelist) >= 5000 {
+		return errors.New("whitelist limit of 5000 entries exceeded")
+	}
+
+	m.whitelist = append(m.whitelist, norm)
+	m.rebuildAndPublishLocked()
+	return nil
+}
+
+// RemoveWhitelist 移除一条白名单域名, 立即重建快照。
+func (m *Manager) RemoveWhitelist(domain string) error {
+	norm, _, ok := normalizeRuleDomain(domain)
+	if !ok {
+		return fmt.Errorf("invalid domain %q for whitelist", domain)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	idx := -1
-	for i, s := range m.subs { if s.Name == name || s.URL == name { idx = i; break } }
-	if idx < 0 { m.mu.Unlock(); return false }
-	path := m.cachePath(m.subs[idx])
-	removed := m.subs[idx]
-	m.subs = append(m.subs[:idx], m.subs[idx+1:]...)
-	filteredStates := m.states[:0]
-	for _, state := range m.states { if state.Name != removed.Name && state.URL != removed.URL { filteredStates = append(filteredStates, state) } }
-	m.states = filteredStates
-	delete(m.hits, removed.URL)
-	m.mu.Unlock()
-	if path != "" { _ = os.Remove(path) }
-	m.rebuild()
+	for i, d := range m.whitelist {
+		if d == norm {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("domain %q not in whitelist", domain)
+	}
+
+	m.whitelist = append(m.whitelist[:idx], m.whitelist[idx+1:]...)
+	m.rebuildAndPublishLocked()
+	return nil
+}
+
+func (m *Manager) countActiveRulesLocked() int {
+	seen := make(map[string]struct{})
+	for _, it := range m.items {
+		if it.Enabled {
+			for _, s := range it.suffixes {
+				seen[s] = struct{}{}
+			}
+		}
+	}
+	return len(seen)
+}
+
+func (m *Manager) rebuildAndPublishLocked() {
+	if !m.conf.Enabled {
+		if m.sink != nil {
+			m.sink(nil)
+		}
+		return
+	}
+
+	disabledBadfilters := make(map[string]struct{})
+	for _, it := range m.items {
+		if it.Enabled {
+			for _, bf := range it.badfilters {
+				disabledBadfilters[bf] = struct{}{}
+			}
+		}
+	}
+
+	allSuffixes := make([]string, 0)
+	allAllow := append([]string(nil), m.whitelist...)
+
+	seenSuffix := make(map[string]struct{})
+	seenAllow := make(map[string]struct{})
+	for _, d := range allAllow {
+		seenAllow[d] = struct{}{}
+	}
+
+	for _, name := range m.itemsOrder {
+		it := m.items[name]
+		if !it.Enabled {
+			continue
+		}
+		for _, s := range it.suffixes {
+			if _, off := disabledBadfilters[s]; off {
+				continue
+			}
+			if _, exists := seenSuffix[s]; !exists {
+				seenSuffix[s] = struct{}{}
+				allSuffixes = append(allSuffixes, s)
+			}
+		}
+		for _, a := range it.allow {
+			key := "@@" + a
+			if _, off := disabledBadfilters[key]; off {
+				continue
+			}
+			if _, exists := seenAllow[a]; !exists {
+				seenAllow[a] = struct{}{}
+				allAllow = append(allAllow, a)
+			}
+		}
+	}
+
+	set := NewSet(allSuffixes, allAllow, m.stats)
+	if m.sink != nil {
+		m.sink(set)
+	}
+}
+
+// saveDiskCacheLocked 将当前生效的 suffixes 与 allow 紧凑落盘。
+func (m *Manager) saveDiskCacheLocked() {
+	if m.cachePath == "" {
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# SmartProxy adblock compact cache\n")
+	for _, it := range m.items {
+		if it.Enabled {
+			for _, a := range it.allow {
+				sb.WriteString("@@||")
+				sb.WriteString(a)
+				sb.WriteString("^\n")
+			}
+			for _, s := range it.suffixes {
+				sb.WriteString("||")
+				sb.WriteString(s)
+				sb.WriteString("^\n")
+			}
+		}
+	}
+
+	tmp := m.cachePath + ".tmp"
+	if err := os.WriteFile(tmp, []byte(sb.String()), 0o600); err != nil {
+		slog.Warn("write adblock disk cache failed", "path", tmp, "error", err)
+		return
+	}
+	_ = os.Rename(tmp, m.cachePath)
+}
+
+// loadFromDiskCache 启动时从紧凑缓存文件恢复快照。
+func (m *Manager) loadFromDiskCache() bool {
+	f, err := os.Open(m.cachePath)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	suffixes, allow, _, _, err := ParseList(f)
+	if err != nil || (len(suffixes) == 0 && len(allow) == 0) {
+		return false
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 整合白名单
+	allow = append(allow, m.whitelist...)
+	set := NewSet(suffixes, allow, m.stats)
+	if m.conf.Enabled && m.sink != nil {
+		m.sink(set)
+	}
+
 	return true
 }
 
-func (m *Manager) AddSubscription(sub Subscription) error {
-	sub.Name = strings.TrimSpace(sub.Name); sub.URL = strings.TrimSpace(sub.URL)
-	if sub.Name == "" || !(strings.HasPrefix(sub.URL, "https://") || strings.HasPrefix(sub.URL, "http://")) { return fmt.Errorf("name and http(s) URL are required") }
-	m.mu.Lock()
-	for _, s := range m.subs { if s.Name == sub.Name || s.URL == sub.URL { m.mu.Unlock(); return fmt.Errorf("subscription already exists") } }
-	m.subs = append(m.subs, sub); m.mu.Unlock()
-	return nil
+func parseInterval(s string) time.Duration {
+	d, err := time.ParseDuration(s)
+	if err != nil || d < minUpdateInterval {
+		return defaultUpdateInterval
+	}
+	return d
 }

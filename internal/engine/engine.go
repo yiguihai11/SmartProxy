@@ -117,19 +117,17 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 	dnsHandler.SetStaticRecords(cfg.DNS.StaticRecordsMap())
 	dnsHandler.SetFilterAAAA(shouldFilterAAAA(cfg))
 
-	adblockSubs := make([]adblock.Subscription, 0, len(cfg.DNS.AdBlock.Subscriptions))
-	for _, sub := range cfg.DNS.AdBlock.Subscriptions {
-		adblockSubs = append(adblockSubs, adblock.Subscription{Name: sub.Name, URL: sub.URL, Enabled: sub.Enabled, UseProxy: sub.UseProxy})
-	}
 	adblockDir := cfgDir
 	if adblockDir == "" && filepath.IsAbs(cfg.Routing.ACLFile) {
 		adblockDir = filepath.Dir(cfg.Routing.ACLFile)
 	}
-	if adblockDir == "" { adblockDir = "." }
-	adblockMgr := adblock.NewManager(adblockDir, adblockSubs, upstreamMgr)
-	adblockMgr.SetEnabled(cfg.DNS.AdBlock.Enabled)
-	dnsHandler.SetAdBlockManager(adblockMgr)
-	if cfg.DNS.AdBlock.Enabled { adblockMgr.Start() }
+	if adblockDir == "" {
+		adblockDir = "."
+	}
+	adblockMgr := adblock.NewManager(adblockDir, cfg.DNS.Adblock, upstreamMgr, func(s *adblock.Set) {
+		dnsHandler.SetAdFilter(s)
+	})
+	adblockMgr.Start()
 
 	var lanternProvider *lantern.Provider
 	if cfg.Lantern.Enabled {
@@ -344,7 +342,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	lc := e.Config.Load().Listen
 	if sockPath := lc.AdminSocket; sockPath != "" || lc.AdminPort > 0 {
 		e.adminServer = admin.New(sockPath, e.Router, e.UpstreamMgr, e.DNSHandler, e.Chnroute)
-		e.adminServer.SetAdBlockManager(e.adblockMgr)
+		e.adminServer.SetAdblockManager(e.adblockMgr)
 		// 面板按 fd 模式裁剪菜单:下挂设备列表由 TUN 按源 IP 记账供给,只有 TUN 由
 		// 外部 fd 提供(VpnService / Shizuku 热点核)时才可能有数据,非 fd 模式隐藏。
 		e.adminServer.SetFDMode(isFdMode)
@@ -1167,12 +1165,8 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 		e.subscriptionMgr.Reload(newCfg.Upstream.Subscriptions)
 	}
 
-	// Keep the adblock runtime switch aligned with the newly loaded config.
 	if e.adblockMgr != nil {
-		e.adblockMgr.SetEnabled(newCfg.DNS.AdBlock.Enabled)
-		if newCfg.DNS.AdBlock.Enabled {
-			e.adblockMgr.Start()
-		}
+		e.adblockMgr.Reload(newCfg.DNS.Adblock)
 	}
 
 	// Publish the new configuration snapshot after runtime components have

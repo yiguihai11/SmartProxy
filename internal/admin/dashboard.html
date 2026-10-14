@@ -384,7 +384,7 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
     <div class="nav-item section">System</div>
     <div class="nav-item" data-view="logs"><span class="nav-icon">L</span><span>Logs</span></div>
     <div class="nav-item" data-view="cache"><span class="nav-icon">D</span><span>DNS Cache</span></div>
-    <div class="nav-item" data-view="adblock"><span class="nav-icon">A</span><span>DNS AdBlock</span></div>
+    <div class="nav-item" data-view="adblock"><span class="nav-icon">A</span><span>Ad Blocking</span></div>
     <div class="nav-item" data-view="tls"><span class="nav-icon">🔐</span><span>TLS Cert</span></div>
     <div class="nav-item" data-view="config"><span class="nav-icon">C</span><span>Config</span></div>
   </div>
@@ -661,28 +661,60 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
   </div>
 </div>
 <div class="view" id="view-adblock">
-  <div class="view-title">DNS AdBlock</div>
-  <div class="view-meta"><span class="dot"></span><span id="adblock-summary">DNS-level domain filtering</span></div>
-  <div class="card" style="margin-bottom:14px;padding:16px">
-    <div class="toolbar" style="gap:12px">
-      <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="adblock-enabled" onchange="toggleAdBlock(this.checked)"> Enable DNS ad filtering</label>
-      <button class="btn btn-sm primary" onclick="refreshAdBlock()">Update all rules</button>
-    </div>
-    <div style="font-size:12px;color:var(--muted);margin-top:8px">Filters DNS answers by domain. Existing ACL routing rules and static DNS records keep their current priority.</div>
+  <div class="view-title">Ad Blocking</div>
+  <div class="view-meta"><span class="dot"></span><span id="adblock-summary">DNS ad filtering</span></div>
+  <div class="seg-group" id="adblock-tabs" style="margin-bottom:12px">
+    <button type="button" class="seg-btn active" data-adbtab="lists" onclick="switchAdblockTab('lists')">Subscriptions</button>
+    <button type="button" class="seg-btn" data-adbtab="whitelist" onclick="switchAdblockTab('whitelist')">Whitelist</button>
+    <button type="button" class="seg-btn" data-adbtab="stats" onclick="switchAdblockTab('stats')">Top Blocked</button>
   </div>
-  <div class="card" style="margin-bottom:14px;padding:16px">
-    <div class="view-title" style="font-size:15px;margin-bottom:12px">Add / update subscription</div>
-    <div class="toolbar" style="gap:8px;flex-wrap:wrap">
-      <input class="search-input" id="adblock-name" placeholder="Name" style="min-width:120px">
-      <input class="search-input" id="adblock-url" placeholder="https://example.com/hosts.txt" style="flex:1;min-width:220px">
-      <label style="display:flex;align-items:center;gap:5px"><input type="checkbox" id="adblock-sub-enabled" checked> Enabled</label>
-      <label style="display:flex;align-items:center;gap:5px"><input type="checkbox" id="adblock-sub-use-proxy" checked> Fetch via proxy node (remote DNS)</label>
-      <button class="btn btn-sm primary" onclick="saveAdBlockSubscription()">Save</button>
+  <div id="adblock-lists-tab">
+    <div class="card" style="margin-bottom:14px;padding:16px">
+      <div class="toolbar" style="gap:12px">
+        <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="adblock-enabled" onchange="toggleAdblockGlobal(this.checked)"> Enable DNS ad filtering</label>
+        <button class="btn btn-sm primary" onclick="refreshAdblock()">Update all rules</button>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:8px">Filters DNS answers by domain. Existing ACL routing rules and static DNS records keep their current priority.</div>
+      <div id="adblock-cache-info" style="font-size:12px;color:var(--muted);margin-top:4px"></div>
+    </div>
+    <div class="card" style="margin-bottom:14px;padding:16px">
+      <div class="view-title" style="font-size:15px;margin-bottom:12px">Add subscription</div>
+      <div class="toolbar" style="gap:8px;flex-wrap:wrap">
+        <input class="search-input" id="adblock-name" placeholder="Name" style="min-width:120px">
+        <input class="search-input" id="adblock-url" placeholder="https://example.com/hosts.txt" style="flex:1;min-width:220px">
+        <label style="display:flex;align-items:center;gap:5px"><input type="checkbox" id="adblock-sub-enabled" checked> Enabled</label>
+        <label style="display:flex;align-items:center;gap:5px"><input type="checkbox" id="adblock-sub-use-proxy" checked> Fetch via proxy node (remote DNS)</label>
+        <button class="btn btn-sm primary" onclick="saveAdblockSub()">Save</button>
+      </div>
+    </div>
+    <div class="card" style="padding:16px">
+      <div class="view-title" style="font-size:15px;margin-bottom:12px">Subscriptions and parser status</div>
+      <div id="adblock-list" class="table-wrap">Loading...</div>
     </div>
   </div>
-  <div class="card" style="padding:16px">
-    <div class="view-title" style="font-size:15px;margin-bottom:12px">Subscriptions and parser status</div>
-    <div id="adblock-list" class="table-wrap">Loading...</div>
+  <div id="adblock-whitelist-tab" style="display:none">
+    <div class="card" style="margin-bottom:14px;padding:16px">
+      <div class="view-title" style="font-size:15px;margin-bottom:12px">Add Whitelist Domain</div>
+      <div class="toolbar" style="gap:8px;flex-wrap:wrap">
+        <input class="search-input" id="adblock-wl-domain" placeholder="example.com" style="flex:1;min-width:200px">
+        <button class="btn btn-sm primary" onclick="addAdblockWhitelist()">Add to Whitelist</button>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:8px">A whitelisted domain exempts both the apex domain and all its subdomains from ad blocking.</div>
+    </div>
+    <div class="card" style="padding:16px">
+      <div class="view-title" style="font-size:15px;margin-bottom:12px">Whitelisted Domains</div>
+      <div id="adblock-wl-list" class="table-wrap">Loading...</div>
+    </div>
+  </div>
+  <div id="adblock-stats-tab" style="display:none">
+    <div class="cards cards-3" style="margin-bottom:14px">
+      <div class="card"><div class="card-label">Total Blocked</div><div class="card-value" id="adblock-stat-total">0</div></div>
+      <div class="card"><div class="card-label">Blocked Since</div><div class="card-value" id="adblock-stat-since">-</div></div>
+    </div>
+    <div class="card" style="padding:16px">
+      <div class="view-title" style="font-size:15px;margin-bottom:12px">Top Blocked Domains</div>
+      <div id="adblock-top-list" class="table-wrap">Loading...</div>
+    </div>
   </div>
 </div>
 <div class="view" id="view-cache">
@@ -4129,50 +4161,203 @@ function cacheBatchACL(){
   if(!entries.length){alert('No valid entries selected (may have expired)');cacheUpdateBatchBar();renderCache();return}
   openACLDialog(entries,document.getElementById('cache-batch-action').value);
 }
-async function loadAdBlock(){
-  var list=document.getElementById('adblock-list');
+var adblockData = null;
+var adblockTab = 'lists';
+
+function switchAdblockTab(tab){
+  adblockTab = tab;
+  document.querySelectorAll('#adblock-tabs .seg-btn').forEach(function(b){b.classList.toggle('active',b.dataset.adbtab===tab)});
+  document.getElementById('adblock-lists-tab').style.display=tab==='lists'?'':'none';
+  document.getElementById('adblock-whitelist-tab').style.display=tab==='whitelist'?'':'none';
+  document.getElementById('adblock-stats-tab').style.display=tab==='stats'?'':'none';
+  renderAdblock();
+}
+
+async function loadAdblock(){
   try{
-    var r=await fetch('/adblock/status');var d=await r.json();
-    document.getElementById('adblock-enabled').checked=!!d.enabled;
-    document.getElementById('adblock-summary').textContent=(d.enabled?'Filtering enabled':'Filtering disabled')+((d.sources||[]).some(function(x){return x.refreshing})?' · Updating rules…':'');
-    var subs=d.subscriptions||[], states=d.sources||[];
-    if(!subs.length){list.innerHTML='<div class="empty-state">No subscriptions configured. Add a source above.</div>';return}
-    var rows=subs.map(function(sub){
-      var st=states.find(function(x){return x.name===sub.name})||{};
-      return '<tr><td>'+esc(sub.name)+'</td><td style="max-width:260px;overflow-wrap:anywhere">'+esc(sub.url)+'</td><td>'+(sub.enabled?'On':'Off')+'</td><td>'+(sub.use_proxy!==false?'Proxy':'Direct')+'</td><td>'+Number(st.active_rules||0)+'</td><td>'+Number(st.ignored_rules||0)+'</td><td>'+Number(st.hits||0)+'</td><td style="color:var(--danger)">'+esc(st.last_error||'')+'</td><td><button class="btn btn-sm" title="Update this subscription" data-name="'+esc(sub.name)+'" onclick="refreshAdBlock(this.dataset.name)">↻</button> <button class="btn btn-sm danger" data-name="'+esc(sub.name)+'" onclick="deleteAdBlockSubscription(this.dataset.name)">Delete</button></td></tr>';
-    }).join('');
-    list.innerHTML='<table><thead><tr><th>Name</th><th>URL</th><th>Enabled</th><th>Fetch</th><th>Active rules</th><th>Ignored</th><th>Hits</th><th>Last error</th><th>Actions</th></tr></thead><tbody>'+rows+'</tbody></table>';
-  }catch(e){list.textContent='Error: '+e.message}
+    var r = await fetch('/adblock');
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    adblockData = await r.json();
+    renderAdblock();
+  }catch(e){
+    var el = document.getElementById('adblock-list');
+    if(el) el.textContent = 'Error: ' + e.message;
+  }
 }
-async function toggleAdBlock(enabled){
-  try{var r=await fetch('/adblock/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:enabled})});if(!r.ok)throw new Error(await r.text());await loadAdBlock()}
-  catch(e){alert('AdBlock toggle failed: '+e.message);document.getElementById('adblock-enabled').checked=!enabled}
-}
-async function saveAdBlockSubscription(){
-  var name=document.getElementById('adblock-name').value.trim(),url=document.getElementById('adblock-url').value.trim();
-  if(!name||!url){alert('Name and URL are required');return}
-  try{var r=await fetch('/adblock/subscriptions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,url:url,enabled:document.getElementById('adblock-sub-enabled').checked,use_proxy:document.getElementById('adblock-sub-use-proxy').checked})});if(!r.ok)throw new Error(await r.text());document.getElementById('adblock-name').value='';document.getElementById('adblock-url').value='';document.getElementById('adblock-sub-enabled').checked=true;document.getElementById('adblock-sub-use-proxy').checked=true;await loadAdBlock()}
-  catch(e){alert('Save failed: '+e.message)}
-}
-async function deleteAdBlockSubscription(name){
-  if(!confirm('Delete subscription '+name+'?'))return;
-  try{var r=await fetch('/adblock/subscriptions?name='+encodeURIComponent(name),{method:'DELETE'});if(!r.ok)throw new Error(await r.text());await loadAdBlock()}
-  catch(e){alert('Delete failed: '+e.message)}
-}
-async function refreshAdBlock(name){
-  try{
-    var r=await fetch('/adblock/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(name?{name:name}:{})});
-    if(!r.ok)throw new Error(await r.text());
-    await loadAdBlock();
-    if(!name){
-      for(var i=0;i<180;i++){
-        await new Promise(function(resolve){setTimeout(resolve,1000)});
-        var sr=await fetch('/adblock/status');if(!sr.ok)throw new Error(await sr.text());
-        var sd=await sr.json();await loadAdBlock();
-        if(!(sd.sources||[]).some(function(x){return x.refreshing}))break;
+var loadAdBlock = loadAdblock;
+
+function renderAdblock(){
+  if(!adblockData) return;
+  var d = adblockData;
+  var enBox = document.getElementById('adblock-enabled');
+  if(enBox) enBox.checked = !!d.enabled;
+  var sum = document.getElementById('adblock-summary');
+  if(sum) sum.textContent = (d.enabled ? 'Filtering enabled' : 'Filtering disabled');
+  var cacheInfo = document.getElementById('adblock-cache-info');
+  if(cacheInfo){
+    cacheInfo.textContent = 'Cached rules: ' + (d.cache_count || 0) + (d.cache_mtime ? (' · Last modified: ' + ts2t(d.cache_mtime)) : '');
+  }
+
+  // 1. Lists tab
+  var listEl = document.getElementById('adblock-list');
+  var items = d.items || [];
+  if(!items.length){
+    listEl.innerHTML = '<div class="empty-state">No subscriptions configured. Add a source above.</div>';
+  } else {
+    var rows = items.map(function(item){
+      var skipDetail = '';
+      if(item.skip_detail){
+        skipDetail = Object.keys(item.skip_detail).map(function(k){return k+':'+item.skip_detail[k]}).join(', ');
       }
-    }
-  }catch(e){alert('Update failed: '+e.message)}
+      return '<tr>' +
+        '<td><b>' + esc(item.name) + '</b></td>' +
+        '<td style="max-width:260px;overflow-wrap:anywhere">' + esc(item.url) + '</td>' +
+        '<td>' + (item.enabled ? 'On' : 'Off') + '</td>' +
+        '<td>' + (item.use_proxy !== false ? 'Proxy' : 'Direct') + '</td>' +
+        '<td>' + Number(item.kept || 0) + '</td>' +
+        '<td title="' + esc(skipDetail) + '">' + Number(item.skipped || 0) + '</td>' +
+        '<td style="color:var(--danger)">' + esc(item.last_error || '') + '</td>' +
+        '<td><button class="btn btn-sm" title="Refresh" data-name="' + esc(item.name) + '" onclick="refreshAdblock(this.dataset.name)">↻</button> ' +
+        '<button class="btn btn-sm danger" data-name="' + esc(item.name) + '" onclick="deleteAdblockSub(this.dataset.name)">Delete</button></td>' +
+        '</tr>';
+    }).join('');
+    listEl.innerHTML = '<table><thead><tr><th>Name</th><th>URL</th><th>Enabled</th><th>Fetch</th><th>Active rules</th><th>Ignored</th><th>Last error</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  // 2. Whitelist tab
+  var wlEl = document.getElementById('adblock-wl-list');
+  var wl = d.whitelist || [];
+  if(!wl.length){
+    wlEl.innerHTML = '<div class="empty-state">No whitelisted domains.</div>';
+  } else {
+    var wlRows = wl.map(function(domain){
+      return '<tr><td><code>' + esc(domain) + '</code></td>' +
+        '<td><button class="btn btn-sm danger" data-domain="' + esc(domain) + '" onclick="removeAdblockWhitelist(this.dataset.domain)">Delete</button></td></tr>';
+    }).join('');
+    wlEl.innerHTML = '<table><thead><tr><th>Domain</th><th>Actions</th></tr></thead><tbody>' + wlRows + '</tbody></table>';
+  }
+
+  // 3. Stats tab
+  var totalEl = document.getElementById('adblock-stat-total');
+  if(totalEl) totalEl.textContent = Number(d.total_hits || 0).toLocaleString();
+  var sinceEl = document.getElementById('adblock-stat-since');
+  if(sinceEl) sinceEl.textContent = d.since ? ts2t(d.since) : '-';
+
+  var topEl = document.getElementById('adblock-top-list');
+  var tops = d.top_domains || [];
+  if(!tops.length){
+    topEl.innerHTML = '<div class="empty-state">No blocked queries recorded yet.</div>';
+  } else {
+    var topRows = tops.map(function(item, idx){
+      return '<tr><td>' + (idx + 1) + '</td><td><code>' + esc(item.domain) + '</code></td><td>' + Number(item.hits || 0).toLocaleString() + '</td></tr>';
+    }).join('');
+    topEl.innerHTML = '<table><thead><tr><th>Rank</th><th>Domain</th><th>Hits</th></tr></thead><tbody>' + topRows + '</tbody></table>';
+  }
+}
+
+async function toggleAdblockGlobal(enabled){
+  try{
+    var r = await fetch('/adblock/toggle', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled: enabled})
+    });
+    if(!r.ok) throw new Error(await r.text());
+    await loadAdblock();
+  }catch(e){
+    alert('Toggle failed: ' + e.message);
+    document.getElementById('adblock-enabled').checked = !enabled;
+  }
+}
+
+async function saveAdblockSub(){
+  var name = document.getElementById('adblock-name').value.trim();
+  var url = document.getElementById('adblock-url').value.trim();
+  if(!name || !url){
+    alert('Name and URL are required');
+    return;
+  }
+  try{
+    var r = await fetch('/adblock/save', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        name: name,
+        url: url,
+        enabled: document.getElementById('adblock-sub-enabled').checked,
+        use_proxy: document.getElementById('adblock-sub-use-proxy').checked
+      })
+    });
+    if(!r.ok) throw new Error(await r.text());
+    document.getElementById('adblock-name').value = '';
+    document.getElementById('adblock-url').value = '';
+    document.getElementById('adblock-sub-enabled').checked = true;
+    document.getElementById('adblock-sub-use-proxy').checked = true;
+    await loadAdblock();
+  }catch(e){
+    alert('Save failed: ' + e.message);
+  }
+}
+
+async function deleteAdblockSub(name){
+  if(!confirm('Delete subscription ' + name + '?')) return;
+  try{
+    var r = await fetch('/adblock/delete?name=' + encodeURIComponent(name), {method: 'POST'});
+    if(!r.ok) throw new Error(await r.text());
+    await loadAdblock();
+  }catch(e){
+    alert('Delete failed: ' + e.message);
+  }
+}
+
+async function refreshAdblock(name){
+  try{
+    var r = await fetch('/adblock/refresh', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(name ? {name: name} : {})
+    });
+    if(!r.ok) throw new Error(await r.text());
+    await loadAdblock();
+  }catch(e){
+    alert('Refresh failed: ' + e.message);
+  }
+}
+
+async function addAdblockWhitelist(){
+  var input = document.getElementById('adblock-wl-domain');
+  var domain = input.value.trim();
+  if(!domain){
+    alert('Domain is required');
+    return;
+  }
+  try{
+    var r = await fetch('/adblock/whitelist', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action: 'add', domain: domain})
+    });
+    if(!r.ok) throw new Error(await r.text());
+    input.value = '';
+    await loadAdblock();
+  }catch(e){
+    alert('Add whitelist failed: ' + e.message);
+  }
+}
+
+async function removeAdblockWhitelist(domain){
+  if(!confirm('Remove ' + domain + ' from whitelist?')) return;
+  try{
+    var r = await fetch('/adblock/whitelist', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action: 'remove', domain: domain})
+    });
+    if(!r.ok) throw new Error(await r.text());
+    await loadAdblock();
+  }catch(e){
+    alert('Remove whitelist failed: ' + e.message);
+  }
 }
 async function loadCache(){
   try{

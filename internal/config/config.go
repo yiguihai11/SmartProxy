@@ -222,24 +222,31 @@ type DNSConf struct {
 	// The same host may appear multiple times to attach both an IPv4 and an IPv6
 	// address. Edited by hand in the config file.
 	StaticRecords []StaticRecord `json:"static_records"`
-	AdBlock        AdBlockConf `json:"adblock"`
+	Adblock       AdblockConf  `json:"adblock"`
 }
 
-// AdBlockConf controls optional DNS-level advertising/tracker domain filtering.
-type AdBlockConf struct {
-	Enabled       bool                  `json:"enabled"`
-	Subscriptions []AdBlockSubscription `json:"subscriptions"`
+// AdblockConf controls optional DNS-level advertising/tracker domain filtering.
+type AdblockConf struct {
+	Enabled    bool              `json:"enabled"`
+	AutoUpdate *bool             `json:"auto_update,omitempty"` // nil = true
+	CacheFile  string            `json:"cache_file"`            // 默认 "adblock_cache.txt";Android 侧 App 写绝对路径
+	Lists      []AdblockListConf `json:"lists,omitempty"`
+	Whitelist  []string          `json:"whitelist,omitempty"`
 }
 
-type AdBlockSubscription struct {
-	Name    string `json:"name"`
-	URL     string `json:"url"`
-	Enabled bool   `json:"enabled"`
-	// nil distinguishes legacy configs from an explicit false; legacy defaults to proxy.
-	UseProxy *bool `json:"use_proxy,omitempty"`
+func (c AdblockConf) AutoUpdateEnabled() bool {
+	return c.AutoUpdate == nil || *c.AutoUpdate
 }
 
-func (s AdBlockSubscription) UsesProxy() bool {
+type AdblockListConf struct {
+	Name           string `json:"name"`
+	URL            string `json:"url"`
+	Enabled        bool   `json:"enabled"`
+	UpdateInterval string `json:"update_interval,omitempty"` // 默认 "24h"
+	UseProxy       *bool  `json:"use_proxy,omitempty"`       // nil = true(走代理,清单多在墙外)
+}
+
+func (s AdblockListConf) UsesProxy() bool {
 	return s.UseProxy == nil || *s.UseProxy
 }
 
@@ -533,6 +540,28 @@ func (c *Config) Validate() error {
 		case "gvisor", "mixed", "system", "go", "lwip":
 		default:
 			errs = append(errs, fmt.Sprintf("tun.stack must be one of 'gvisor', 'mixed', 'system', 'go', or 'lwip', got %q", c.TUN.Stack))
+		}
+	}
+	if c.DNS.Adblock.Enabled {
+		if strings.TrimSpace(c.DNS.Adblock.CacheFile) == "" {
+			errs = append(errs, "dns.adblock.cache_file must not be empty when enabled")
+		}
+		if len(c.DNS.Adblock.Lists) > 32 {
+			errs = append(errs, "dns.adblock.lists exceeds maximum limit of 32")
+		}
+		for i, l := range c.DNS.Adblock.Lists {
+			if l.Enabled {
+				if strings.TrimSpace(l.Name) == "" {
+					errs = append(errs, fmt.Sprintf("dns.adblock.lists[%d].name must not be empty", i))
+				}
+				u := strings.TrimSpace(l.URL)
+				if u == "" || !(strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")) {
+					errs = append(errs, fmt.Sprintf("dns.adblock.lists[%d].url must be a valid http(s) URL", i))
+				}
+			}
+		}
+		if len(c.DNS.Adblock.Whitelist) > 5000 {
+			errs = append(errs, "dns.adblock.whitelist exceeds maximum limit of 5000")
 		}
 	}
 	if len(errs) == 0 {

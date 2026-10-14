@@ -2,146 +2,289 @@ package admin
 
 import (
 	"encoding/json"
-	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 
-	"smartproxy/internal/adblock"
 	"smartproxy/internal/config"
 )
 
-func (s *Server) handleAdBlockStatus(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	if r.Method != http.MethodGet { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
-	if s.configSrc == nil { http.Error(w, "config not available", http.StatusServiceUnavailable); return }
-	cfg := s.configSrc()
-	var states interface{} = []adblock.SourceState{}
-	if s.adblockMgr != nil { states = s.adblockMgr.Status() }
-	enabled := cfg.DNS.AdBlock.Enabled
-	if s.adblockMgr != nil {
-		enabled = s.adblockMgr.Enabled()
+func (s *Server) handleAdblock(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"enabled": enabled,
-		"subscriptions": cfg.DNS.AdBlock.Subscriptions,
-		"sources": states,
+	w.Header().Set("Content-Type", "application/json")
+
+	if s.adblockMgr == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"enabled":     false,
+			"items":       []interface{}{},
+			"total_hits":  0,
+			"since":       0,
+			"top_domains": []interface{}{},
+			"cache_count": 0,
+			"cache_mtime": 0,
+			"whitelist":   []string{},
+		})
+		return
+	}
+
+	st := s.adblockMgr.Status()
+	wl := s.adblockMgr.Whitelist()
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"enabled":     st.Enabled,
+		"items":       st.Items,
+		"total_hits":  st.TotalHits,
+		"since":       st.Since,
+		"top_domains": st.TopDomains,
+		"cache_count": st.CacheCount,
+		"cache_mtime": st.CacheMtime,
+		"whitelist":   wl,
 	})
 }
 
-func (s *Server) handleAdBlockRefresh(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	if r.Method != http.MethodPost { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
-	if s.adblockMgr == nil { http.Error(w, "adblock manager unavailable", http.StatusServiceUnavailable); return }
-	var req struct { Name string `json:"name"` }
-	if r.Body != nil { _ = json.NewDecoder(r.Body).Decode(&req) }
-	if strings.TrimSpace(req.Name) == "" {
-		s.adblockMgr.RefreshAll()
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "refreshing": "all"})
+func (s *Server) handleAdblockRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if err := s.adblockMgr.Refresh(r.Context(), strings.TrimSpace(req.Name)); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest); return
+	if s.adblockMgr == nil {
+		http.Error(w, "adblock manager unavailable", http.StatusServiceUnavailable)
+		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	target := strings.TrimSpace(req.Name)
+	kept, err := s.adblockMgr.Refresh(r.Context(), target)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "ok",
+		"kept":   kept,
+	})
 }
 
-func (s *Server) handleAdBlockSubscriptions(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	if s.configSrc == nil { http.Error(w, "config not available", http.StatusServiceUnavailable); return }
-	if r.Method == http.MethodGet {
-		_ = json.NewEncoder(w).Encode(s.configSrc().DNS.AdBlock.Subscriptions)
-		return
-	}
-	if s.configPath == "" || s.reloadConfig == nil {
-		http.Error(w, "config write not available", http.StatusServiceUnavailable); return
-	}
-	current := s.configSrc()
-	if current == nil { http.Error(w, "config not available", http.StatusServiceUnavailable); return }
-	next := *current
-	next.DNS = current.DNS
-	next.DNS.AdBlock = current.DNS.AdBlock
-	next.DNS.AdBlock.Subscriptions = append([]config.AdBlockSubscription(nil), current.DNS.AdBlock.Subscriptions...)
-
-	switch r.Method {
-	case http.MethodPost:
-		var req config.AdBlockSubscription
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil { http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest); return }
-		req.Name = strings.TrimSpace(req.Name)
-		req.URL = strings.TrimSpace(req.URL)
-		if req.Name == "" { http.Error(w, "name is required", http.StatusBadRequest); return }
-		u, err := url.ParseRequestURI(req.URL)
-		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
-			http.Error(w, "URL must be http(s)", http.StatusBadRequest); return
-		}
-		replaced := false
-		for i, old := range next.DNS.AdBlock.Subscriptions {
-			if old.Name == req.Name || old.URL == req.URL {
-				next.DNS.AdBlock.Subscriptions[i] = req
-				replaced = true
-				break
-			}
-		}
-		if !replaced { next.DNS.AdBlock.Subscriptions = append(next.DNS.AdBlock.Subscriptions, req) }
-	case http.MethodDelete:
-		name := strings.TrimSpace(r.URL.Query().Get("name"))
-		if name == "" { http.Error(w, "name is required", http.StatusBadRequest); return }
-		filtered := next.DNS.AdBlock.Subscriptions[:0]
-		found := false
-		for _, sub := range next.DNS.AdBlock.Subscriptions {
-			if sub.Name == name || sub.URL == name { found = true; continue }
-			filtered = append(filtered, sub)
-		}
-		if !found { http.Error(w, "subscription not found", http.StatusNotFound); return }
-		next.DNS.AdBlock.Subscriptions = filtered
-	default:
-		w.Header().Set("Allow", "GET, POST, DELETE")
+func (s *Server) handleAdblockSave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodPut {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	data, err := json.MarshalIndent(&next, "", "  ")
-	if err != nil { http.Error(w, fmt.Sprintf("encode config: %v", err), http.StatusInternalServerError); return }
-	if err := atomicWriteFile(s.configPath, data, 0600); err != nil {
-		http.Error(w, "save config: "+err.Error(), http.StatusInternalServerError); return
+	var req config.AdblockListConf
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
 	}
-	s.reloadConfig()
-	if s.adblockMgr != nil {
-		subs := make([]adblock.Subscription, 0, len(next.DNS.AdBlock.Subscriptions))
-		for _, sub := range next.DNS.AdBlock.Subscriptions {
-			subs = append(subs, adblock.Subscription{Name: sub.Name, URL: sub.URL, Enabled: sub.Enabled, UseProxy: sub.UseProxy})
+
+	req.Name = strings.TrimSpace(req.Name)
+	req.URL = strings.TrimSpace(req.URL)
+	if req.Name == "" || req.URL == "" {
+		http.Error(w, "name and url must not be empty", http.StatusBadRequest)
+		return
+	}
+	u, err := url.ParseRequestURI(req.URL)
+	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		http.Error(w, "url must be a valid http(s) URL", http.StatusBadRequest)
+		return
+	}
+	if req.UpdateInterval == "" {
+		req.UpdateInterval = "24h"
+	}
+
+	_, valErr, writeErr := s.saveConfig(func(c *config.Config) {
+		found := false
+		for i, l := range c.DNS.Adblock.Lists {
+			if l.Name == req.Name {
+				c.DNS.Adblock.Lists[i] = req
+				found = true
+				break
+			}
 		}
-		s.adblockMgr.Configure(subs)
+		if !found {
+			c.DNS.Adblock.Lists = append(c.DNS.Adblock.Lists, req)
+		}
+	})
+	if valErr != nil {
+		http.Error(w, "validation failed: "+valErr.Error(), http.StatusBadRequest)
+		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "subscriptions": next.DNS.AdBlock.Subscriptions})
+	if writeErr != nil {
+		http.Error(w, "write failed: "+writeErr.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("admin: adblock subscription saved", "name", req.Name, "url", req.URL)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
 }
 
-func (s *Server) handleAdBlockToggle(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAdblockDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		var req struct {
+			Name string `json:"name"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		name = strings.TrimSpace(req.Name)
+	}
+	if name == "" {
+		http.Error(w, "name must not be empty", http.StatusBadRequest)
+		return
+	}
+
+	_, valErr, writeErr := s.saveConfig(func(c *config.Config) {
+		var filtered []config.AdblockListConf
+		for _, l := range c.DNS.Adblock.Lists {
+			if l.Name != name && l.URL != name {
+				filtered = append(filtered, l)
+			}
+		}
+		c.DNS.Adblock.Lists = filtered
+	})
+	if valErr != nil {
+		http.Error(w, "validation failed: "+valErr.Error(), http.StatusBadRequest)
+		return
+	}
+	if writeErr != nil {
+		http.Error(w, "write failed: "+writeErr.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("admin: adblock subscription deleted", "name", name)
 	w.Header().Set("Content-Type", "application/json")
-	if r.Method != http.MethodPost { http.Error(w, "method not allowed", http.StatusMethodNotAllowed); return }
-	if s.configSrc == nil || s.configPath == "" || s.reloadConfig == nil {
-		http.Error(w, "config write not available", http.StatusServiceUnavailable); return
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+}
+
+func (s *Server) handleAdblockToggle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
 	}
-	var req struct { Enabled *bool `json:"enabled"` }
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Enabled == nil {
-		http.Error(w, "enabled boolean is required", http.StatusBadRequest); return
+
+	var req struct {
+		Name    string `json:"name,omitempty"`
+		Enabled *bool  `json:"enabled,omitempty"`
 	}
-	current := s.configSrc()
-	if current == nil { http.Error(w, "config not available", http.StatusServiceUnavailable); return }
-	next := *current
-	next.DNS = current.DNS
-	next.DNS.AdBlock = current.DNS.AdBlock
-	next.DNS.AdBlock.Subscriptions = append([]config.AdBlockSubscription(nil), current.DNS.AdBlock.Subscriptions...)
-	next.DNS.AdBlock.Enabled = *req.Enabled
-	data, err := json.MarshalIndent(&next, "", "  ")
-	if err != nil { http.Error(w, "encode config: "+err.Error(), http.StatusInternalServerError); return }
-	if err := atomicWriteFile(s.configPath, data, 0600); err != nil {
-		http.Error(w, "save config: "+err.Error(), http.StatusInternalServerError); return
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = strings.TrimSpace(r.URL.Query().Get("name"))
 	}
-	s.reloadConfig()
+
+	enable := true
+	if req.Enabled != nil {
+		enable = *req.Enabled
+	} else if enableStr := r.URL.Query().Get("enable"); enableStr != "" {
+		enable = enableStr == "true" || enableStr == "1"
+	}
+
+	_, valErr, writeErr := s.saveConfig(func(c *config.Config) {
+		if name != "" {
+			for i, l := range c.DNS.Adblock.Lists {
+				if l.Name == name || l.URL == name {
+					c.DNS.Adblock.Lists[i].Enabled = enable
+					break
+				}
+			}
+		} else {
+			c.DNS.Adblock.Enabled = enable
+		}
+	})
+	if valErr != nil {
+		http.Error(w, "validation failed: "+valErr.Error(), http.StatusBadRequest)
+		return
+	}
+	if writeErr != nil {
+		http.Error(w, "write failed: "+writeErr.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "enabled": enable})
+}
+
+func (s *Server) handleAdblockWhitelist(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Action string `json:"action"` // "add" or "remove"
+		Domain string `json:"domain"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	domain := strings.TrimSpace(strings.ToLower(req.Domain))
+	domain = strings.TrimPrefix(domain, "*.")
+	domain = strings.TrimPrefix(domain, ".")
+	domain = strings.TrimSuffix(domain, ".")
+	if domain == "" {
+		http.Error(w, "domain must not be empty", http.StatusBadRequest)
+		return
+	}
+
+	action := strings.ToLower(strings.TrimSpace(req.Action))
+	if action != "add" && action != "remove" {
+		http.Error(w, "action must be 'add' or 'remove'", http.StatusBadRequest)
+		return
+	}
+
+	_, valErr, writeErr := s.saveConfig(func(c *config.Config) {
+		if action == "add" {
+			for _, d := range c.DNS.Adblock.Whitelist {
+				if d == domain {
+					return
+				}
+			}
+			if len(c.DNS.Adblock.Whitelist) >= 5000 {
+				return
+			}
+			c.DNS.Adblock.Whitelist = append(c.DNS.Adblock.Whitelist, domain)
+		} else {
+			var filtered []string
+			for _, d := range c.DNS.Adblock.Whitelist {
+				if d != domain {
+					filtered = append(filtered, d)
+				}
+			}
+			c.DNS.Adblock.Whitelist = filtered
+		}
+	})
+	if valErr != nil {
+		http.Error(w, "validation failed: "+valErr.Error(), http.StatusBadRequest)
+		return
+	}
+	if writeErr != nil {
+		http.Error(w, "write failed: "+writeErr.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	wl := []string{}
 	if s.adblockMgr != nil {
-		s.adblockMgr.SetEnabled(*req.Enabled)
-		if *req.Enabled { s.adblockMgr.Start() }
+		wl = s.adblockMgr.Whitelist()
 	}
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "enabled": *req.Enabled})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "whitelist": wl})
 }

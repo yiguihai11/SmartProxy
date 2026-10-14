@@ -1,64 +1,106 @@
-# DNS AdBlock subscriptions
+# DNS AdBlock Subscriptions
 
-SmartProxy can optionally block DNS queries using domain lists. This is a DNS-layer
-feature: it does not inspect HTTP paths, TLS SNI, QUIC payloads, SOCKS streams, or
-established connections, and it does not alter ACL routing decisions.
+SmartProxy provides high-performance DNS-level advertising and tracker domain filtering through subscription lists (AdGuard/ABP domain rules, hosts files, and bare domain lists).
 
-## Configuration
+This feature operates strictly at the **DNS resolution layer**: it does not inspect HTTP payloads, TLS SNI, QUIC streams, or established TCP/UDP connections. Blocked queries return fake responses (`0.0.0.0` for A, `::` for AAAA, NOERROR, TTL 60).
 
-The feature is off by default. Add this object under `dns` in `config.json`:
+---
+
+## 1. Configuration
+
+The feature is disabled by default. Configure it in `config.json` under `dns.adblock`:
 
 ```json
 {
-  "adblock": {
+  "dns": {
     "enabled": true,
-    "subscriptions": [
-      {
-        "name": "example-hosts",
-        "url": "https://example.org/hosts.txt",
-        "enabled": true,
-        "use_proxy": true
-      }
-    ]
+    "adblock": {
+      "enabled": true,
+      "auto_update": true,
+      "cache_file": "adblock_cache.txt",
+      "lists": [
+        {
+          "name": "AdGuard DNS filter",
+          "url": "https://example.com/adguard_dns.txt",
+          "enabled": true,
+          "update_interval": "24h",
+          "use_proxy": true
+        }
+      ],
+      "whitelist": ["example.com"]
+    }
   }
 }
 ```
 
-Do not enable a list until you trust its source. SmartProxy does not install a default
-subscription, which avoids unexpected breakage from an opinionated list.
+### Fields
 
-## Supported rules
+- `enabled`: Global toggle for DNS ad filtering.
+- `auto_update`: Enable periodic background updating (default: `true`).
+- `cache_file`: Local compact cache path (default: `"adblock_cache.txt"`). On Android, the app provides an absolute path.
+- `lists`: Array of subscription sources.
+  - `name`: Human-readable identifier.
+  - `url`: HTTP(S) URL to the rules list.
+  - `enabled`: Toggle for this individual subscription.
+  - `update_interval`: Update frequency, e.g., `"24h"`, `"12h"` (default: `"24h"`).
+  - `use_proxy`: Whether to fetch via proxy upstream nodes (default: `true`).
+- `whitelist`: Domain whitelist (up to 5000 items). An allowed domain exempts both the apex domain and all its subdomains.
 
-- AdGuard/ABP domain rules such as `||ads.example^`
-- Domain exceptions such as `@@||safe.ads.example^`
-- Hosts rows such as `0.0.0.0 ads.example` and `127.0.0.1 tracker.example`
-- Comment and blank lines
+---
 
-Matching includes the domain apex and its subdomains. A more-specific exception
-overrides a parent block rule. Static DNS records are checked first and always override
-blocklists. Existing ACL block checks keep their existing priority; ACL allow rules do
-not bypass AdBlock.
+## 2. Rule Syntax and Priority
 
-Path/regex rules and conditional options (for example `$third-party`, `$dnsrewrite`,
-`$domain=`, and `$client=`) are not applied. Unsupported lines are counted rather than
-silently treated as active rules. A list with no accepted rules is rejected, and the
-last known-good cache is preserved.
+### Supported Rules
 
-## Subscription lifecycle and cache
+- **AdGuard / ABP domain rules**: `||ads.example.com^` blocks `ads.example.com` and all subdomains (e.g., `sub.ads.example.com`).
+- **ABP important rules**: `||ads.example.com^$important` preserves the domain.
+- **Whitelist exceptions**: `@@||safe.example.com^` exempts the domain and all subdomains.
+- **Hosts files**: `0.0.0.0 ads.example.com` or `127.0.0.1 tracker.example.com` (multiple aliases per line supported). Real-IP mappings (e.g. `1.2.3.4 a.com`) are skipped.
+- **Bare domain lists**: Plain domains one per line.
+- **$badfilter**: Negates matching rules regardless of evaluation order.
 
-Subscriptions are fetched asynchronously at startup and refreshed every 12 hours. Each source has a `use_proxy` option: it defaults to `true` (including when omitted from older configs), which fetches through the current SmartProxy node and lets the remote side resolve the target hostname; set it to `false` for a direct device-network fetch.
-Responses are limited to 32 MiB, use HTTP ETag revalidation, and are cached as JSON in
-the engine's config directory. A failed fetch or invalid list does not replace a
-previous valid snapshot. DNS queries use an immutable in-memory snapshot; they do not
-wait for downloads or parse lists on the hot path.
+### Unsupported Rules (Skipped and Counted)
 
-The admin dashboard has a **DNS AdBlock** page. Its API is:
+Element hiding rules (`##`, `#?#`, `#@#`, `#%#`), URL path patterns with `/`, regular expressions `/.../`, wildcard rules with `*`, and non-DNS options (`$third-party`, `$dnsrewrite`, etc.) are safely ignored and accounted for in the skipped statistics.
 
-- `GET /adblock/status` — enabled state, configured subscriptions and parser status.
-- `POST /adblock/toggle` with `{"enabled":true}` — enable or disable filtering.
-- `GET /adblock/subscriptions` — list configured subscriptions.
-- `POST /adblock/subscriptions` with `{"name":"list","url":"https://…","enabled":true,"use_proxy":true}` — add or update a source.
-- `DELETE /adblock/subscriptions?name=list` — remove a source.
-- `POST /adblock/refresh` with `{"name":"list"}` — refresh one source; an empty object refreshes all sources asynchronously.
+### Precedence
 
-Filtering affects DNS answers only. It does not terminate already-established connections.
+1. **User Static DNS Records** (`dns.static_records`): Always evaluated first and takes absolute priority over adblock and ACL.
+2. **ACL Block Rules** (`internal/rules`): Evaluated before adblock.
+3. **AdBlock Whitelist & @@|| Exceptions**: Exempt matching domain apex and subdomains. ACL `allow domain` rules **do not** exempt adblock filtering.
+4. **AdBlock Subscriptions**: Matched via zero-allocation suffix walk.
+5. **DNS Cache & Upstream Resolution**: Only queries passing filtering reach cache and upstream servers.
+6. **Established Connections**: Adblock affects DNS responses only; already established connections are not terminated.
+
+---
+
+## 3. High Performance Matching
+
+The matcher uses a compact hash set with reverse suffix traversal:
+- **Typical lookup latency**: ~60ns/query with **0 heap allocations** and **0 locks** on the hot query path.
+- **Suffix compression**: Subdomains whose parent domain is already in the set (e.g., `sub.a.com` when `a.com` is present) are eliminated during compilation.
+- **Safe limits**: 8-label depth ceiling, single-label noise rejection (`localhost`, `local` etc. are hard-filtered), 32 MB single download limit, and max 500,000 active rules.
+
+---
+
+## 4. Android & Shizuku Architecture: Two Cores
+
+On Android, SmartProxy runs two independent Go routing engines:
+1. **Main Core** (App process, uid = `untrusted_app`): Uses `cacheDir/adblock/adblock_cache.txt`.
+2. **Tethering Core** (Shizuku shell service, uid = `shell`): Uses `/data/local/tmp/smartproxy-tethering-state/adblock_cache.txt`.
+
+**Each core fetches and caches independently**:
+- Whichever core is active keeps its own filter snapshot up-to-date through its own upstream proxies.
+- Hotspot users can manage subscriptions and trigger manual updates via the Tethering Core web dashboard (accessible over Wi-Fi gateway IP).
+- Configuration edits made on either core persist and reload dynamically without service restart.
+
+---
+
+## 5. Admin API Endpoints
+
+- `GET /adblock`: Returns operational status, subscription lists with rule/skip counts, whitelist, and TOP blocked domains.
+- `POST /adblock/refresh`: Refreshes subscriptions. Body: `{"name":"..."}` (empty or omitted name refreshes all).
+- `POST /adblock/save`: Adds or updates a subscription source.
+- `POST /adblock/delete`: Removes a subscription source (`?name=...` or JSON body).
+- `POST /adblock/toggle`: Toggles global ad blocking or individual list state (`{"enabled": true/false}`).
+- `POST /adblock/whitelist`: Adds or removes a whitelist domain (`{"action": "add"|"remove", "domain": "..."}`).

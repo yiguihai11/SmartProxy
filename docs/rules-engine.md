@@ -93,3 +93,4 @@ allow 严格优先于 block；匹配 proxy 规则前先做 allow 判定，命中
 2. 无效行被跳过但不报错（如 `block port abc`），见 `TestEngine_InvalidRulesIgnored`。
 3. 解析用 `net/netip`；`parseCIDRInto` 对裸地址做 `/bitlen` 退化，IPv6 单地址同理（`TestEngine_ProxyRuleCIDR_IPv6_SingleHost`）。
 4. 域名匹配统一走 `normalizeDomain`（去尾点 + 转小写）。
+5. 广告过滤规则属于独立订阅功能（详见 [DNS AdBlock](adblock.md)），仅在 DNS 层生效。ACL 引擎 `internal/rules` 不参与广告过滤，ACL 的 `allow domain` 亦不豁免广告过滤。
