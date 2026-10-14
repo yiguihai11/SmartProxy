@@ -969,7 +969,6 @@ func (e *Engine) handleUDPAssociate(ctx context.Context, conn net.Conn, clientIP
 }
 
 func (e *Engine) Stop() {
-	if e.adblockMgr != nil { e.adblockMgr.Stop() }
 	e.stopOnce.Do(func() {
 		slog.Info("[Go-Engine] Engine.Stop() entered")
 		if e.cancel != nil {

@@ -792,47 +792,61 @@ func (m *Manager) saveDiskCacheLocked() {
 		_ = os.MkdirAll(dir, 0o755)
 	}
 
-	var sb strings.Builder
-	sb.WriteString("# SmartProxy adblock compact cache\n")
+	tmp := m.cachePath + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		slog.Warn("create adblock disk cache temp file failed", "path", tmp, "error", err)
+		return
+	}
+
+	w := bufio.NewWriter(f)
+	w.WriteString("# SmartProxy adblock compact cache\n")
 	for _, name := range m.itemsOrder {
 		it := m.items[name]
 		if it == nil || !it.Enabled {
 			continue
 		}
-		sb.WriteString("# [item: ")
-		sb.WriteString(it.Name)
-		sb.WriteString("]\n")
+		w.WriteString("# [item: ")
+		w.WriteString(it.Name)
+		w.WriteString("]\n")
 		if it.LastUpdate > 0 {
-			sb.WriteString(fmt.Sprintf("# last_update: %d\n", it.LastUpdate))
+			fmt.Fprintf(w, "# last_update: %d\n", it.LastUpdate)
 		}
 		if it.etag != "" {
-			sb.WriteString("# etag: ")
-			sb.WriteString(it.etag)
-			sb.WriteString("\n")
+			w.WriteString("# etag: ")
+			w.WriteString(it.etag)
+			w.WriteString("\n")
 		}
 		if it.Lines > 0 {
-			sb.WriteString(fmt.Sprintf("# lines: %d\n", it.Lines))
+			fmt.Fprintf(w, "# lines: %d\n", it.Lines)
 		}
 		if it.Skipped > 0 {
-			sb.WriteString(fmt.Sprintf("# skipped: %d\n", it.Skipped))
+			fmt.Fprintf(w, "# skipped: %d\n", it.Skipped)
 		}
 		for _, a := range it.allow {
-			sb.WriteString("@@||")
-			sb.WriteString(a)
-			sb.WriteString("^\n")
+			w.WriteString("@@||")
+			w.WriteString(a)
+			w.WriteString("^\n")
 		}
 		for _, s := range it.suffixes {
-			sb.WriteString("||")
-			sb.WriteString(s)
-			sb.WriteString("^\n")
+			w.WriteString("||")
+			w.WriteString(s)
+			w.WriteString("^\n")
 		}
 	}
 
-	tmp := m.cachePath + ".tmp"
-	if err := os.WriteFile(tmp, []byte(sb.String()), 0o600); err != nil {
-		slog.Warn("write adblock disk cache failed", "path", tmp, "error", err)
+	if err := w.Flush(); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		slog.Warn("flush adblock disk cache failed", "path", tmp, "error", err)
 		return
 	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		slog.Warn("close adblock disk cache failed", "path", tmp, "error", err)
+		return
+	}
+
 	if err := os.Rename(tmp, m.cachePath); err != nil {
 		_ = os.Remove(tmp)
 		slog.Warn("rename adblock disk cache failed", "error", err)
@@ -898,23 +912,29 @@ func (m *Manager) loadFromDiskCache() bool {
 		if strings.HasPrefix(line, "@@||") {
 			domainPart := strings.TrimSuffix(strings.TrimPrefix(line, "@@||"), "^")
 			if norm, _, ok := normalizeRuleDomain(domainPart); ok {
-				allAllow = append(allAllow, norm)
 				if curItem != nil {
 					curItem.allow = append(curItem.allow, norm)
+				} else {
+					allAllow = append(allAllow, norm)
 				}
 			}
 		} else if strings.HasPrefix(line, "||") {
 			domainPart := strings.TrimSuffix(strings.TrimPrefix(line, "||"), "^")
 			if norm, _, ok := normalizeRuleDomain(domainPart); ok {
-				allSuffixes = append(allSuffixes, norm)
 				if curItem != nil {
 					curItem.suffixes = append(curItem.suffixes, norm)
+				} else {
+					allSuffixes = append(allSuffixes, norm)
 				}
 			}
 		}
 	}
 
-	if len(allSuffixes) == 0 && len(allAllow) == 0 {
+	totalRules := len(allSuffixes) + len(allAllow)
+	for _, ci := range itemMap {
+		totalRules += len(ci.suffixes) + len(ci.allow)
+	}
+	if totalRules == 0 {
 		return false
 	}
 
@@ -941,6 +961,7 @@ func (m *Manager) loadFromDiskCache() bool {
 				it.etag = ci.etag
 			}
 		}
+		m.rebuildAndPublishLocked()
 	} else if len(m.itemsOrder) == 1 {
 		// 兼容旧格式无 item 头的单订阅缓存
 		if it, ok := m.items[m.itemsOrder[0]]; ok {
@@ -949,13 +970,14 @@ func (m *Manager) loadFromDiskCache() bool {
 			it.Kept = len(allSuffixes) + len(allAllow)
 			it.LastUpdate = fileMtime
 		}
-	}
-
-	// 整合白名单
-	allAllow = append(allAllow, m.whitelist...)
-	set := NewSet(allSuffixes, allAllow, m.stats)
-	if m.conf.Enabled && m.sink != nil {
-		m.sink(set)
+		m.rebuildAndPublishLocked()
+	} else {
+		// 无 item 头且无配置清单(如手工指定纯规则缓存文件)
+		allAllow = append(allAllow, m.whitelist...)
+		set := NewSet(allSuffixes, allAllow, m.stats)
+		if m.conf.Enabled && m.sink != nil {
+			m.sink(set)
+		}
 	}
 
 	return true

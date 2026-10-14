@@ -2387,8 +2387,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		case <-timer.C:
 			data := s.gatherLiveData()
 			b, _ := json.Marshal(data)
-			fmt.Fprintf(w, "data: %s\n\n", b)
-
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", b); err != nil {
+				return
+			}
 			flusher.Flush()
 		case <-r.Context().Done():
 			timer.Stop()
