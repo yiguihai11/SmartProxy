@@ -16,7 +16,8 @@ The feature is off by default. Add this object under `dns` in `config.json`:
       {
         "name": "example-hosts",
         "url": "https://example.org/hosts.txt",
-        "enabled": true
+        "enabled": true,
+        "use_proxy": true
       }
     ]
   }
@@ -45,8 +46,8 @@ last known-good cache is preserved.
 
 ## Subscription lifecycle and cache
 
-Subscriptions are fetched asynchronously at startup and refreshed every 12 hours.
-Responses are limited to 16 MiB, use HTTP ETag revalidation, and are cached as JSON in
+Subscriptions are fetched asynchronously at startup and refreshed every 12 hours. Each source has a `use_proxy` option: it defaults to `true` (including when omitted from older configs), which fetches through the current SmartProxy node and lets the remote side resolve the target hostname; set it to `false` for a direct device-network fetch.
+Responses are limited to 32 MiB, use HTTP ETag revalidation, and are cached as JSON in
 the engine's config directory. A failed fetch or invalid list does not replace a
 previous valid snapshot. DNS queries use an immutable in-memory snapshot; they do not
 wait for downloads or parse lists on the hot path.
@@ -56,7 +57,7 @@ The admin dashboard has a **DNS AdBlock** page. Its API is:
 - `GET /adblock/status` — enabled state, configured subscriptions and parser status.
 - `POST /adblock/toggle` with `{"enabled":true}` — enable or disable filtering.
 - `GET /adblock/subscriptions` — list configured subscriptions.
-- `POST /adblock/subscriptions` with `{"name":"list","url":"https://…","enabled":true}` — add or update a source.
+- `POST /adblock/subscriptions` with `{"name":"list","url":"https://…","enabled":true,"use_proxy":true}` — add or update a source.
 - `DELETE /adblock/subscriptions?name=list` — remove a source.
 - `POST /adblock/refresh` with `{"name":"list"}` — refresh one source; an empty object refreshes all sources asynchronously.
 

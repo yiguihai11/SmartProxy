@@ -105,7 +105,7 @@ func (s *Server) handleAdBlockSubscriptions(w http.ResponseWriter, r *http.Reque
 	if s.adblockMgr != nil {
 		subs := make([]adblock.Subscription, 0, len(next.DNS.AdBlock.Subscriptions))
 		for _, sub := range next.DNS.AdBlock.Subscriptions {
-			subs = append(subs, adblock.Subscription{Name: sub.Name, URL: sub.URL, Enabled: sub.Enabled})
+			subs = append(subs, adblock.Subscription{Name: sub.Name, URL: sub.URL, Enabled: sub.Enabled, UseProxy: sub.UseProxy})
 		}
 		s.adblockMgr.Configure(subs)
 	}

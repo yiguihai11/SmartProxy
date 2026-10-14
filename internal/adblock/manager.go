@@ -8,25 +8,34 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"smartproxy/internal/upstream"
 )
 
 type Subscription struct {
-	Name string `json:"name"`
-	URL string `json:"url"`
-	Enabled bool `json:"enabled"`
+	Name     string `json:"name"`
+	URL      string `json:"url"`
+	Enabled  bool   `json:"enabled"`
+	// nil preserves compatibility with older configs and defaults to proxy fetch.
+	UseProxy *bool `json:"use_proxy,omitempty"`
 }
+
+func (s Subscription) UsesProxy() bool { return s.UseProxy == nil || *s.UseProxy }
 
 type SourceState struct {
 	Name string `json:"name"`
 	URL string `json:"url"`
 	Enabled bool `json:"enabled"`
+	UseProxy bool `json:"use_proxy"`
 	ActiveRules int `json:"active_rules"`
 	IgnoredRules int `json:"ignored_rules"`
 	LastUpdated time.Time `json:"last_updated,omitempty"`
@@ -43,17 +52,42 @@ type Manager struct {
 	mu sync.Mutex
 	dir string
 	subs []Subscription
-	client *http.Client
-	active atomic.Pointer[Set]
+	client        *http.Client
+	proxiedClient *http.Client
+	upstreamMgr   *upstream.Manager
+	active        atomic.Pointer[Set]
 	enabled atomic.Bool
 	states []SourceState
 	startOnce sync.Once
 	stop chan struct{}
 }
 
-func NewManager(dir string, subs []Subscription) *Manager {
+func NewManager(dir string, subs []Subscription, upstreamManagers ...*upstream.Manager) *Manager {
 	cp := append([]Subscription(nil), subs...)
-	m := &Manager{dir: dir, subs: cp, client: &http.Client{Timeout: 20*time.Second}, stop: make(chan struct{})}
+	m := &Manager{
+		dir: dir, subs: cp,
+		client: &http.Client{Timeout: 20 * time.Second},
+		stop: make(chan struct{}),
+	}
+	if len(upstreamManagers) > 0 {
+		m.upstreamMgr = upstreamManagers[0]
+	}
+	if m.upstreamMgr != nil {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.Proxy = nil
+		transport.DialContext = func(ctx context.Context, _, addr string) (net.Conn, error) {
+			host, portText, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, fmt.Errorf("invalid adblock target address %q: %w", addr, err)
+			}
+			port, err := strconv.Atoi(portText)
+			if err != nil {
+				return nil, fmt.Errorf("invalid adblock target port %q: %w", portText, err)
+			}
+			return m.upstreamMgr.ConnectDefault(ctx, host, port)
+		}
+		m.proxiedClient = &http.Client{Transport: transport, Timeout: 20 * time.Second}
+	}
 	m.active.Store(NewSet(nil))
 	m.enabled.Store(true)
 	return m
@@ -139,14 +173,21 @@ func (m *Manager) refreshOne(ctx context.Context, sub Subscription) error {
 	}
 	if cached.Body != "" {
 		if _, stats, err := Parse(cached.Body); err == nil {
-			m.setState(SourceState{Name: sub.Name, URL: sub.URL, Enabled: sub.Enabled, ActiveRules: stats.Accepted, IgnoredRules: stats.Ignored, LastUpdated: cached.Updated})
+			m.setState(SourceState{Name: sub.Name, URL: sub.URL, Enabled: sub.Enabled, UseProxy: sub.UsesProxy(), ActiveRules: stats.Accepted, IgnoredRules: stats.Ignored, LastUpdated: cached.Updated})
 		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sub.URL, nil)
 	if err != nil { return m.setError(sub, err) }
 	req.Header.Set("User-Agent", "SmartProxy-DNS-AdBlock/1.0")
 	if cached.ETag != "" { req.Header.Set("If-None-Match", cached.ETag) }
-	resp, err := m.client.Do(req)
+	client := m.client
+	if sub.UsesProxy() {
+		if m.proxiedClient == nil {
+			return m.setError(sub, fmt.Errorf("subscription is configured to use proxy, but no upstream manager is available"))
+		}
+		client = m.proxiedClient
+	}
+	resp, err := client.Do(req)
 	if err != nil { return m.setError(sub, err) }
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotModified && cached.Body != "" {
@@ -166,7 +207,7 @@ func (m *Manager) refreshOne(ctx context.Context, sub Subscription) error {
 		if err != nil { return m.setError(sub, fmt.Errorf("encode cache: %w", err)) }
 		if err := atomicWrite(path, data); err != nil { return m.setError(sub, fmt.Errorf("write cache: %w", err)) }
 	}
-	m.setState(SourceState{Name: sub.Name, URL: sub.URL, Enabled: true, ActiveRules: stats.Accepted, IgnoredRules: stats.Ignored, LastUpdated: cached.Updated})
+	m.setState(SourceState{Name: sub.Name, URL: sub.URL, Enabled: true, UseProxy: sub.UsesProxy(), ActiveRules: stats.Accepted, IgnoredRules: stats.Ignored, LastUpdated: cached.Updated})
 	_ = rules
 	m.rebuild()
 	return nil
@@ -185,7 +226,7 @@ func (m *Manager) setError(sub Subscription, err error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := range m.states { if m.states[i].Name == sub.Name { m.states[i].LastError = err.Error(); return err } }
-	m.states = append(m.states, SourceState{Name: sub.Name, URL: sub.URL, Enabled: sub.Enabled, LastError: err.Error()})
+	m.states = append(m.states, SourceState{Name: sub.Name, URL: sub.URL, Enabled: sub.Enabled, UseProxy: sub.UsesProxy(), LastError: err.Error()})
 	return err
 }
 

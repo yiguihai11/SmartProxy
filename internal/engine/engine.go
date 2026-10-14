@@ -119,14 +119,14 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 
 	adblockSubs := make([]adblock.Subscription, 0, len(cfg.DNS.AdBlock.Subscriptions))
 	for _, sub := range cfg.DNS.AdBlock.Subscriptions {
-		adblockSubs = append(adblockSubs, adblock.Subscription{Name: sub.Name, URL: sub.URL, Enabled: sub.Enabled})
+		adblockSubs = append(adblockSubs, adblock.Subscription{Name: sub.Name, URL: sub.URL, Enabled: sub.Enabled, UseProxy: sub.UseProxy})
 	}
 	adblockDir := cfgDir
 	if adblockDir == "" && filepath.IsAbs(cfg.Routing.ACLFile) {
 		adblockDir = filepath.Dir(cfg.Routing.ACLFile)
 	}
 	if adblockDir == "" { adblockDir = "." }
-	adblockMgr := adblock.NewManager(adblockDir, adblockSubs)
+	adblockMgr := adblock.NewManager(adblockDir, adblockSubs, upstreamMgr)
 	adblockMgr.SetEnabled(cfg.DNS.AdBlock.Enabled)
 	dnsHandler.SetAdBlockManager(adblockMgr)
 	if cfg.DNS.AdBlock.Enabled { adblockMgr.Start() }

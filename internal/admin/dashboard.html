@@ -676,6 +676,7 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
       <input class="search-input" id="adblock-name" placeholder="Name" style="min-width:120px">
       <input class="search-input" id="adblock-url" placeholder="https://example.com/hosts.txt" style="flex:1;min-width:220px">
       <label style="display:flex;align-items:center;gap:5px"><input type="checkbox" id="adblock-sub-enabled" checked> Enabled</label>
+      <label style="display:flex;align-items:center;gap:5px"><input type="checkbox" id="adblock-sub-use-proxy" checked> Fetch via proxy node (remote DNS)</label>
       <button class="btn btn-sm primary" onclick="saveAdBlockSubscription()">Save</button>
     </div>
   </div>
@@ -4138,9 +4139,9 @@ async function loadAdBlock(){
     if(!subs.length){list.innerHTML='<div class="empty-state">No subscriptions configured. Add a source above.</div>';return}
     var rows=subs.map(function(sub){
       var st=states.find(function(x){return x.name===sub.name})||{};
-      return '<tr><td>'+esc(sub.name)+'</td><td style="max-width:260px;overflow-wrap:anywhere">'+esc(sub.url)+'</td><td>'+(sub.enabled?'On':'Off')+'</td><td>'+Number(st.active_rules||0)+'</td><td>'+Number(st.ignored_rules||0)+'</td><td style="color:var(--danger)">'+esc(st.last_error||'')+'</td><td><button class="btn btn-sm" data-name="'+esc(sub.name)+'" onclick="refreshAdBlock(this.dataset.name)">Refresh</button> <button class="btn btn-sm danger" data-name="'+esc(sub.name)+'" onclick="deleteAdBlockSubscription(this.dataset.name)">Delete</button></td></tr>';
+      return '<tr><td>'+esc(sub.name)+'</td><td style="max-width:260px;overflow-wrap:anywhere">'+esc(sub.url)+'</td><td>'+(sub.enabled?'On':'Off')+'</td><td>'+(sub.use_proxy!==false?'Proxy':'Direct')+'</td><td>'+Number(st.active_rules||0)+'</td><td>'+Number(st.ignored_rules||0)+'</td><td style="color:var(--danger)">'+esc(st.last_error||'')+'</td><td><button class="btn btn-sm" data-name="'+esc(sub.name)+'" onclick="refreshAdBlock(this.dataset.name)">Refresh</button> <button class="btn btn-sm danger" data-name="'+esc(sub.name)+'" onclick="deleteAdBlockSubscription(this.dataset.name)">Delete</button></td></tr>';
     }).join('');
-    list.innerHTML='<table><thead><tr><th>Name</th><th>URL</th><th>Enabled</th><th>Active rules</th><th>Ignored</th><th>Last error</th><th>Actions</th></tr></thead><tbody>'+rows+'</tbody></table>';
+    list.innerHTML='<table><thead><tr><th>Name</th><th>URL</th><th>Enabled</th><th>Fetch</th><th>Active rules</th><th>Ignored</th><th>Last error</th><th>Actions</th></tr></thead><tbody>'+rows+'</tbody></table>';
   }catch(e){list.textContent='Error: '+e.message}
 }
 async function toggleAdBlock(enabled){
@@ -4150,7 +4151,7 @@ async function toggleAdBlock(enabled){
 async function saveAdBlockSubscription(){
   var name=document.getElementById('adblock-name').value.trim(),url=document.getElementById('adblock-url').value.trim();
   if(!name||!url){alert('Name and URL are required');return}
-  try{var r=await fetch('/adblock/subscriptions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,url:url,enabled:document.getElementById('adblock-sub-enabled').checked})});if(!r.ok)throw new Error(await r.text());document.getElementById('adblock-name').value='';document.getElementById('adblock-url').value='';await loadAdBlock()}
+  try{var r=await fetch('/adblock/subscriptions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name,url:url,enabled:document.getElementById('adblock-sub-enabled').checked,use_proxy:document.getElementById('adblock-sub-use-proxy').checked})});if(!r.ok)throw new Error(await r.text());document.getElementById('adblock-name').value='';document.getElementById('adblock-url').value='';document.getElementById('adblock-sub-enabled').checked=true;document.getElementById('adblock-sub-use-proxy').checked=true;await loadAdBlock()}
   catch(e){alert('Save failed: '+e.message)}
 }
 async function deleteAdBlockSubscription(name){

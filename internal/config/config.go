@@ -235,6 +235,12 @@ type AdBlockSubscription struct {
 	Name    string `json:"name"`
 	URL     string `json:"url"`
 	Enabled bool   `json:"enabled"`
+	// nil distinguishes legacy configs from an explicit false; legacy defaults to proxy.
+	UseProxy *bool `json:"use_proxy,omitempty"`
+}
+
+func (s AdBlockSubscription) UsesProxy() bool {
+	return s.UseProxy == nil || *s.UseProxy
 }
 
 // StaticRecord is a single host→IP(s) static DNS entry. The same host may carry
