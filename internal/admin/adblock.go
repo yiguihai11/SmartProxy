@@ -18,8 +18,12 @@ func (s *Server) handleAdBlockStatus(w http.ResponseWriter, r *http.Request) {
 	cfg := s.configSrc()
 	var states interface{} = []adblock.SourceState{}
 	if s.adblockMgr != nil { states = s.adblockMgr.Status() }
+	enabled := cfg.DNS.AdBlock.Enabled
+	if s.adblockMgr != nil {
+		enabled = s.adblockMgr.Enabled()
+	}
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"enabled": cfg.DNS.AdBlock.Enabled,
+		"enabled": enabled,
 		"subscriptions": cfg.DNS.AdBlock.Subscriptions,
 		"sources": states,
 	})

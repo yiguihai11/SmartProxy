@@ -120,6 +120,9 @@ func (m *Manager) Stop() { select { case <-m.stop: default: close(m.stop) } }
 
 func (m *Manager) SetEnabled(enabled bool) { m.enabled.Store(enabled) }
 
+// Enabled reports whether DNS ad filtering is active at runtime.
+func (m *Manager) Enabled() bool { return m.enabled.Load() }
+
 func (m *Manager) Blocked(domain string) bool {
 	if !m.enabled.Load() { return false }
 	s := m.active.Load()

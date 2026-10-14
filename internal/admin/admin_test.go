@@ -24,6 +24,7 @@ import (
 	mdns "github.com/miekg/dns"
 	"github.com/quic-go/quic-go/http3"
 
+	"smartproxy/internal/adblock"
 	"smartproxy/internal/chnroute"
 	"smartproxy/internal/config"
 	"smartproxy/internal/dns"
@@ -2057,4 +2058,50 @@ func TestTLSDispatch_PlaintextAssetsAndHostPreservation(t *testing.T) {
 	if loc != "https://smartproxy.lan:9090/dashboard" {
 		t.Errorf("expected redirect to https://smartproxy.lan:9090/dashboard, got %q", loc)
 	}
+}
+
+
+func TestAdmin_AdBlockTogglePersistsAcrossStatusRefresh(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	cfg := config.DefaultConfig()
+	cfg.DNS.AdBlock.Enabled = false
+	mgr := adblock.NewManager(dir, nil)
+	s := newTestServer(t)
+	s.SetAdBlockManager(mgr)
+	s.SetConfigSrc(func() *config.Config { return cfg })
+	s.SetConfigPath(cfgPath)
+	s.SetReloadConfig(func() {}) // Simulate a delayed/failed config watcher; runtime state must still reflect the toggle.
+	startServer(t, s)
+
+	client := &http.Client{
+		Transport: &http.Transport{DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+			return net.Dial("unix", s.sockPath)
+		}},
+		Timeout: 5 * time.Second,
+	}
+	req, err := http.NewRequest(http.MethodPost, "http://unix/adblock/toggle", bytes.NewBufferString(`{"enabled":true}`))
+	if err != nil { t.Fatal(err) }
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil { t.Fatal(err) }
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body); resp.Body.Close()
+		t.Fatalf("toggle returned %d: %s", resp.StatusCode, body)
+	}
+	resp.Body.Close()
+
+	resp, err = client.Get("http://unix/adblock/status")
+	if err != nil { t.Fatal(err) }
+	defer resp.Body.Close()
+	var status struct { Enabled bool `json:"enabled"` }
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil { t.Fatal(err) }
+	if !status.Enabled { t.Fatal("status reverted to disabled after refresh") }
+	if !mgr.Enabled() { t.Fatal("runtime adblock manager remained disabled") }
+
+	disk, err := os.ReadFile(cfgPath)
+	if err != nil { t.Fatalf("config was not persisted: %v", err) }
+	var saved config.Config
+	if err := json.Unmarshal(disk, &saved); err != nil { t.Fatal(err) }
+	if !saved.DNS.AdBlock.Enabled { t.Fatal("dns.adblock.enabled was not saved as true") }
 }

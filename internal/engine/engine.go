@@ -1167,6 +1167,14 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 		e.subscriptionMgr.Reload(newCfg.Upstream.Subscriptions)
 	}
 
+	// Keep the adblock runtime switch aligned with the newly loaded config.
+	if e.adblockMgr != nil {
+		e.adblockMgr.SetEnabled(newCfg.DNS.AdBlock.Enabled)
+		if newCfg.DNS.AdBlock.Enabled {
+			e.adblockMgr.Start()
+		}
+	}
+
 	// Publish the new configuration snapshot after runtime components have
 	// been updated. This Store is atomic for the Config pointer itself, but
 	// ReloadConfig as a whole is intentionally not a cross-component transaction.
