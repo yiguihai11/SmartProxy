@@ -222,6 +222,7 @@ class SmartProxyVpnService : VpnService() {
     private var hasInitialNetwork = false
     private var hadNetworkLost = false
 
+    @Volatile
     private var tetheringService: IShizukuTetheringService? = null
     private val tetheringConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
@@ -234,6 +235,7 @@ class SmartProxyVpnService : VpnService() {
         }
     }
 
+    @Synchronized
     private fun bindTetheringServiceIfNeeded() {
         if (tetheringService != null) return
         if (Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
@@ -243,6 +245,7 @@ class SmartProxyVpnService : VpnService() {
         }
     }
 
+    @Synchronized
     private fun unbindTetheringService() {
         if (tetheringService != null) {
             runCatching {

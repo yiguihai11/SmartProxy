@@ -58,19 +58,23 @@ object AppEnumerator {
         val pm = context.packageManager
         val selected = AppPrefs.selectedApps(context)
         val self = context.packageName
-        return pm.getInstalledApplications(0)
-            .asSequence()
-            .filter { it.packageName != self }
-            .map { ai ->
-                AppInfo(
-                    pkg = ai.packageName,
-                    label = pm.getApplicationLabel(ai).toString(),
-                    uid = ai.uid,
-                    selected = selected.contains(ai.packageName),
-                    system = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0
-                )
-            }
-            .toList()
+        return try {
+            pm.getInstalledApplications(0)
+                .asSequence()
+                .filter { it.packageName != self }
+                .map { ai ->
+                    AppInfo(
+                        pkg = ai.packageName,
+                        label = runCatching { pm.getApplicationLabel(ai).toString() }.getOrDefault(ai.packageName),
+                        uid = ai.uid,
+                        selected = selected.contains(ai.packageName),
+                        system = (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+                    )
+                }
+                .toList()
+        } catch (_: Throwable) {
+            emptyList()
+        }
     }
 
     /**
@@ -98,7 +102,7 @@ object AppEnumerator {
         val bmp = try {
             val icon: Drawable = context.packageManager.getApplicationIcon(pkg)
             icon.toBitmap(96, 96).asImageBitmap()
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             null
         }
         if (bmp != null) iconCache.put(pkg, bmp)

@@ -197,6 +197,10 @@ object AppPrefs {
         sp(context).edit().putString(KEY_SERVICE_MODE, mode).apply()
     }
 
+    private val activePrefListeners = java.util.Collections.synchronizedSet(
+        java.util.HashSet<SharedPreferences.OnSharedPreferenceChangeListener>()
+    )
+
     /**
      * 注册 serviceMode / tunStack 变化回调(UI 把 SharedPreferences 变化接成 Compose state,§8):
      * 侧边栏菜单显示条件、监听开关副标题等直接读 serviceMode/tunStack 的 UI 依赖它,否则切模式后
@@ -207,8 +211,12 @@ object AppPrefs {
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
             if (key == KEY_SERVICE_MODE || key == KEY_TUN_STACK) onChange()
         }
+        activePrefListeners.add(listener)
         sp.registerOnSharedPreferenceChangeListener(listener)
-        return { sp.unregisterOnSharedPreferenceChangeListener(listener) }
+        return {
+            sp.unregisterOnSharedPreferenceChangeListener(listener)
+            activePrefListeners.remove(listener)
+        }
     }
 
     /** 电池优化豁免引导已弹次数:仅代理(SOCKS5)模式后台连通性依赖「忽略电池优化」,

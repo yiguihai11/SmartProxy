@@ -189,14 +189,25 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+        handleIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        if (intent == null) return
         // 控制中心磁贴:VPN 授权缺失时收面板跳过来,落到这里接着弹系统授权框,
         // 用户同意后 vpnConsent 回调自动起服务。post 到本轮之后,等界面与 launcher 就绪。
-        if (intent?.getBooleanExtra(QuickToggleService.EXTRA_START_VPN, false) == true) {
+        if (intent.getBooleanExtra(QuickToggleService.EXTRA_START_VPN, false)) {
             android.os.Handler(android.os.Looper.getMainLooper()).post { onToggleClicked() }
         }
         // 桌面长按快捷方式「管理面板」:面板地址随服务状态变(VPN 模式要等 smartproxy.lan),
         // 静态 shortcut 写不死 URL,在这里现取;取不到说明服务没跑,弹 toast 不做傻事。
-        if (intent?.getBooleanExtra(EXTRA_OPEN_PANEL, false) == true) {
+        if (intent.getBooleanExtra(EXTRA_OPEN_PANEL, false)) {
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 val url = PanelUrl.url(this)
                 if (url != null) openPanel(this, url)

@@ -67,6 +67,9 @@ object ShizukuShell {
             false
         } finally {
             runCatching { errDrain.join(1000) }
+            runCatching { process.inputStream.close() }
+            runCatching { process.outputStream.close() }
+            runCatching { process.errorStream.close() }
             runCatching { process.destroy() }
         }
     }

@@ -162,6 +162,7 @@ class NetworkStatusActivity : ComponentActivity() {
      *  页面走/留只动自己那一份,不能把悬浮窗在用的采集关掉。 */
     private var gateHeld = false
 
+    @Volatile
     private var tetheringService: IShizukuTetheringService? = null
     private val tetheringConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
@@ -172,6 +173,7 @@ class NetworkStatusActivity : ComponentActivity() {
         }
     }
 
+    @Synchronized
     private fun bindTetheringIfNeeded() {
         if (tetheringService != null) return
         if (Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
@@ -181,6 +183,7 @@ class NetworkStatusActivity : ComponentActivity() {
         }
     }
 
+    @Synchronized
     private fun unbindTethering() {
         if (tetheringService != null) {
             runCatching {

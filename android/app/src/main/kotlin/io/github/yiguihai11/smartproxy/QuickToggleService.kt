@@ -78,7 +78,7 @@ class QuickToggleService : TileService() {
             this, 0, intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        startActivityAndCollapse(pi)
+        runCatching { startActivityAndCollapse(pi) }
     }
 
     override fun onDestroy() {

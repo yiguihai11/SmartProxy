@@ -195,7 +195,7 @@ object NotificationHelper {
         }
         lastNotificationSignature = sig
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIFICATION_ID, build(context))
+        runCatching { nm.notify(NOTIFICATION_ID, build(context)) }
     }
 
     /** §4.5 被动断连提示:一次性(auto-cancel)通知,非 ongoing,点掉即消失。 */
@@ -227,13 +227,13 @@ object NotificationHelper {
             ).build()
             builder.addAction(stopAction)
         }
-        nm.notify(NOTIFICATION_ID_DISCONNECTED, builder.build())
+        runCatching { nm.notify(NOTIFICATION_ID_DISCONNECTED, builder.build()) }
     }
 
     /** 清理等待网络重连的提示通知。 */
     fun cancelWaitingNotification(context: Context) {
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.cancel(NOTIFICATION_ID_DISCONNECTED)
+        runCatching { nm.cancel(NOTIFICATION_ID_DISCONNECTED) }
     }
 
     /** 启动前台并带 specialUse 类型。注意 `vpn` 不是合法的 manifest 属性 flag
@@ -263,7 +263,7 @@ object NotificationHelper {
      * 空列表——此时通知本就被系统压住,补挂也无意义,由授权回调里的 refreshForeground 负责。
      */
     fun isForegroundNotificationVisible(context: Context): Boolean {
-        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        return nm.activeNotifications?.any { it.id == NOTIFICATION_ID } == true
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return false
+        return runCatching { nm.activeNotifications?.any { it.id == NOTIFICATION_ID } == true }.getOrDefault(false)
     }
 }

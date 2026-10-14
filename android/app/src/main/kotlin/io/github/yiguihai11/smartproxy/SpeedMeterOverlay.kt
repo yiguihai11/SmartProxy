@@ -208,13 +208,16 @@ object SpeedMeterOverlay {
         settingsOpen = false
         // 注销转屏监听:胶囊都拆了,回调里也拿不到 capsule,留着只是白跑。
         displayListener?.let { l ->
-            (appContext?.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager)
-                ?.unregisterDisplayListener(l)
+            runCatching {
+                (appContext?.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager)
+                    ?.unregisterDisplayListener(l)
+            }
         }
         displayListener = null
         val view = capsule
         val manager = wm
         if (view != null && manager != null) {
+            runCatching { view.animate().cancel() }
             runCatching { manager.removeView(view) }
         }
         capsule = null
@@ -654,8 +657,11 @@ object SpeedMeterOverlay {
     }
 
     /** uid → (应用名, 图标),懒解析 + 缓存;失败回退 "UID x"。仅 bg 线程写。 */
-    private fun metaFor(app: Context, uid: Int): Pair<String, Drawable?> =
-        metaCache.getOrPut(uid) {
+    private fun metaFor(app: Context, uid: Int): Pair<String, Drawable?> {
+        if (metaCache.size > 256) {
+            metaCache.clear()
+        }
+        return metaCache.getOrPut(uid) {
             runCatching {
                 val pm = app.packageManager
                 val pkg = pm.getPackagesForUid(uid)?.firstOrNull()
@@ -668,6 +674,7 @@ object SpeedMeterOverlay {
                 }
             }.getOrElse { "UID $uid" to null }
         }
+    }
 
     private fun fmt(bps: Long): String {
         val f = bps.toDouble()

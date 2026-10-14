@@ -107,8 +107,12 @@ object NetworkRecoveryManager {
             SmartProxyVpnService.start(app)
         }.onFailure { e ->
             Log.e(TAG, "Failed to start SmartProxyVpnService during restore", e)
-            // 若拉起失败，重新等待
-            startRecovery(app)
+            // 若拉起失败，延迟重新等待，避免高频循环重试
+            mainHandler.postDelayed({
+                if (AppPrefs.vpnDesired(app) && !SmartProxyVpnService.isRunning.value) {
+                    startRecovery(app)
+                }
+            }, 3000L)
         }
     }
 
