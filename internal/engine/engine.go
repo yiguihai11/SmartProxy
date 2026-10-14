@@ -1015,6 +1015,11 @@ func (e *Engine) Stop() {
 			e.subscriptionMgr.Stop()
 			slog.Info("[Go-Engine] subscription manager stopped")
 		}
+		if e.adblockMgr != nil {
+			slog.Info("[Go-Engine] Stopping adblock manager...")
+			e.adblockMgr.Stop()
+			slog.Info("[Go-Engine] adblock manager stopped")
+		}
 		if e.adminServer != nil {
 			slog.Info("[Go-Engine] Stopping adminServer...")
 			e.adminServer.Stop()

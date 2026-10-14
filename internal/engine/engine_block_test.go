@@ -1,14 +1,17 @@
 package engine
 
 import (
+	"context"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"smartproxy/internal/config"
 
+	mdns "github.com/miekg/dns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -199,3 +202,107 @@ func TestEngine_HandleNetworkChange(t *testing.T) {
 	e := &Engine{}
 	e.HandleNetworkChange()
 }
+
+func TestEngine_Adblock_Stop_Lifecycle(t *testing.T) {
+	dir := t.TempDir()
+	aclPath := filepath.Join(dir, "acl.txt")
+	require.NoError(t, os.WriteFile(aclPath, []byte("allow port 80\n"), 0o644))
+	chnPath := filepath.Join(dir, "chnroute.txt")
+	require.NoError(t, os.WriteFile(chnPath, []byte("1.0.1.0/24\n"), 0o644))
+
+	cfg := config.DefaultConfig()
+	cfg.Routing.ACLFile = aclPath
+	cfg.Routing.ChnrouteFile = chnPath
+	cfg.DNS.Adblock.Enabled = true
+	cfg.DNS.Adblock.CacheFile = "adblock_cache.txt"
+
+	e, err := New(cfg, dir)
+	require.NoError(t, err)
+	require.NotNil(t, e.adblockMgr)
+
+	// Engine.Stop() must cleanly stop adblockMgr without deadlock or goroutine leak
+	e.Stop()
+}
+
+func TestEngine_ACL_Adblock_Interaction(t *testing.T) {
+	dir := t.TempDir()
+	aclContent := "block domain acl-blocked.com\nallow domain acl-allowed-but-ad-blocked.com\n"
+	aclPath := filepath.Join(dir, "acl.txt")
+	require.NoError(t, os.WriteFile(aclPath, []byte(aclContent), 0o644))
+
+	chnPath := filepath.Join(dir, "chnroute.txt")
+	require.NoError(t, os.WriteFile(chnPath, []byte("1.0.1.0/24\n"), 0o644))
+
+	cacheContent := "||acl-allowed-but-ad-blocked.com^\n||ad-only-blocked.com^\n"
+	cachePath := filepath.Join(dir, "adblock_cache.txt")
+	require.NoError(t, os.WriteFile(cachePath, []byte(cacheContent), 0o644))
+
+	cfg := config.DefaultConfig()
+	cfg.Routing.ACLFile = aclPath
+	cfg.Routing.ChnrouteFile = chnPath
+	cfg.DNS.Enabled = true
+	cfg.DNS.StaticRecords = []config.StaticRecord{
+		{Host: "ad-override.com", IP: []string{"192.168.1.100"}},
+	}
+	cfg.DNS.Adblock.Enabled = true
+	cfg.DNS.Adblock.CacheFile = cachePath
+
+	e, err := New(cfg, dir)
+	require.NoError(t, err)
+	defer e.Stop()
+
+	// Wait for adblock manager startup to load disk cache
+	for i := 0; i < 20; i++ {
+		st := e.adblockMgr.Status()
+		if st.CacheCount >= 2 {
+			break
+		}
+		// give startup goroutine time to parse cache
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	query := func(domain string) (isBlocked bool, ips []string) {
+		m := new(mdns.Msg)
+		m.SetQuestion(mdns.Fqdn(domain), mdns.TypeA)
+		wire, err := m.Pack()
+		require.NoError(t, err)
+
+		respWire := e.DNSHandler.HandleDNS(context.Background(), wire, "1.1.1.1", 53, e.RuleEng)
+		if respWire == nil {
+			return false, nil
+		}
+		resp := new(mdns.Msg)
+		require.NoError(t, resp.Unpack(respWire))
+		for _, ans := range resp.Answer {
+			if a, ok := ans.(*mdns.A); ok {
+				ip := a.A.String()
+				ips = append(ips, ip)
+				if ip == "0.0.0.0" {
+					isBlocked = true
+				}
+			}
+		}
+		return isBlocked, ips
+	}
+
+	// 1. static_records takes highest precedence over both ACL and AdBlock
+	blocked, ips := query("ad-override.com")
+	assert.False(t, blocked)
+	assert.Contains(t, ips, "192.168.1.100")
+
+	// 2. ACL block takes precedence before AdBlock
+	blocked, ips = query("acl-blocked.com")
+	assert.True(t, blocked)
+	assert.Contains(t, ips, "0.0.0.0")
+
+	// 3. ACL allow domain does NOT exempt AdBlock (DevPlan §0.2 constraint 3)
+	blocked, ips = query("acl-allowed-but-ad-blocked.com")
+	assert.True(t, blocked, "ACL allow domain must NOT exempt adblock filtering")
+	assert.Contains(t, ips, "0.0.0.0")
+
+	// 4. Adblock-only rule blocks as expected
+	blocked, ips = query("ad-only-blocked.com")
+	assert.True(t, blocked)
+	assert.Contains(t, ips, "0.0.0.0")
+}
+
