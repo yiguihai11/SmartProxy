@@ -42,8 +42,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    env:
-      GODEBUG: http2client=0
 
     steps:
       - name: Checkout
@@ -182,14 +180,7 @@ jobs:
         run: cp -f acl.txt android/app/src/main/assets/acl.txt
 
       - name: Build Go engine AAR
-        run: |
-          set -euxo pipefail
-          export PATH="$PATH:$(go env GOPATH)/bin"
-          go mod download
-          gomobile init
-          make android
-          mkdir -p android/app/libs
-          cp build/smartproxy.aar android/app/libs/smartproxy.aar
+        run: ./scripts/build-android-aar.sh
 
       # 固定签名 keystore 随仓库走(android/ci-release.keystore,openssl 产 PKCS12,
       # 密码/别名都是公开的 debug 惯例值)。个人自分发、不上架,要的就是「所有构建同一把
