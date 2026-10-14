@@ -38,6 +38,8 @@ type SourceState struct {
 	UseProxy bool `json:"use_proxy"`
 	ActiveRules int `json:"active_rules"`
 	IgnoredRules int `json:"ignored_rules"`
+	Hits uint64 `json:"hits"`
+	Refreshing bool `json:"refreshing"`
 	LastUpdated time.Time `json:"last_updated,omitempty"`
 	LastError string `json:"last_error,omitempty"`
 }
@@ -50,6 +52,11 @@ type diskCache struct {
 
 type Manager struct {
 	mu sync.Mutex
+	refreshAllMu sync.Mutex
+	refreshLocks sync.Map
+	hits map[string]uint64
+	refreshing map[string]bool
+	refreshingAll bool
 	dir string
 	subs []Subscription
 	client        *http.Client
@@ -65,7 +72,7 @@ type Manager struct {
 func NewManager(dir string, subs []Subscription, upstreamManagers ...*upstream.Manager) *Manager {
 	cp := append([]Subscription(nil), subs...)
 	m := &Manager{
-		dir: dir, subs: cp,
+		dir: dir, subs: cp, hits: make(map[string]uint64), refreshing: make(map[string]bool),
 		client: &http.Client{Timeout: 20 * time.Second},
 		stop: make(chan struct{}),
 	}
@@ -103,7 +110,12 @@ func (m *Manager) Configure(subs []Subscription) {
 	go m.refreshAll()
 }
 
-func (m *Manager) RefreshAll() { go m.refreshAll() }
+func (m *Manager) RefreshAll() {
+	m.mu.Lock()
+	m.refreshingAll = true
+	m.mu.Unlock()
+	go m.refreshAll()
+}
 
 func (m *Manager) Start() {
 	m.startOnce.Do(func() {
@@ -126,12 +138,32 @@ func (m *Manager) Enabled() bool { return m.enabled.Load() }
 func (m *Manager) Blocked(domain string) bool {
 	if !m.enabled.Load() { return false }
 	s := m.active.Load()
-	return s != nil && s.Blocked(domain)
+	blocked, sourceURL := s.BlockedBy(domain)
+	if blocked && sourceURL != "" {
+		m.mu.Lock()
+		m.hits[sourceURL]++
+		m.mu.Unlock()
+	}
+	return blocked
 }
 
 func (m *Manager) Status() []SourceState {
-	m.mu.Lock(); defer m.mu.Unlock()
-	out := make([]SourceState, len(m.states)); copy(out, m.states)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]SourceState, 0, len(m.subs))
+	for _, sub := range m.subs {
+		state := SourceState{Name: sub.Name, URL: sub.URL, Enabled: sub.Enabled, UseProxy: sub.UsesProxy(), Hits: m.hits[sub.URL]}
+		for _, existing := range m.states {
+			if existing.URL == sub.URL {
+				state = existing
+				state.Name, state.URL, state.Enabled, state.UseProxy = sub.Name, sub.URL, sub.Enabled, sub.UsesProxy()
+				state.Hits = m.hits[sub.URL]
+				break
+			}
+		}
+		state.Refreshing = m.refreshing[sub.URL] || (m.refreshingAll && sub.Enabled)
+		out = append(out, state)
+	}
 	return out
 }
 
@@ -149,9 +181,13 @@ func (m *Manager) Refresh(ctx context.Context, name string) error {
 }
 
 func (m *Manager) refreshAll() {
+	m.refreshAllMu.Lock()
+	defer m.refreshAllMu.Unlock()
 	m.mu.Lock()
+	m.refreshingAll = true
 	subs := append([]Subscription(nil), m.subs...)
 	m.mu.Unlock()
+	defer func() { m.mu.Lock(); m.refreshingAll = false; m.mu.Unlock() }()
 	for _, sub := range subs {
 		if !sub.Enabled { continue }
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
@@ -169,6 +205,14 @@ func (m *Manager) cachePath(sub Subscription) string {
 }
 
 func (m *Manager) refreshOne(ctx context.Context, sub Subscription) error {
+	lockValue, _ := m.refreshLocks.LoadOrStore(sub.URL, &sync.Mutex{})
+	refreshLock := lockValue.(*sync.Mutex)
+	refreshLock.Lock()
+	defer refreshLock.Unlock()
+	m.mu.Lock()
+	m.refreshing[sub.URL] = true
+	m.mu.Unlock()
+	defer func() { m.mu.Lock(); m.refreshing[sub.URL] = false; m.mu.Unlock() }()
 	path := m.cachePath(sub)
 	var cached diskCache
 	if b, err := os.ReadFile(path); err == nil {
@@ -250,7 +294,7 @@ func (m *Manager) rebuild() {
 		if path == "" { continue }
 		b, err := os.ReadFile(path); if err != nil { continue }
 		var c diskCache; if json.Unmarshal(b, &c) != nil { continue }
-		rules, _, err := Parse(c.Body); if err == nil { all = append(all, rules...) }
+		rules, _, err := Parse(c.Body); if err == nil { for i := range rules { rules[i].SourceURL = sub.URL }; all = append(all, rules...) }
 	}
 	m.active.Store(NewSet(all))
 }
@@ -273,8 +317,12 @@ func (m *Manager) RemoveSubscription(name string) bool {
 	for i, s := range m.subs { if s.Name == name || s.URL == name { idx = i; break } }
 	if idx < 0 { m.mu.Unlock(); return false }
 	path := m.cachePath(m.subs[idx])
+	removed := m.subs[idx]
 	m.subs = append(m.subs[:idx], m.subs[idx+1:]...)
-	m.states = append(m.states[:0], m.states...)
+	filteredStates := m.states[:0]
+	for _, state := range m.states { if state.Name != removed.Name && state.URL != removed.URL { filteredStates = append(filteredStates, state) } }
+	m.states = filteredStates
+	delete(m.hits, removed.URL)
 	m.mu.Unlock()
 	if path != "" { _ = os.Remove(path) }
 	m.rebuild()

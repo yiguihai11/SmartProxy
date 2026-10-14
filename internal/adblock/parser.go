@@ -12,7 +12,8 @@ const maxRuleLines = 500000
 
 type Rule struct {
 	Domain string
-	Allow  bool
+	Allow bool
+	SourceURL string
 }
 
 type ParseStats struct {

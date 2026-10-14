@@ -58,3 +58,13 @@ func TestProxyFetchRequiresUpstreamManager(t *testing.T) {
 		t.Fatal("failed proxy fetch must not activate rules")
 	}
 }
+
+func TestManagerCountsBlockedQueriesBySubscription(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("||ads.example^\n")) }))
+	defer server.Close()
+	m := NewManager(t.TempDir(), []Subscription{{Name:"test", URL:server.URL, Enabled:true, UseProxy:boolPtr(false)}})
+	if err := m.Refresh(context.Background(), "test"); err != nil { t.Fatal(err) }
+	for i:=0;i<3;i++ { if !m.Blocked("cdn.ads.example") { t.Fatal("expected blocked") } }
+	status:=m.Status()
+	if len(status)!=1 || status[0].Hits!=3 { t.Fatalf("expected 3 hits, got %+v",status) }
+}
