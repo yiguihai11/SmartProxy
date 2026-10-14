@@ -4226,17 +4226,23 @@ function renderAdblock(){
   var enBox = document.getElementById('adblock-enabled');
   if(enBox) enBox.checked = !!d.enabled;
   var sum = document.getElementById('adblock-summary');
-  if(sum) sum.textContent = (d.enabled ? 'Filtering enabled' : 'Filtering disabled');
+  if(sum) sum.textContent = (d.enabled ? t('Filtering enabled') : t('Filtering disabled'));
   var cacheInfo = document.getElementById('adblock-cache-info');
   if(cacheInfo){
-    cacheInfo.textContent = 'Cached rules: ' + (d.cache_count || 0) + (d.cache_mtime ? (' · Last modified: ' + ts2t(d.cache_mtime)) : '');
+    var cCount = d.cache_count || 0;
+    var cTime = d.cache_mtime ? ts2t(d.cache_mtime) : '';
+    if(cTime){
+      cacheInfo.textContent = tf('Cached rules: {0} · Last modified: {1}', [cCount, cTime]);
+    } else {
+      cacheInfo.textContent = tf('Cached rules: {0}', [cCount]);
+    }
   }
 
   // 1. Lists tab
   var listEl = document.getElementById('adblock-list');
   var items = d.items || [];
   if(!items.length){
-    listEl.innerHTML = '<div class="empty-state">No subscriptions configured. Add a source above.</div>';
+    listEl.innerHTML = '<div class="empty-state">' + t('No subscriptions configured. Add a source above.') + '</div>';
   } else {
     var rows = items.map(function(item){
       var skipDetail = '';
@@ -4246,29 +4252,29 @@ function renderAdblock(){
       return '<tr>' +
         '<td><b>' + esc(item.name) + '</b></td>' +
         '<td style="max-width:260px;overflow-wrap:anywhere"><a href="javascript:void(0)" onclick="openUrlActionCard(this.dataset.url)" data-url="' + escAttr(item.url) + '" style="color:var(--primary);text-decoration:none;cursor:pointer;word-break:break-all">' + esc(item.url) + '</a></td>' +
-        '<td>' + (item.enabled ? 'On' : 'Off') + '</td>' +
-        '<td>' + (item.use_proxy !== false ? 'Proxy' : 'Direct') + '</td>' +
+        '<td>' + t(item.enabled ? 'On' : 'Off') + '</td>' +
+        '<td>' + t(item.use_proxy !== false ? 'Proxy' : 'Direct') + '</td>' +
         '<td>' + Number(item.kept || 0) + '</td>' +
         '<td title="' + esc(skipDetail) + '">' + Number(item.skipped || 0) + '</td>' +
         '<td style="color:var(--danger)">' + esc(item.last_error || '') + '</td>' +
-        '<td><button class="btn btn-sm" title="Refresh" data-name="' + esc(item.name) + '" onclick="refreshAdblock(this.dataset.name)">↻</button> ' +
-        '<button class="btn btn-sm danger" data-name="' + esc(item.name) + '" onclick="deleteAdblockSub(this.dataset.name)">Delete</button></td>' +
+        '<td><button class="btn btn-sm" title="' + t('Refresh') + '" data-name="' + esc(item.name) + '" onclick="refreshAdblock(this.dataset.name)">↻</button> ' +
+        '<button class="btn btn-sm danger" data-name="' + esc(item.name) + '" onclick="deleteAdblockSub(this.dataset.name)">' + t('Delete') + '</button></td>' +
         '</tr>';
     }).join('');
-    listEl.innerHTML = '<table><thead><tr><th>Name</th><th>URL</th><th>Enabled</th><th>Fetch</th><th>Active rules</th><th>Ignored</th><th>Last error</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    listEl.innerHTML = '<table><thead><tr><th>' + t('Name') + '</th><th>' + t('URL') + '</th><th>' + t('Enabled') + '</th><th>' + t('Fetch') + '</th><th>' + t('Active rules') + '</th><th>' + t('Ignored') + '</th><th>' + t('Last error') + '</th><th>' + t('Actions') + '</th></tr></thead><tbody>' + rows + '</tbody></table>';
   }
 
   // 2. Whitelist tab
   var wlEl = document.getElementById('adblock-wl-list');
   var wl = d.whitelist || [];
   if(!wl.length){
-    wlEl.innerHTML = '<div class="empty-state">No whitelisted domains.</div>';
+    wlEl.innerHTML = '<div class="empty-state">' + t('No whitelisted domains.') + '</div>';
   } else {
     var wlRows = wl.map(function(domain){
       return '<tr><td><code>' + esc(domain) + '</code></td>' +
-        '<td><button class="btn btn-sm danger" data-domain="' + esc(domain) + '" onclick="removeAdblockWhitelist(this.dataset.domain)">Delete</button></td></tr>';
+        '<td><button class="btn btn-sm danger" data-domain="' + esc(domain) + '" onclick="removeAdblockWhitelist(this.dataset.domain)">' + t('Delete') + '</button></td></tr>';
     }).join('');
-    wlEl.innerHTML = '<table><thead><tr><th>Domain</th><th>Actions</th></tr></thead><tbody>' + wlRows + '</tbody></table>';
+    wlEl.innerHTML = '<table><thead><tr><th>' + t('Domain') + '</th><th>' + t('Actions') + '</th></tr></thead><tbody>' + wlRows + '</tbody></table>';
   }
 
   // 3. Stats tab
@@ -4280,12 +4286,12 @@ function renderAdblock(){
   var topEl = document.getElementById('adblock-top-list');
   var tops = d.top_domains || [];
   if(!tops.length){
-    topEl.innerHTML = '<div class="empty-state">No blocked queries recorded yet.</div>';
+    topEl.innerHTML = '<div class="empty-state">' + t('No blocked queries recorded yet.') + '</div>';
   } else {
     var topRows = tops.map(function(item, idx){
       return '<tr><td>' + (idx + 1) + '</td><td><code>' + esc(item.domain) + '</code></td><td>' + Number(item.hits || 0).toLocaleString() + '</td></tr>';
     }).join('');
-    topEl.innerHTML = '<table><thead><tr><th>Rank</th><th>Domain</th><th>Hits</th></tr></thead><tbody>' + topRows + '</tbody></table>';
+    topEl.innerHTML = '<table><thead><tr><th>' + t('Rank') + '</th><th>' + t('Domain') + '</th><th>' + t('Hits') + '</th></tr></thead><tbody>' + topRows + '</tbody></table>';
   }
 }
 
@@ -4299,7 +4305,7 @@ async function toggleAdblockGlobal(enabled){
     if(!r.ok) throw new Error(await r.text());
     await loadAdblock();
   }catch(e){
-    alert('Toggle failed: ' + e.message);
+    alert(tf('Toggle failed: {0}', [e.message]));
     document.getElementById('adblock-enabled').checked = !enabled;
   }
 }
@@ -4308,7 +4314,7 @@ async function saveAdblockSub(){
   var name = document.getElementById('adblock-name').value.trim();
   var url = document.getElementById('adblock-url').value.trim();
   if(!name || !url){
-    alert('Name and URL are required');
+    alert(t('Name and URL are required'));
     return;
   }
   try{
@@ -4329,18 +4335,18 @@ async function saveAdblockSub(){
     document.getElementById('adblock-sub-use-proxy').checked = true;
     await loadAdblock();
   }catch(e){
-    alert('Save failed: ' + e.message);
+    alert(tf('Save failed: {0}', [e.message]));
   }
 }
 
 async function deleteAdblockSub(name){
-  if(!confirm('Delete subscription ' + name + '?')) return;
+  if(!confirm(tf('Delete subscription {0}?', [name]))) return;
   try{
     var r = await fetch('/adblock/delete?name=' + encodeURIComponent(name), {method: 'POST'});
     if(!r.ok) throw new Error(await r.text());
     await loadAdblock();
   }catch(e){
-    alert('Delete failed: ' + e.message);
+    alert(tf('Delete failed: {0}', [e.message]));
   }
 }
 
@@ -4354,7 +4360,7 @@ async function refreshAdblock(name){
     if(!r.ok) throw new Error(await r.text());
     await loadAdblock();
   }catch(e){
-    alert('Refresh failed: ' + e.message);
+    alert(tf('Refresh failed: {0}', [e.message]));
   }
 }
 
@@ -4362,7 +4368,7 @@ async function addAdblockWhitelist(){
   var input = document.getElementById('adblock-wl-domain');
   var domain = input.value.trim();
   if(!domain){
-    alert('Domain is required');
+    alert(t('Domain is required'));
     return;
   }
   try{
@@ -4375,12 +4381,12 @@ async function addAdblockWhitelist(){
     input.value = '';
     await loadAdblock();
   }catch(e){
-    alert('Add whitelist failed: ' + e.message);
+    alert(tf('Add whitelist failed: {0}', [e.message]));
   }
 }
 
 async function removeAdblockWhitelist(domain){
-  if(!confirm('Remove ' + domain + ' from whitelist?')) return;
+  if(!confirm(tf('Remove {0} from whitelist?', [domain]))) return;
   try{
     var r = await fetch('/adblock/whitelist', {
       method: 'POST',
@@ -4390,7 +4396,7 @@ async function removeAdblockWhitelist(domain){
     if(!r.ok) throw new Error(await r.text());
     await loadAdblock();
   }catch(e){
-    alert('Remove whitelist failed: ' + e.message);
+    alert(tf('Remove whitelist failed: {0}', [e.message]));
   }
 }
 async function loadCache(){
