@@ -1246,9 +1246,9 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
                 for (addr in nif.inetAddresses) {
                     if (addr.isLoopbackAddress) continue
                     if (addr is Inet4Address && addr.isSiteLocalAddress) {
-                        ips.add(addr.hostAddress)
+                        addr.hostAddress?.let { ips.add(it) }
                     } else if (addr is Inet6Address && !addr.isLinkLocalAddress) {
-                        ips.add(addr.hostAddress)
+                        addr.hostAddress?.let { ips.add(it) }
                     }
                 }
             }
