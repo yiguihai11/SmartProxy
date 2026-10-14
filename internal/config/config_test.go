@@ -1044,3 +1044,11 @@ func TestValidate_TUNStack(t *testing.T) {
 		t.Error("expected invalid stack to fail validation")
 	}
 }
+
+func TestWatcher_DoubleStopNoPanic(t *testing.T) {
+	w := NewWatcher()
+	w.Start()
+	w.Stop()
+	// Second Stop call must not panic
+	w.Stop()
+}

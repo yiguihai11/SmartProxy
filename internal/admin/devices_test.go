@@ -585,3 +585,20 @@ func TestDevices_VirtualGatewayProtection(t *testing.T) {
 		}
 	}
 }
+
+func TestDeviceManager_LifetimeTrafficBounded(t *testing.T) {
+	dm := newDeviceManager(t.TempDir())
+	for i := 0; i < 600; i++ {
+		key := "192.168.1." + string(rune(i))
+		dm.mu.Lock()
+		dm.updateLifetimeLocked(key, 100, 200)
+		dm.mu.Unlock()
+	}
+
+	dm.mu.Lock()
+	count := len(dm.lifetimeTraffic)
+	dm.mu.Unlock()
+	if count > 512 {
+		t.Fatalf("expected lifetimeTraffic map to be bounded <= 512, got %d", count)
+	}
+}

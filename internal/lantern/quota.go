@@ -110,7 +110,7 @@ func CheckAccountQuota(ctx context.Context, client *http.Client, acc *Account, m
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return QuotaResult{}, fmt.Errorf("failed to read datacap response: %w", err)
 	}

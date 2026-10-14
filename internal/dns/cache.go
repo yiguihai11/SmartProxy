@@ -29,6 +29,7 @@ type Cache struct {
 	defaultTTL time.Duration
 
 	stopClean chan struct{}
+	closeOnce sync.Once
 	cleanWg   sync.WaitGroup
 }
 
@@ -73,7 +74,9 @@ func (c *Cache) deleteEntry(key cacheKey, entry *cacheEntry) {
 }
 
 func (c *Cache) Close() {
-	close(c.stopClean)
+	c.closeOnce.Do(func() {
+		close(c.stopClean)
+	})
 	c.cleanWg.Wait()
 }
 

@@ -56,8 +56,15 @@ func TestAndFilterNodes(ctx context.Context, nodes []json.RawMessage, testURL st
 	sem := make(chan struct{}, 10) // concurrent probing semaphore
 
 	for i, tag := range tags {
+		select {
+		case <-ctx.Done():
+			break
+		case sem <- struct{}{}:
+		}
+		if ctx.Err() != nil {
+			break
+		}
 		wg.Add(1)
-		sem <- struct{}{}
 		go func(idx int, t string) {
 			defer wg.Done()
 			defer func() { <-sem }()

@@ -12,10 +12,11 @@ import (
 )
 
 type Watcher struct {
-	mu     sync.Mutex
-	files  map[string]string
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	mu       sync.Mutex
+	files    map[string]string
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	wg       sync.WaitGroup
 	// addDirCh carries directory paths that must be registered with the kernel
 	// fsnotify watch after Start (used by ReplaceFile when a reloaded config points
 	// at a file in a new directory). Buffered so the send from a reload callback
@@ -80,7 +81,9 @@ func (w *Watcher) Start() {
 }
 
 func (w *Watcher) Stop() {
-	close(w.stopCh)
+	w.stopOnce.Do(func() {
+		close(w.stopCh)
+	})
 	w.wg.Wait()
 }
 

@@ -47,3 +47,10 @@ func TestCacheUpdateConfigGrow(t *testing.T) {
 		t.Fatalf("after Set within new cap len = %d, want 3", c.Len())
 	}
 }
+
+func TestCache_DoubleCloseNoPanic(t *testing.T) {
+	c := NewCache(5, time.Minute)
+	c.Close()
+	// Second close must not panic
+	c.Close()
+}

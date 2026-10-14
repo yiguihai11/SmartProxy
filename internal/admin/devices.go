@@ -284,6 +284,28 @@ func (dm *deviceManager) calculateRates(key string, curUp, curDown int64) (upBps
 	return upBps, downBps
 }
 
+func (dm *deviceManager) updateLifetimeLocked(rateKey string, up, down int64) (int64, int64) {
+	life := dm.lifetimeTraffic[rateKey]
+	if life.up > up {
+		up = life.up
+	}
+	if life.down > down {
+		down = life.down
+	}
+	if len(dm.lifetimeTraffic) > 512 {
+		for k := range dm.lifetimeTraffic {
+			if _, active := dm.lastSamples[k]; !active {
+				delete(dm.lifetimeTraffic, k)
+				if len(dm.lifetimeTraffic) <= 256 {
+					break
+				}
+			}
+		}
+	}
+	dm.lifetimeTraffic[rateKey] = lifetimeTraffic{up: up, down: down}
+	return up, down
+}
+
 // readSystemARP parses /proc/net/arp to discover local neighbor IP <-> MAC mappings.
 func readSystemARP() map[string]string {
 	arpMap := make(map[string]string)
@@ -597,14 +619,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 					// 保持累计流量单调递增，连接关闭后累计字节不回退
 					if rateKey != "" {
 						dm.mu.Lock()
-						life := dm.lifetimeTraffic[rateKey]
-						if life.up > up {
-							up = life.up
-						}
-						if life.down > down {
-							down = life.down
-						}
-						dm.lifetimeTraffic[rateKey] = lifetimeTraffic{up: up, down: down}
+						up, down = dm.updateLifetimeLocked(rateKey, up, down)
 						dm.mu.Unlock()
 					}
 
@@ -742,14 +757,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 
 			// 保持累计流量单调递增，连接关闭后累计字节不回退
 			dm.mu.Lock()
-			life := dm.lifetimeTraffic[rateKey]
-			if life.up > up {
-				up = life.up
-			}
-			if life.down > down {
-				down = life.down
-			}
-			dm.lifetimeTraffic[rateKey] = lifetimeTraffic{up: up, down: down}
+			up, down = dm.updateLifetimeLocked(rateKey, up, down)
 			dm.mu.Unlock()
 
 			isBlocked := dm.isBlocked(grp.primaryIP, grp.mac)

@@ -80,7 +80,7 @@ func FetchStandardOutbounds(ctx context.Context, client *http.Client, acc *Accou
 		return nil, etag, nil // 304 Not Modified
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to read config response: %w", err)
 	}

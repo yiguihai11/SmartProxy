@@ -43,7 +43,7 @@ func AnonymousRegister(ctx context.Context, client *http.Client) (Account, error
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return Account{}, fmt.Errorf("failed to read register response: %w", err)
 	}

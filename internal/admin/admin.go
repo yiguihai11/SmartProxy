@@ -79,6 +79,7 @@ type Server struct {
 	stats      cachedStats
 
 	stopCh    chan struct{}
+	stopOnce  sync.Once
 	listener  net.Listener
 	tcpLn     net.Listener
 	tcpHost   string
@@ -539,28 +540,30 @@ func (s *Server) isKnownPanelHost(h string) bool {
 }
 
 func (s *Server) Stop() {
-	close(s.stopCh)
-	if s.h3Server != nil {
-		s.h3Server.Close()
-	}
-	if s.udpLn != nil {
-		s.udpLn.Close()
-	}
-	if s.server != nil {
-		s.server.Close()
-	}
-	if s.listener != nil {
-		s.listener.Close()
-	}
-	if s.tcpServer != nil {
-		s.tcpServer.Close()
-	}
-	if s.tcpLn != nil {
-		s.tcpLn.Close()
-	}
-	if s.sockPath != "" {
-		os.Remove(s.sockPath)
-	}
+	s.stopOnce.Do(func() {
+		close(s.stopCh)
+		if s.h3Server != nil {
+			s.h3Server.Close()
+		}
+		if s.udpLn != nil {
+			s.udpLn.Close()
+		}
+		if s.server != nil {
+			s.server.Close()
+		}
+		if s.listener != nil {
+			s.listener.Close()
+		}
+		if s.tcpServer != nil {
+			s.tcpServer.Close()
+		}
+		if s.tcpLn != nil {
+			s.tcpLn.Close()
+		}
+		if s.sockPath != "" {
+			os.Remove(s.sockPath)
+		}
+	})
 }
 func (s *Server) setupMux() http.Handler {
 	mux := http.NewServeMux()
@@ -2164,7 +2167,7 @@ func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 		w.Write(data)
 
 	case http.MethodPut:
-		body, err := io.ReadAll(r.Body)
+		body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
 		if err != nil {
 			http.Error(w, "read error", http.StatusBadRequest)
 			return
@@ -2321,7 +2324,7 @@ func (s *Server) handleChnroute(w http.ResponseWriter, r *http.Request) {
 		w.Write(data)
 
 	case http.MethodPut:
-		body, err := io.ReadAll(r.Body)
+		body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
 		if err != nil {
 			http.Error(w, "read error", http.StatusBadRequest)
 			return
@@ -2392,6 +2395,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			flusher.Flush()
 		case <-r.Context().Done():
+			timer.Stop()
+			return
+		case <-s.stopCh:
 			timer.Stop()
 			return
 		}
@@ -2566,7 +2572,7 @@ func (s *Server) handleAPIIPConline(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	utf8Reader := simplifiedchinese.GBK.NewDecoder().Reader(resp.Body)
+	utf8Reader := simplifiedchinese.GBK.NewDecoder().Reader(io.LimitReader(resp.Body, 1<<20))
 	body, err := io.ReadAll(utf8Reader)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

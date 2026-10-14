@@ -2165,3 +2165,10 @@ func TestAdmin_AdblockAPI(t *testing.T) {
 	}
 	resp.Body.Close()
 }
+
+func TestServer_DoubleStopNoPanic(t *testing.T) {
+	s := &Server{stopCh: make(chan struct{})}
+	s.Stop()
+	// Second Stop call must not panic
+	s.Stop()
+}
