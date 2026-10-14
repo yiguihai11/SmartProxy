@@ -5224,7 +5224,7 @@ document.querySelectorAll('.nav-item:not(.section)').forEach(function(item){
     item.classList.add('active');
     var vi=document.getElementById('view-'+item.dataset.view);
     if(vi)vi.classList.add('active');
-    var ld={dashboard:loadDashboard,traffic:loadTraffic,health:loadHealth,devices:loadDevices,blacklist:loadBlacklist,cache:loadDNS,logs:loadLogs,config:loadConfig};
+    var ld={dashboard:loadDashboard,traffic:loadTraffic,health:loadHealth,devices:loadDevices,blacklist:loadBlacklist,cache:loadDNS,adblock:loadAdblock,logs:loadLogs,config:loadConfig};
     if(ld[item.dataset.view])ld[item.dataset.view]();
   });
 });
@@ -6003,6 +6003,7 @@ document.addEventListener('visibilitychange',function(){
     else if(v==='blacklist'&&blAuto)refreshBlacklist();
     else if(v==='cache'&&cacheAuto){if(dnsTab==='static')loadStatic();else refreshCache()}
     else if(v==='logs'&&logsAuto)refreshLogs();
+    else if(v==='adblock')loadAdblock();
   }
 });
 </script>
