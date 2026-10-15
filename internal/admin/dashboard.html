@@ -182,6 +182,8 @@ tr:last-child td{border-bottom:none}
 .proxy-group-section.collapsed .proxy-group-cards{display:none}
 .proxy-group-badge{display:inline-flex;align-items:center;font-size:.72rem;font-weight:500;padding:2px 8px;border-radius:12px;background:var(--surface2);color:var(--text2);border:1px solid var(--border)}
 .proxy-group-badge.online{color:var(--green);border-color:rgba(60,207,142,.3);background:var(--green-bg)}
+.badge{display:inline-flex;align-items:center;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:600;background:var(--surface2);color:var(--text2);border:1px solid var(--border);line-height:1.2;letter-spacing:.2px}
+.badge.badge-inactive{background:var(--red-bg);color:var(--red);border-color:rgba(240,96,96,.35)}
 .proxy-group-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .proxy-group-actions .btn{padding:3px 8px;font-size:.75rem}
 .proxy-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(min(100%,340px),1fr))}
@@ -911,7 +913,7 @@ function navTo(n){
   if(ni)ni.classList.add('active');
   var vi=document.getElementById('view-'+n);
   if(vi)vi.classList.add('active');
-  var ld={dashboard:loadDashboard,traffic:loadTraffic,health:loadHealth,devices:loadDevices,blacklist:loadBlacklist,cache:loadDNS,adblock:loadAdblock,config:loadConfig};
+  var ld={dashboard:loadDashboard,traffic:loadTraffic,health:loadHealth,devices:loadDevices,blacklist:loadBlacklist,cache:loadDNS,adblock:loadAdblock,logs:loadLogs,config:loadConfig};
   if(ld[n])ld[n]();
 }
 function ldash(d){
@@ -924,19 +926,40 @@ function ldash(d){
   var gcPause=s.gc_pause||'0s',gcCount=s.gc_count!=null?s.gc_count:0;
   var rEntries=r&&r.entries!=null?r.entries:0,rV4=r&&r.v4!=null?r.v4:0,rV6=r&&r.v6!=null?r.v6:0;
   var target=document.getElementById('dash-metric-cards')||document.getElementById('dash-cards');
-  target.innerHTML=
-    '<div class="card"><div class="card-label">Uptime</div><div class="card-value accent">'+s.uptime+'</div></div>'+
-    '<div class="card"><div class="card-label">Goroutines</div><div class="card-value">'+s.goroutines+'</div></div>'+
-    '<div class="card"><div class="card-label">Memory</div><div class="card-value green">'+(s.alloc_mb||'0')+' MB</div></div>'+
-    '<div class="card"><div class="card-label">CPU</div><div style="display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0"><div class="card-value">'+((s.cpu_percent||0).toFixed(1))+'%</div><canvas id="cpu-mini" width="36" height="36" style="flex-shrink:0"></canvas></div></div>'+
-    '<div class="card"><div class="card-label">TCP</div><div class="card-value accent">'+(s.tcp_conns||0)+'</div></div>'+
-    '<div class="card"><div class="card-label">UDP</div><div class="card-value accent">'+(s.udp_sessions||0)+'</div></div>'+
-    '<div class="card card-link" onclick="navTo(\'health\')"><div class="card-label">Proxies</div><div class="card-value">'+pxCount+'</div></div>'+
-    '<div class="card card-link" onclick="navTo(\'blacklist\')"><div class="card-label">Blacklist</div><div class="card-value">'+blCount+'</div></div>'+
-    '<div class="card card-link" onclick="navTo(\'cache\')"><div class="card-label">DNS Cache</div><div class="card-value accent" id="cache-ov">'+ca+'</div></div>'+
-    '<div class="card"><div class="card-label">GC</div><div class="card-sub"><span><span style="color:var(--text2)">Pause</span> '+gcPause+'</span><span><span style="color:var(--text2)">Count</span> '+gcCount+'</span></div></div>'+
-    '<div class="card card-link card-wide" onclick="navTo(\'traffic\')"><div class="card-label">Total Traffic</div><div class="card-value green">'+fmtNum(tt)+'</div><div class="card-bar" style="margin-top:8px"><div class="card-bar-bg" style="height:3px;background:var(--border);border-radius:2px;overflow:hidden"><div class="card-bar-fill" style="height:100%;width:'+Math.min(100,tt>0?pp/tt*100:0)+'%;background:linear-gradient(90deg,var(--accent),#8b5cf6);transition:width .6s"></div></div></div><div class="card-sub" style="color:var(--text2)"><span>Proxy: '+fmtNum(pp)+'</span><span>Direct: '+fmtNum(tt-pp)+'</span></div></div>'+
-    '<div class="card card-link card-wide" onclick="navTo(\'config\');setTimeout(function(){showCfg(2)},100)"><div class="card-label">Route Table</div><div class="card-value accent">'+rEntries+'</div><div class="card-sub"><span style="color:var(--green)">IPv4: '+rV4+'</span><span style="color:var(--yellow)">IPv6: '+rV6+'</span></div></div>';
+  if(target){
+    var elUptime=document.getElementById('dash-v-uptime');
+    if(!elUptime){
+      target.innerHTML=
+        '<div class="card"><div class="card-label">Uptime</div><div class="card-value accent" id="dash-v-uptime">'+s.uptime+'</div></div>'+
+        '<div class="card"><div class="card-label">Goroutines</div><div class="card-value" id="dash-v-goroutines">'+s.goroutines+'</div></div>'+
+        '<div class="card"><div class="card-label">Memory</div><div class="card-value green" id="dash-v-mem">'+(s.alloc_mb||'0')+' MB</div></div>'+
+        '<div class="card"><div class="card-label">CPU</div><div style="display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0"><div class="card-value" id="dash-v-cpu">'+((s.cpu_percent||0).toFixed(1))+'%</div><canvas id="cpu-mini" width="36" height="36" style="flex-shrink:0"></canvas></div></div>'+
+        '<div class="card"><div class="card-label">TCP</div><div class="card-value accent" id="dash-v-tcp">'+(s.tcp_conns||0)+'</div></div>'+
+        '<div class="card"><div class="card-label">UDP</div><div class="card-value accent" id="dash-v-udp">'+(s.udp_sessions||0)+'</div></div>'+
+        '<div class="card card-link" onclick="navTo(\'health\')"><div class="card-label">Proxies</div><div class="card-value" id="dash-v-proxies">'+pxCount+'</div></div>'+
+        '<div class="card card-link" onclick="navTo(\'blacklist\')"><div class="card-label">Blacklist</div><div class="card-value" id="dash-v-bl">'+blCount+'</div></div>'+
+        '<div class="card card-link" onclick="navTo(\'cache\')"><div class="card-label">DNS Cache</div><div class="card-value accent" id="cache-ov">'+ca+'</div></div>'+
+        '<div class="card"><div class="card-label">GC</div><div class="card-sub" id="dash-v-gc"><span><span style="color:var(--text2)">Pause</span> '+gcPause+'</span><span><span style="color:var(--text2)">Count</span> '+gcCount+'</span></div></div>'+
+        '<div class="card card-link card-wide" onclick="navTo(\'traffic\')"><div class="card-label">Total Traffic</div><div class="card-value green" id="dash-v-traffic">'+fmtNum(tt)+'</div><div class="card-bar" style="margin-top:8px"><div class="card-bar-bg" style="height:3px;background:var(--border);border-radius:2px;overflow:hidden"><div class="card-bar-fill" id="dash-v-traffic-fill" style="height:100%;width:'+Math.min(100,tt>0?pp/tt*100:0)+'%;background:linear-gradient(90deg,var(--accent),#8b5cf6);transition:width .6s"></div></div></div><div class="card-sub" id="dash-v-traffic-sub" style="color:var(--text2)"><span>Proxy: '+fmtNum(pp)+'</span><span>Direct: '+fmtNum(tt-pp)+'</span></div></div>'+
+        '<div class="card card-link card-wide" onclick="navTo(\'config\');setTimeout(function(){showCfg(2)},100)"><div class="card-label">Route Table</div><div class="card-value accent" id="dash-v-route">'+rEntries+'</div><div class="card-sub" id="dash-v-route-sub"><span style="color:var(--green)">IPv4: '+rV4+'</span><span style="color:var(--yellow)">IPv6: '+rV6+'</span></div></div>';
+    }else{
+      elUptime.textContent=s.uptime;
+      var elGo=document.getElementById('dash-v-goroutines');if(elGo)elGo.textContent=s.goroutines;
+      var elMem=document.getElementById('dash-v-mem');if(elMem)elMem.textContent=(s.alloc_mb||'0')+' MB';
+      var elCpu=document.getElementById('dash-v-cpu');if(elCpu)elCpu.textContent=((s.cpu_percent||0).toFixed(1))+'%';
+      var elTcp=document.getElementById('dash-v-tcp');if(elTcp)elTcp.textContent=s.tcp_conns||0;
+      var elUdp=document.getElementById('dash-v-udp');if(elUdp)elUdp.textContent=s.udp_sessions||0;
+      var elPx=document.getElementById('dash-v-proxies');if(elPx)elPx.textContent=pxCount;
+      var elBl=document.getElementById('dash-v-bl');if(elBl)elBl.textContent=blCount;
+      var elCa=document.getElementById('cache-ov');if(elCa)elCa.textContent=ca;
+      var elGc=document.getElementById('dash-v-gc');if(elGc)elGc.innerHTML='<span><span style="color:var(--text2)">Pause</span> '+gcPause+'</span><span><span style="color:var(--text2)">Count</span> '+gcCount+'</span>';
+      var elTraf=document.getElementById('dash-v-traffic');if(elTraf)elTraf.textContent=fmtNum(tt);
+      var elFill=document.getElementById('dash-v-traffic-fill');if(elFill)elFill.style.width=Math.min(100,tt>0?pp/tt*100:0)+'%';
+      var elTsub=document.getElementById('dash-v-traffic-sub');if(elTsub)elTsub.innerHTML='<span>Proxy: '+fmtNum(pp)+'</span><span>Direct: '+fmtNum(tt-pp)+'</span>';
+      var elRt=document.getElementById('dash-v-route');if(elRt)elRt.textContent=rEntries;
+      var elRts=document.getElementById('dash-v-route-sub');if(elRts)elRts.innerHTML='<span style="color:var(--green)">IPv4: '+rV4+'</span><span style="color:var(--yellow)">IPv6: '+rV6+'</span>';
+    }
+  }
   var dc2=document.getElementById('dash-cards2');
   if(dc2){dc2.innerHTML='';dc2.style.display='none';}
   st('dash-time');
@@ -971,8 +994,14 @@ function drawTrafficChart(s){
 function drawCPUGauge(pct){
   var canvas=document.getElementById('cpu-mini');
   if(!canvas)return;
-  if(window.cpuGauge)window.cpuGauge.destroy();
   var color=pct<50?'#3ccf8e':pct<80?'#f5b34b':'#f06060';
+  if(window.cpuGauge&&window.cpuGauge.canvas===canvas){
+    window.cpuGauge.data.datasets[0].data=[Math.min(pct,100),Math.max(100-pct,0)];
+    window.cpuGauge.data.datasets[0].backgroundColor[0]=color;
+    window.cpuGauge.update('none');
+    return;
+  }
+  if(window.cpuGauge)window.cpuGauge.destroy();
   window.cpuGauge=new Chart(canvas.getContext('2d'),{
     type:'doughnut',
     data:{
@@ -990,13 +1019,20 @@ function drawCPUGauge(pct){
 }
 function ltraf(d){
   var s=d.stats;
-  document.getElementById('traffic-table').innerHTML=
-    '<table><tr><th>Direction</th><th>Up</th><th>Down</th><th>Total</th></tr>'+
-    '<tr><td>TCP Proxy</td><td>'+fmtNum(s.tcp_proxy_up)+'</td><td>'+fmtNum(s.tcp_proxy_down)+'</td><td>'+fmtNum(s.tcp_proxy_up+s.tcp_proxy_down)+'</td></tr>'+
-    '<tr><td>TCP Direct</td><td>'+fmtNum(s.tcp_direct_up)+'</td><td>'+fmtNum(s.tcp_direct_down)+'</td><td>'+fmtNum(s.tcp_direct_up+s.tcp_direct_down)+'</td></tr>'+
-    '<tr><td>UDP Proxy</td><td>'+fmtNum(s.udp_proxy_up)+'</td><td>'+fmtNum(s.udp_proxy_down)+'</td><td>'+fmtNum(s.udp_proxy_up+s.udp_proxy_down)+'</td></tr>'+
-    '<tr><td>UDP Direct</td><td>'+fmtNum(s.udp_direct_up)+'</td><td>'+fmtNum(s.udp_direct_down)+'</td><td>'+fmtNum(s.udp_direct_up+s.udp_direct_down)+'</td></tr>'+
-    '<tr style="border-top:2px solid var(--border)"><td><b>Total</b></td><td>'+fmtNum(s.tcp_proxy_up+s.tcp_direct_up+s.udp_proxy_up+s.udp_direct_up)+'</td><td>'+fmtNum(s.tcp_proxy_down+s.tcp_direct_down+s.udp_proxy_down+s.udp_direct_down)+'</td><td><b>'+fmtNum(s.tcp_proxy_up+s.tcp_proxy_down+s.tcp_direct_up+s.tcp_direct_down+s.udp_proxy_up+s.udp_proxy_down+s.udp_direct_up+s.udp_direct_down)+'</b></td></tr></table>';
+  var tableEl=document.getElementById('traffic-table');
+  if(tableEl){
+    var html=
+      '<table><tr><th>Direction</th><th>Up</th><th>Down</th><th>Total</th></tr>'+
+      '<tr><td>TCP Proxy</td><td>'+fmtNum(s.tcp_proxy_up)+'</td><td>'+fmtNum(s.tcp_proxy_down)+'</td><td>'+fmtNum(s.tcp_proxy_up+s.tcp_proxy_down)+'</td></tr>'+
+      '<tr><td>TCP Direct</td><td>'+fmtNum(s.tcp_direct_up)+'</td><td>'+fmtNum(s.tcp_direct_down)+'</td><td>'+fmtNum(s.tcp_direct_up+s.tcp_direct_down)+'</td></tr>'+
+      '<tr><td>UDP Proxy</td><td>'+fmtNum(s.udp_proxy_up)+'</td><td>'+fmtNum(s.udp_proxy_down)+'</td><td>'+fmtNum(s.udp_proxy_up+s.udp_proxy_down)+'</td></tr>'+
+      '<tr><td>UDP Direct</td><td>'+fmtNum(s.udp_direct_up)+'</td><td>'+fmtNum(s.udp_direct_down)+'</td><td>'+fmtNum(s.udp_direct_up+s.udp_direct_down)+'</td></tr>'+
+      '<tr style="border-top:2px solid var(--border)"><td><b>Total</b></td><td>'+fmtNum(s.tcp_proxy_up+s.tcp_direct_up+s.udp_proxy_up+s.udp_direct_up)+'</td><td>'+fmtNum(s.tcp_proxy_down+s.tcp_direct_down+s.udp_proxy_down+s.udp_direct_down)+'</td><td><b>'+fmtNum(s.tcp_proxy_up+s.tcp_proxy_down+s.tcp_direct_up+s.tcp_direct_down+s.udp_proxy_up+s.udp_proxy_down+s.udp_direct_up+s.udp_direct_down)+'</b></td></tr></table>';
+    if(tableEl._renderedHtml!==html){
+      tableEl.innerHTML=html;
+      tableEl._renderedHtml=html;
+    }
+  }
   drawTrafficChart(s);
   st('traffic-time');
 }
@@ -1830,7 +1866,10 @@ function lhealth(d){
       var g=groups[gid];
       ddHtml+='<div class="filter-option '+(proxyGroupFilter===gid?'selected':'')+'" data-value="'+gid+'" onclick="setProxyGroupFilter(\''+gid+'\')">'+escHtml(g.label)+' ('+g.items.length+')</div>';
     });
-    filterDd.innerHTML=ddHtml;
+    if(filterDd._renderedHtml!==ddHtml){
+      filterDd.innerHTML=ddHtml;
+      filterDd._renderedHtml=ddHtml;
+    }
   }
 
   var container=document.getElementById('proxy-cards');
@@ -2005,10 +2044,9 @@ async function loadDashboard(){
   try{
     var s=await jf('/stats'),r=await jf('/route');
     var h=healthD||await jf('/health').catch(function(){return null});
-    var bl=blD||await jf('/blacklist').catch(function(){return null});
+    var blTotal=(typeof window._lastBLTotal==='number'&&window._lastBLTotal>=0)?window._lastBLTotal:(Array.isArray(blD)?blD.length:0);
     var ca=0;
     try{var c=await jf('/cache');ca=c.entries;}catch(_){}
-    var blTotal=bl?((bl.ip_rules||[]).length+(bl.domain_rules||[]).length):0;
     var proxies=(h&&h.health&&h.health.proxies)?h.health.proxies:(h&&h.proxies?h.proxies:[]);
     ldash({
       stats:{
@@ -3088,7 +3126,10 @@ function renderSubscriptions(subs){
   });
 
   html+='</div></div>';
-  el.innerHTML=html;
+  if(el._renderedHtml!==html){
+    el.innerHTML=html;
+    el._renderedHtml=html;
+  }
 }
 function openSubscriptionDialog(name){
   var title=document.getElementById('sub-modal-title');
@@ -3674,26 +3715,40 @@ function applyFileSelection(path){
   }
 }
 var blD=[],blFilter='all',blPage=1,blPageSize=15,blSearch='',blSelected={},blAuto=true;
+var _blFetching=false,_blSearchTimer=null;
 function toggleBLAuto(){blAuto=!blAuto;var b=document.getElementById('bl-auto-btn');if(b){b.textContent=t(blAuto?'Auto':'Paused');b.classList.toggle('active-auto',blAuto)}}
 async function loadBlacklist(){
+  if(Array.isArray(blD)&&blD.length>0){
+    rbl(blFilter);
+    var now=Date.now();
+    if(window._lastBLFetchTime&&(now-window._lastBLFetchTime<15000)){
+      return;
+    }
+  }
+  if(_blFetching)return;
+  _blFetching=true;
   try{
     blD=await jf('/blacklist');
+    window._lastBLTotal=Array.isArray(blD)?blD.length:0;
+    window._lastBLFetchTime=Date.now();
     st('bl-time');
-    blPage=1;
-    blSearch='';
-    var sb=document.getElementById('bl-search');
-    if(sb)sb.value='';
     rbl(blFilter);
-  }catch(e){document.getElementById('bl-time').textContent='Error: '+e.message}
+  }catch(e){var el=document.getElementById('bl-time');if(el)el.textContent='Error: '+e.message}
+  finally{_blFetching=false}
 }
 async function refreshBlacklist(){
+  if(_blFetching)return;
+  _blFetching=true;
   try{
     blD=await jf('/blacklist');
+    window._lastBLTotal=Array.isArray(blD)?blD.length:0;
+    window._lastBLFetchTime=Date.now();
     st('bl-time');
     var valid={};blD.forEach(function(e){valid[blKey(e)]=true});
     Object.keys(blSelected).forEach(function(k){if(!valid[k])delete blSelected[k]});
     rbl(blFilter);
   }catch(e){}
+  finally{_blFetching=false}
 }
 function blGetFiltered(){
   var fl=blFilter==='all'?blD:blD.filter(function(e){return e.type===blFilter});
@@ -3717,22 +3772,32 @@ function rbl(f){
   var allFl=blGetFiltered();
   var el=document.getElementById('bl-table');
   if(!allFl.length){
-    el.innerHTML='<div style="padding:32px;text-align:center;color:var(--text2)">No entries</div>';
+    var emptyHtml='<div style="padding:32px;text-align:center;color:var(--text2)">'+t('No entries')+'</div>';
+    if(el._renderedHtml!==emptyHtml){
+      el.innerHTML=emptyHtml;
+      el._renderedHtml=emptyHtml;
+    }
     document.getElementById('bl-pagination').style.display='none';
     document.getElementById('bl-info').textContent=t('0 entries');
     blUpdateBatchBar();
-    return
+    return;
   }
-  var types={};
-  blD.forEach(function(e){if(e&&e.type)types[e.type]=true});
   var existing=el.querySelector('table');
   if(!existing){
     el.innerHTML='<table><thead><tr><th class="th-chk"><input class="cb-row" type="checkbox" id="bl-cb-all" onchange="blToggleAll(this.checked)"></th><th>Type</th><th>Host</th><th>Port</th><th>Reason</th><th>Expires</th></tr></thead><tbody id="bl-body"></tbody></table>';
+    el._renderedHtml='table';
   }
   var dd=document.getElementById('bl-filter-dropdown');
   if(dd){
-    dd.innerHTML='<div class="filter-option '+(blFilter==='all'?'selected':'')+'" data-value="all" onclick="setBLFilter(\'all\')">All</div>'+
-      Object.keys(types).sort().map(function(k){return '<div class="filter-option '+(blFilter===k?'selected':'')+'" data-value="'+k+'" onclick="setBLFilter(\''+k+'\')">'+k.charAt(0).toUpperCase()+k.slice(1)+'</div>'}).join('');
+    if(!dd._initialized){
+      dd.innerHTML='<div class="filter-option" data-value="all" onclick="setBLFilter(\'all\')">'+t('All')+'</div>'+
+        '<div class="filter-option" data-value="domain" onclick="setBLFilter(\'domain\')">Domain</div>'+
+        '<div class="filter-option" data-value="ip" onclick="setBLFilter(\'ip\')">IP</div>';
+      dd._initialized=true;
+    }
+    dd.querySelectorAll('.filter-option').forEach(function(opt){
+      opt.classList.toggle('selected',opt.getAttribute('data-value')===blFilter);
+    });
     var ft=document.getElementById('bl-filter-trigger');
     if(ft)ft.textContent=tf('Type: {0} ▾',[blFilter==='all'?t('All'):blFilter.charAt(0).toUpperCase()+blFilter.slice(1)]);
   }
@@ -3743,7 +3808,7 @@ function rbl(f){
   var anyOnPage=false;
   var tbody=document.getElementById('bl-body');
   if(tbody){
-    tbody.innerHTML=pageItems.map(function(e){
+    var rowsHtml=pageItems.map(function(e){
       if(!e)return '';
       var host=e.host||'';
       var typ=e.type||'';
@@ -3756,6 +3821,10 @@ function rbl(f){
       var safeTypeAttr=escAttr(typ);
       return '<tr><td class="td-chk"><input class="cb-row" type="checkbox" '+checked+' data-host="'+safeHostAttr+'" data-type="'+safeTypeAttr+'" onchange="blToggleRowEl(this)"></td><td><span class="tag '+(typ==='ip'?'green':'yellow')+'">'+escHtml(typ)+'</span></td><td class="clickable" style="word-break:break-all" data-host="'+safeHostAttr+'" data-type="'+safeTypeAttr+'" onclick="blOpenACLEl(this)">'+hostEsc+'</td><td>'+(e.port||0)+'</td><td>'+reasonEsc+'</td><td>'+ts2t(e.expires_at)+'</td></tr>';
     }).join('');
+    if(tbody._renderedHtml!==rowsHtml){
+      tbody.innerHTML=rowsHtml;
+      tbody._renderedHtml=rowsHtml;
+    }
   }
   document.getElementById('bl-pagination').style.display='flex';
   document.getElementById('bl-prev').disabled=blPage<=1;
@@ -3774,9 +3843,13 @@ function blOpenACLEl(el){
   blOpenACL(el.getAttribute('data-host')||'', el.getAttribute('data-type')||'');
 }
 function blOnSearch(){
-  blSearch=document.getElementById('bl-search').value;
-  blPage=1;
-  rbl(blFilter);
+  clearTimeout(_blSearchTimer);
+  _blSearchTimer=setTimeout(function(){
+    var sb=document.getElementById('bl-search');
+    blSearch=sb?(sb.value||'').trim():'';
+    blPage=1;
+    rbl(blFilter);
+  }, 200);
 }
 // Export the currently filtered blacklist as a plain host list (one per line, deduped) —
 // a hand-rolled "gfwlist" of hosts that failed direct connection and now route via proxy.
@@ -3899,6 +3972,7 @@ async function blDeleteSelected(){
 var trafficAuto=true;
 function toggleTrafficAuto(){trafficAuto=!trafficAuto;var b=document.getElementById('traffic-auto-btn');if(b){b.textContent=t(trafficAuto?'Auto':'Paused');b.classList.toggle('active-auto',trafficAuto)}}
 var cacheData=[],cacheFilter='all',cachePage=1,cachePageSize=15,cacheSearch='',cacheSelected={},cacheAuto=true;
+var _cacheFetching=false,_cacheSearchTimer=null;
 function toggleCacheAuto(){cacheAuto=!cacheAuto;var b=document.getElementById('cache-auto-btn');if(b){b.textContent=t(cacheAuto?'Auto':'Paused');b.classList.toggle('active-auto',cacheAuto)}}
 var cacheTypes={1:'A',28:'AAAA',65:'HTTPS'};
 function cacheGetFiltered(){
@@ -3916,22 +3990,33 @@ function renderCache(){
   var el=document.getElementById('cache-list');
   var allFl=cacheGetFiltered();
   if(!allFl||!allFl.length){
-    el.innerHTML='<div style="padding:32px;text-align:center;color:var(--text2)">No entries</div>';
+    var emptyHtml='<div style="padding:32px;text-align:center;color:var(--text2)">'+t('No entries')+'</div>';
+    if(el._renderedHtml!==emptyHtml){
+      el.innerHTML=emptyHtml;
+      el._renderedHtml=emptyHtml;
+    }
     document.getElementById('cache-pagination').style.display='none';
     document.getElementById('cache-info').textContent=t('0 entries');
     cacheUpdateBatchBar();
-    return
+    return;
   }
-  var allTypes={};
-  cacheData.forEach(function(e){if(e&&e.qtype)allTypes[e.qtype]=true});
   var existing=el.querySelector('table');
   if(!existing){
     el.innerHTML='<table><thead><tr><th class="th-chk"><input class="cb-row" type="checkbox" id="cache-cb-all" onchange="cacheToggleAll(this.checked)"></th><th>Domain</th><th>Type</th><th>Answers</th><th>Expires</th></tr></thead><tbody id="cache-body"></tbody></table>';
+    el._renderedHtml='table';
   }
   var dd=document.getElementById('cache-filter-dropdown');
   if(dd){
-    dd.innerHTML='<div class="filter-option '+(cacheFilter==='all'?'selected':'')+'" data-value="all" onclick="setCacheFilter(\'all\')">All</div>'+
-      Object.keys(allTypes).sort().map(function(k){return '<div class="filter-option '+(cacheFilter==k?'selected':'')+'" data-value="'+k+'" onclick="setCacheFilter(\''+k+'\')">'+(cacheTypes[k]||k)+'</div>'}).join('');
+    if(!dd._initialized){
+      dd.innerHTML='<div class="filter-option selected" data-value="all" onclick="setCacheFilter(\'all\')">'+t('All')+'</div>'+
+        '<div class="filter-option" data-value="1" onclick="setCacheFilter(\'1\')">A</div>'+
+        '<div class="filter-option" data-value="28" onclick="setCacheFilter(\'28\')">AAAA</div>'+
+        '<div class="filter-option" data-value="65" onclick="setCacheFilter(\'65\')">HTTPS</div>';
+      dd._initialized=true;
+    }
+    dd.querySelectorAll('.filter-option').forEach(function(opt){
+      opt.classList.toggle('selected',opt.getAttribute('data-value')===String(cacheFilter));
+    });
     var ft=document.getElementById('cache-filter-trigger');
     if(ft)ft.textContent=tf('Type: {0} ▾',[cacheFilter==='all'?t('All'):(cacheTypes[parseInt(cacheFilter)]||cacheFilter)]);
   }
@@ -3939,17 +4024,23 @@ function renderCache(){
   if(cachePage>totalPages)cachePage=totalPages;
   var start=(cachePage-1)*cachePageSize;
   var pageItems=allFl.slice(start,start+cachePageSize);
-  document.getElementById('cache-body').innerHTML=pageItems.map(function(e){
-    var k=cacheKey(e);
-    var checked=cacheSelected[k]?'checked':'';
-    var ans=e.answers&&e.answers.length?e.answers.join('<br>'):'-';
-    // A/AAAA rows carry editable IP answers; clicking pins a persistent static record.
-    var editable=(e.qtype===1||e.qtype===28)&&e.answers&&e.answers.length>0;
-    var ansCell=editable
-      ?'<td class="clickable" title="Click to pin as static record" style="font-family:var(--mono);font-size:.8rem;word-break:break-all" onclick="openCachePinDialog(\''+e.qname.replace(/'/g,"\\'")+'\','+e.qtype+',\''+(e.answers||[]).join('\\n').replace(/'/g,"\\'")+'\')">'+ans+'</td>'
-      :'<td style="font-family:var(--mono);font-size:.8rem;word-break:break-all">'+ans+'</td>';
-    return '<tr><td class="td-chk"><input class="cb-row" type="checkbox" '+checked+' onchange="cacheToggleRow(\''+e.qname.replace(/'/g,"\\'")+'\','+e.qtype+')"></td><td class="clickable" style="word-break:break-all" onclick="cacheOpenACL(\''+e.qname.replace(/'/g,"\\'")+'\')">'+e.qname+'</td><td>'+(cacheTypes[e.qtype]||e.qtype)+'</td>'+ansCell+'<td>'+ts2t(e.expires)+'</td></tr>'
-  }).join('');
+  var tbody=document.getElementById('cache-body');
+  if(tbody){
+    var rowsHtml=pageItems.map(function(e){
+      var k=cacheKey(e);
+      var checked=cacheSelected[k]?'checked':'';
+      var ans=e.answers&&e.answers.length?e.answers.join('<br>'):'-';
+      var editable=(e.qtype===1||e.qtype===28)&&e.answers&&e.answers.length>0;
+      var ansCell=editable
+        ?'<td class="clickable" title="Click to pin as static record" style="font-family:var(--mono);font-size:.8rem;word-break:break-all" onclick="openCachePinDialog(\''+e.qname.replace(/'/g,"\\'")+'\','+e.qtype+',\''+(e.answers||[]).join('\\n').replace(/'/g,"\\'")+'\')">'+ans+'</td>'
+        :'<td style="font-family:var(--mono);font-size:.8rem;word-break:break-all">'+ans+'</td>';
+      return '<tr><td class="td-chk"><input class="cb-row" type="checkbox" '+checked+' onchange="cacheToggleRow(\''+e.qname.replace(/'/g,"\\'")+'\','+e.qtype+')"></td><td class="clickable" style="word-break:break-all" onclick="cacheOpenACL(\''+e.qname.replace(/'/g,"\\'")+'\')">'+e.qname+'</td><td>'+(cacheTypes[e.qtype]||e.qtype)+'</td>'+ansCell+'<td>'+ts2t(e.expires)+'</td></tr>';
+    }).join('');
+    if(tbody._renderedHtml!==rowsHtml){
+      tbody.innerHTML=rowsHtml;
+      tbody._renderedHtml=rowsHtml;
+    }
+  }
   document.getElementById('cache-pagination').style.display='flex';
   document.getElementById('cache-prev').disabled=cachePage<=1;
   document.getElementById('cache-next').disabled=cachePage>=totalPages;
@@ -4207,15 +4298,28 @@ function switchAdblockTab(tab){
   renderAdblock();
 }
 
+var _adblockFetching = false;
 async function loadAdblock(){
+  if(adblockData){
+    renderAdblock();
+    var now=Date.now();
+    if(window._lastAdblockFetchTime&&(now-window._lastAdblockFetchTime<20000)){
+      return;
+    }
+  }
+  if(_adblockFetching)return;
+  _adblockFetching=true;
   try{
     var r = await fetch('/adblock');
     if(!r.ok) throw new Error('HTTP '+r.status);
     adblockData = await r.json();
+    window._lastAdblockFetchTime=Date.now();
     renderAdblock();
   }catch(e){
     var el = document.getElementById('adblock-list');
     if(el) el.textContent = 'Error: ' + e.message;
+  }finally{
+    _adblockFetching=false;
   }
 }
 var loadAdBlock = loadAdblock;
@@ -4241,8 +4345,9 @@ function renderAdblock(){
   // 1. Lists tab
   var listEl = document.getElementById('adblock-list');
   var items = d.items || [];
+  var listHtml = '';
   if(!items.length){
-    listEl.innerHTML = '<div class="empty-state">' + t('No subscriptions configured. Add a source above.') + '</div>';
+    listHtml = '<div class="empty-state">' + t('No subscriptions configured. Add a source above.') + '</div>';
   } else {
     var rows = items.map(function(item){
       var skipDetail = '';
@@ -4261,20 +4366,29 @@ function renderAdblock(){
         '<button class="btn btn-sm danger" data-name="' + esc(item.name) + '" onclick="deleteAdblockSub(this.dataset.name)">' + t('Delete') + '</button></td>' +
         '</tr>';
     }).join('');
-    listEl.innerHTML = '<table><thead><tr><th>' + t('Name') + '</th><th>' + t('URL') + '</th><th>' + t('Enabled') + '</th><th>' + t('Fetch') + '</th><th>' + t('Active rules') + '</th><th>' + t('Ignored') + '</th><th>' + t('Last error') + '</th><th>' + t('Actions') + '</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    listHtml = '<table><thead><tr><th>' + t('Name') + '</th><th>' + t('URL') + '</th><th>' + t('Enabled') + '</th><th>' + t('Fetch') + '</th><th>' + t('Active rules') + '</th><th>' + t('Ignored') + '</th><th>' + t('Last error') + '</th><th>' + t('Actions') + '</th></tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+  if(listEl && listEl._renderedHtml !== listHtml){
+    listEl.innerHTML = listHtml;
+    listEl._renderedHtml = listHtml;
   }
 
   // 2. Whitelist tab
   var wlEl = document.getElementById('adblock-wl-list');
   var wl = d.whitelist || [];
+  var wlHtml = '';
   if(!wl.length){
-    wlEl.innerHTML = '<div class="empty-state">' + t('No whitelisted domains.') + '</div>';
+    wlHtml = '<div class="empty-state">' + t('No whitelisted domains.') + '</div>';
   } else {
     var wlRows = wl.map(function(domain){
       return '<tr><td><code>' + esc(domain) + '</code></td>' +
         '<td><button class="btn btn-sm danger" data-domain="' + esc(domain) + '" onclick="removeAdblockWhitelist(this.dataset.domain)">' + t('Delete') + '</button></td></tr>';
     }).join('');
-    wlEl.innerHTML = '<table><thead><tr><th>' + t('Domain') + '</th><th>' + t('Actions') + '</th></tr></thead><tbody>' + wlRows + '</tbody></table>';
+    wlHtml = '<table><thead><tr><th>' + t('Domain') + '</th><th>' + t('Actions') + '</th></tr></thead><tbody>' + wlRows + '</tbody></table>';
+  }
+  if(wlEl && wlEl._renderedHtml !== wlHtml){
+    wlEl.innerHTML = wlHtml;
+    wlEl._renderedHtml = wlHtml;
   }
 
   // 3. Stats tab
@@ -4285,13 +4399,18 @@ function renderAdblock(){
 
   var topEl = document.getElementById('adblock-top-list');
   var tops = d.top_domains || [];
+  var topHtml = '';
   if(!tops.length){
-    topEl.innerHTML = '<div class="empty-state">' + t('No blocked queries recorded yet.') + '</div>';
+    topHtml = '<div class="empty-state">' + t('No blocked queries recorded yet.') + '</div>';
   } else {
     var topRows = tops.map(function(item, idx){
       return '<tr><td>' + (idx + 1) + '</td><td><code>' + esc(item.domain) + '</code></td><td>' + Number(item.hits || 0).toLocaleString() + '</td></tr>';
     }).join('');
-    topEl.innerHTML = '<table><thead><tr><th>' + t('Rank') + '</th><th>' + t('Domain') + '</th><th>' + t('Hits') + '</th></tr></thead><tbody>' + topRows + '</tbody></table>';
+    topHtml = '<table><thead><tr><th>' + t('Rank') + '</th><th>' + t('Domain') + '</th><th>' + t('Hits') + '</th></tr></thead><tbody>' + topRows + '</tbody></table>';
+  }
+  if(topEl && topEl._renderedHtml !== topHtml){
+    topEl.innerHTML = topHtml;
+    topEl._renderedHtml = topHtml;
   }
 }
 
@@ -4400,22 +4519,34 @@ async function removeAdblockWhitelist(domain){
   }
 }
 async function loadCache(){
+  if(Array.isArray(cacheData)&&cacheData.length>0){
+    renderCache();
+    var now=Date.now();
+    if(window._lastCacheFetchTime&&(now-window._lastCacheFetchTime<15000)){
+      return;
+    }
+  }
+  if(_cacheFetching)return;
+  _cacheFetching=true;
   try{
     var r=await fetch('/cache?list=1');
     cacheData=await r.json();
+    window._lastCacheLen=Array.isArray(cacheData)?cacheData.length:0;
+    window._lastCacheFetchTime=Date.now();
     st('cache-time');
     if(!Array.isArray(cacheData)){document.getElementById('cache-time').textContent=t('Error: bad response');return}
-    cachePage=1;
-    cacheSearch='';
-    var sb=document.getElementById('cache-search');
-    if(sb)sb.value='';
     renderCache();
-  }catch(e){document.getElementById('cache-time').textContent='Error: '+e.message}
+  }catch(e){var el=document.getElementById('cache-time');if(el)el.textContent='Error: '+e.message}
+  finally{_cacheFetching=false}
 }
 async function refreshCache(){
+  if(_cacheFetching)return;
+  _cacheFetching=true;
   try{
     var r=await fetch('/cache?list=1');
     cacheData=await r.json();
+    window._lastCacheLen=Array.isArray(cacheData)?cacheData.length:0;
+    window._lastCacheFetchTime=Date.now();
     st('cache-time');
     if(Array.isArray(cacheData)){
       var valid={};cacheData.forEach(function(e){valid[cacheKey(e)]=true});
@@ -4423,11 +4554,16 @@ async function refreshCache(){
       renderCache();
     }
   }catch(e){}
+  finally{_cacheFetching=false}
 }
 function cacheOnSearch(){
-  cacheSearch=document.getElementById('cache-search').value;
-  cachePage=1;
-  renderCache();
+  clearTimeout(_cacheSearchTimer);
+  _cacheSearchTimer=setTimeout(function(){
+    var sb=document.getElementById('cache-search');
+    cacheSearch=sb?(sb.value||'').trim():'';
+    cachePage=1;
+    renderCache();
+  }, 200);
 }
 function cacheGoToPage(d){
   var totalPages=Math.max(1,Math.ceil(cacheGetFiltered().length/cachePageSize));
@@ -4860,7 +4996,17 @@ async function applyACLAuditFixes(){
 }
 
 var cfgD={};
+var _cfgFetching=false;
 async function loadConfig(){
+  if(cfgD.cfg){
+    showCfg(0);
+    var now=Date.now();
+    if(window._lastCfgFetchTime&&(now-window._lastCfgFetchTime<30000)){
+      return;
+    }
+  }
+  if(_cfgFetching)return;
+  _cfgFetching=true;
   try{
     var [cfg,acl,chn]=await Promise.all([
       jf('/config'),
@@ -4868,12 +5014,18 @@ async function loadConfig(){
       fetch('/chnroute').then(function(r){return r.ok?r.text():''})
     ]);
     cfgD={cfg:JSON.stringify(cfg,null,2),acl:acl,chn:chn};
+    window._lastCfgFetchTime=Date.now();
     st('cfg-time');
-    document.getElementById('cfg-toggles').innerHTML=['Config','ACL','Chnroute'].map(function(t,i){
-      return '<button class="toggle-btn'+(i===0?' active':'')+'" onclick="showCfg('+i+')">'+t+'</button>'
-    }).join('');
+    var togglesEl=document.getElementById('cfg-toggles');
+    if(togglesEl&&!togglesEl._initialized){
+      togglesEl.innerHTML=['Config','ACL','Chnroute'].map(function(t,i){
+        return '<button class="toggle-btn'+(i===0?' active':'')+'" onclick="showCfg('+i+')">'+t+'</button>'
+      }).join('');
+      togglesEl._initialized=true;
+    }
     showCfg(0);
-  }catch(e){document.getElementById('cfg-time').textContent='Error: '+e.message}
+  }catch(e){var el=document.getElementById('cfg-time');if(el)el.textContent='Error: '+e.message}
+  finally{_cfgFetching=false}
 }
 CodeMirror.defineSimpleMode('acl',{
   start:[
@@ -5009,6 +5161,7 @@ function uploadChn(){
   inp.click();
 }
 var logsData=[],logsFilter='all',logsSearch='',logsAuto=true,logsAutoScroll=true;
+var _logsFetching=false,_logsSearchTimer=null;
 function toggleLogsAuto(){
   logsAuto=!logsAuto;
   var b=document.getElementById('logs-auto-btn');
@@ -5042,23 +5195,40 @@ function setLogsFilter(val){
   renderLogs();
 }
 function logsOnSearch(){
-  var sb=document.getElementById('logs-search');
-  if(sb)logsSearch=sb.value.trim().toLowerCase();
-  renderLogs();
+  clearTimeout(_logsSearchTimer);
+  _logsSearchTimer=setTimeout(function(){
+    var sb=document.getElementById('logs-search');
+    logsSearch=sb?sb.value.trim().toLowerCase():'';
+    renderLogs();
+  }, 200);
 }
 async function loadLogs(){
+  if(Array.isArray(logsData)&&logsData.length>0){
+    renderLogs();
+    var now=Date.now();
+    if(window._lastLogsFetchTime&&(now-window._lastLogsFetchTime<10000)){
+      return;
+    }
+  }
+  if(_logsFetching)return;
+  _logsFetching=true;
   try{
     logsData=await jf('/logs');
+    window._lastLogsFetchTime=Date.now();
     st('logs-time');
     renderLogs();
-  }catch(e){document.getElementById('logs-time').textContent='Error: '+e.message}
+  }catch(e){var el=document.getElementById('logs-time');if(el)el.textContent='Error: '+e.message}
+  finally{_logsFetching=false}
 }
 async function refreshLogs(){
+  if(_logsFetching)return;
+  _logsFetching=true;
   try{
     logsData=await jf('/logs');
     st('logs-time');
     renderLogs();
   }catch(e){}
+  finally{_logsFetching=false}
 }
 function esc(s){
   if(!s)return '';
@@ -5080,10 +5250,14 @@ function renderLogs(){
   var box=document.getElementById('logs-box');
   if(!box)return;
   if(!fl.length){
-    box.innerHTML='<div style="color:var(--text3);text-align:center;padding:40px 0;">'+t('No logs available')+'</div>';
+    var emptyLogHtml='<div style="color:var(--text3);text-align:center;padding:40px 0;">'+t('No logs available')+'</div>';
+    if(box._renderedHtml!==emptyLogHtml){
+      box.innerHTML=emptyLogHtml;
+      box._renderedHtml=emptyLogHtml;
+    }
     return;
   }
-  box.innerHTML=fl.map(function(e){
+  var rowsHtml=fl.map(function(e){
     var lvl=(e.level||'INFO').toUpperCase();
     return '<div class="log-row">'+
       '<span class="log-time">'+esc(e.time||'')+'</span>'+
@@ -5091,6 +5265,13 @@ function renderLogs(){
       '<span class="log-msg">'+esc(e.message||'')+'</span>'+
       '</div>';
   }).join('');
+  if(box._renderedHtml!==rowsHtml){
+    box.innerHTML=rowsHtml;
+    box._renderedHtml=rowsHtml;
+    if(logsAutoScroll){
+      box.scrollTop=box.scrollHeight;
+    }
+  }
 
   box.onscroll=function(){
     var atBottom=box.scrollHeight-box.scrollTop-box.clientHeight<30;
@@ -5102,10 +5283,6 @@ function renderLogs(){
       updateLogsScrollBtn();
     }
   };
-
-  if(logsAutoScroll){
-    box.scrollTop=box.scrollHeight;
-  }
 }
 // Click a log row to copy it to the clipboard
 document.getElementById('logs-box').addEventListener('click',function(e){
@@ -5514,6 +5691,7 @@ var devicesSearchTerm = '';
 var expandedDeviceConns = {};
 var deviceConnsAccumulator = {};
 
+var _devicesFetching = false, _devicesSearchTimer = null;
 function toggleDevicesAuto() {
   devicesAuto = !devicesAuto;
   var b = document.getElementById('devices-auto-btn');
@@ -5524,13 +5702,25 @@ function toggleDevicesAuto() {
 }
 
 async function loadDevices() {
+  if (Array.isArray(devicesData) && devicesData.length > 0) {
+    renderDevices();
+    var now = Date.now();
+    if (window._lastDevicesFetchTime && (now - window._lastDevicesFetchTime < 10000)) {
+      return;
+    }
+  }
+  if (_devicesFetching) return;
+  _devicesFetching = true;
   try {
     var data = await jf('/api/devices');
     devicesData = data;
+    window._lastDevicesFetchTime = Date.now();
     renderDevices();
     st('devices-time');
   } catch(e) {
     console.error('loadDevices err:', e);
+  } finally {
+    _devicesFetching = false;
   }
 }
 
@@ -5542,9 +5732,12 @@ function refreshDevices() {
 }
 
 function devicesOnSearch() {
-  var el = document.getElementById('devices-search');
-  devicesSearchTerm = el ? el.value.toLowerCase().trim() : '';
-  renderDevices();
+  clearTimeout(_devicesSearchTimer);
+  _devicesSearchTimer = setTimeout(function(){
+    var el = document.getElementById('devices-search');
+    devicesSearchTerm = el ? el.value.toLowerCase().trim() : '';
+    renderDevices();
+  }, 200);
 }
 
 function toggleDeviceConns(key, e) {
@@ -5744,7 +5937,11 @@ function renderDevices() {
   });
 
   if (filtered.length === 0) {
-    container.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px 20px;color:var(--text3);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)">' + t('No connected devices detected') + '</div>';
+    var emptyDevHtml = '<div style="grid-column:1/-1;text-align:center;padding:40px 20px;color:var(--text3);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)">' + t('No connected devices detected') + '</div>';
+    if (container._renderedHtml !== emptyDevHtml) {
+      container.innerHTML = emptyDevHtml;
+      container._renderedHtml = emptyDevHtml;
+    }
   } else {
     filtered.sort(function(a, b) {
       if (a.is_current && !b.is_current) return -1;
@@ -5890,7 +6087,10 @@ function renderDevices() {
         '</div>' +
       '</div>';
     });
-    container.innerHTML = html;
+    if (container._renderedHtml !== html) {
+      container.innerHTML = html;
+      container._renderedHtml = html;
+    }
   }
 
   var blockedSec = document.getElementById('blocked-devices-section');
@@ -5915,10 +6115,16 @@ function renderDevices() {
           '<td><button class="btn btn-sm" onclick="unblockDevice(\'' + escAttr(b.ip || '') + '\',\'' + escAttr(b.mac || '') + '\')">' + t('Unblock') + '</button></td>' +
         '</tr>';
       });
-      blockedBody.innerHTML = bHtml;
+      if (blockedBody._renderedHtml !== bHtml) {
+        blockedBody.innerHTML = bHtml;
+        blockedBody._renderedHtml = bHtml;
+      }
     } else {
       blockedSec.style.display = 'none';
-      blockedBody.innerHTML = '';
+      if (blockedBody._renderedHtml !== '') {
+        blockedBody.innerHTML = '';
+        blockedBody._renderedHtml = '';
+      }
     }
   }
 }
@@ -5996,8 +6202,28 @@ es.onmessage=function(e){
     else if(v==='traffic'&&trafficAuto){ltraf(d);st('traffic-time')}
     else if(v==='health'){lhealth(d);st('health-time')}
     else if(v==='devices'&&devicesAuto){refreshDevices();st('devices-time')}
-    else if(v==='blacklist'&&blAuto)refreshBlacklist();
-    else if(v==='cache'&&cacheAuto){if(dnsTab==='static')loadStatic();else refreshCache()}
+    else if(v==='blacklist'&&blAuto){
+      var curBlTotal=(typeof d.bl_total==='number')?d.bl_total:-1;
+      var now=Date.now();
+      if(curBlTotal!==window._lastBLTotal||(now-(window._lastBLFetchTime||0)>30000)){
+        refreshBlacklist();
+      }else{
+        st('bl-time');
+      }
+    }
+    else if(v==='cache'&&cacheAuto){
+      if(dnsTab==='static'){
+        loadStatic();
+      }else{
+        var curCacheLen=(d.cache&&typeof d.cache.entries==='number')?d.cache.entries:-1;
+        var now=Date.now();
+        if(curCacheLen!==window._lastCacheLen||(now-(window._lastCacheFetchTime||0)>30000)){
+          refreshCache();
+        }else{
+          st('cache-time');
+        }
+      }
+    }
     else if(v==='logs'&&logsAuto)refreshLogs();
   }catch(ex){log('SSE err: '+ex.message)}
 };
