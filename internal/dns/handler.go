@@ -3,7 +3,9 @@ package dns
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"strconv"
@@ -351,6 +353,8 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 			resCh := make(chan dnsQueryResult, 2)
 			domCtx, cancelDom := context.WithCancel(fctx)
 			defer cancelDom()
+			foreignCtx, cancelForeign := context.WithCancel(fctx)
+			defer cancelForeign()
 
 			safego.Go("dns.domesticQuery", func() {
 				dResp, dErr := h.QueryUDPVerifyID(domCtx, queryWire, targetIP, targetPort)
@@ -364,11 +368,14 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 			launchForeign := func() {
 				if foreignLaunched.CompareAndSwap(false, true) {
 					safego.Go("dns.foreignHedgeQuery", func() {
-						fResp, fErr := h.queryForeignDNSWithRetry(fctx, queryWire, foreignHost, foreignPort)
+						fResp, fErr := h.queryForeignDNSWithRetry(foreignCtx, queryWire, foreignHost, foreignPort)
 						resCh <- dnsQueryResult{resp: fResp, err: fErr, from: "foreign"}
 					})
 				}
 			}
+
+			var domesticFailedOrPolluted bool
+			var foreignFailed bool
 
 			for {
 				select {
@@ -382,12 +389,17 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 				case qRes := <-resCh:
 					if qRes.from == "domestic" {
 						if qRes.err != nil {
+							domesticFailedOrPolluted = true
 							fll.Warn("domestic DNS query failed, falling back to foreign DNS", "qname", qname, "error", qRes.err)
+							if foreignFailed {
+								return h.buildSERVFAIL(queryWire), nil
+							}
 							launchForeign()
 							continue
 						}
 						// Check pollution and preference
 						if preferred, cached, clean := h.isDNSCleanAndPrefer(fctx, qRes.resp, qname); clean {
+							cancelForeign()
 							resp = sanitizeResponse(preferred, cfg.filterAAAA, filterLAN)
 							if cached {
 								h.cache.Set(qname, qtype, resp, 0)
@@ -395,14 +407,24 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 							return resp, nil
 						}
 						// Domestic response is polluted by GFW: discard and launch/wait for foreign
+						domesticFailedOrPolluted = true
 						fll.Warn("domestic DNS response polluted, falling back to foreign DNS", "qname", qname)
+						if foreignFailed {
+							return h.buildSERVFAIL(queryWire), nil
+						}
 						launchForeign()
 						continue
 					} else { // from == "foreign"
 						if qRes.err != nil {
-							fll.Warn("foreign DNS fallback failed, answering SERVFAIL", "qname", qname, "error", qRes.err)
-							return h.buildSERVFAIL(queryWire), nil
+							foreignFailed = true
+							fll.Warn("foreign DNS fallback failed", "qname", qname, "error", qRes.err)
+							if domesticFailedOrPolluted {
+								return h.buildSERVFAIL(queryWire), nil
+							}
+							// Domestic query is still in flight: do not answer SERVFAIL prematurely
+							continue
 						}
+						cancelDom()
 						resp = sanitizeResponse(qRes.resp, cfg.filterAAAA, filterLAN)
 						h.cache.Set(qname, qtype, resp, 0)
 						return resp, nil
@@ -462,37 +484,103 @@ func (h *Handler) queryViaProxyVerifyID(ctx context.Context, queryWire []byte, d
 	return resp, nil
 }
 
-// queryForeignDNSWithRetry queries a foreign DNS server through the proxy,
-// retrying once when the first attempt fails. The total time across attempts is
-// bounded by cfg.queryTimeout (split evenly between them), so the retry never
-// pushes the whole foreign lookup past the configured DNS timeout. On persistent
-// failure it returns the last error so the caller can answer SERVFAIL instead of
-// silently dropping the query.
+// queryForeignDNSWithRetry queries a foreign DNS server through the proxy.
+// It first attempts UDP query via proxy. If UDP fails or times out (e.g. proxy
+// lacks UDP support like CDN/WebSocket nodes), it falls back to TCP via proxy.
+// The total time across attempts is bounded by cfg.queryTimeout.
 func (h *Handler) queryForeignDNSWithRetry(ctx context.Context, queryWire []byte, host string, port int) ([]byte, error) {
 	cfg := h.cfg.Load()
-	const attempts = 2
-	perAttempt := cfg.queryTimeout / attempts
-	if perAttempt < time.Millisecond {
-		perAttempt = cfg.queryTimeout
-	}
 	budgetCtx, cancel := context.WithTimeout(ctx, cfg.queryTimeout)
 	defer cancel()
-	var lastErr error
-	for i := 0; i < attempts; i++ {
-		timeout := perAttempt
-		if i == 0 && cfg.queryTimeout >= 2*time.Second && timeout > 1000*time.Millisecond {
-			timeout = 1000 * time.Millisecond
-		}
-		resp, err := h.queryViaProxyVerifyID(budgetCtx, queryWire, host, port, timeout)
-		if err == nil {
-			return resp, nil
-		}
-		lastErr = err
+
+	// 1. Try UDP via proxy (fast probe: bounded by up to 800ms)
+	udpTimeout := 800 * time.Millisecond
+	if udpTimeout > cfg.queryTimeout/3 {
+		udpTimeout = cfg.queryTimeout / 3
 	}
+	if udpTimeout < 400*time.Millisecond && cfg.queryTimeout >= 400*time.Millisecond {
+		udpTimeout = 400 * time.Millisecond
+	}
+
+	attemptCtx, attemptCancel := context.WithTimeout(budgetCtx, udpTimeout)
+	resp, lastErr := h.queryViaProxyVerifyID(attemptCtx, queryWire, host, port, udpTimeout)
+	attemptCancel()
+	if lastErr == nil {
+		return resp, nil
+	}
+
+	// If caller context or budget was canceled (e.g. domestic DNS hedge won the race), stop immediately.
+	if budgetCtx.Err() != nil {
+		return nil, budgetCtx.Err()
+	}
+
+	// 2. Fallback to TCP via proxy if UDP failed or timed out (e.g. WebSocket / CDN nodes without UDP support)
+	if h.upstreamMgr != nil && ctx.Err() == nil {
+		tcpTimeout := 4000 * time.Millisecond
+		if d, ok := budgetCtx.Deadline(); ok {
+			remaining := time.Until(d)
+			if remaining > 0 && remaining < tcpTimeout {
+				tcpTimeout = remaining
+			}
+		}
+		if tcpTimeout > 300*time.Millisecond {
+			tcpCtx, tcpCancel := context.WithTimeout(ctx, tcpTimeout)
+			if resp, tcpErr := h.queryViaProxyTCP(tcpCtx, queryWire, host, port, tcpTimeout); tcpErr == nil {
+				tcpCancel()
+				return resp, nil
+			} else {
+				lastErr = tcpErr
+			}
+			tcpCancel()
+		}
+	}
+
 	if lastErr == nil {
 		lastErr = fmt.Errorf("DNS query failed")
 	}
 	return nil, lastErr
+}
+
+func (h *Handler) queryViaProxyTCP(ctx context.Context, queryWire []byte, dnsHost string, dnsPort int, timeout time.Duration) ([]byte, error) {
+	if h.upstreamMgr == nil {
+		return nil, fmt.Errorf("no upstream manager")
+	}
+	ll := trace.Log(ctx)
+	ll.Debug("querying DNS via proxy TCP fallback", "dns", fmt.Sprintf("%s:%d", dnsHost, dnsPort))
+
+	dialCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	conn, _ := h.upstreamMgr.Connect(dialCtx, dnsHost, dnsPort, "", nil)
+	if conn == nil {
+		return nil, fmt.Errorf("proxy TCP connect failed")
+	}
+	defer conn.Close()
+
+	_ = conn.SetDeadline(time.Now().Add(timeout))
+
+	req := make([]byte, 2+len(queryWire))
+	binary.BigEndian.PutUint16(req[:2], uint16(len(queryWire)))
+	copy(req[2:], queryWire)
+
+	if _, err := conn.Write(req); err != nil {
+		return nil, fmt.Errorf("write TCP DNS: %w", err)
+	}
+
+	var respLen uint16
+	if err := binary.Read(conn, binary.BigEndian, &respLen); err != nil {
+		return nil, fmt.Errorf("read TCP DNS len: %w", err)
+	}
+
+	resp := make([]byte, respLen)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		return nil, fmt.Errorf("read TCP DNS payload: %w", err)
+	}
+
+	if len(resp) < 2 || resp[0] != queryWire[0] || resp[1] != queryWire[1] {
+		return nil, fmt.Errorf("DNS transaction ID mismatch")
+	}
+	return resp, nil
 }
 
 func (h *Handler) queryUDP(ctx context.Context, queryWire []byte, host string, port int) ([]byte, error) {
@@ -532,7 +620,11 @@ func (h *Handler) queryViaProxy(ctx context.Context, queryWire []byte, dnsHost s
 
 	udpConn, err := h.upstreamMgr.AcquireDNSUDP(ctx, dnsHost, dnsPort)
 	if err != nil {
-		ll.Error("UDP ASSOCIATE failed for DNS", "dns", fmt.Sprintf("%s:%d", dnsHost, dnsPort), "error", err)
+		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+			ll.Debug("foreign DNS UDP query canceled", "dns", fmt.Sprintf("%s:%d", dnsHost, dnsPort))
+		} else {
+			ll.Warn("UDP ASSOCIATE failed for DNS", "dns", fmt.Sprintf("%s:%d", dnsHost, dnsPort), "error", err)
+		}
 		return nil, fmt.Errorf("UDP ASSOCIATE failed: %w", err)
 	}
 
@@ -568,7 +660,11 @@ func (h *Handler) queryViaProxy(ctx context.Context, queryWire []byte, dnsHost s
 	udpConn.SetDeadline(deadline)
 	writeStart := time.Now()
 	if _, err := udpConn.Write(packet); err != nil {
-		ll.Error("failed to write DNS query to proxy UDP", "error", err)
+		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+			ll.Debug("write DNS query to proxy UDP canceled")
+		} else {
+			ll.Warn("failed to write DNS query to proxy UDP", "error", err)
+		}
 		if h.upstreamMgr != nil {
 			h.upstreamMgr.ReportDNSUDPError(udpConn, err)
 		}
@@ -583,11 +679,15 @@ func (h *Handler) queryViaProxy(ctx context.Context, queryWire []byte, dnsHost s
 	readLatency := time.Since(readStart)
 	relay.PacketPool.Put(pktPtr)
 	if err != nil {
-		ll.Error("DNS proxy read error",
-			"dns", fmt.Sprintf("%s:%d", dnsHost, dnsPort),
-			"error", err,
-			"timeout", timeout,
-			"readWait", readLatency)
+		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
+			ll.Debug("DNS proxy read canceled", "dns", fmt.Sprintf("%s:%d", dnsHost, dnsPort))
+		} else {
+			ll.Warn("DNS proxy read error",
+				"dns", fmt.Sprintf("%s:%d", dnsHost, dnsPort),
+				"error", err,
+				"timeout", timeout,
+				"readWait", readLatency)
+		}
 		if h.upstreamMgr != nil {
 			h.upstreamMgr.ReportDNSUDPError(udpConn, err)
 		}

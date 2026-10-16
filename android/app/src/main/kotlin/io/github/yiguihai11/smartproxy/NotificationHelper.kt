@@ -26,6 +26,10 @@ object NotificationHelper {
     /** 循环切换选路策略 (latency -> failover -> round_robin)。 */
     const val ACTION_CYCLE_STRATEGY = "io.github.yiguihai11.smartproxy.CYCLE_STRATEGY"
 
+    /** 指定切换选路策略 (latency / failover / round_robin / random)。 */
+    const val ACTION_SET_STRATEGY = "io.github.yiguihai11.smartproxy.SET_STRATEGY"
+    const val EXTRA_STRATEGY = "strategy"
+
     /** 触发上游节点并发对冲测速与重新选路。 */
     const val ACTION_REFRESH_NODES = "io.github.yiguihai11.smartproxy.REFRESH_NODES"
 

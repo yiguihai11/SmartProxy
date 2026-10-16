@@ -6,6 +6,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.LinkProperties
@@ -25,59 +26,99 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.AltRoute
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.AltRoute
+import androidx.compose.material.icons.outlined.Apps
+import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.outlined.BatteryChargingFull
 import androidx.compose.material.icons.outlined.BrightnessAuto
+import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.Dashboard
+import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.LightMode
+import androidx.compose.material.icons.outlined.OpenInBrowser
+import androidx.compose.material.icons.outlined.Route
+import androidx.compose.material.icons.outlined.Sync
+import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.outlined.RestartAlt
+import androidx.compose.material.icons.outlined.Timeline
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.Wallpaper
+import androidx.compose.material.icons.outlined.WifiTethering
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -86,37 +127,60 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.border
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import dev.chrisbanes.haze.HazeDefaults
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.hazeEffect
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.json.JSONObject
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -433,25 +497,25 @@ private fun themeIcon(mode: String): ImageVector = when (mode) {
     else -> Icons.Outlined.BrightnessAuto
 }
 
-// ── 主题色(樱花粉,从紫色系整体换色)──────────────────────────────
+// ── 主题色(樱花粉强调 + 高级纯净画布)──────────────────────────────
 // 浅/深两套(§7):getter 读 ThemeState.isDark 响应式切换,引用处零改动。
 // 调色板:浅色强调 #D66E9B(深粉,白内容可读)/深色强调 #F6B8CF(浅粉,深底可读);
 // 填充型容器(品牌块/按钮/FAB 的白图标)在深色下用更深一档 #C25E87,浅色沿用强调。
 private val PurpleText get() = if (ThemeState.isDark) Color(0xFFF6B8CF) else Color(0xFFD66E9B) // 标题/强调
 private val PurpleFill get() = if (ThemeState.isDark) Color(0xFFC25E87) else Color(0xFFD66E9B) // 填充容器(白内容)
-private val PurpleDark get() = if (ThemeState.isDark) Color(0xFFF8CDDF) else Color(0xFFB3557F) // 面板文字
+private val PurpleDark get() = if (ThemeState.isDark) Color(0xFFF8CDDF) else Color(0xFF3A1525) // 面板标题与正文(高对比深紫，确保高透玻璃上字迹清晰醒目)
 private val PurpleSoft get() = if (ThemeState.isDark) Color(0xFFE9A8C3) else Color(0xFFE88EAF) // 弱化箭头
 private val StatusConnecting = Color(0xFFFF8413) // 连接中
 private val StatusConnected = Color(0xFF2EBD85)  // 已连接
-private val GreyText get() = if (ThemeState.isDark) Color(0xFFC9A8B6) else Color(0xFF7A626D)
-private val TrackPink get() = if (ThemeState.isDark) Color(0xFF5A3A48) else Color(0xFFFAD4E3) // 圆环轨道
+private val GreyText get() = if (ThemeState.isDark) Color(0xFFB59AA6) else Color(0xFF66545F)
+private val TrackPink get() = if (ThemeState.isDark) Color(0xFF3B2832) else Color(0xFFF3E5EC) // 圆环轨道
 private val ArcOrange = Color(0xFFFF8413)
 private val ArcYellow = Color(0xFFFFEB3C)
-// 表面/分隔/开关轨道:深色模式换深色变体,保证卡片与抽屉不刺眼。
-private val CardSurface get() = if (ThemeState.isDark) Color(0xFF38262F).copy(alpha = 0.90f) else Color.White.copy(alpha = 0.90f)
-private val DrawerSurface get() = if (ThemeState.isDark) Color(0xFF32212A) else Color(0xFFFDF4F7)
-private val DividerLine get() = if (ThemeState.isDark) Color(0xFF4A3741) else Color(0xFFF0DCE5)
-private val SwitchBorder get() = if (ThemeState.isDark) Color(0xFF5A4250) else Color(0xFFE3C8D3)
+// 页面画布与表面:浅色下采用通透高级的浅灰白画布(#F8F9FA),深色采用暗夜深灰(#181215),彻底消除补丁感
+private val PageBackground get() = if (ThemeState.isDark) Color(0xFF181215) else Color(0xFFF8F9FA)
+private val CardSurface get() = if (ThemeState.isDark) Color(0xFF271C22) else Color.White
+private val DividerLine get() = if (ThemeState.isDark) Color(0xFF382931) else Color(0xFFEDE8EB)
+private val SwitchBorder get() = if (ThemeState.isDark) Color(0xFF45333D) else Color(0xFFE2DCE0)
 
 /** 原版图标字体(assets/fonts/iconfont.ttf,逆向自 Ultimate VPN):电源/菜单/刷新/箭头。 */
 private val IconFont = FontFamily(Font(R.font.iconfont))
@@ -501,11 +565,7 @@ private fun HomeScreen(
     onOpenBatterySettings: () -> Unit
 ) {
     val context = LocalContext.current
-    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-    val scope = rememberCoroutineScope()
 
-    // 面板 URL:局域网 IP 变化时在 onResume 刷新(§4.4 注意)。
-    var panelUrl by remember { mutableStateOf(PanelUrl.url(context)) }
     // 面板账号密码:与 URL 同源(读 listen.admin_auth),onResume 一并刷新,
     // 在面板里改过密码后回首页能取到新值。
     var adminAuth by remember { mutableStateOf(ConfigProvider.adminAuth(context)) }
@@ -513,7 +573,6 @@ private fun HomeScreen(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                panelUrl = PanelUrl.url(context)
                 adminAuth = ConfigProvider.adminAuth(context)
             }
         }
@@ -521,65 +580,38 @@ private fun HomeScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // DNS / 排除路由 / 服务模式 / 网络共享设置对话框开关(侧边栏菜单打开,§6 / §8)。
+    // DNS / 排除路由 / 服务模式 / 网络共享设置对话框开关
     var showDnsDialog by remember { mutableStateOf(false) }
     var showExcludeDialog by remember { mutableStateOf(false) }
     var showServiceModeDialog by remember { mutableStateOf(false) }
     var showTetheringDialog by remember { mutableStateOf(false) }
 
-    // DNS / 排除路由在 establish() 时固化(读 AppPrefs),改了要重建 VpnService 才生效;
-    // 两者是 App 层设置,Go watcher 不感知。VPN 在跑则显式重建(SmartProxyVpnService.restart
-    // 主线程原子停→建);未在跑时只落盘,下次启动自然生效。
     fun applyVpnSettings() {
         if (SmartProxyVpnService.isRunning.value) {
             SmartProxyVpnService.restart(context)
         }
     }
 
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        drawerContent = {
-            AppDrawerContent(
-                onOpenApps = {
-                    scope.launch { drawerState.close() }
-                    context.startActivity(Intent(context, AppSelectionActivity::class.java))
-                },
-                onOpenDns = {
-                    scope.launch { drawerState.close() }
-                    showDnsDialog = true
-                },
-                onOpenExclude = {
-                    scope.launch { drawerState.close() }
-                    showExcludeDialog = true
-                },
-                onOpenServiceMode = {
-                    scope.launch { drawerState.close() }
-                    showServiceModeDialog = true
-                },
-                onOpenTethering = {
-                    scope.launch { drawerState.close() }
-                    showTetheringDialog = true
-                },
-                onOpenNetworkStatus = {
-                    scope.launch { drawerState.close() }
-                    context.startActivity(Intent(context, NetworkStatusActivity::class.java))
-                },
-                onOpenLogcat = {
-                    scope.launch { drawerState.close() }
-                    context.startActivity(Intent(context, LogcatActivity::class.java))
-                }
-            )
-        }
-    ) {
-        HomeLauncher(
-            panelUrl = panelUrl,
-            adminAuth = adminAuth,
-            onToggleVpn = onToggleVpn,
-            onOpenDrawer = { scope.launch { drawerState.open() } },
-            themeMode = themeMode,
-            onCycleTheme = onCycleTheme
-        )
-    }
+    HomeLauncher(
+        adminAuth = adminAuth,
+        onToggleVpn = onToggleVpn,
+        themeMode = themeMode,
+        onCycleTheme = onCycleTheme,
+        onOpenApps = {
+            context.startActivity(Intent(context, AppSelectionActivity::class.java))
+        },
+        onOpenDns = { showDnsDialog = true },
+        onOpenExclude = { showExcludeDialog = true },
+        onOpenServiceMode = { showServiceModeDialog = true },
+        onOpenTethering = { showTetheringDialog = true },
+        onOpenNetworkStatus = {
+            context.startActivity(Intent(context, NetworkStatusActivity::class.java))
+        },
+        onOpenLogcat = {
+            context.startActivity(Intent(context, LogcatActivity::class.java))
+        },
+        onOpenBatterySettings = onOpenBatterySettings
+    )
 
     if (showTetheringDialog) {
         TetheringDialog(
@@ -596,6 +628,9 @@ private fun HomeScreen(
                 showDnsDialog = false
                 AppPrefs.setDnsV4(context, v4)
                 AppPrefs.setDnsV6(context, v6)
+                runCatching {
+                    smartproxy.mobile.Mobile.setSystemDNS(v4, v6)
+                }
                 applyVpnSettings()
             }
         )
@@ -650,239 +685,940 @@ private fun HomeScreen(
     }
 }
 
-/** 侧边栏抽屉菜单内容 */
+/** 全局背景毛玻璃上下文: 允许各个 GlassCard 直接采样底层流体壁纸进行真实 GPU 模糊 */
+private val LocalBackgroundHazeState = staticCompositionLocalOf<HazeState?> { null }
+
+/** 超清丝绸流体极光壁纸画布 (High-Definition Silk Fluid Aurora Canvas) */
 @Composable
-private fun AppDrawerContent(
+private fun FluidAmbientCanvas(
+    isDark: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+
+        // 1. 全局柔和基底丝绸光晕过渡 (Base Radiant Silk Gradient)
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = if (isDark) {
+                    listOf(Color(0xFF0F0A14), Color(0xFF08050C), Color(0xFF0C0712))
+                } else {
+                    listOf(Color(0xFFFFF6F9), Color(0xFFF6F3FC), Color(0xFFEEF6FC))
+                }
+            )
+        )
+
+        // 2. 顶部波浪丝绸流光 (Crimson Sakura Silk Ribbon: 环绕状态栏与顶部电源球体)
+        val pathWaveTop = Path().apply {
+            moveTo(-0.1f * w, -0.05f * h)
+            cubicTo(0.35f * w, 0.02f * h, 0.65f * w, 0.26f * h, 1.15f * w, 0.16f * h)
+            lineTo(1.15f * w, -0.05f * h)
+            close()
+        }
+        drawPath(
+            path = pathWaveTop,
+            brush = Brush.radialGradient(
+                colors = if (isDark) {
+                    listOf(
+                        Color(0xFF9E1D56).copy(alpha = 0.80f),
+                        Color(0xFF6B1238).copy(alpha = 0.45f),
+                        Color.Transparent
+                    )
+                } else {
+                    listOf(
+                        Color(0xFFFF3B6C).copy(alpha = 0.55f),
+                        Color(0xFFFF758C).copy(alpha = 0.38f),
+                        Color(0xFFFFB0C0).copy(alpha = 0.16f),
+                        Color.Transparent
+                    )
+                },
+                center = Offset(w * 0.70f, h * 0.12f),
+                radius = w * 0.95f
+            )
+        )
+
+        // 3. 中部左侧丝绸巨浪 (Royal Lavender & Electric Violet Silk Wave: 横贯开关卡片底部，提供鲜明折射流光)
+        val pathWaveMid = Path().apply {
+            moveTo(-0.15f * w, 0.28f * h)
+            cubicTo(0.40f * w, 0.38f * h, 0.75f * w, 0.48f * h, 0.25f * w, 0.70f * h)
+            cubicTo(0.05f * w, 0.78f * h, -0.1f * w, 0.65f * h, -0.15f * w, 0.50f * h)
+            close()
+        }
+        drawPath(
+            path = pathWaveMid,
+            brush = Brush.radialGradient(
+                colors = if (isDark) {
+                    listOf(
+                        Color(0xFF6D28D9).copy(alpha = 0.75f),
+                        Color(0xFF4C1D95).copy(alpha = 0.40f),
+                        Color.Transparent
+                    )
+                } else {
+                    listOf(
+                        Color(0xFF7C3AED).copy(alpha = 0.50f),
+                        Color(0xFF9333EA).copy(alpha = 0.32f),
+                        Color(0xFFC084FC).copy(alpha = 0.15f),
+                        Color.Transparent
+                    )
+                },
+                center = Offset(w * 0.25f, h * 0.45f),
+                radius = w * 0.85f
+            )
+        )
+
+        // 4. 中下部右侧清透冰海丝绸 (Ocean Mint Aquamarine Ribbon: 穿透管理面板卡片)
+        val pathWaveOcean = Path().apply {
+            moveTo(1.15f * w, 0.45f * h)
+            cubicTo(0.60f * w, 0.60f * h, 0.35f * w, 0.75f * w, 0.80f * w, 0.92f * h)
+            lineTo(1.15f * w, 0.92f * h)
+            close()
+        }
+        drawPath(
+            path = pathWaveOcean,
+            brush = Brush.radialGradient(
+                colors = if (isDark) {
+                    listOf(
+                        Color(0xFF0284C7).copy(alpha = 0.70f),
+                        Color(0xFF0369A1).copy(alpha = 0.35f),
+                        Color.Transparent
+                    )
+                } else {
+                    listOf(
+                        Color(0xFF0284C7).copy(alpha = 0.46f),
+                        Color(0xFF06B6D4).copy(alpha = 0.28f),
+                        Color(0xFF67E8F9).copy(alpha = 0.12f),
+                        Color.Transparent
+                    )
+                },
+                center = Offset(w * 0.85f, h * 0.70f),
+                radius = w * 0.90f
+            )
+        )
+
+        // 5. 底部暖阳金琥珀焦散流体 (Golden Amber Sunset Glow: 照亮悬浮胶囊导航栏)
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = if (isDark) {
+                    listOf(
+                        Color(0xFF8C3415).copy(alpha = 0.65f),
+                        Color(0xFF4A1809).copy(alpha = 0.25f),
+                        Color.Transparent
+                    )
+                } else {
+                    listOf(
+                        Color(0xFFF59E0B).copy(alpha = 0.42f),
+                        Color(0xFFFBBF24).copy(alpha = 0.22f),
+                        Color(0xFFFDE68A).copy(alpha = 0.10f),
+                        Color.Transparent
+                    )
+                },
+                center = Offset(w * 0.50f, h * 0.96f),
+                radius = w * 0.80f
+            ),
+            center = Offset(w * 0.50f, h * 0.96f),
+            radius = w * 0.80f
+        )
+    }
+}
+
+/**
+ * 真·液态晶莹玻璃卡片容器 (True Liquid Glass Card)
+ *
+ * 核心光学指标:
+ * 1. 真实 GPU 背景模糊 (Haze Backdrop Blur): 采样底层丝绸壁纸产生 24dp 柔美雾化
+ * 2. 92% 超高通透率晶莹次表面 (Crystalline Refractive Surface): 腹部仅保留 4%~8% 微白，彻底告别“白纸贴纸感”
+ * 3. 0.75dp 晶体斜切单向高光棱镜边 (Prism Rim Highlight): 顶部聚光 80% 白微光，四周顺滑淡出
+ * 4. 0.8dp 极细镜面反射闪光 (Top Specular Glint): 模拟苹果 VisionOS 玻璃表面的镜面折射
+ * 5. 极微无重力悬浮焦散 (Weightless Caustic Ambient): 消除生硬的黑脏阴影
+ */
+@Composable
+private fun GlassCard(
+    modifier: Modifier = Modifier,
+    shape: Shape = RoundedCornerShape(22.dp),
+    isHighlighted: Boolean = false,
+    content: @Composable BoxScope.() -> Unit
+) {
+    val isDark = ThemeState.isDark
+    val bgHazeState = LocalBackgroundHazeState.current
+
+    // 1. 晶莹次表面折射渐变 (92%~96% 高度通透，绝不遮挡底层丝绸流光)
+    val surfaceBrush = if (isDark) {
+        if (isHighlighted) {
+            Brush.verticalGradient(
+                listOf(
+                    Color.White.copy(alpha = 0.15f),
+                    Color(0xFF1E101D).copy(alpha = 0.35f),
+                    Color(0xFF281426).copy(alpha = 0.50f)
+                )
+            )
+        } else {
+            Brush.verticalGradient(
+                listOf(
+                    Color.White.copy(alpha = 0.08f),
+                    Color(0xFF120A14).copy(alpha = 0.22f),
+                    Color(0xFF1A0E1C).copy(alpha = 0.36f)
+                )
+            )
+        }
+    } else {
+        if (isHighlighted) {
+            Brush.verticalGradient(
+                listOf(
+                    Color.White.copy(alpha = 0.28f),
+                    Color.White.copy(alpha = 0.08f), // 高通透腹部
+                    Color.White.copy(alpha = 0.18f)
+                )
+            )
+        } else {
+            Brush.verticalGradient(
+                listOf(
+                    Color.White.copy(alpha = 0.18f),
+                    Color.White.copy(alpha = 0.04f), // 极清透腹部: 让底层鲜活的丝绸波浪完全穿透晶莹玻璃!
+                    Color.White.copy(alpha = 0.12f)
+                )
+            )
+        }
+    }
+
+    // 2. 晶体斜切棱镜高光边 (0.75dp 极细边框: 顶部明亮聚光 -> 两侧快速过渡 -> 底部融入背景)
+    val borderBrush = Brush.verticalGradient(
+        listOf(
+            Color.White.copy(alpha = if (isDark) 0.45f else 0.80f),
+            Color.White.copy(alpha = if (isDark) 0.15f else 0.20f),
+            if (isHighlighted) PurpleText.copy(alpha = 0.35f) else Color.White.copy(alpha = if (isDark) 0.04f else 0.06f)
+        )
+    )
+
+    // 3. 悬浮焦散微光投影 (告别系统黑阴影，呈现悬浮晶莹感)
+    val spotColor = when {
+        isDark -> Color(0x33000000)
+        isHighlighted -> Color(0x18D66E9B)
+        else -> Color(0x108A3D5E)
+    }
+
+    val hazeModifier = if (bgHazeState != null) {
+        Modifier.hazeEffect(
+            state = bgHazeState,
+            style = HazeDefaults.style(
+                backgroundColor = (if (isDark) Color(0xFF140A15) else Color.White).copy(
+                    alpha = if (isDark) 0.30f else 0.10f
+                ),
+                blurRadius = 24.dp,
+                noiseFactor = 0.012f
+            )
+        )
+    } else Modifier
+
+    Box(
+        modifier = modifier
+            .shadow(
+                elevation = if (isHighlighted) 3.dp else 1.5.dp,
+                shape = shape,
+                ambientColor = Color(0x04000000),
+                spotColor = spotColor
+            )
+            .clip(shape)
+            .then(hazeModifier)
+            .background(surfaceBrush)
+            .border(0.75.dp, borderBrush, shape)
+    ) {
+        // 4. 顶部极细镜面反射闪光 (Specular Glint)
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth(0.75f)
+                .height(1.dp)
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            Color.Transparent,
+                            Color.White.copy(alpha = if (isDark) 0.35f else 0.70f),
+                            Color.Transparent
+                        )
+                    )
+                )
+        )
+
+        content()
+    }
+}
+
+/** 组样式卡片容器(真液态玻璃质感分组) */
+@Composable
+private fun SettingsGroupCard(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    GlassCard(
+        shape = RoundedCornerShape(22.dp),
+        isHighlighted = false,
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            content()
+        }
+    }
+}
+
+/** 分组行条目(带图标色块、副标题、徽标与弹性按压反馈) */
+@Composable
+private fun SettingsRowItem(
+    icon: ImageVector,
+    iconTint: Color = PurpleText,
+    iconBg: Color = PurpleSoft.copy(alpha = 0.15f),
+    title: String,
+    subtitle: String,
+    badgeText: String? = null,
+    onClick: () -> Unit
+) {
+    val haptic = LocalHapticFeedback.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.975f else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow
+        ),
+        label = "settingsRowScale"
+    )
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .scale(scale)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null
+            ) {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onClick()
+            }
+            .padding(horizontal = 16.dp, vertical = 13.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = iconBg,
+            modifier = Modifier.size(38.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = iconTint,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = title,
+                fontSize = 15.sp,
+                color = PurpleDark,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = subtitle,
+                fontSize = 12.sp,
+                color = GreyText,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (!badgeText.isNullOrBlank()) {
+            Spacer(Modifier.width(8.dp))
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = PurpleSoft.copy(alpha = 0.14f)
+            ) {
+                Text(
+                    text = badgeText,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = PurpleDark,
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                )
+            }
+        }
+        Spacer(Modifier.width(6.dp))
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = PurpleSoft.copy(alpha = 0.7f),
+            modifier = Modifier.size(18.dp)
+        )
+    }
+}
+
+/** 快捷操作胶囊 Chip(按压弹性与微光边框) */
+@Composable
+private fun QuickActionChip(
+    icon: ImageVector,
+    label: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    val haptic = LocalHapticFeedback.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed && enabled) 0.93f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "chipScale"
+    )
+
+    val isDark = ThemeState.isDark
+    val bgHazeState = LocalBackgroundHazeState.current
+    val chipHazeModifier = if (bgHazeState != null) {
+        Modifier.hazeEffect(
+            state = bgHazeState,
+            style = HazeDefaults.style(
+                backgroundColor = (if (isDark) Color(0xFF160B18) else Color.White).copy(
+                    alpha = if (isDark) 0.35f else 0.12f
+                ),
+                blurRadius = 20.dp,
+                noiseFactor = 0.01f
+            )
+        )
+    } else Modifier
+
+    val chipSurfaceBrush = if (isDark) {
+        Brush.verticalGradient(
+            listOf(
+                Color.White.copy(alpha = if (enabled) 0.16f else 0.08f),
+                Color(0xFF160B18).copy(alpha = if (enabled) 0.35f else 0.15f)
+            )
+        )
+    } else {
+        Brush.verticalGradient(
+            listOf(
+                Color.White.copy(alpha = if (enabled) 0.25f else 0.12f),
+                Color.White.copy(alpha = if (enabled) 0.05f else 0.02f),
+                Color.White.copy(alpha = if (enabled) 0.15f else 0.08f)
+            )
+        )
+    }
+    val chipBorderBrush = Brush.verticalGradient(
+        listOf(
+            Color.White.copy(alpha = if (isDark) 0.40f else 0.80f),
+            if (enabled) PurpleText.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.10f),
+            Color.Transparent
+        )
+    )
+
+    Box(
+        modifier = Modifier
+            .scale(scale)
+            .shadow(
+                elevation = if (enabled) 2.dp else 0.5.dp,
+                shape = RoundedCornerShape(16.dp),
+                ambientColor = Color(0x04000000),
+                spotColor = if (isDark) Color.Black else Color(0x108A3D5E)
+            )
+            .clip(RoundedCornerShape(16.dp))
+            .then(chipHazeModifier)
+            .background(chipSurfaceBrush)
+            .border(0.75.dp, chipBorderBrush, RoundedCornerShape(16.dp))
+            .alpha(if (enabled) 1f else 0.55f)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                enabled = enabled
+            ) {
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onClick()
+            }
+    ) {
+        // 顶部微高光闪光
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth(0.80f)
+                .height(1.dp)
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            Color.Transparent,
+                            Color.White.copy(alpha = if (isDark) 0.35f else 0.80f),
+                            Color.Transparent
+                        )
+                    )
+                )
+        )
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = if (enabled) PurpleText else GreyText,
+                modifier = Modifier.size(15.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = label,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (enabled) PurpleDark else GreyText
+            )
+        }
+    }
+}
+
+/** 活跃节点信息胶囊(实时节点名、延迟与选路策略，点击节点刷新测速，点击策略徽标展开下拉菜单选择调度策略) */
+@Composable
+private fun ActiveNodePill(
+    nodeName: String,
+    latencyMs: Long,
+    strategy: String,
+    onReprobe: () -> Unit,
+    onSelectStrategy: (String) -> Unit
+) {
+    val haptic = LocalHapticFeedback.current
+    val context = LocalContext.current
+
+    var rotationTarget by remember { mutableStateOf(0f) }
+    val animatedRotation by animateFloatAsState(
+        targetValue = rotationTarget,
+        animationSpec = tween(durationMillis = 650, easing = FastOutSlowInEasing),
+        label = "nodePillRotate"
+    )
+
+    val pingColor = when {
+        latencyMs <= 0 -> GreyText
+        latencyMs < 100 -> StatusConnected
+        latencyMs < 250 -> StatusConnecting
+        else -> Color(0xFFE53935)
+    }
+
+    GlassCard(
+        shape = RoundedCornerShape(20.dp),
+        isHighlighted = latencyMs > 0,
+        modifier = Modifier
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // 节点名称与测速区域：点击触发并发对冲测速与选路
+            val probeInteraction = remember { MutableInteractionSource() }
+            val isProbePressed by probeInteraction.collectIsPressedAsState()
+            val probeScale by animateFloatAsState(
+                targetValue = if (isProbePressed) 0.96f else 1f,
+                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+                label = "nodeProbeScale"
+            )
+
+            Row(
+                modifier = Modifier
+                    .scale(probeScale)
+                    .clickable(
+                        interactionSource = probeInteraction,
+                        indication = null
+                    ) {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        rotationTarget += 360f
+                        onReprobe()
+                    }
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.size(14.dp)
+                ) {
+                    Box(Modifier.size(12.dp).background(StatusConnected.copy(alpha = 0.25f), CircleShape))
+                    Box(Modifier.size(6.dp).background(StatusConnected, CircleShape))
+                }
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = nodeName.ifBlank { stringResource(R.string.node_direct) },
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = PurpleDark,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 160.dp)
+                )
+                if (latencyMs > 0) {
+                    Spacer(Modifier.width(6.dp))
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = pingColor.copy(alpha = 0.14f)
+                    ) {
+                        Text(
+                            text = "${latencyMs}ms",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = pingColor,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+                Spacer(Modifier.width(6.dp))
+                Icon(
+                    imageVector = Icons.Outlined.Sync,
+                    contentDescription = stringResource(R.string.cd_refresh),
+                    tint = PurpleSoft,
+                    modifier = Modifier
+                        .size(15.dp)
+                        .rotate(animatedRotation)
+                )
+            }
+
+            // 调度策略徽标：点击展开下拉菜单选择调度算法 (最低延迟 / 故障转移 / 负载轮询 / 随机)
+            if (strategy.isNotBlank()) {
+                Spacer(Modifier.width(4.dp))
+                var menuExpanded by remember { mutableStateOf(false) }
+                val stratInteraction = remember { MutableInteractionSource() }
+                val isStratPressed by stratInteraction.collectIsPressedAsState()
+                val stratScale by animateFloatAsState(
+                    targetValue = if (isStratPressed) 0.94f else 1f,
+                    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+                    label = "nodeStratScale"
+                )
+
+                Box {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = PurpleSoft.copy(alpha = 0.15f),
+                        modifier = Modifier
+                            .scale(stratScale)
+                            .clickable(
+                                interactionSource = stratInteraction,
+                                indication = null
+                            ) {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                menuExpanded = true
+                            }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = NotificationHelper.getStrategyDisplayName(context, strategy),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = PurpleDark
+                            )
+                            Spacer(Modifier.width(2.dp))
+                            Icon(
+                                imageVector = Icons.Filled.KeyboardArrowDown,
+                                contentDescription = stringResource(R.string.notification_action_strategy),
+                                tint = PurpleDark,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
+                        shape = RoundedCornerShape(16.dp),
+                        containerColor = if (ThemeState.isDark) Color(0xFF281C23) else Color.White.copy(alpha = 0.95f),
+                        border = BorderStroke(
+                            1.dp,
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color.White.copy(alpha = if (ThemeState.isDark) 0.40f else 0.90f),
+                                    DividerLine.copy(alpha = 0.40f)
+                                )
+                            )
+                        )
+                    ) {
+                        val strategies = listOf(
+                            "latency" to stringResource(R.string.notification_strategy_latency),
+                            "failover" to stringResource(R.string.notification_strategy_failover),
+                            "round_robin" to stringResource(R.string.notification_strategy_round_robin),
+                            "random" to stringResource(R.string.notification_strategy_random)
+                        )
+                        strategies.forEach { (key, label) ->
+                            val isSelected = strategy.equals(key, ignoreCase = true)
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        text = label,
+                                        fontSize = 14.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (isSelected) PurpleText else PurpleDark
+                                    )
+                                },
+                                trailingIcon = {
+                                    if (isSelected) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Check,
+                                            contentDescription = null,
+                                            tint = PurpleText,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    menuExpanded = false
+                                    onSelectStrategy(key)
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 悬浮式胶囊底部导航栏 (Floating Capsule Dock) - 真·液态毛玻璃 (通透模糊 + 晶莹棱镜边框 + 顶部镜面高光) */
+@Composable
+private fun FloatingCapsuleBar(
+    selectedTab: Int,
+    onSelectTab: (Int) -> Unit,
+    hazeState: HazeState,
+    isCompact: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    val haptic = LocalHapticFeedback.current
+    val isDark = ThemeState.isDark
+
+    Box(
+        modifier = modifier
+            .navigationBarsPadding()
+            .padding(horizontal = if (isCompact) 12.dp else 24.dp, vertical = if (isCompact) 6.dp else 10.dp)
+            .shadow(
+                elevation = 14.dp,
+                shape = RoundedCornerShape(32.dp),
+                ambientColor = if (isDark) Color.Black else Color(0x18000000),
+                spotColor = if (isDark) Color.Black else Color(0x358A3D5E)
+            )
+            .clip(RoundedCornerShape(32.dp))
+            .border(
+                1.2.dp,
+                Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = if (isDark) 0.60f else 0.95f),
+                        Color.White.copy(alpha = if (isDark) 0.22f else 0.40f),
+                        Color.Transparent
+                    )
+                ),
+                shape = RoundedCornerShape(32.dp)
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        // 液态玻璃模糊背景层 (通透度提升至 28% 白，让底层滑过的流体极光产生梦幻折射)
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .hazeEffect(
+                    state = hazeState,
+                    style = HazeDefaults.style(
+                        backgroundColor = (if (isDark) Color(0xFF140B10) else Color.White).copy(
+                            alpha = if (isDark) 0.40f else 0.28f
+                        ),
+                        blurRadius = 32.dp,
+                        noiseFactor = 0.015f
+                    )
+                )
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            if (isDark) Color.White.copy(alpha = 0.16f) else Color.White.copy(alpha = 0.50f),
+                            if (isDark) Color.White.copy(alpha = 0.03f) else Color.White.copy(alpha = 0.15f),
+                            Color.Transparent
+                        )
+                    )
+                )
+        )
+
+        // 顶部高光弧线闪光 (Top Specular Rim Glint)
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth(0.70f)
+                .height(1.5.dp)
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            Color.Transparent,
+                            Color.White.copy(alpha = if (isDark) 0.50f else 0.95f),
+                            Color.Transparent
+                        )
+                    )
+                )
+        )
+
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val tabs = listOf(
+                Triple(0, Icons.Outlined.Dashboard to Icons.Filled.Dashboard, stringResource(R.string.tab_dashboard)),
+                Triple(1, Icons.Outlined.AltRoute to Icons.Filled.AltRoute, stringResource(R.string.tab_routing)),
+                Triple(2, Icons.Outlined.Build to Icons.Filled.Build, stringResource(R.string.tab_tools))
+            )
+            tabs.forEach { (index, icons, title) ->
+                val isSelected = selectedTab == index
+                val interactionSource = remember { MutableInteractionSource() }
+                val isPressed by interactionSource.collectIsPressedAsState()
+                val scale by animateFloatAsState(
+                    targetValue = if (isPressed) 0.92f else 1f,
+                    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+                    label = "tabScale$index"
+                )
+                val pillBg by animateColorAsState(
+                    targetValue = if (isSelected) PurpleFill else Color.Transparent,
+                    animationSpec = tween(220),
+                    label = "tabPillBg$index"
+                )
+                val contentColor by animateColorAsState(
+                    targetValue = if (isSelected) Color.White else GreyText,
+                    animationSpec = tween(220),
+                    label = "tabContentColor$index"
+                )
+
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = pillBg,
+                    border = if (isSelected) {
+                        BorderStroke(
+                            1.dp,
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color.White.copy(alpha = 0.60f),
+                                    Color.Transparent
+                                )
+                            )
+                        )
+                    } else null,
+                    shadowElevation = if (isSelected) 3.dp else 0.dp,
+                    modifier = Modifier
+                        .scale(scale)
+                        .clickable(
+                            interactionSource = interactionSource,
+                            indication = null
+                        ) {
+                            if (selectedTab != index) {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onSelectTab(index)
+                            }
+                        }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(
+                            horizontal = if (isCompact) 12.dp else 16.dp,
+                            vertical = if (isCompact) 7.dp else 9.dp
+                        ),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (isSelected) icons.second else icons.first,
+                            contentDescription = title,
+                            tint = contentColor,
+                            modifier = Modifier.size(if (isCompact) 17.dp else 19.dp)
+                        )
+                        AnimatedVisibility(
+                            visible = isSelected,
+                            enter = fadeIn(animationSpec = tween(150)) + expandVertically(),
+                            exit = fadeOut(animationSpec = tween(150)) + shrinkVertically()
+                        ) {
+                            Row {
+                                Spacer(Modifier.width(if (isCompact) 4.dp else 6.dp))
+                                Text(
+                                    text = title,
+                                    fontSize = if (isCompact) 12.sp else 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = contentColor
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 屏幕自适应布局模型 (适配小屏/矮屏、标准手机、平板/折叠大屏及横屏模式) */
+data class AdaptiveLayoutInfo(
+    val screenWidthDp: Dp,
+    val screenHeightDp: Dp,
+    val isLandscape: Boolean,
+    val isCompact: Boolean,
+    val isTablet: Boolean,
+    val orbSize: Dp,
+    val contentHorizontalPadding: Dp
+)
+
+@Composable
+private fun rememberAdaptiveLayoutInfo(): AdaptiveLayoutInfo {
+    val configuration = LocalConfiguration.current
+    val width = configuration.screenWidthDp.dp
+    val height = configuration.screenHeightDp.dp
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val isCompact = width < 360.dp || (height < 640.dp && !isLandscape)
+    val isTablet = width >= 600.dp
+
+    // 动态圆环尺寸:
+    // 横屏模式受限于纵向视口高度 (通常 360dp - 410dp)，圆环缩至 150dp - 180dp
+    // 小屏/矮屏设备动态收缩至 172dp - 196dp，避免挤占下方卡片
+    // 平板/宽折叠屏适度放大至 244dp，与 580dp 容器完美呼应
+    // 主流机型保持经典的 220dp - 228dp 舒适视觉比例
+    val orbSize = when {
+        isLandscape -> (height * 0.44f).coerceIn(148.dp, 185.dp)
+        isCompact -> (width * 0.54f).coerceIn(168.dp, 196.dp)
+        isTablet -> 244.dp
+        else -> (width * 0.58f).coerceIn(200.dp, 230.dp)
+    }
+
+    val contentHorizPadding = if (isCompact) 14.dp else 20.dp
+
+    return remember(width, height, isLandscape, isCompact, isTablet, orbSize, contentHorizPadding) {
+        AdaptiveLayoutInfo(
+            screenWidthDp = width,
+            screenHeightDp = height,
+            isLandscape = isLandscape,
+            isCompact = isCompact,
+            isTablet = isTablet,
+            orbSize = orbSize,
+            contentHorizontalPadding = contentHorizPadding
+        )
+    }
+}
+
+/** 首页主体内容:全新旗舰级三标签设计(仪表盘、规则分流、系统工具)+ 悬浮导航胶囊 */
+@Composable
+private fun HomeLauncher(
+    adminAuth: Pair<String, String>?,
+    onToggleVpn: () -> Unit,
+    themeMode: String,
+    onCycleTheme: () -> Unit,
     onOpenApps: () -> Unit,
     onOpenDns: () -> Unit,
     onOpenExclude: () -> Unit,
     onOpenServiceMode: () -> Unit,
     onOpenTethering: () -> Unit,
+    onOpenNetworkStatus: () -> Unit,
     onOpenLogcat: () -> Unit,
-    onOpenNetworkStatus: () -> Unit
+    onOpenBatterySettings: () -> Unit
 ) {
     val context = LocalContext.current
-    // 服务模式做成可观察 state(见 rememberServiceMode):切模式后抽屉菜单/副标题实时刷新,
-    // 否则 drawerContent 被 Compose 跳过(skipping),隐藏菜单不恢复、副标题不更新(§8)。
-    val serviceMode = rememberServiceMode()
-    val tunStack = rememberTunStack()
-    // 联网状态门控 = VPN 运行中 && 仅绕过(黑名单)模式:仅绕过下应用分流行为与「联网状态」
-    // 的按应用维度展示最相关;白名单模式隐藏入口(设计定稿 §6.1)。
-    val vpnRunning by SmartProxyVpnService.isRunning.collectAsState()
-
-    ModalDrawerSheet(
-        drawerContainerColor = DrawerSurface,
-        drawerShape = RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp),
-        modifier = Modifier.width(300.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .safeDrawingPadding()
-                .padding(20.dp)
-        ) {
-            // 抽屉头部品牌区
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // 品牌 logo:用 launcher 自适应图标的前景位图(黑底霓虹 S 贴纸,自带圆角与透明边距),
-                // 跟桌面图标同源;不再用旧的 icon-font 电源字符 + 紫底。
-                Image(
-                    painter = painterResource(R.mipmap.ic_launcher_foreground),
-                    contentDescription = null,
-                    modifier = Modifier.size(46.dp)
-                )
-                Spacer(Modifier.width(14.dp))
-                Column {
-                    Text(
-                        text = "SmartProxy",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = PurpleDark
-                    )
-                    Text(
-                        text = stringResource(R.string.drawer_tagline),
-                        fontSize = 12.sp,
-                        color = GreyText
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(20.dp))
-            HorizontalDivider(color = DividerLine, thickness = 1.dp)
-            Spacer(Modifier.height(16.dp))
-
-            Text(
-                text = stringResource(R.string.drawer_section_menu),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = PurpleSoft,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
-            )
-            Spacer(Modifier.height(6.dp))
-
-            // 侧边栏菜单项：分应用代理 (Apps)(per-app 分流走 VpnService.Builder、禁止联网
-            // 走 TUN 数据路径,仅 VPN 隧道模式生效;仅代理 SOCKS5 无 VpnService,入口一并
-            // 隐藏(§8)。规则仍留在 AppPrefs,切回 VPN 模式照常生效。)
-            if (serviceMode == AppPrefs.MODE_VPN) {
-                DrawerMenuItem(
-                    title = stringResource(R.string.drawer_apps),
-                    subtitle = stringResource(R.string.drawer_apps_subtitle),
-                    onClick = onOpenApps
-                )
-            }
-
-            // 侧边栏菜单项：DNS 服务器(builder.addDnsServer,仅 VPN 隧道模式生效;仅代理
-            // SOCKS5 无 VpnService,注入不发生,入口一并隐藏(§6.1))。设置存 AppPrefs,
-            // 切换服务模式不丢,回 VPN 模式照常注入。
-            if (serviceMode == AppPrefs.MODE_VPN) {
-                DrawerMenuItem(
-                    title = stringResource(R.string.drawer_dns),
-                    subtitle = stringResource(R.string.drawer_dns_subtitle),
-                    onClick = onOpenDns
-                )
-            }
-
-            // 侧边栏菜单项：排除路由(builder.excludeRoute,仅 VPN 隧道模式;
-            // 仅代理 SOCKS5 无 VpnService,excludeRoute 不生效,入口一并隐藏(§6.1))。
-            if (serviceMode == AppPrefs.MODE_VPN) {
-                DrawerMenuItem(
-                    title = stringResource(R.string.drawer_exclude),
-                    subtitle = stringResource(R.string.drawer_exclude_subtitle),
-                    onClick = onOpenExclude
-                )
-            }
-
-            // 侧边栏菜单项：服务模式(VPN 隧道 / 仅代理 SOCKS5,§8)。副标题实时显示当前模式及协议栈。
-            val modeSub = if (serviceMode == AppPrefs.MODE_VPN) {
-                "${serviceModeLabel(context, serviceMode)} (${tunStackLabel(context, tunStack)})"
-            } else {
-                serviceModeLabel(context, serviceMode)
-            }
-            DrawerMenuItem(
-                title = stringResource(R.string.drawer_service_mode),
-                subtitle = stringResource(R.string.drawer_service_mode_subtitle, modeSub),
-                onClick = onOpenServiceMode
-            )
-
-            // 侧边栏菜单项：网络共享 (Shizuku 免 Root 共享代理至热点/USB)。
-            // 只挂 TUN 数据路径(Shizuku 读 TUN fd 转发到热点),仅代理(SOCKS5)模式无 TUN 可
-            // 共享,入口一并隐藏(§6.1)。
-            if (serviceMode == AppPrefs.MODE_VPN) {
-                DrawerMenuItem(
-                    title = stringResource(R.string.drawer_tethering),
-                    subtitle = stringResource(R.string.drawer_tethering_subtitle),
-                    onClick = onOpenTethering
-                )
-            }
-
-            // 侧边栏菜单项：联网状态(仅 VPN 隧道服务模式 + 仅绕过 + 运行中才出现;懒采集,页面开才统计)
-            // 连接监控只挂在 TUN 数据路径,仅代理(SOCKS5)模式监控恒空,入口一并隐藏(§6.1)。
-            if (serviceMode == AppPrefs.MODE_VPN && vpnRunning && AppPrefs.globalMode(context)) {
-                DrawerMenuItem(
-                    title = stringResource(R.string.drawer_network_status),
-                    subtitle = stringResource(R.string.drawer_network_status_subtitle),
-                    onClick = onOpenNetworkStatus
-                )
-            }
-
-            // 侧边栏菜单项：日志查看(本进程 logcat,Debug 级)
-            DrawerMenuItem(
-                title = stringResource(R.string.drawer_logcat),
-                subtitle = stringResource(R.string.drawer_logcat_subtitle),
-                onClick = onOpenLogcat
-            )
-
-            Spacer(Modifier.weight(1f))
-
-            // 底部版本与架构信息(版本行可点击打开项目主页)
-            Box(
-                modifier = Modifier.fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "SmartProxy for Android",
-                    fontSize = 12.sp,
-                    color = PurpleSoft,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.clickable { openProjectUrl(context) }
-                )
-            }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = stringResource(R.string.drawer_footer_tagline),
-                fontSize = 11.sp,
-                color = GreyText.copy(alpha = 0.7f),
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-    }
-}
-
-/** 侧边栏菜单按钮项 */
-@Composable
-private fun DrawerMenuItem(
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit
-) {
-    Card(
-        onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = CardSurface),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 5.dp)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(title, fontSize = 15.sp, color = PurpleDark, fontWeight = FontWeight.Medium)
-                Text(subtitle, fontSize = 12.sp, color = GreyText)
-            }
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                tint = PurpleSoft,
-                modifier = Modifier.size(20.dp)
-            )
-        }
-    }
-}
-
-/** 首页主体内容(抽屉 HomeScreen 的内层):背景 + 标题栏(左菜单按钮开抽屉)+ 状态行 +
- *  圆环 + 开关卡 + 面板卡(仅 VPN 运行时显示)。侧边栏功能(Apps / DNS / 排除路由)在 HomeScreen 抽屉。 */
-@Composable
-private fun HomeLauncher(
-    panelUrl: String?,
-    adminAuth: Pair<String, String>?,
-    onToggleVpn: () -> Unit,
-    onOpenDrawer: () -> Unit,
-    themeMode: String,
-    onCycleTheme: () -> Unit
-) {
-    val context = LocalContext.current
+    val adaptive = rememberAdaptiveLayoutInfo()
     val running by SmartProxyVpnService.isRunning.collectAsState()
 
-    // 服务模式做成可观察 state(见 rememberServiceMode):切模式后监听开关的语义副标题
-    // (开机自启文案等)实时刷新,否则 HomeLauncher 组合被跳过时读旧值(§8)。
-    val serviceMode = rememberServiceMode()
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
 
-    // 开关语义随服务模式(§8):VPN 隧道 = 拦截(tun.inet4/6_address,config.json 真源);
-    // 仅代理(SOCKS5) = 监听(AppPrefs.socksListen → listen.host,首页与面板同源)。
-    // remember 以 socksMode 为 key:切换服务模式时重新读真源,不残留旧模式的显示态。
+    val serviceMode = rememberServiceMode()
+    val tunStack = rememberTunStack()
+
     val socksMode = serviceMode == AppPrefs.MODE_SOCKS5
     val vpnIntercept = !socksMode
 
     var networkStatus by remember { mutableStateOf(NetworkUtils.checkPhysicalNetworkAddresses(context)) }
 
-    // 底层网络状态的唯一写入口。光靠 NetworkCallback 不够:回调是异步投递的,首页组合被跳过时
-    // DisposableEffect 不重跑、进程在后台被冻结期间投递的 AVAIL/LOST 又可能整段错过,缓存一旦停在
-    // 上一张网,按钮就保留上一张网的「可用」外观 —— 启动环看着能点、v4 开关看着能拨,点下去才由
-    // 各自的守卫弹提示,而且两个提示的理由还不一致(一个说没网,一个说不能关掉最后一个协议族)。
-    // 所以除回调外还有三处重算:注册回调时、每次回到前台时、以及可见期间每 2s 兜底一次。
-    // NetworkAddressStatus 是 data class,值没变时写回不触发重组,轮询本身几乎零开销。
     fun refreshNetworkStatus(): NetworkAddressStatus {
         val fresh = NetworkUtils.checkPhysicalNetworkAddresses(context)
         networkStatus = fresh
@@ -897,14 +1633,11 @@ private fun HomeLauncher(
             override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) { refreshNetworkStatus() }
             override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) { refreshNetworkStatus() }
         }
-        refreshNetworkStatus() // 组合重建时立刻对齐,不吃上一次的旧值
+        refreshNetworkStatus()
         runCatching { cm?.registerDefaultNetworkCallback(cb) }
         onDispose { runCatching { cm?.unregisterNetworkCallback(cb) } }
     }
 
-    // 可见期间兜底:在通知栏里关掉 WiFi/移动数据后直接看首页时,回调未必已经到,靠这个把按钮的
-    // 置灰态补上。repeatOnLifecycle 进入 RESUMED 立刻跑一轮,离开即取消,不在后台空转。
-    // 注意 lifecycleOwner 要在这里自己取一份 —— HomeScreen 里那个同名变量不在本组合的作用域内。
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
@@ -926,20 +1659,29 @@ private fun HomeLauncher(
         else ConfigProvider.ipv6(context)
     ) }
 
-    // 底层物理网络缺哪一族就关掉对应开关并同步落盘;网络把该族还回来时,只把「当初是自动关的」
-    // 那一族拨回去。原先只有前半段,是单向的:WiFi 关一次两族全关,WiFi 回来两个都还是关的,
-    // 点启动只会得到「至少需开启 IPv4 或 IPv6 其中一个」,得手动拨回来。
-    // 靠 AppPrefs 的标记区分「自动关的」和「用户自己关的」,丢进 SharedPreferences 是为了
-    // 进程在断网期间被杀后仍认得出来 —— 光用内存标记,重启后开关就永远停在关。
+    val currentSocksListen = if (socksMode) {
+        when {
+            ipv4 && ipv6 -> AppPrefs.SOCKS_LISTEN_BOTH
+            ipv6 -> AppPrefs.SOCKS_LISTEN_V6
+            else -> AppPrefs.SOCKS_LISTEN_V4
+        }
+    } else {
+        AppPrefs.SOCKS_LISTEN_BOTH
+    }
+
+    val panelUrl = PanelUrl.url(
+        context = context,
+        serviceMode = serviceMode,
+        socksListen = currentSocksListen
+    )
+
     LaunchedEffect(networkStatus, socksMode) {
         if (networkStatus.hasV6 && !ipv6 && AppPrefs.autoDisabledV6(context)) {
             ipv6 = true
             AppPrefs.setAutoDisabledV6(context, false)
             if (vpnIntercept) {
-                // 与自动关闭对称:setIpv6(true) 会把 dns.filter_aaaa 复位成 false。
                 ConfigProvider.setIpv6(context, true)
             } else if (AppPrefs.socksListen(context) == AppPrefs.SOCKS_LISTEN_V4) {
-                // listen 是单值(§8):v6 被自动关时从 both 落成了 v4,补回 v6 就是 both。
                 AppPrefs.setSocksListen(context, AppPrefs.SOCKS_LISTEN_BOTH)
             }
             if (running) {
@@ -989,37 +1731,27 @@ private fun HomeLauncher(
     }
     var bootAuto by remember { mutableStateOf(AppPrefs.bootAutoStart(context)) }
 
-    // 悬浮网速计开关(首页右侧半卡,与开机自启各占半宽):仅 VPN 隧道模式有意义 —— 按应用
-    // 统计只挂 TUN 数据路径,仅代理(SOCKS5)模式禁用置灰。开启需悬浮窗权限:无权限先跳
-    // 系统设置授权,返回回调按授权结果置位;已授权且 VPN 在跑则立即显示胶囊,否则只落盘,
-    // 下次连接由服务 autoShow 拉起。关闭即撤胶囊。socksMode 下 enabled=false 点卡片弹提示。
     var speedMeterOn by remember { mutableStateOf(AppPrefs.speedMeterEnabled(context)) }
-    // 悬浮窗授权回调里/开关开启时:缺「使用情况访问权限」就弹 M3 说明对话框(见下方 Box 内)。
     var showUsageAccessDialog by remember { mutableStateOf(false) }
     val overlayPermLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {
-        // 系统悬浮窗设置页不回传 resultCode,直接按当前授权状态定夺:授权了才真正打开。
         if (Settings.canDrawOverlays(context)) {
             speedMeterOn = true
             AppPrefs.setSpeedMeterEnabled(context, true)
             if (running) SpeedMeterOverlay.autoShow(context)
-            // 前台应用判定还需「使用情况访问权限」:顺带引导(不阻塞,未授权退回流量最大)。
             if (SpeedMeterOverlay.needsUsageAccess(context)) showUsageAccessDialog = true
         } else {
-            speedMeterOn = false // 用户未授权:开关回弹为关
+            speedMeterOn = false
         }
     }
 
-    // 连接进度弧:运行中扫 0→360°,扫完前状态显示"连接中"。
     val sweep = remember { Animatable(0f) }
     LaunchedEffect(running) {
         sweep.animateTo(if (running) 360f else 0f, animationSpec = tween(1200))
     }
     val connecting = running && sweep.value < 355f
 
-    // 连接时长(§圆环):每秒 tick,读服务端会话启动时刻算 elapsed。running 变 false 时
-    // LaunchedEffect 重启不进入循环,计时停;重建(fullTeardown=false)不重置 startedAt。
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(running) {
         if (running) {
@@ -1031,54 +1763,161 @@ private fun HomeLauncher(
     }
     val elapsedMs = if (running) nowMs - SmartProxyVpnService.startedAt else 0L
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        if (ThemeState.isDark) {
-            // 深色模式(§7):樱花粉深色渐变,夜间不刺眼。
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(listOf(Color(0xFF2B1A22), Color(0xFF3D2430)))
-                    )
-            )
+    // 活跃节点与选路策略实时轮询 (1.5s 内存级无开销)
+    var activeNodeName by remember { mutableStateOf("") }
+    var activeNodeLatency by remember { mutableStateOf(0L) }
+    var activeStrategy by remember { mutableStateOf("") }
+
+    LaunchedEffect(running) {
+        if (running) {
+            while (true) {
+                runCatching {
+                    val raw = smartproxy.mobile.Mobile.getActiveNodeStatus()
+                    if (raw.isNotBlank()) {
+                        val json = JSONObject(raw)
+                        val v4 = json.optString("v4_node")
+                        val v6 = json.optString("v6_node")
+                        activeNodeName = when {
+                            v4.isNotBlank() -> v4
+                            v6.isNotBlank() -> v6
+                            else -> ""
+                        }
+                        activeNodeLatency = if (v4.isNotBlank()) json.optLong("v4_latency_ms", 0L) else json.optLong("v6_latency_ms", 0L)
+                        activeStrategy = json.optString("strategy", "")
+                    }
+                }
+                delay(1500)
+            }
         } else {
-            // 浅色背景(樱花粉):原 bg_main.jpg 图换成同源代码渐变,顶部同样色系。
-            // 原图只有 10×100(淡紫上下渐变),代码渐变更高清、天然适配任意屏幕。
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(listOf(Color(0xFFFFF5F9), Color(0xFFFCE0EC)))
-                    )
-            )
+            activeNodeName = ""
+            activeNodeLatency = 0L
+            activeStrategy = ""
         }
-        Column(
+    }
+
+    fun reprobeNodes() {
+        val reprobeIntent = Intent(context, SmartProxyVpnService::class.java)
+            .setAction(NotificationHelper.ACTION_REFRESH_NODES)
+        context.startService(reprobeIntent)
+        Toast.makeText(context, context.getString(R.string.toast_reprobe_started), Toast.LENGTH_SHORT).show()
+    }
+
+    fun selectStrategy(target: String) {
+        val stratIntent = Intent(context, SmartProxyVpnService::class.java)
+            .setAction(NotificationHelper.ACTION_SET_STRATEGY)
+            .putExtra(NotificationHelper.EXTRA_STRATEGY, target)
+        context.startService(stratIntent)
+        smartproxy.mobile.Mobile.setUpstreamStrategy(target)
+        ConfigProvider.setUpstreamStrategy(context, target)
+        activeStrategy = target
+        reprobeNodes()
+    }
+
+    val bgHazeState = remember { HazeState() }
+    val contentHazeState = remember { HazeState() }
+
+    val coroutineScope = rememberCoroutineScope()
+    var wallpaperVersion by remember { mutableIntStateOf(0) }
+    var customWallpaperBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+    var showWallpaperDialog by remember { mutableStateOf(false) }
+    var isCustomWp by remember { mutableStateOf(AppPrefs.isCustomWallpaperEnabled(context)) }
+
+    LaunchedEffect(wallpaperVersion) {
+        isCustomWp = AppPrefs.isCustomWallpaperEnabled(context)
+        val bmp = withContext(Dispatchers.IO) {
+            WallpaperHelper.loadWallpaperBitmap(context)
+        }
+        customWallpaperBitmap = bmp?.asImageBitmap()
+    }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            val initialStream = runCatching { context.contentResolver.openInputStream(uri) }.getOrNull()
+            val appContext = context.applicationContext
+            coroutineScope.launch {
+                val success = withContext(Dispatchers.IO) {
+                    WallpaperHelper.saveWallpaper(appContext, uri, initialStream)
+                }
+                if (success) {
+                    wallpaperVersion++
+                    Toast.makeText(appContext, appContext.getString(R.string.wallpaper_toast_saved), Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(appContext, appContext.getString(R.string.wallpaper_toast_fail), Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(PageBackground)
+    ) {
+        // ── 背景壁纸画布 (采样源：自定义相册壁纸 / 超清丝绸流体极光) ───────
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .safeDrawingPadding()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .hazeSource(state = bgHazeState)
         ) {
-            // ── 标题栏:M3 CenterAlignedTopAppBar(左菜单按钮 + 居中标题 + 右上主题切换)。
-            // windowInsets=0 交给外层 safeDrawingPadding 统一让位,避免双份状态栏 inset;
-            // 容器透明保留首页渐变,icon/标题色沿用品牌紫。 ──
+            val bmp = customWallpaperBitmap
+            if (bmp != null) {
+                Image(
+                    bitmap = bmp,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+                // 深色模式下铺设一层微透明遮罩，保证文字与玻璃卡片的高对比度辨识度
+                if (ThemeState.isDark) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.25f))
+                    )
+                }
+            } else {
+                FluidAmbientCanvas(
+                    isDark = ThemeState.isDark,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+
+        CompositionLocalProvider(LocalBackgroundHazeState provides bgHazeState) {
+            Column(
+                modifier = Modifier.fillMaxSize()
+            ) {
+            // ── 顶部标题栏 ──────────────────────────────
             CenterAlignedTopAppBar(
                 title = {
-                    Text(
-                        text = "SmartProxy",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = PurpleText
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onOpenDrawer) {
-                        Icon(Icons.Filled.Menu, contentDescription = stringResource(R.string.cd_open_menu), tint = PurpleText)
+                    AnimatedContent(
+                        targetState = selectedTab,
+                        transitionSpec = {
+                            fadeIn(animationSpec = tween(200)) togetherWith fadeOut(animationSpec = tween(150))
+                        },
+                        label = "topBarTitle"
+                    ) { tab ->
+                        val titleText = when (tab) {
+                            1 -> stringResource(R.string.tab_routing)
+                            2 -> stringResource(R.string.tab_tools)
+                            else -> "SmartProxy"
+                        }
+                        Text(
+                            text = titleText,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = PurpleText
+                        )
                     }
                 },
-                // 主题切换钮(§7):按模式显太阳/月亮/自动图标,点击循环切换(auto→浅→深),
-                // 图标随模式变化,状态一目了然。
                 actions = {
                     IconButton(onClick = onCycleTheme) {
                         Icon(
@@ -1090,200 +1929,480 @@ private fun HomeLauncher(
                     }
                 },
                 windowInsets = WindowInsets(0, 0, 0, 0),
-                // centerAlignedTopAppBarColors 已废弃(官方提示用 topAppBarColors 代替),
-                // 两者返回同型 TopAppBarColors,行为一致。
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color.Transparent,
-                    navigationIconContentColor = PurpleText,
                     titleContentColor = PurpleText,
                     actionIconContentColor = PurpleText
-                )
+                ),
+                modifier = Modifier.statusBarsPadding()
             )
-            Spacer(Modifier.height(24.dp))
 
-            // ── 大圆环 + 中心状态区 ──────────────────────────────
-            // 未连接:中心电源球体;连接中/已连接:状态点+文字+时长。状态显示并入
-            // 圆环中心(§效果图),不再单独状态行。点按整环启停。
-            val startEnabled = running || networkStatus.isAnyAvailable
-            ConnectOrb(
-                running = running,
-                connecting = connecting,
-                sweep = sweep.value,
-                elapsedMs = elapsedMs,
-                enabled = startEnabled,
-                onDisabledClick = {
-                    // 点到了灰环说明缓存认为没网;顺手重算一次,万一网又回来了立刻恢复可用。
-                    refreshNetworkStatus()
-                    Toast.makeText(context, context.getString(R.string.toast_no_network_start), Toast.LENGTH_SHORT).show()
-                },
-                // 启停前重算:onToggleClicked() 自己会再查一次真实网络(Line 236),这里同步一份
-                // 到 UI 状态,免得它判完「无网」返回后首页还维持着可点的样子。
-                onToggleVpn = { refreshNetworkStatus(); onToggleVpn() }
-            )
-            Spacer(Modifier.height(30.dp))
-
-            // ── 开关卡:IPv4 / IPv6 左右各半;开机自启(Apps 已移至侧边栏菜单)──
-            // 语义随服务模式(§8):VPN 隧道 = 拦截(tun.inet4/6_address);仅代理(SOCKS5) =
-            // 监听(AppPrefs.socksListen → listen.host:双开/只 v6="::"、只 v4="0.0.0.0"。
-            // Go net.Listen 对 "::" 默认双栈,只 v6 实际仍收 v4-mapped,与双开等价)。
-            // 守卫:两个族不能同时关 —— VPN 的 VpnService.Builder 至少要一个 addAddress,
-            // 否则 establish() 抛 IllegalArgumentException;仅代理也要有监听地址。
-            // 运行中改都走显式重建(Go watcher 自动重启已删除);restart() 自带 isRunning
-            // 守卫,未在跑只落盘。拦在开关这一层,checked 是受控 state,不更新即回弹。
-            Row(modifier = Modifier.fillMaxWidth()) {
-                SwitchCard(
-                    title = if (vpnIntercept) stringResource(R.string.home_ipv4_intercept) else stringResource(R.string.home_ipv4_listen),
-                    subtitle = when {
-                        !networkStatus.hasV4 -> stringResource(R.string.home_ipv4_no_address)
-                        vpnIntercept -> stringResource(R.string.home_ipv4_intercept_sub)
-                        else -> stringResource(R.string.home_ipv4_listen_sub)
-                    },
-                    checked = ipv4 && networkStatus.hasV4,
-                    enabled = networkStatus.hasV4,
-                    onDisabledClick = {
-                        Toast.makeText(context, context.getString(R.string.toast_no_ipv4_address), Toast.LENGTH_SHORT).show()
-                    },
-                    onCheckedChange = { v ->
-                        // 先按真实网络重算再判:开关的可用性取自可能过期的缓存,直接信它会把
-                        // 「网已经没了」误报成「你不肯关掉最后一个协议族」。
-                        if (!refreshNetworkStatus().hasV4) {
-                            Toast.makeText(context, context.getString(R.string.toast_no_ipv4_address), Toast.LENGTH_SHORT).show()
-                            return@SwitchCard
-                        }
-                        if (!v && !ipv6) {
-                            Toast.makeText(context, context.getString(R.string.toast_need_ipv46), Toast.LENGTH_SHORT).show()
-                            return@SwitchCard
-                        }
-                        ipv4 = v
-                        // 用户手动拨过就以他的为准:清掉「自动关」标记,网络回来时不再替他打开。
-                        AppPrefs.setAutoDisabledV4(context, false)
-                        if (vpnIntercept) {
-                            // 写 config.json tun.inet4_address(§4.6),运行中显式重建才生效。
-                            ConfigProvider.setIpv4(context, v)
-                        } else {
-                            AppPrefs.setSocksListen(context, when {
-                                v && ipv6 -> AppPrefs.SOCKS_LISTEN_BOTH
-                                v -> AppPrefs.SOCKS_LISTEN_V4
-                                else -> AppPrefs.SOCKS_LISTEN_V6
-                            })
-                        }
-                        SmartProxyVpnService.restart(context)
-                    },
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(8.dp))
-                SwitchCard(
-                    title = if (vpnIntercept) stringResource(R.string.home_ipv6_intercept) else stringResource(R.string.home_ipv6_listen),
-                    subtitle = when {
-                        !networkStatus.hasV6 -> stringResource(R.string.home_ipv6_no_address)
-                        vpnIntercept -> stringResource(R.string.home_ipv6_intercept_sub)
-                        else -> stringResource(R.string.home_ipv6_listen_sub)
-                    },
-                    checked = ipv6 && networkStatus.hasV6,
-                    enabled = networkStatus.hasV6,
-                    onDisabledClick = {
-                        Toast.makeText(context, context.getString(R.string.toast_no_ipv6_address), Toast.LENGTH_SHORT).show()
-                    },
-                    onCheckedChange = { v ->
-                        // 同 v4:先重算,网已经没了就报「未分配地址」而不是「不能关最后一个协议族」。
-                        if (!refreshNetworkStatus().hasV6) {
-                            Toast.makeText(context, context.getString(R.string.toast_no_ipv6_address), Toast.LENGTH_SHORT).show()
-                            return@SwitchCard
-                        }
-                        if (!v && !ipv4) {
-                            Toast.makeText(context, context.getString(R.string.toast_need_ipv46), Toast.LENGTH_SHORT).show()
-                            return@SwitchCard
-                        }
-                        ipv6 = v
-                        // 同 v4:用户手动拨过就清掉「自动关」标记,不再由网络恢复替他把开关打开。
-                        AppPrefs.setAutoDisabledV6(context, false)
-                        if (vpnIntercept) {
-                            ConfigProvider.setIpv6(context, v)
-                        } else {
-                            AppPrefs.setSocksListen(context, when {
-                                ipv4 && v -> AppPrefs.SOCKS_LISTEN_BOTH
-                                v -> AppPrefs.SOCKS_LISTEN_V6
-                                else -> AppPrefs.SOCKS_LISTEN_V4
-                            })
-                            val json = ConfigProvider.readConfig(context)
-                            val dns = json.optJSONObject("dns") ?: org.json.JSONObject().also { json.put("dns", it) }
-                            dns.put("filter_aaaa", !v)
-                            ConfigProvider.writeConfig(context, json)
-                        }
-                        SmartProxyVpnService.restart(context)
-                    },
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            // 开机自启 | 悬浮网速计:与上面 IPv4/IPv6 同款「左右各半」布局。悬浮网速计仅
-            // VPN 隧道模式可用(按应用统计挂 TUN 数据路径),仅代理 SOCKS5 模式整卡置灰,
-            // 点了 Toast 提示;开启时若还没悬浮窗权限走系统授权,授权成功才真正置位。
-            Row(modifier = Modifier.fillMaxWidth()) {
-                SwitchCard(
-                    title = stringResource(R.string.home_boot_autostart),
-                    subtitle = if (serviceMode == AppPrefs.MODE_VPN)
-                        stringResource(R.string.home_boot_autostart_sub_vpn) else stringResource(R.string.home_boot_autostart_sub_socks),
-                    checked = bootAuto,
-                    onCheckedChange = { v ->
-                        bootAuto = v
-                        AppPrefs.setBootAutoStart(context, v)
-                    },
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(8.dp))
-                SwitchCard(
-                    title = stringResource(R.string.home_speed_meter),
-                    subtitle = stringResource(R.string.home_speed_meter_sub),
-                    checked = speedMeterOn,
-                    enabled = !socksMode,
-                    onDisabledClick = {
-                        Toast.makeText(context, context.getString(R.string.toast_speed_meter_vpn_only), Toast.LENGTH_SHORT).show()
-                    },
-                    onCheckedChange = { want ->
-                        if (want) {
-                            if (Settings.canDrawOverlays(context)) {
-                                speedMeterOn = true
-                                AppPrefs.setSpeedMeterEnabled(context, true)
-                                if (running) {
-                                    SpeedMeterOverlay.autoShow(context)
-                                    NotificationHelper.refresh(context)
-                                }
-                                // 前台应用判定需「使用情况访问权限」:引导授权(不阻塞,未授权退回流量最大)。
-                                if (SpeedMeterOverlay.needsUsageAccess(context)) showUsageAccessDialog = true
+            // ── 主体内容与底部悬浮胶囊 ──────────────────────────────
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .widthIn(max = 580.dp)
+                        .fillMaxWidth()
+                        .hazeSource(state = contentHazeState)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = adaptive.contentHorizontalPadding, vertical = 6.dp)
+                        .padding(bottom = 110.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    AnimatedContent(
+                        targetState = selectedTab,
+                        transitionSpec = {
+                            if (targetState > initialState) {
+                                (fadeIn(animationSpec = tween(220)) + slideInHorizontally { width -> (width * 0.08f).toInt() })
+                                    .togetherWith(fadeOut(animationSpec = tween(160)) + slideOutHorizontally { width -> (-width * 0.08f).toInt() })
                             } else {
-                                Toast.makeText(context, context.getString(R.string.speed_meter_perm_needed), Toast.LENGTH_LONG).show()
-                                val intent = Intent(
-                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                    Uri.parse("package:${context.packageName}")
-                                )
-                                runCatching { overlayPermLauncher.launch(intent) }
-                                    .onFailure { runCatching { context.startActivity(intent) } }
+                                (fadeIn(animationSpec = tween(220)) + slideInHorizontally { width -> (-width * 0.08f).toInt() })
+                                    .togetherWith(fadeOut(animationSpec = tween(160)) + slideOutHorizontally { width -> (width * 0.08f).toInt() })
                             }
-                        } else {
-                            speedMeterOn = false
-                            AppPrefs.setSpeedMeterEnabled(context, false)
-                            SpeedMeterOverlay.hide()
-                            if (running) {
-                                NotificationHelper.refresh(context)
+                        },
+                        label = "tabContentTransition"
+                    ) { tab ->
+                        when (tab) {
+                            0 -> {
+                                // ── 仪表盘 Tab ──────────────────────────────
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Spacer(Modifier.height(if (adaptive.isCompact || adaptive.isLandscape) 4.dp else 10.dp))
+
+                                    val startEnabled = running || networkStatus.isAnyAvailable
+                                    ConnectOrb(
+                                        running = running,
+                                        connecting = connecting,
+                                        sweep = sweep.value,
+                                        elapsedMs = elapsedMs,
+                                        enabled = startEnabled,
+                                        orbSize = adaptive.orbSize,
+                                        onDisabledClick = {
+                                            refreshNetworkStatus()
+                                            Toast.makeText(context, context.getString(R.string.toast_no_network_start), Toast.LENGTH_SHORT).show()
+                                        },
+                                        onToggleVpn = { refreshNetworkStatus(); onToggleVpn() }
+                                    )
+
+                                    Spacer(Modifier.height(if (adaptive.isCompact || adaptive.isLandscape) 8.dp else 14.dp))
+
+                                    // 活跃节点信息胶囊
+                                    AnimatedVisibility(
+                                        visible = running,
+                                        enter = fadeIn(animationSpec = tween(220)) + expandVertically(),
+                                        exit = fadeOut(animationSpec = tween(180)) + shrinkVertically()
+                                    ) {
+                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                            ActiveNodePill(
+                                                nodeName = activeNodeName,
+                                                latencyMs = activeNodeLatency,
+                                                strategy = activeStrategy,
+                                                onReprobe = { reprobeNodes() },
+                                                onSelectStrategy = { strat -> selectStrategy(strat) }
+                                            )
+                                            Spacer(Modifier.height(16.dp))
+                                        }
+                                    }
+
+                                    // 快捷操作胶囊横排 (精选非重复核心入口)
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .horizontalScroll(rememberScrollState()),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        QuickActionChip(
+                                            icon = Icons.Outlined.OpenInBrowser,
+                                            label = stringResource(R.string.chip_panel),
+                                            enabled = running && panelUrl != null,
+                                            onClick = { if (panelUrl != null) openPanel(context, panelUrl) }
+                                        )
+                                        if (serviceMode == AppPrefs.MODE_VPN) {
+                                            QuickActionChip(
+                                                icon = Icons.Outlined.Apps,
+                                                label = stringResource(R.string.chip_apps),
+                                                enabled = true,
+                                                onClick = onOpenApps
+                                            )
+                                            QuickActionChip(
+                                                icon = Icons.Outlined.WifiTethering,
+                                                label = stringResource(R.string.chip_tethering),
+                                                enabled = true,
+                                                onClick = onOpenTethering
+                                            )
+                                        }
+                                        QuickActionChip(
+                                            icon = Icons.Outlined.Article,
+                                            label = stringResource(R.string.drawer_logcat),
+                                            enabled = true,
+                                            onClick = onOpenLogcat
+                                        )
+                                    }
+
+                                    Spacer(Modifier.height(if (adaptive.isCompact || adaptive.isLandscape) 10.dp else 18.dp))
+
+                                    // 2x2 便当开关网格
+                                    Row(modifier = Modifier.fillMaxWidth()) {
+                                        SwitchCard(
+                                            title = if (vpnIntercept) stringResource(R.string.home_ipv4_intercept) else stringResource(R.string.home_ipv4_listen),
+                                            subtitle = when {
+                                                !networkStatus.hasV4 -> stringResource(R.string.home_ipv4_no_address)
+                                                vpnIntercept -> stringResource(R.string.home_ipv4_intercept_sub)
+                                                else -> stringResource(R.string.home_ipv4_listen_sub)
+                                            },
+                                            checked = ipv4 && networkStatus.hasV4,
+                                            enabled = networkStatus.hasV4,
+                                            isCompact = adaptive.isCompact,
+                                            onDisabledClick = {
+                                                Toast.makeText(context, context.getString(R.string.toast_no_ipv4_address), Toast.LENGTH_SHORT).show()
+                                            },
+                                            onCheckedChange = { v ->
+                                                if (!refreshNetworkStatus().hasV4) {
+                                                    Toast.makeText(context, context.getString(R.string.toast_no_ipv4_address), Toast.LENGTH_SHORT).show()
+                                                    return@SwitchCard
+                                                }
+                                                if (!v && !ipv6) {
+                                                    Toast.makeText(context, context.getString(R.string.toast_need_ipv46), Toast.LENGTH_SHORT).show()
+                                                    return@SwitchCard
+                                                }
+                                                ipv4 = v
+                                                AppPrefs.setAutoDisabledV4(context, false)
+                                                if (vpnIntercept) {
+                                                    ConfigProvider.setIpv4(context, v)
+                                                } else {
+                                                    AppPrefs.setSocksListen(context, when {
+                                                        v && ipv6 -> AppPrefs.SOCKS_LISTEN_BOTH
+                                                        v -> AppPrefs.SOCKS_LISTEN_V4
+                                                        else -> AppPrefs.SOCKS_LISTEN_V6
+                                                    })
+                                                }
+                                                SmartProxyVpnService.restart(context)
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        SwitchCard(
+                                            title = if (vpnIntercept) stringResource(R.string.home_ipv6_intercept) else stringResource(R.string.home_ipv6_listen),
+                                            subtitle = when {
+                                                !networkStatus.hasV6 -> stringResource(R.string.home_ipv6_no_address)
+                                                vpnIntercept -> stringResource(R.string.home_ipv6_intercept_sub)
+                                                else -> stringResource(R.string.home_ipv6_listen_sub)
+                                            },
+                                            checked = ipv6 && networkStatus.hasV6,
+                                            enabled = networkStatus.hasV6,
+                                            isCompact = adaptive.isCompact,
+                                            onDisabledClick = {
+                                                Toast.makeText(context, context.getString(R.string.toast_no_ipv6_address), Toast.LENGTH_SHORT).show()
+                                            },
+                                            onCheckedChange = { v ->
+                                                if (!refreshNetworkStatus().hasV6) {
+                                                    Toast.makeText(context, context.getString(R.string.toast_no_ipv6_address), Toast.LENGTH_SHORT).show()
+                                                    return@SwitchCard
+                                                }
+                                                if (!v && !ipv4) {
+                                                    Toast.makeText(context, context.getString(R.string.toast_need_ipv46), Toast.LENGTH_SHORT).show()
+                                                    return@SwitchCard
+                                                }
+                                                ipv6 = v
+                                                AppPrefs.setAutoDisabledV6(context, false)
+                                                if (vpnIntercept) {
+                                                    ConfigProvider.setIpv6(context, v)
+                                                } else {
+                                                    AppPrefs.setSocksListen(context, when {
+                                                        ipv4 && v -> AppPrefs.SOCKS_LISTEN_BOTH
+                                                        v -> AppPrefs.SOCKS_LISTEN_V6
+                                                        else -> AppPrefs.SOCKS_LISTEN_V4
+                                                    })
+                                                    val json = ConfigProvider.readConfig(context)
+                                                    val dns = json.optJSONObject("dns") ?: org.json.JSONObject().also { json.put("dns", it) }
+                                                    dns.put("filter_aaaa", !v)
+                                                    ConfigProvider.writeConfig(context, json)
+                                                }
+                                                SmartProxyVpnService.restart(context)
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+
+                                    Row(modifier = Modifier.fillMaxWidth()) {
+                                        SwitchCard(
+                                            title = stringResource(R.string.home_boot_autostart),
+                                            subtitle = if (serviceMode == AppPrefs.MODE_VPN)
+                                                stringResource(R.string.home_boot_autostart_sub_vpn) else stringResource(R.string.home_boot_autostart_sub_socks),
+                                            checked = bootAuto,
+                                            isCompact = adaptive.isCompact,
+                                            onCheckedChange = { v ->
+                                                bootAuto = v
+                                                AppPrefs.setBootAutoStart(context, v)
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        SwitchCard(
+                                            title = stringResource(R.string.home_speed_meter),
+                                            subtitle = stringResource(R.string.home_speed_meter_sub),
+                                            checked = speedMeterOn,
+                                            enabled = !socksMode,
+                                            isCompact = adaptive.isCompact,
+                                            onDisabledClick = {
+                                                Toast.makeText(context, context.getString(R.string.toast_speed_meter_vpn_only), Toast.LENGTH_SHORT).show()
+                                            },
+                                            onCheckedChange = { want ->
+                                                if (want) {
+                                                    if (Settings.canDrawOverlays(context)) {
+                                                        speedMeterOn = true
+                                                        AppPrefs.setSpeedMeterEnabled(context, true)
+                                                        if (running) {
+                                                            SpeedMeterOverlay.autoShow(context)
+                                                            NotificationHelper.refresh(context)
+                                                        }
+                                                        if (SpeedMeterOverlay.needsUsageAccess(context)) showUsageAccessDialog = true
+                                                    } else {
+                                                        Toast.makeText(context, context.getString(R.string.speed_meter_perm_needed), Toast.LENGTH_LONG).show()
+                                                        val intent = Intent(
+                                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                            Uri.parse("package:${context.packageName}")
+                                                        )
+                                                        runCatching { overlayPermLauncher.launch(intent) }
+                                                            .onFailure { runCatching { context.startActivity(intent) } }
+                                                    }
+                                                } else {
+                                                    speedMeterOn = false
+                                                    AppPrefs.setSpeedMeterEnabled(context, false)
+                                                    SpeedMeterOverlay.hide()
+                                                    if (running) {
+                                                        NotificationHelper.refresh(context)
+                                                    }
+                                                }
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+
+                                    Spacer(Modifier.height(16.dp))
+
+                                    // 管理面板卡片
+                                    AnimatedVisibility(
+                                        visible = running && panelUrl != null,
+                                        enter = fadeIn(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) +
+                                                expandVertically(animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow)),
+                                        exit = fadeOut(animationSpec = tween(180)) +
+                                               shrinkVertically(animationSpec = tween(220))
+                                    ) {
+                                        if (panelUrl != null) {
+                                            PanelCard(
+                                                url = panelUrl,
+                                                auth = adminAuth,
+                                                onCopy = { url -> copyPanelUrl(context, url) }
+                                            )
+                                            Spacer(Modifier.height(8.dp))
+                                        }
+                                    }
+                                }
+                            }
+                            1 -> {
+                                // ── 规则分流 Tab ──────────────────────────────
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    if (serviceMode == AppPrefs.MODE_VPN) {
+                                        Spacer(Modifier.height(10.dp))
+                                        Text(
+                                            text = stringResource(R.string.settings_group_rules),
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = PurpleSoft,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                                        )
+                                        Spacer(Modifier.height(4.dp))
+                                        SettingsGroupCard {
+                                            val isBypass = AppPrefs.globalMode(context)
+                                            val count = AppPrefs.selectedApps(context).size
+                                            val appSub = if (isBypass) {
+                                                context.getString(R.string.appsel_bypass_desc) + " (已选 $count)"
+                                            } else {
+                                                context.getString(R.string.appsel_proxy_desc) + " (已选 $count)"
+                                            }
+                                            val appBadge = if (isBypass) stringResource(R.string.appsel_mode_bypass) else stringResource(R.string.appsel_mode_proxy)
+                                            SettingsRowItem(
+                                                icon = Icons.Outlined.Apps,
+                                                title = stringResource(R.string.drawer_apps),
+                                                subtitle = appSub,
+                                                badgeText = appBadge,
+                                                onClick = onOpenApps
+                                            )
+                                            HorizontalDivider(color = DividerLine.copy(alpha = 0.45f), thickness = 0.8.dp)
+
+                                            val d4 = AppPrefs.dnsV4(context)
+                                            val d6 = AppPrefs.dnsV6(context)
+                                            val dnsSub = if (d4.isBlank() && d6.isBlank()) {
+                                                "默认内置反污染 (223.5.5.5 / 2400:3200::1)"
+                                            } else {
+                                                "${d4.ifBlank { "默认" }} · ${d6.ifBlank { "默认" }}"
+                                            }
+                                            SettingsRowItem(
+                                                icon = Icons.Outlined.Dns,
+                                                title = stringResource(R.string.drawer_dns),
+                                                subtitle = dnsSub,
+                                                onClick = onOpenDns
+                                            )
+                                            HorizontalDivider(color = DividerLine.copy(alpha = 0.45f), thickness = 0.8.dp)
+
+                                            val routes = AppPrefs.excludedRoutes(context)
+                                            val routeSub = if (routes.isEmpty()) stringResource(R.string.drawer_exclude_subtitle)
+                                            else "已配置 ${routes.size} 条直连路由网段"
+                                            SettingsRowItem(
+                                                icon = Icons.Outlined.Route,
+                                                title = stringResource(R.string.drawer_exclude),
+                                                subtitle = routeSub,
+                                                badgeText = if (routes.isNotEmpty()) "${routes.size}" else null,
+                                                onClick = onOpenExclude
+                                            )
+                                        }
+                                        Spacer(Modifier.height(20.dp))
+                                    } else {
+                                        Spacer(Modifier.height(10.dp))
+                                    }
+
+                                    Text(
+                                        text = stringResource(R.string.settings_group_engine),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = PurpleSoft,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                                    )
+                                    Spacer(Modifier.height(4.dp))
+                                    SettingsGroupCard {
+                                        val modeSub = if (serviceMode == AppPrefs.MODE_VPN) {
+                                            "${serviceModeLabel(context, serviceMode)} (${tunStackLabel(context, tunStack)})"
+                                        } else {
+                                            serviceModeLabel(context, serviceMode)
+                                        }
+                                        SettingsRowItem(
+                                            icon = Icons.Outlined.Tune,
+                                            title = stringResource(R.string.drawer_service_mode),
+                                            subtitle = stringResource(R.string.drawer_service_mode_subtitle, modeSub),
+                                            onClick = onOpenServiceMode
+                                        )
+                                    }
+                                }
+                            }
+                            2 -> {
+                                // ── 系统工具 Tab ──────────────────────────────
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    Spacer(Modifier.height(10.dp))
+                                    Text(
+                                        text = stringResource(R.string.settings_group_diagnostics),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = PurpleSoft,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                                    )
+                                    Spacer(Modifier.height(4.dp))
+                                    SettingsGroupCard {
+                                        if (serviceMode == AppPrefs.MODE_VPN) {
+                                            SettingsRowItem(
+                                                icon = Icons.Outlined.WifiTethering,
+                                                title = stringResource(R.string.drawer_tethering),
+                                                subtitle = stringResource(R.string.drawer_tethering_subtitle),
+                                                onClick = onOpenTethering
+                                            )
+                                            HorizontalDivider(color = DividerLine.copy(alpha = 0.45f), thickness = 0.8.dp)
+                                        }
+
+                                        if (serviceMode == AppPrefs.MODE_VPN && running && AppPrefs.globalMode(context)) {
+                                            SettingsRowItem(
+                                                icon = Icons.Outlined.Timeline,
+                                                title = stringResource(R.string.drawer_network_status),
+                                                subtitle = stringResource(R.string.drawer_network_status_subtitle),
+                                                onClick = onOpenNetworkStatus
+                                            )
+                                            HorizontalDivider(color = DividerLine.copy(alpha = 0.45f), thickness = 0.8.dp)
+                                        }
+
+                                        SettingsRowItem(
+                                            icon = Icons.Outlined.Article,
+                                            title = stringResource(R.string.drawer_logcat),
+                                            subtitle = stringResource(R.string.drawer_logcat_subtitle),
+                                            onClick = onOpenLogcat
+                                        )
+                                    }
+
+                                    Spacer(Modifier.height(20.dp))
+                                    Text(
+                                        text = stringResource(R.string.settings_group_appearance),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = PurpleSoft,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                                    )
+                                    Spacer(Modifier.height(4.dp))
+                                    SettingsGroupCard {
+                                        SettingsRowItem(
+                                            icon = themeIcon(themeMode),
+                                            title = stringResource(R.string.settings_theme_title),
+                                            subtitle = stringResource(R.string.settings_theme_subtitle, themeModeLabel(context, themeMode)),
+                                            onClick = onCycleTheme
+                                        )
+                                        HorizontalDivider(color = DividerLine.copy(alpha = 0.45f), thickness = 0.8.dp)
+                                        SettingsRowItem(
+                                            icon = Icons.Outlined.Wallpaper,
+                                            title = stringResource(R.string.settings_wallpaper_title),
+                                            subtitle = if (isCustomWp) stringResource(R.string.settings_wallpaper_custom) else stringResource(R.string.settings_wallpaper_default),
+                                            badgeText = if (isCustomWp) stringResource(R.string.settings_wallpaper_badge_custom) else null,
+                                            onClick = { showWallpaperDialog = true }
+                                        )
+                                    }
+
+                                    Spacer(Modifier.height(20.dp))
+                                    Text(
+                                        text = stringResource(R.string.settings_group_about),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = PurpleSoft,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                                    )
+                                    Spacer(Modifier.height(4.dp))
+                                    SettingsGroupCard {
+                                        SettingsRowItem(
+                                            icon = Icons.Outlined.BatteryChargingFull,
+                                            title = stringResource(R.string.tools_battery_title),
+                                            subtitle = stringResource(R.string.tools_battery_subtitle),
+                                            onClick = onOpenBatterySettings
+                                        )
+                                        HorizontalDivider(color = DividerLine.copy(alpha = 0.45f), thickness = 0.8.dp)
+                                        SettingsRowItem(
+                                            icon = Icons.Outlined.Info,
+                                            title = stringResource(R.string.tools_about_title),
+                                            subtitle = stringResource(R.string.tools_about_subtitle) + " · 访问 GitHub",
+                                            onClick = { openProjectUrl(context) }
+                                        )
+                                    }
+                                }
                             }
                         }
-                    },
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            Spacer(Modifier.height(24.dp))
+                    }
+                }
 
-            // ── 管理面板卡(服务运行中且面板可达才显示)。panelUrl==null 涵盖两种:
-            //  admin_port 空(引擎没开面板)、VPN 模式拿不到局域网 IP——都不给死链/空卡。
-            //  仅代理模式 URL=127.0.0.1,QR 跨设备扫到的是扫描机自己,只能本机开面板;
-            //  VPN 模式 smartproxy.lan 可跨设备扫 QR。────────
-            if (running && panelUrl != null) {
-                PanelCard(url = panelUrl, auth = adminAuth, onCopy = { url -> copyPanelUrl(context, url) }, onOpen = { url -> openPanel(context, url) })
-                Spacer(Modifier.height(8.dp))
+                // 悬浮式胶囊底部导航栏
+                FloatingCapsuleBar(
+                    selectedTab = selectedTab,
+                    onSelectTab = { selectedTab = it },
+                    hazeState = contentHazeState,
+                    isCompact = adaptive.isCompact,
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                )
             }
         }
+        }
 
-        // 「使用情况访问权限」说明对话框(M3):开启悬浮网速计且前台应用判定缺权限时弹出。
+        // 「使用情况访问权限」说明对话框(M3)
         if (showUsageAccessDialog) {
             AlertDialog(
                 onDismissRequest = { showUsageAccessDialog = false },
@@ -1297,6 +2416,63 @@ private fun HomeLauncher(
                 },
                 dismissButton = {
                     TextButton(onClick = { showUsageAccessDialog = false }) {
+                        Text(stringResource(R.string.usage_access_dialog_cancel))
+                    }
+                }
+            )
+        }
+
+        // 「背景壁纸设置」对话框 (M3)
+        if (showWallpaperDialog) {
+            AlertDialog(
+                onDismissRequest = { showWallpaperDialog = false },
+                title = { Text(stringResource(R.string.wallpaper_dialog_title), fontWeight = FontWeight.Bold) },
+                text = {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = stringResource(R.string.wallpaper_dialog_desc),
+                            fontSize = 14.sp,
+                            color = GreyText,
+                            lineHeight = 20.sp
+                        )
+                        Spacer(Modifier.height(18.dp))
+                        OutlinedButton(
+                            onClick = {
+                                showWallpaperDialog = false
+                                photoPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Icon(Icons.Outlined.PhotoLibrary, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(R.string.wallpaper_action_pick))
+                        }
+                        if (isCustomWp) {
+                            Spacer(Modifier.height(10.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    showWallpaperDialog = false
+                                    WallpaperHelper.clearWallpaper(context)
+                                    wallpaperVersion++
+                                    Toast.makeText(context, context.getString(R.string.wallpaper_toast_reset), Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFE53935))
+                            ) {
+                                Icon(Icons.Outlined.RestartAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(stringResource(R.string.wallpaper_action_reset))
+                            }
+                        }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = {
+                    TextButton(onClick = { showWallpaperDialog = false }) {
                         Text(stringResource(R.string.usage_access_dialog_cancel))
                     }
                 }
@@ -1660,9 +2836,14 @@ private fun formatElapsed(ms: Long): String {
     return String.format("%02d:%02d:%02d", totalSec / 3600, (totalSec % 3600) / 60, totalSec % 60)
 }
 
-/** 大圆环:浅粉轨道 + 橙→黄渐变进度弧 + 中心状态区。点按整环启停。
- *  未连接:中心为电源球体(1:1 原版素材 progress_btn_normal.png + 白色电源字形,保持原样);
- *  连接中/已连接:中心换成 状态点(橙/绿)+ 状态文字 + 连接时长(§圆环效果图样式)。 */
+/**
+ * 首页核心大圆环(高质感动效版):
+ * 1. 物理阻尼按压弹性缩放 (spring 阻尼感)
+ * 2. 连接中的流光顺滑旋转 (Continuous orbiting sweep arc)
+ * 3. 已连接时的双层动态声呐/雷达扩散脉冲水波纹 (Dual-layer sonar pulse wave)
+ * 4. 电源键与连接状态的平滑形变过渡 (AnimatedContent scale + crossfade)
+ * 5. 机械级触觉震动反馈 (HapticFeedback)
+ */
 @Composable
 private fun ConnectOrb(
     running: Boolean,
@@ -1670,32 +2851,108 @@ private fun ConnectOrb(
     sweep: Float,
     elapsedMs: Long,
     enabled: Boolean = true,
+    orbSize: Dp = 228.dp,
     onDisabledClick: (() -> Unit)? = null,
     onToggleVpn: () -> Unit
 ) {
+    val haptic = LocalHapticFeedback.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+
+    // 比例缩放因子 (以设计基准 228.dp 为 1.0f)
+    val scaleFactor = (orbSize.value / 228f).coerceIn(0.65f, 1.25f)
+
+    // 物理弹性按压缩放动效:按压时 0.93f,松开以 Spring 弹性回弹
+    val orbScale by animateFloatAsState(
+        targetValue = if (isPressed && enabled) 0.93f else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow
+        ),
+        label = "orbScale"
+    )
+
+    // 雷达光晕脉冲与旋转流光周期
+    val infiniteTransition = rememberInfiniteTransition(label = "orbEffects")
+    val pulseFraction by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "orbPulseFraction"
+    )
+    val spinAngle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "orbSpinAngle"
+    )
+
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .size(214.dp)
-            .clickable {
+            .size(orbSize)
+            .scale(orbScale)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null
+            ) {
                 if (!enabled && !running) {
                     onDisabledClick?.invoke()
                 } else {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     onToggleVpn()
                 }
             }
             .alpha(if (!enabled && !running) 0.45f else 1f)
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val stroke = 12.dp.toPx()
-            val radius = (size.minDimension - stroke) / 2f
+            val stroke = (12f * scaleFactor).dp.toPx()
+            val radius = (size.minDimension - stroke * 2.8f) / 2f
             val center = this.center
-            // 浅粉轨道(整圈)
+
+            // 1. 已连接时的双层雷达光晕扩散波纹
+            if (running && !connecting) {
+                val waveRadius1 = radius + stroke * (0.6f + pulseFraction * 1.5f)
+                val waveAlpha1 = ((1f - pulseFraction).coerceIn(0f, 1f) * 0.25f)
+                drawCircle(
+                    color = StatusConnected.copy(alpha = waveAlpha1),
+                    radius = waveRadius1,
+                    style = Stroke(width = stroke * (1f - pulseFraction * 0.5f).coerceAtLeast(0.2f))
+                )
+
+                val fraction2 = (pulseFraction + 0.5f) % 1f
+                val waveRadius2 = radius + stroke * (0.6f + fraction2 * 1.5f)
+                val waveAlpha2 = ((1f - fraction2).coerceIn(0f, 1f) * 0.20f)
+                drawCircle(
+                    color = StatusConnected.copy(alpha = waveAlpha2),
+                    radius = waveRadius2,
+                    style = Stroke(width = stroke * (1f - fraction2 * 0.5f).coerceAtLeast(0.2f))
+                )
+            }
+
+            // 2. 底轨
             drawCircle(color = TrackPink, radius = radius, style = Stroke(width = stroke))
-            // 进度弧:橙色→黄色,连接时从顶开始顺时针扫过;未连接为 0。
-            if (sweep > 0f) {
+
+            // 3. 进度弧:连接中带有流光旋转,连接完成定格在整圈满弧
+            if (connecting) {
                 drawArc(
-                    brush = Brush.sweepGradient(listOf(ArcOrange, ArcYellow)),
+                    brush = Brush.sweepGradient(listOf(ArcOrange, ArcYellow, ArcOrange)),
+                    startAngle = -90f + spinAngle,
+                    sweepAngle = sweep.coerceAtLeast(60f),
+                    useCenter = false,
+                    topLeft = Offset(center.x - radius, center.y - radius),
+                    size = Size(radius * 2f, radius * 2f),
+                    style = Stroke(width = stroke, cap = StrokeCap.Round)
+                )
+            } else if (running && sweep > 0f) {
+                drawArc(
+                    brush = Brush.sweepGradient(listOf(ArcOrange, ArcYellow, ArcOrange)),
                     startAngle = -90f,
                     sweepAngle = sweep,
                     useCenter = false,
@@ -1705,106 +2962,176 @@ private fun ConnectOrb(
                 )
             }
         }
-        if (!running) {
-            // 未连接:电源球体(启停点击区域是整个圆环,点哪都触发)。
-            Box(
-                modifier = Modifier.size(121.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Image(
-                    painter = painterResource(R.drawable.progress_btn_normal),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize()
-                )
-                Text(
-                    text = "\ue640",                     // 原版电源(dianyuan),白色
-                    fontFamily = IconFont,
-                    fontSize = 40.sp,
-                    color = Color.White
-                )
-            }
-        } else {
-            // 连接中/已连接:状态点 + 文字 + 连接时长。
-            val dotColor = if (connecting) StatusConnecting else StatusConnected
-            val statusText = if (connecting) stringResource(R.string.home_connecting)
-            else stringResource(R.string.home_connected)
-            // 已连接绿点呼吸动画:光晕 alpha 在 0.22 ↔ 0.05 间往复(约 1.6s 一个周期),
-            // 模拟"心跳"提示运行中;连接中橙点保持静态。
-            val haloAlpha = if (!connecting) {
-                val breath = rememberInfiniteTransition(label = "connectedDotBreath")
-                breath.animateFloat(
-                    initialValue = 0.22f,
-                    targetValue = 0.05f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(800, easing = LinearEasing),
-                        repeatMode = RepeatMode.Reverse
-                    ),
-                    label = "connectedDotHaloAlpha"
-                ).value
-            } else 0.22f
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                // 状态点(带一圈同色光晕,对齐效果图)
+
+        // 中心状态平滑过渡 (AnimatedContent)
+        AnimatedContent(
+            targetState = running,
+            transitionSpec = {
+                (fadeIn(animationSpec = tween(350)) + scaleIn(animationSpec = spring(stiffness = Spring.StiffnessMediumLow), initialScale = 0.88f))
+                    .togetherWith(fadeOut(animationSpec = tween(250)) + scaleOut(animationSpec = tween(250), targetScale = 1.12f))
+            },
+            label = "orbCenterTransition"
+        ) { isRunningState ->
+            if (!isRunningState) {
+                // 未连接:电源球体
+                val powerBtnSize = (126f * scaleFactor).dp
                 Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier.size(26.dp)
+                    modifier = Modifier.size(powerBtnSize),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Box(Modifier.size(22.dp).background(dotColor.copy(alpha = haloAlpha), CircleShape))
-                    Box(Modifier.size(11.dp).background(dotColor, CircleShape))
-                }
-                Spacer(Modifier.height(10.dp))
-                Text(statusText, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = PurpleDark)
-                if (!connecting) {
-                    Spacer(Modifier.height(5.dp))
-                    Text(
-                        formatElapsed(elapsedMs),
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = GreyText
+                    Image(
+                        painter = painterResource(R.drawable.progress_btn_normal),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize()
                     )
+                    Text(
+                        text = "\ue640", // 原版电源(dianyuan),白色
+                        fontFamily = IconFont,
+                        fontSize = (42f * scaleFactor).sp,
+                        color = Color.White
+                    )
+                }
+            } else {
+                // 连接中/已连接:呼吸状态点 + 标题 + 连接时长
+                val dotColor = if (connecting) StatusConnecting else StatusConnected
+                val statusText = if (connecting) stringResource(R.string.home_connecting)
+                else stringResource(R.string.home_connected)
+
+                val haloAlpha = if (!connecting) {
+                    val breath = rememberInfiniteTransition(label = "connectedDotBreath")
+                    breath.animateFloat(
+                        initialValue = 0.28f,
+                        targetValue = 0.05f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(850, easing = LinearEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "connectedDotHaloAlpha"
+                    ).value
+                } else 0.28f
+
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                ) {
+                    // 状态点(带呼吸光晕)
+                    val dotContainerSize = (28f * scaleFactor).coerceAtLeast(20f).dp
+                    val dotHaloSize = (24f * scaleFactor).coerceAtLeast(16f).dp
+                    val dotInnerSize = (12f * scaleFactor).coerceAtLeast(8f).dp
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.size(dotContainerSize)
+                    ) {
+                        Box(Modifier.size(dotHaloSize).background(dotColor.copy(alpha = haloAlpha), CircleShape))
+                        Box(Modifier.size(dotInnerSize).background(dotColor, CircleShape))
+                    }
+                    Spacer(Modifier.height((10f * scaleFactor).coerceAtLeast(4f).dp))
+                    Text(
+                        text = statusText,
+                        fontSize = (17f * scaleFactor).coerceAtLeast(13f).sp,
+                        fontWeight = FontWeight.Bold,
+                        color = PurpleDark
+                    )
+                    if (!connecting) {
+                        Spacer(Modifier.height((6f * scaleFactor).coerceAtLeast(2f).dp))
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = PurpleSoft.copy(alpha = 0.12f),
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        ) {
+                            Text(
+                                text = formatElapsed(elapsedMs),
+                                fontSize = (16f * scaleFactor).coerceAtLeast(12f).sp,
+                                fontWeight = FontWeight.Bold,
+                                color = PurpleDark,
+                                modifier = Modifier.padding(
+                                    horizontal = (10f * scaleFactor).coerceAtLeast(6f).dp,
+                                    vertical = (3f * scaleFactor).coerceAtLeast(2f).dp
+                                )
+                            )
+                        }
+                    }
                 }
             }
         }
     }
 }
 
-/** 白色圆角卡片开关(紫色强调)。 */
+/** 液态玻璃圆角卡片开关(微交互物理弹性、晶莹半透明玻璃质感、微光高光边框与触觉反馈)。 */
 @Composable
 private fun SwitchCard(
     title: String,
     subtitle: String,
     checked: Boolean,
     enabled: Boolean = true,
+    isCompact: Boolean = false,
     onDisabledClick: (() -> Unit)? = null,
     onCheckedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // 禁用态(onDisabledClick 提供):开关置灰不可拨,整卡可点弹提示(拦截开关在仅代理
-    // 模式点不动,Toast 提示仅 VPN 隧道模式生效;enabled=true 时本 modifier 为空,零开销)。
+    val haptic = LocalHapticFeedback.current
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+
+    // 按压弹性物理缩放
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed && enabled) 0.965f else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow
+        ),
+        label = "switchCardScale"
+    )
+
+    // 禁用态点击处理
     val tapModifier = if (!enabled && onDisabledClick != null) {
-        Modifier.clickable { onDisabledClick() }
+        Modifier.clickable(
+            interactionSource = interactionSource,
+            indication = null
+        ) {
+            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            onDisabledClick()
+        }
     } else Modifier
-    Card(
+
+    GlassCard(
         shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = CardSurface),
+        isHighlighted = checked && enabled,
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
+            .scale(scale)
             .then(tapModifier)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            modifier = Modifier.padding(
+                horizontal = if (isCompact) 12.dp else 16.dp,
+                vertical = if (isCompact) 9.dp else 11.dp
+            ),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
-                Text(title, fontSize = 16.sp, color = if (enabled) PurpleDark else GreyText, fontWeight = FontWeight.Medium)
-                Text(subtitle, fontSize = 12.sp, color = GreyText)
+                Text(
+                    text = title,
+                    fontSize = if (isCompact) 13.5.sp else 15.sp,
+                    color = if (enabled) PurpleDark else GreyText,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = subtitle,
+                    fontSize = if (isCompact) 11.sp else 12.sp,
+                    color = GreyText,
+                    lineHeight = if (isCompact) 14.sp else 15.sp
+                )
             }
             Switch(
                 checked = checked,
-                onCheckedChange = onCheckedChange,
+                onCheckedChange = { newVal ->
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onCheckedChange(newVal)
+                },
                 enabled = enabled,
-                // ON/OFF 对比分明:ON = 实心紫轨道 + 白拇指;OFF = 浅紫灰轨道 + 白拇指。
-                // 此前 ON 轨道用默认浅紫(≈#E8DEF8)+ 中紫拇指,白卡上浅紫对浅紫糊成一团。
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color.White,
                     checkedTrackColor = PurpleText,
@@ -1818,14 +3145,15 @@ private fun SwitchCard(
 }
 
 
-/** 管理面板入口卡:URL + 账号密码提示 + 复制 + 浏览器选择器;二维码默认折叠,点卡片
- *  底部居中箭头展开(§4.4)。auth 非空(admin_auth 启用)时在 URL 下方显示登录凭据。 */
+/** 管理面板入口卡:URL(点击复制) + 账号密码提示(点击复制) + 二维码展开。 */
 @Composable
-private fun PanelCard(url: String?, auth: Pair<String, String>?, onCopy: (String) -> Unit, onOpen: (String) -> Unit) {
+private fun PanelCard(url: String?, auth: Pair<String, String>?, onCopy: (String) -> Unit) {
     val context = LocalContext.current
-    Card(
+    val haptic = LocalHapticFeedback.current
+
+    GlassCard(
         shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = CardSurface),
+        isHighlighted = false,
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
@@ -1835,6 +3163,10 @@ private fun PanelCard(url: String?, auth: Pair<String, String>?, onCopy: (String
             var showQr by remember { mutableStateOf(false) }
             val rotation by animateFloatAsState(
                 targetValue = if (showQr) 180f else 0f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessMediumLow
+                ),
                 label = "qrArrow"
             )
             Text(
@@ -1845,11 +3177,34 @@ private fun PanelCard(url: String?, auth: Pair<String, String>?, onCopy: (String
             )
             if (url != null) {
                 Spacer(Modifier.height(6.dp))
-                Text(url, fontSize = 13.sp, color = GreyText)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onCopy(url)
+                        }
+                        .padding(vertical = 4.dp, horizontal = 2.dp)
+                ) {
+                    Text(
+                        text = url,
+                        fontSize = 13.sp,
+                        color = PurpleDark,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Icon(
+                        imageVector = Icons.Outlined.ContentCopy,
+                        contentDescription = stringResource(R.string.panel_copy),
+                        tint = PurpleSoft,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
                 if (auth != null) {
-                    Spacer(Modifier.height(6.dp))
-                    // 出厂随机密码人手记不住:点账号行复制账号、点密码行复制密码,Toast 反馈
-                    // (不进 URL、不进 QR)。整行 clickable + padding 放大触摸区,替代长按选词。
+                    Spacer(Modifier.height(4.dp))
                     Column {
                         Text(
                             stringResource(R.string.panel_user, auth.first),
@@ -1857,7 +3212,10 @@ private fun PanelCard(url: String?, auth: Pair<String, String>?, onCopy: (String
                             color = GreyText,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { copyPanelCredential(context, auth.first, R.string.toast_copy_user) }
+                                .clickable {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    copyPanelCredential(context, auth.first, R.string.toast_copy_user)
+                                }
                                 .padding(vertical = 4.dp)
                         )
                         Text(
@@ -1866,30 +3224,25 @@ private fun PanelCard(url: String?, auth: Pair<String, String>?, onCopy: (String
                             color = GreyText,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { copyPanelCredential(context, auth.second, R.string.toast_copy_pass) }
+                                .clickable {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    copyPanelCredential(context, auth.second, R.string.toast_copy_pass)
+                                }
                                 .padding(vertical = 4.dp)
                         )
                     }
                 }
-                Spacer(Modifier.height(10.dp))
-                Row {
-                    OutlinedButton(onClick = { onCopy(url) }, modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.panel_copy))
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Button(onClick = { onOpen(url) }, modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.panel_open))
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
                 val qr = remember(url) { QrHelper.generate(url, 512) }
-                // QR 块整体折叠:AnimatedVisibility 包住图片+提示,展开/收起平滑;
-                // qr 照常生成(不为 null 才渲染),退出动画期间图片不会提前消失。
-                // 内层 Column fillMaxWidth + CenterHorizontally:180dp 图在卡片内真正居中。
-                AnimatedVisibility(visible = showQr) {
+                AnimatedVisibility(
+                    visible = showQr,
+                    enter = fadeIn(animationSpec = tween(200)) +
+                            expandVertically(animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy)),
+                    exit = fadeOut(animationSpec = tween(150)) +
+                           shrinkVertically(animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy))
+                ) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
                     ) {
                         if (qr != null) {
                             Image(
@@ -1897,7 +3250,10 @@ private fun PanelCard(url: String?, auth: Pair<String, String>?, onCopy: (String
                                 contentDescription = stringResource(R.string.cd_panel_qr),
                                 modifier = Modifier
                                     .size(180.dp)
-                                    .clickable { onOpen(url) }
+                                    .clickable {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        onCopy(url)
+                                    }
                             )
                             Text(
                                 text = stringResource(R.string.panel_scan_hint),
@@ -1910,7 +3266,10 @@ private fun PanelCard(url: String?, auth: Pair<String, String>?, onCopy: (String
                 }
                 // 卡片底部居中的展开/收起箭头;仅在有二维码可展时显示。
                 IconButton(
-                    onClick = { showQr = !showQr },
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        showQr = !showQr
+                    },
                     modifier = Modifier
                         .align(Alignment.CenterHorizontally)
                         .size(28.dp)

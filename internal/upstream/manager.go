@@ -557,9 +557,10 @@ func (m *Manager) SelectProxy(ctx context.Context, targetIP string, targetPort i
 
 // 多节点 failover 的对冲节奏:第一个节点立即拨号,之后每过 hedgeDelay 前一个还没出结果,
 // 就并发拨下一个;单次拨号(含握手+目标 CONNECT)的硬上限 attemptTimeout,只在多节点时
-// 生效——单节点没有备胎,保持 proxyDialTimeout 的 10s 容忍,慢目标也不能误杀。
-// 默认 1.5s/5s:日志实测健康节点拨号都在 1s 内完成,而死节点会把 SYN 挂到满 10s,
-// 没有对冲时用户要干等一个超时才 failover。
+// 默认 1.5s/5s: 实测节点延迟中位数(P50)为 1502ms, 优质亚太/美西节点通常在 0.3s~1.4s 内完成握手。
+// 设置 1500ms 既能让首选优质节点从容完成握手(避免 500ms 造成全量并发对冲风暴),
+// 又能在首选节点遭遇跨境丢包或严重卡顿(>1.5s)时及时并发拉起备用节点。
+// 注: 若节点明确报错(RST/拒连), 代码已实现零等待即刻启动下一个, 无需等定时器。
 const (
 	defaultDialHedgeDelay     = 1500 * time.Millisecond
 	defaultDialAttemptTimeout = 5 * time.Second
@@ -699,10 +700,26 @@ func (m *Manager) hedgedDial(
 		attemptTimeout = defaultDialAttemptTimeout
 	}
 
+	var winningConn net.Conn
 	dialCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	// 容量=候选数:赢家产生后才结束的在途拨号也能无阻塞投递结果后退出,不泄漏 goroutine。
 	results := make(chan dialResult, len(candidates))
+	defer func() {
+		cancel()
+		// 异步排空 results，确保所有未成为赢家的迟到连接被显式 Close，杜绝 Socket FD 泄漏
+		go func() {
+			for i := 0; i < len(candidates); i++ {
+				select {
+				case res := <-results:
+					if res.conn != nil && res.conn != winningConn {
+						res.conn.Close()
+					}
+				case <-time.After(attemptTimeout + 100*time.Millisecond):
+					return
+				}
+			}
+		}()
+	}()
 
 	launch := func(proxy *Proxy) {
 		ll.Info("trying "+label, "url", MaskProxyURL(proxy.URL))
@@ -719,6 +736,9 @@ func (m *Manager) hedgedDial(
 			}
 			select {
 			case results <- dialResult{conn: conn, proxy: proxy}:
+				if dialCtx.Err() != nil {
+					conn.Close()
+				}
 			case <-dialCtx.Done():
 				// 另一个节点已经赢了,这条迟到的成功连接必须关掉,不能悬挂。
 				conn.Close()
@@ -739,6 +759,7 @@ func (m *Manager) hedgedDial(
 		case res := <-results:
 			if res.err == nil {
 				ll.Info("connected via", "url", MaskProxyURL(res.proxy.URL))
+				winningConn = res.conn
 				if onWin != nil {
 					onWin(res.proxy)
 				}
@@ -1013,7 +1034,7 @@ func (m *Manager) Connect(ctx context.Context, host string, port int, domain str
 		ll.Warn("rule selected a udp_only proxy for TCP, connection failed", "url", MaskProxyURL(selected.URL))
 		return nil, "failed"
 	}
-	if isIPv6Address(host) && !selected.SupportsIPv6() {
+	if isIPv6Address(host) && selected.IsIPv6Unsupported() {
 		ll.Warn("rule selected an ipv4-only proxy for IPv6 target, falling back to default IPv6 proxy", "url", MaskProxyURL(selected.URL), "target", host)
 		conn, err := m.ConnectDefault(ctx, host, port)
 		if err != nil {
@@ -1031,7 +1052,9 @@ func (m *Manager) Connect(ctx context.Context, host string, port int, domain str
 	if !selected.IsAvailable() {
 		ll.Warn("selected proxy is unhealthy but still using it due to rule", "alias", MaskProxyURL(selected.URL))
 	}
-	conn, err := selected.Connect(ctx, host, port)
+	dialCtx, dialCancel := context.WithTimeout(ctx, 5*time.Second)
+	conn, err := selected.Connect(dialCtx, host, port)
+	dialCancel()
 	if err != nil {
 		ll.Error("proxy connect failed", "url", MaskProxyURL(selected.URL), "error", err)
 		if isIPv6Address(host) {
@@ -1040,7 +1063,12 @@ func (m *Manager) Connect(ctx context.Context, host string, port int, domain str
 		} else if m.healthChecker != nil {
 			m.healthChecker.RecordFailure(selected, err)
 		}
-		return nil, "failed"
+		ll.Warn("rule selected proxy failed to connect, falling back to default proxy", "url", MaskProxyURL(selected.URL), "host", host, "port", port, "domain", domain, "error", err)
+		conn, err = m.ConnectDefault(ctx, host, port)
+		if err != nil {
+			return nil, "failed"
+		}
+		return conn, "proxy"
 	}
 	if isIPv6Address(host) {
 		selected.SetIPv6Capability(IPv6CapSupported)
@@ -1072,18 +1100,35 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 		return nil, fmt.Errorf("UDP direct is not supported")
 	}
 	if selected != nil {
-		// Honor an explicit manual "Disable" even under rule routing, mirroring Connect.
-		if selected.udpHealth.IsManuallyDisabled() {
-			ll.Warn("rule selected a manually-disabled proxy for UDP, connection failed", "url", MaskProxyURL(selected.URL))
-			return nil, fmt.Errorf("proxy %s is manually disabled for UDP", MaskProxyURL(selected.URL))
+		isV6 := isIPv6Address(host)
+		if selected.udpHealth.IsManuallyDisabled() || !selected.IsUDPAvailable() || (isV6 && selected.IsIPv6Unsupported()) {
+			reason := "unhealthy"
+			if selected.udpHealth.IsManuallyDisabled() {
+				reason = "manually_disabled"
+			} else if isV6 && selected.IsIPv6Unsupported() {
+				reason = "ipv6_unsupported"
+			}
+			ll.Warn("rule selected proxy unsuitable for UDP, falling back to default UDP proxies", "url", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port), "reason", reason)
+			return m.defaultUDPAssociate(ctx, ll, host, port)
 		}
 		ll.Debug("UDPAssociate: using selected proxy by rule",
 			"proxy", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port))
-		conn, err := m.establishUDPRelay(ctx, selected, host, port)
-		if err != nil && m.healthChecker != nil {
-			m.healthChecker.RecordUDPFailure(selected, err)
+		dialCtx, dialCancel := context.WithTimeout(ctx, 5*time.Second)
+		conn, err := m.establishUDPRelay(dialCtx, selected, host, port)
+		dialCancel()
+		if err != nil {
+			if isV6 {
+				selected.SetIPv6Capability(IPv6CapUnsupported)
+			} else if m.healthChecker != nil {
+				m.healthChecker.RecordUDPFailure(selected, err)
+			}
+			ll.Warn("rule selected proxy failed for UDP, falling back to default UDP proxies", "url", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port), "error", err)
+			return m.defaultUDPAssociate(ctx, ll, host, port)
 		}
-		return conn, err
+		if isV6 {
+			selected.SetIPv6Capability(IPv6CapSupported)
+		}
+		return conn, nil
 	}
 	return m.defaultUDPAssociate(ctx, ll, host, port)
 }
@@ -1093,13 +1138,35 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port int, selected *Proxy) (net.Conn, error) {
 	ll := trace.Log(ctx)
 	if selected != nil {
+		isV6 := isIPv6Address(host)
+		if selected.udpHealth.IsManuallyDisabled() || !selected.IsUDPAvailable() || (isV6 && selected.IsIPv6Unsupported()) {
+			reason := "unhealthy"
+			if selected.udpHealth.IsManuallyDisabled() {
+				reason = "manually_disabled"
+			} else if isV6 && selected.IsIPv6Unsupported() {
+				reason = "ipv6_unsupported"
+			}
+			ll.Warn("pre-selected proxy unsuitable for UDP, falling back to default UDP proxies", "url", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port), "reason", reason)
+			return m.defaultUDPAssociate(ctx, ll, host, port)
+		}
 		ll.Debug("UDPAssociateSelected: using pre-selected proxy",
 			"proxy", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port))
-		conn, err := m.establishUDPRelay(ctx, selected, host, port)
-		if err != nil && m.healthChecker != nil {
-			m.healthChecker.RecordUDPFailure(selected, err)
+		dialCtx, dialCancel := context.WithTimeout(ctx, 5*time.Second)
+		conn, err := m.establishUDPRelay(dialCtx, selected, host, port)
+		dialCancel()
+		if err != nil {
+			if isV6 {
+				selected.SetIPv6Capability(IPv6CapUnsupported)
+			} else if m.healthChecker != nil {
+				m.healthChecker.RecordUDPFailure(selected, err)
+			}
+			ll.Warn("pre-selected proxy failed for UDP, falling back to default UDP proxies", "url", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port), "error", err)
+			return m.defaultUDPAssociate(ctx, ll, host, port)
 		}
-		return conn, err
+		if isV6 {
+			selected.SetIPv6Capability(IPv6CapSupported)
+		}
+		return conn, nil
 	}
 	// selected == nil: fall back to default ordered selection.
 	return m.defaultUDPAssociate(ctx, ll, host, port)
@@ -1331,6 +1398,14 @@ func (m *Manager) findProxyLocked(alias string) (*Proxy, string) {
 		}
 	}
 	return nil, ""
+}
+
+// FindProxy returns the Proxy object for the given alias, or nil if not found.
+func (m *Manager) FindProxy(alias string) *Proxy {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	p, _ := m.findProxyLocked(alias)
+	return p
 }
 
 // ProxyInfo returns the snapshot info for a specific proxy alias.

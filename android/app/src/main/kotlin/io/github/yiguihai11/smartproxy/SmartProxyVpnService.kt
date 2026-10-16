@@ -323,6 +323,23 @@ class SmartProxyVpnService : VpnService() {
             return START_STICKY
         }
 
+        // 指定选路策略 (latency / failover / round_robin / random)
+        if (action == NotificationHelper.ACTION_SET_STRATEGY) {
+            val target = intent?.getStringExtra(NotificationHelper.EXTRA_STRATEGY).orEmpty()
+            if (target.isNotBlank()) {
+                smartproxy.mobile.Mobile.setUpstreamStrategy(target)
+                ConfigProvider.setUpstreamStrategy(this, target)
+                NotificationHelper.refresh(this)
+                val displayName = NotificationHelper.getStrategyDisplayName(this, target)
+                Toast.makeText(
+                    this,
+                    getString(R.string.toast_strategy_switched, displayName),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            return START_STICKY
+        }
+
         // 刷新测速与重新选路
         if (action == NotificationHelper.ACTION_REFRESH_NODES) {
             Toast.makeText(this, R.string.toast_reprobe_started, Toast.LENGTH_SHORT).show()
@@ -629,9 +646,8 @@ class SmartProxyVpnService : VpnService() {
                 // 拆 VPN 的唯一干净信号,图标即刻消失。
                 val dupPfd = pfd.dup()
                 val goFd = dupPfd.detachFd()
-                // 注册 UID 反查回调(per-app「禁止联网」):Go TUN 路径按连接回问 Android
-                // 连接所属 UID,命中 tun.blocked_uids 即丢弃。传 applicationContext 防 Service 泄漏。
-                // 必须在 startRouter 前注册,引擎启动时注入 TUN handler。
+                // 把 Kotlin 层配置的 DNS 注入给 Go 运行时，供标准库解析器与 sing-box 直连解析节点域名
+                smartproxy.mobile.Mobile.setSystemDNS(effectiveDnsV4, effectiveDnsV6)
                 smartproxy.mobile.Mobile.setUIDResolver(UIDResolver(applicationContext))
                 bindTetheringServiceIfNeeded()
                 smartproxy.mobile.Mobile.setTetheringBridge(tetheringBridge)
@@ -672,6 +688,9 @@ class SmartProxyVpnService : VpnService() {
             val configPath = ConfigProvider.configPath(this)
             Log.i(TAG, "[startSocksOnly] Step 2: Calling Go Mobile.startRouter(configPath, fd=0, tunEnabled=false)...")
             val t0 = System.currentTimeMillis()
+            val d4 = AppPrefs.dnsV4(this)
+            val d6 = AppPrefs.dnsV6(this)
+            smartproxy.mobile.Mobile.setSystemDNS(d4, d6)
             bindTetheringServiceIfNeeded()
             smartproxy.mobile.Mobile.setTetheringBridge(tetheringBridge)
             smartproxy.mobile.Mobile.startRouter(configPath, 0L, false)

@@ -129,6 +129,9 @@ dependencies {
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
 
+    // Haze for iOS-grade liquid glass / frosted glass blur
+    implementation("dev.chrisbanes.haze:haze:1.3.1")
+
     // Compose BOM 停在 2026.05.01(Compose 1.11 系列):2026.09+ 强制要求 AGP 9.1+ 与 compileSdk 37。
     implementation(platform("androidx.compose:compose-bom:2026.05.01"))
     implementation("androidx.activity:activity-compose:1.13.0")

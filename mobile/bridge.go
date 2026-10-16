@@ -14,7 +14,9 @@ import (
 	"smartproxy/internal/config"
 	"smartproxy/internal/engine"
 	"smartproxy/internal/logbuf"
+	"smartproxy/internal/netutil"
 	"smartproxy/internal/route"
+	"smartproxy/internal/singbox"
 	"smartproxy/internal/tun"
 )
 
@@ -89,6 +91,16 @@ func NotifyNetworkChange() {
 
 	if eng != nil {
 		eng.HandleNetworkChange()
+	}
+}
+
+// SetSystemDNS updates the system DNS servers used by Go's default resolver and sing-box engine.
+// Called by Android Kotlin layer (SmartProxyVpnService and DnsDialog).
+func SetSystemDNS(v4 string, v6 string) {
+	slog.Info("[Go-Bridge] SetSystemDNS called", "v4", v4, "v6", v6)
+	netutil.SetSystemDNS(v4, v6)
+	if v4 != "" {
+		_ = singbox.GlobalEngine().SetDNS(v4)
 	}
 }
 

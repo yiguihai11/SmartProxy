@@ -43,6 +43,7 @@ object AppPrefs {
     private const val KEY_DNS_V6 = "custom_dns_v6"
     private const val KEY_EXCLUDED_ROUTES = "excluded_routes"
     private const val KEY_THEME_MODE = "theme_mode"
+    private const val KEY_CUSTOM_WALLPAPER_ENABLED = "custom_wallpaper_enabled"
     private const val KEY_LOGCAT_LEVEL = "logcat_level"
     private const val KEY_SERVICE_MODE = "service_mode"
     private const val KEY_BATTERY_OPT_ASK = "battery_opt_ask_count"
@@ -151,6 +152,17 @@ object AppPrefs {
     fun setThemeMode(context: Context, mode: String) {
         sp(context).edit().putString(KEY_THEME_MODE, mode).apply()
     }
+
+    /** 自定义背景壁纸是否启用。启用时优先读取 filesDir/custom_wallpaper.jpg。 */
+    fun isCustomWallpaperEnabled(context: Context): Boolean =
+        sp(context).getBoolean(KEY_CUSTOM_WALLPAPER_ENABLED, false)
+
+    fun setCustomWallpaperEnabled(context: Context, enabled: Boolean) {
+        sp(context).edit().putBoolean(KEY_CUSTOM_WALLPAPER_ENABLED, enabled).apply()
+    }
+
+    fun customWallpaperFile(context: Context): java.io.File =
+        java.io.File(context.filesDir, "custom_wallpaper.jpg")
 
     // 日志查看页的抓取级别(设置,非过滤):logcat 按 tag:priority 在 logd 侧设阈值,
     // 与 Go slog 级别一致——DEBUG/INFO/WARN/ERROR(无 VERBOSE,Go 没这档)。默认 DEBUG。

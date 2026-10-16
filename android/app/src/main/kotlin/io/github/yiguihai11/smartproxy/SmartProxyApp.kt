@@ -57,6 +57,14 @@ class SmartProxyApp : Application() {
             AppLog.i("SmartProxyApp", "Unified file logger initialized at ${logDir.absolutePath}")
         }
 
+        // 把系统/Kotlin层配置的 DNS 注入给 Go 运行时，避免底层因缺少 /etc/resolv.conf 回退到 [::1]:53
+        runCatching {
+            val d4 = AppPrefs.dnsV4(this)
+            val d6 = AppPrefs.dnsV6(this)
+            smartproxy.mobile.Mobile.setSystemDNS(d4, d6)
+            AppLog.i("SmartProxyApp", "System DNS injected into Go core: v4=$d4, v6=$d6")
+        }
+
         // 全局未捕获异常统一记入融合日志，便于排查崩溃
         val defaultUncaughtHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->

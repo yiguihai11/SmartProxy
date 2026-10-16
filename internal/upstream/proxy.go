@@ -493,6 +493,15 @@ func (p *Proxy) SupportsIPv6() bool {
 	return false
 }
 
+// IsIPv6Unsupported reports whether the node is confirmed to NOT support IPv6
+// (either explicitly pinned false, or verified unable to reach IPv6 via probes or traffic).
+func (p *Proxy) IsIPv6Unsupported() bool {
+	if ptr := p.ipv6Pinned.Load(); ptr != nil {
+		return !*ptr
+	}
+	return p.IPv6Capability() == IPv6CapUnsupported
+}
+
 // UDPCapability returns the last-known-good UDP capability marker (unknown before any
 // successful relay; standard/raw after a working path is found; none only when a fresh
 // node's UDP failed end to end). A zero value is normalized to unknown.

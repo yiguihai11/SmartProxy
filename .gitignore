@@ -29,3 +29,4 @@ subscriptions_cache.json
 # Claude Code local tooling config
 .claude/
 ci_artifacts/
+build-apk/

@@ -3,7 +3,13 @@ package lantern
 import (
 	"encoding/json"
 	"fmt"
+	"smartproxy/internal/netutil"
 )
+
+// SingBoxDNSConfig represents DNS options for sing-box.
+type SingBoxDNSConfig struct {
+	Servers []map[string]any `json:"servers"`
+}
 
 // SingBoxInboundConfig represents an inbound endpoint.
 type SingBoxInboundConfig struct {
@@ -20,6 +26,7 @@ type SingBoxCompleteConfig struct {
 		Timestamp bool   `json:"timestamp"`
 	} `json:"log"`
 	Inbounds  []SingBoxInboundConfig `json:"inbounds"`
+	DNS       *SingBoxDNSConfig      `json:"dns,omitempty"`
 	Outbounds []json.RawMessage      `json:"outbounds"`
 	Route     struct {
 		Rules []struct {
@@ -92,6 +99,21 @@ func BuildCompleteSingBoxConfig(nodes []json.RawMessage, socksPort int) ([]byte,
 	var cfg SingBoxCompleteConfig
 	cfg.Log.Level = "warn"
 	cfg.Log.Timestamp = true
+	if dnsServer, _ := netutil.GetSystemDNS(); dnsServer != "" {
+		host, port := netutil.ParseHostPort(dnsServer, 53)
+		if host != "" {
+			cfg.DNS = &SingBoxDNSConfig{
+				Servers: []map[string]any{
+					{
+						"type":        "udp",
+						"tag":         "dns-direct",
+						"server":      host,
+						"server_port": port,
+					},
+				},
+			}
+		}
+	}
 
 	cfg.Inbounds = []SingBoxInboundConfig{
 		{

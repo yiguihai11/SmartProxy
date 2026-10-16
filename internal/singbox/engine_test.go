@@ -67,3 +67,32 @@ func TestEngine_LifecycleAndDirectDial(t *testing.T) {
 		t.Error("expected error getting unregistered outbound, got nil")
 	}
 }
+
+func TestEngine_SetDNSAndResolve(t *testing.T) {
+	engine := NewEngine()
+	defer engine.Close()
+
+	if err := engine.SetDNS("223.5.5.5:53"); err != nil {
+		t.Fatalf("SetDNS failed: %v", err)
+	}
+
+	raw := []byte(`{
+		"type": "direct",
+		"tag": "my-direct"
+	}`)
+	if err := engine.RegisterOutbound("my-direct", raw); err != nil {
+		t.Fatalf("RegisterOutbound failed: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, err := engine.DialContext(ctx, "my-direct", "tcp", "www.baidu.com:80")
+	if err != nil {
+		t.Logf("dial domain warning (may be offline during test): %v", err)
+		return
+	}
+	defer conn.Close()
+	t.Logf("successfully resolved and dialed www.baidu.com:80 through sing-box direct outbound")
+}
+

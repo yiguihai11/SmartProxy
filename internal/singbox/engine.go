@@ -15,6 +15,7 @@ import (
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/option"
 	M "github.com/sagernet/sing/common/metadata"
+	"smartproxy/internal/netutil"
 )
 
 var (
@@ -36,6 +37,7 @@ type Engine struct {
 	mu        sync.RWMutex
 	instance  *box.Box
 	outbounds map[string]json.RawMessage
+	dnsServer string
 }
 
 // NewEngine creates a new Engine.
@@ -159,6 +161,20 @@ func (e *Engine) Rebuild(ctx context.Context) error {
 	return e.rebuildLocked(ctx)
 }
 
+// SetDNS updates the DNS server used by sing-box for direct outbound domain resolution.
+func (e *Engine) SetDNS(dnsServer string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.dnsServer == dnsServer {
+		return nil
+	}
+	e.dnsServer = dnsServer
+	if len(e.outbounds) > 0 && e.instance != nil {
+		return e.rebuildLocked(context.Background())
+	}
+	return nil
+}
+
 func (e *Engine) rebuildLocked(ctx context.Context) error {
 	if len(e.outbounds) == 0 {
 		if e.instance != nil {
@@ -179,11 +195,32 @@ func (e *Engine) rebuildLocked(ctx context.Context) error {
 		outboundList = append(outboundList, raw)
 	}
 
+	dnsServer := e.dnsServer
+	if dnsServer == "" {
+		dnsServer, _ = netutil.GetSystemDNS()
+	}
+
 	cfg := map[string]any{
 		"log": map[string]any{
 			"level": "warn",
 		},
 		"outbounds": outboundList,
+	}
+
+	if dnsServer != "" {
+		dnsHost, dnsPort := netutil.ParseHostPort(dnsServer, 53)
+		if dnsHost != "" {
+			cfg["dns"] = map[string]any{
+				"servers": []map[string]any{
+					{
+						"type":        "udp",
+						"tag":         "dns-direct",
+						"server":      dnsHost,
+						"server_port": dnsPort,
+					},
+				},
+			}
+		}
 	}
 
 	cfgBytes, err := json.Marshal(cfg)

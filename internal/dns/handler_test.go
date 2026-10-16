@@ -1378,3 +1378,83 @@ func TestSanitizeResponse_FilterBogonLAN(t *testing.T) {
 		t.Errorf("expected 1 answer preserved when filterLAN=false, got %d", len(preservedMsg.Answer))
 	}
 }
+
+func TestHandleDNS_DomesticSlowHedgeForeignFails_DomesticStillWins(t *testing.T) {
+	// Set up a mock domestic DNS server that takes 180ms to reply with a clean domestic IP
+	domesticSrv, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen domestic server: %v", err)
+	}
+	defer domesticSrv.Close()
+
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, addr, err := domesticSrv.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			req := new(dns.Msg)
+			if err := req.Unpack(buf[:n]); err != nil || len(req.Question) == 0 {
+				continue
+			}
+			time.Sleep(180 * time.Millisecond)
+			resp := new(dns.Msg)
+			resp.SetReply(req)
+			resp.Answer = append(resp.Answer, &dns.A{
+				Hdr: dns.RR_Header{
+					Name:   req.Question[0].Name,
+					Rrtype: dns.TypeA,
+					Class:  dns.ClassINET,
+					Ttl:    60,
+				},
+				A: net.ParseIP("114.114.114.114").To4(),
+			})
+			w, _ := resp.Pack()
+			domesticSrv.WriteToUDP(w, addr)
+		}
+	}()
+
+	cn := chnroute.New()
+	cn.Insert(netip.MustParsePrefix("114.114.114.0/24"))
+	// Also mark domesticSrv IP as domestic so HandleDNS classifies it as domestic
+	cn.Insert(netip.MustParsePrefix("127.0.0.1/32"))
+
+	// Upstream manager with a dead proxy (foreign hedge will fail quickly upon 150ms timeout)
+	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
+		Default: "failover",
+		Proxies: []upstream.ProxyEntry{
+			{Alias: "dead_proxy", URL: "socks5://127.0.0.1:1"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Stop()
+
+	h := NewHandler(100, 60, "8.8.8.8", "", cn, mgr, 2, "0.0.0.0", "::", false, PreferNone, nil, true)
+
+	query := buildTestDNSQuery("slow-clean.cn", dns.TypeA)
+	udpAddr := domesticSrv.LocalAddr().(*net.UDPAddr)
+	host := udpAddr.IP.String()
+	port := udpAddr.Port
+
+	resp := h.HandleDNS(context.Background(), query, host, port, nil)
+	if resp == nil {
+		t.Fatal("expected response, got nil")
+	}
+	msg := new(dns.Msg)
+	if err := msg.Unpack(resp); err != nil {
+		t.Fatalf("unpack: %v", err)
+	}
+	if msg.Rcode != dns.RcodeSuccess {
+		t.Fatalf("expected RcodeSuccess from slow clean domestic query, got %d", msg.Rcode)
+	}
+	if len(msg.Answer) == 0 {
+		t.Fatal("expected answer from domestic DNS")
+	}
+	a, ok := msg.Answer[0].(*dns.A)
+	if !ok || a.A.String() != "114.114.114.114" {
+		t.Fatalf("expected 114.114.114.114, got %v", msg.Answer[0])
+	}
+}

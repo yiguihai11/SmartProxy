@@ -373,7 +373,11 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 	if !smartEnabled {
 		remote, isProxy, err := h.router.EstablishConnection(ctx, host, port, "", h.ruleEng)
 		if err != nil {
-			ll.Error("TUN failed to establish connection", "host", host, "port", port, "error", err)
+			if isClientAbort(err) || errors.Is(ctx.Err(), context.Canceled) {
+				ll.Debug("TUN connection aborted by client", "host", host, "port", port, "error", err)
+			} else {
+				ll.Warn("TUN failed to establish connection", "host", host, "port", port, "error", err)
+			}
 			// 成功路径的 remove 在 relay goroutine 的 defer 里;失败分支不建 goroutine,
 			// 必须在这里手动摘表,否则代理故障时每个失败连接漏一个句柄,liveTCP 只增不减。
 			h.liveTCP.remove(hd)
@@ -443,7 +447,11 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 	if isDomestic {
 		remote, isProxy, err := h.router.EstablishConnection(ctx, host, port, domain, h.ruleEng)
 		if err != nil {
-			ll.Error("TUN failed to establish domestic connection", "host", host, "port", port, "domain", domain, "error", err)
+			if isClientAbort(err) || errors.Is(ctx.Err(), context.Canceled) {
+				ll.Debug("TUN domestic connection aborted", "host", host, "port", port, "domain", domain, "error", err)
+			} else {
+				ll.Warn("TUN failed to establish domestic connection", "host", host, "port", port, "domain", domain, "error", err)
+			}
 			netutil.ResetConn(conn)
 			return
 		}
@@ -463,7 +471,11 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 
 	remote, prefix, isProxy, err := h.router.SmartConnectWithFallback(ctx, host, port, domain, firstPkt, h.ruleEng)
 	if err != nil {
-		ll.Error("TUN smart connect failed", "host", host, "port", port, "domain", domain, "error", err)
+		if isClientAbort(err) || errors.Is(ctx.Err(), context.Canceled) {
+			ll.Debug("TUN smart connect aborted", "host", host, "port", port, "domain", domain, "error", err)
+		} else {
+			ll.Warn("TUN smart connect failed", "host", host, "port", port, "domain", domain, "error", err)
+		}
 		netutil.ResetConn(conn)
 		return
 	}
@@ -1581,3 +1593,18 @@ func intIn(list []int, v int) bool {
 	}
 	return false
 }
+
+func isClientAbort(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	s := err.Error()
+	return strings.Contains(s, "context canceled") ||
+		strings.Contains(s, "use of closed network connection") ||
+		strings.Contains(s, "connection reset by peer") ||
+		strings.Contains(s, "broken pipe")
+}
+

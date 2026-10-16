@@ -839,6 +839,86 @@ func TestSmartConnectWithFallback_UDPOnlyFallback(t *testing.T) {
 	}
 }
 
+func TestEstablishConnection_RuleProxyFailuresFallback(t *testing.T) {
+	proxyHit := make(chan struct{}, 10)
+	addr, stop := startMockSOCKS5Server(t, proxyHit)
+	defer stop()
+
+	cn := chnroute.New()
+	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
+		Default: "failover",
+		Proxies: []upstream.ProxyEntry{
+			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s?ipv6=1", addr)},
+			{Alias: "failing_proxy", URL: "socks5://127.0.0.1:54322"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Stop()
+
+	r := New(cn, mgr, true, 3*time.Second, nil, 300*time.Second)
+
+	dir := t.TempDir()
+	rulesFile := filepath.Join(dir, "rules.txt")
+	os.WriteFile(rulesFile, []byte("proxy ip 1.2.3.4 failing_proxy\nproxy ip 2001:db8::1 failing_proxy\n"), 0644)
+	eng, err := rules.New(rulesFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Failing proxy (connection refused) falls back to default proxy
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, isProxy, err := r.EstablishConnection(ctx, "1.2.3.4", 80, "", eng)
+	if err != nil {
+		t.Fatalf("expected fallback to default proxy on connect failure, got error: %v", err)
+	}
+	if conn != nil {
+		conn.Close()
+	}
+	if !isProxy {
+		t.Errorf("expected isProxy=true, got false")
+	}
+	select {
+	case <-proxyHit:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for fallback default proxy connection")
+	}
+
+	// 2. Unhealthy proxy (circuit open) falls back to default proxy
+	_ = mgr.SetCircuitHealth("failing_proxy", "tcp", "disable")
+
+	conn2, isProxy2, err := r.EstablishConnection(ctx, "1.2.3.4", 80, "", eng)
+	if err != nil {
+		t.Fatalf("expected fallback to default proxy on unhealthy proxy, got error: %v", err)
+	}
+	if conn2 != nil {
+		conn2.Close()
+	}
+	if !isProxy2 {
+		t.Errorf("expected isProxy2=true, got false")
+	}
+
+	// 3. IPv6 destination when rule proxy is pinned/known unsupported falls back to default proxy
+	_ = mgr.SetCircuitHealth("failing_proxy", "tcp", "auto")
+	p := mgr.FindProxy("failing_proxy")
+	if p != nil {
+		p.PinIPv6(false)
+	}
+	conn3, isProxy3, err := r.EstablishConnection(ctx, "2001:db8::1", 80, "", eng)
+	if err != nil {
+		t.Fatalf("expected fallback to default proxy on IPv6 unsupported proxy, got error: %v", err)
+	}
+	if conn3 != nil {
+		conn3.Close()
+	}
+	if !isProxy3 {
+		t.Errorf("expected isProxy3=true, got false")
+	}
+}
+
 func TestIsNetworkUnreachable(t *testing.T) {
 	if !isNetworkUnreachable(syscall.ENETUNREACH) {
 		t.Error("expected ENETUNREACH to be recognized as unreachable")
@@ -1129,5 +1209,52 @@ func TestSmartConnectWithFallback_IdempotentHTTP_EOFNotReplayed(t *testing.T) {
 	case <-proxyHit:
 		t.Fatal("proxy should NOT be hit on clean EOF")
 	default:
+	}
+}
+
+func TestSmartConnectWithFallback_HedgedProxyFailsBeforeDirectDoesNotDeadlock(t *testing.T) {
+	cn := chnroute.New()
+
+	// Upstream proxy points to a dead port that refuses connection immediately
+	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
+		Default: "failover",
+		Proxies: []upstream.ProxyEntry{
+			{Alias: "dead_proxy", URL: "socks5://127.0.0.1:1"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Stop()
+
+	// 100ms smartTimeout so direct times out quickly, but after 50ms hedge window
+	r := New(cn, mgr, false, 150*time.Millisecond, nil, 300*time.Second)
+
+	dir := t.TempDir()
+	rulesFile := filepath.Join(dir, "rules.txt")
+	os.WriteFile(rulesFile, []byte(""), 0644)
+	eng, err := rules.New(rulesFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// 198.51.100.1 is RFC 5737 TEST-NET-2 (silent drop).
+	// Hedge starts at 150ms (or hedgeDelay). Proxy fails immediately (127.0.0.1:1 refused).
+	// Direct fails when 150ms smartTimeout expires.
+	// Must return error cleanly and NOT deadlock!
+	start := time.Now()
+	conn, _, _, err := r.SmartConnectWithFallback(ctx, "198.51.100.1", 443, "deadlock.test", nil, eng)
+	if err == nil {
+		if conn != nil {
+			conn.Close()
+		}
+		t.Fatalf("expected error from both failed direct and failed proxy, got nil")
+	}
+	elapsed := time.Since(start)
+	if elapsed >= 1800*time.Millisecond {
+		t.Fatalf("SmartConnectWithFallback took %v, deadlock occurred!", elapsed)
 	}
 }

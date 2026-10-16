@@ -171,10 +171,17 @@ func (r *Router) isDomesticHost(host string) bool {
 	return false
 }
 
+func isIPv6Address(host string) bool {
+	host = strings.TrimPrefix(host, "[")
+	host = strings.TrimSuffix(host, "]")
+	ip := net.ParseIP(host)
+	return ip != nil && ip.To4() == nil
+}
+
 // defaultDirectTimeout is the dial timeout for non-smart direct connections (rule-forced direct,
-// LAN bypass, and domestic IP direct). Set to 1s to tolerate normal cellular/Wi-Fi
+// LAN bypass, and domestic IP direct). Set to 3s to tolerate normal cellular/Wi-Fi
 // latency and packet jitter without premature resets on domestic services.
-const defaultDirectTimeout = 1 * time.Second
+const defaultDirectTimeout = 3 * time.Second
 
 func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 	domain string, engine *rules.Engine) (net.Conn, bool, error) {
@@ -194,8 +201,15 @@ func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 		}
 		return conn, true, nil
 	case result != "fallback":
-		if selected.IsUDPOnly() {
-			ll.Warn("rule selected a udp_only proxy for TCP, falling back to default proxy", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port)
+		isV6 := isIPv6Address(host)
+		if selected.IsUDPOnly() || !selected.IsAvailable() || (isV6 && selected.IsIPv6Unsupported()) {
+			reason := "unhealthy"
+			if selected.IsUDPOnly() {
+				reason = "udp_only"
+			} else if isV6 && selected.IsIPv6Unsupported() {
+				reason = "ipv6_unsupported"
+			}
+			ll.Warn("rule selected proxy unsuitable, falling back to default proxy", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port, "domain", domain, "reason", reason)
 			conn, err := r.upstreamMgr.ConnectDefault(ctx, host, port)
 			if err != nil {
 				return nil, false, errors.New("failed to connect via default upstream proxy")
@@ -203,8 +217,24 @@ func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 			return conn, true, nil
 		}
 		ll.Info("using proxy alias from rule", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port, "domain", domain)
-		conn, err := selected.Connect(ctx, host, port)
-		return conn, true, err
+		dialCtx, dialCancel := context.WithTimeout(ctx, 5*time.Second)
+		conn, err := selected.Connect(dialCtx, host, port)
+		dialCancel()
+		if err != nil {
+			if isV6 {
+				selected.SetIPv6Capability(upstream.IPv6CapUnsupported)
+			}
+			ll.Warn("rule selected proxy failed to connect, falling back to default proxy", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port, "domain", domain, "error", err)
+			conn, err = r.upstreamMgr.ConnectDefault(ctx, host, port)
+			if err != nil {
+				return nil, false, errors.New("failed to connect via default upstream proxy")
+			}
+			return conn, true, nil
+		}
+		if isV6 {
+			selected.SetIPv6Capability(upstream.IPv6CapSupported)
+		}
+		return conn, true, nil
 	}
 
 	cfg := r.cfg.Load()
@@ -301,8 +331,15 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 		}
 		return conn, nil, true, nil
 	case result != "fallback":
-		if selected.IsUDPOnly() {
-			ll.Warn("rule selected a udp_only proxy for TCP, falling back to default proxy", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port)
+		isV6 := isIPv6Address(host)
+		if selected.IsUDPOnly() || !selected.IsAvailable() || (isV6 && selected.IsIPv6Unsupported()) {
+			reason := "unhealthy"
+			if selected.IsUDPOnly() {
+				reason = "udp_only"
+			} else if isV6 && selected.IsIPv6Unsupported() {
+				reason = "ipv6_unsupported"
+			}
+			ll.Warn("rule selected proxy unsuitable, falling back to default proxy", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port, "domain", domain, "reason", reason)
 			conn, err := r.upstreamMgr.ConnectDefault(ctx, host, port)
 			if err != nil {
 				return nil, nil, false, err
@@ -314,9 +351,20 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 			return conn, nil, true, nil
 		}
 		ll.Info("using proxy alias from rule", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port, "domain", domain)
-		conn, err := selected.Connect(ctx, host, port)
+		dialCtx, dialCancel := context.WithTimeout(ctx, 5*time.Second)
+		conn, err := selected.Connect(dialCtx, host, port)
+		dialCancel()
 		if err != nil {
-			return nil, nil, false, err
+			if isV6 {
+				selected.SetIPv6Capability(upstream.IPv6CapUnsupported)
+			}
+			ll.Warn("rule selected proxy failed to connect, falling back to default proxy", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port, "domain", domain, "error", err)
+			conn, err = r.upstreamMgr.ConnectDefault(ctx, host, port)
+			if err != nil {
+				return nil, nil, false, err
+			}
+		} else if isV6 {
+			selected.SetIPv6Capability(upstream.IPv6CapSupported)
 		}
 		if _, err := conn.Write(firstPkt); err != nil {
 			conn.Close()
@@ -415,15 +463,46 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 		}
 	}
 
+	var proxyErr error
+	var proxyDone bool
+
 	for {
 		select {
 		case <-ctx.Done():
+			cancelDirect()
+			cancelProxy()
+			if proxyStarted.Load() && !proxyDone {
+				safego.Go("route.drainProxy", func() {
+					select {
+					case pRes := <-proxyCh:
+						if pRes.conn != nil {
+							pRes.conn.Close()
+						}
+					case <-time.After(5 * time.Second):
+					}
+				})
+			}
+			safego.Go("route.drainDirect", func() {
+				select {
+				case dRes := <-directCh:
+					if dRes.conn != nil {
+						dRes.conn.Close()
+					}
+				case <-time.After(5 * time.Second):
+				}
+			})
+			if proxyStarted.Load() {
+				// Direct connection exceeded 250ms and client timed out or aborted while waiting for proxy.
+				// Record in dynamic blacklist so subsequent connections skip the direct attempt penalty.
+				shortReason := "direct_timeout_client_abort"
+				r.addToBlacklists(host, port, domain, shortReason)
+			}
 			return nil, nil, false, ctx.Err()
 
 		case res := <-directCh:
 			if res.err == nil {
 				cancelProxy()
-				if proxyStarted.Load() {
+				if proxyStarted.Load() && !proxyDone {
 					safego.Go("route.drainProxy", func() {
 						pRes := <-proxyCh
 						if pRes.conn != nil {
@@ -449,18 +528,26 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 				return nil, nil, false, fmt.Errorf("direct connection failed (%d bytes sent, not replay-safe): %w", res.written, res.err)
 			}
 
+			if proxyDone && proxyErr != nil {
+				return nil, nil, false, fmt.Errorf("direct failed (%v) and proxy fallback failed (%v)", res.err, proxyErr)
+			}
+
 			startProxy()
-			pRes := <-proxyCh
-			if pRes.err != nil {
-				return nil, nil, false, fmt.Errorf("direct failed (%v) and proxy fallback failed (%v)", res.err, pRes.err)
-			}
-			if len(firstPkt) > 0 {
-				if _, err := pRes.conn.Write(firstPkt); err != nil {
-					pRes.conn.Close()
-					return nil, nil, false, err
+			select {
+			case <-ctx.Done():
+				return nil, nil, false, ctx.Err()
+			case pRes := <-proxyCh:
+				if pRes.err != nil {
+					return nil, nil, false, fmt.Errorf("direct failed (%v) and proxy fallback failed (%v)", res.err, pRes.err)
 				}
+				if len(firstPkt) > 0 {
+					if _, err := pRes.conn.Write(firstPkt); err != nil {
+						pRes.conn.Close()
+						return nil, nil, false, err
+					}
+				}
+				return pRes.conn, nil, true, nil
 			}
-			return pRes.conn, nil, true, nil
 
 		case <-hedgeTimer.C:
 			// Direct is taking longer than 250ms (GFW SYN drop or high cross-border latency).
@@ -472,7 +559,9 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 
 		case pRes := <-proxyCh:
 			if pRes.err != nil {
-				// Proxy failed, continue waiting for direct
+				// Proxy failed, record failure and continue waiting for direct
+				proxyErr = pRes.err
+				proxyDone = true
 				continue
 			}
 			// Hedged proxy won the race against slow/blocked direct!
