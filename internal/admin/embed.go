@@ -3,6 +3,8 @@ package admin
 import (
 	_ "embed"
 	"net/http"
+	"os"
+	"strings"
 )
 
 //go:embed dashboard.html
@@ -27,6 +29,23 @@ var (
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	zh := s.uiLang(r) == "zh"
 	doc := dashboardHTML
+	if devPath := os.Getenv("SMARTPROXY_DEV_DASHBOARD"); devPath != "" {
+		if b, err := os.ReadFile(devPath); err == nil {
+			doc = string(b)
+			if zh {
+				doc = strings.Replace(doc, `<html lang="en">`, `<html lang="zh-CN">`, 1)
+				doc = headInject(doc, zhBoot)
+			}
+			if !s.fdMode {
+				doc = headInject(doc, noFDBoot)
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(doc))
+			return
+		}
+	}
 	if zh {
 		doc = zhDashboardHTML
 	}
