@@ -82,9 +82,9 @@ jobs:
             fi
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          # 基数提高至 200000: 彻底防止分支开发提交数(如 feat 分支达 653 导致 100653)比 squash 后的 main 提交数大
+          # 基数提高至 300000: 彻底防止分支开发提交数(如 feat 分支达 712 导致 200712)比 squash 后的 main 提交数大
           # 从而导致覆盖安装报错 INSTALL_FAILED_VERSION_DOWNGRADE，确保任何分支构建包都能被正式版无感覆盖安装
-          echo "VERSION_CODE=$((200000 + $(git rev-list --count HEAD)))" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=$((300000 + $(git rev-list --count HEAD)))" >> "$GITHUB_ENV"
 
       # JDK 21 (LTS):AGP 9.4 / Gradle 9.6 都支持,比 17 新的 LTS。
       - name: Set up JDK 21
