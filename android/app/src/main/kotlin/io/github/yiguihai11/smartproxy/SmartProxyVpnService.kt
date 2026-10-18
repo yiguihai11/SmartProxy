@@ -325,7 +325,7 @@ class SmartProxyVpnService : VpnService() {
 
         // 指定选路策略 (latency / failover / round_robin / random)
         if (action == NotificationHelper.ACTION_SET_STRATEGY) {
-            val target = intent?.getStringExtra(NotificationHelper.EXTRA_STRATEGY).orEmpty()
+            val target = intent.getStringExtra(NotificationHelper.EXTRA_STRATEGY).orEmpty()
             if (target.isNotBlank()) {
                 smartproxy.mobile.Mobile.setUpstreamStrategy(target)
                 ConfigProvider.setUpstreamStrategy(this, target)

@@ -79,15 +79,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.AltRoute
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.AltRoute
+import androidx.compose.material.icons.automirrored.outlined.AltRoute
+import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.outlined.AltRoute
 import androidx.compose.material.icons.outlined.Apps
-import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.outlined.BatteryChargingFull
 import androidx.compose.material.icons.outlined.BrightnessAuto
 import androidx.compose.material.icons.outlined.Build
@@ -1457,7 +1457,7 @@ private fun FloatingCapsuleBar(
         ) {
             val tabs = listOf(
                 Triple(0, Icons.Outlined.Dashboard to Icons.Filled.Dashboard, stringResource(R.string.tab_dashboard)),
-                Triple(1, Icons.Outlined.AltRoute to Icons.Filled.AltRoute, stringResource(R.string.tab_routing)),
+                Triple(1, Icons.AutoMirrored.Outlined.AltRoute to Icons.AutoMirrored.Filled.AltRoute, stringResource(R.string.tab_routing)),
                 Triple(2, Icons.Outlined.Build to Icons.Filled.Build, stringResource(R.string.tab_tools))
             )
             tabs.forEach { (index, icons, title) ->
@@ -2040,7 +2040,7 @@ private fun HomeLauncher(
                                             )
                                         }
                                         QuickActionChip(
-                                            icon = Icons.Outlined.Article,
+                                            icon = Icons.AutoMirrored.Outlined.Article,
                                             label = stringResource(R.string.drawer_logcat),
                                             enabled = true,
                                             onClick = onOpenLogcat
@@ -2327,7 +2327,7 @@ private fun HomeLauncher(
                                         }
 
                                         SettingsRowItem(
-                                            icon = Icons.Outlined.Article,
+                                            icon = Icons.AutoMirrored.Outlined.Article,
                                             title = stringResource(R.string.drawer_logcat),
                                             subtitle = stringResource(R.string.drawer_logcat_subtitle),
                                             onClick = onOpenLogcat
