@@ -626,7 +626,6 @@ func (m *Manager) ConnectDefault(ctx context.Context, host string, port int) (ne
 			if isV6Target {
 				p.SetIPv6Capability(IPv6CapSupported)
 			}
-			m.healthChecker.RecordSuccess(p, 0)
 		}
 		onFail = func(p *Proxy, err error) {
 			if isV6Target {
@@ -663,9 +662,6 @@ func (m *Manager) connectOne(ctx context.Context, ll *slog.Logger, proxy *Proxy,
 	ll.Info("connected via", "url", MaskProxyURL(proxy.URL))
 	if isIPv6Address(host) {
 		proxy.SetIPv6Capability(IPv6CapSupported)
-	}
-	if m.healthChecker != nil {
-		m.healthChecker.RecordSuccess(proxy, 0)
 	}
 	return conn, nil
 }
@@ -1074,9 +1070,6 @@ func (m *Manager) Connect(ctx context.Context, host string, port int, domain str
 	}
 	if isIPv6Address(host) {
 		selected.SetIPv6Capability(IPv6CapSupported)
-	}
-	if m.healthChecker != nil {
-		m.healthChecker.RecordSuccess(selected, 0)
 	}
 	return conn, "proxy"
 }

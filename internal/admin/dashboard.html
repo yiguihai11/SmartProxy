@@ -1069,8 +1069,9 @@ function circuitStat(snap,supports){
   if(m)return snap.available?{c:'up',t:'up',m:true}:{c:'down',t:'down',m:true};
   if(snap.state==='open')return {c:'down',t:'down',m:m};
   if(snap.state==='half_open')return {c:'half',t:'half',m:m};
+  if(!snap.last_attempt)return {c:'unknown',t:'unknown',m:false};
   if(snap.state==='closed')return {c:'up',t:'up',m:m};
-  return snap.last_attempt?{c:'up',t:'up',m:m}:{c:'unknown',t:'unknown',m:m};
+  return {c:'unknown',t:'unknown',m:m};
 }
 // Click a badge to flip that circuit: up → disable (force down), down → enable (force up),
 // manually-up → release back to automatic. A manual-down pin (e.g. the udp_in_tcp TCP default)
@@ -1542,7 +1543,9 @@ function toggleGroupCollapse(gid){
 function computeCardHash(p, i){
   if(!p)return '';
   var udpScheme=isUDPSupportedScheme(p);
-  var anyUp=p.health.available||(udpScheme&&p.udp_health&&p.udp_health.available);
+  var tcpUp=p.health.manual?p.health.available:(p.health.available&&!!p.health.last_attempt);
+  var udpUp=udpScheme&&p.udp_health&&(p.udp_health.manual?p.udp_health.available:(p.udp_health.available&&!!p.udp_health.last_attempt));
+  var anyUp=tcpUp||udpUp;
   var latVal=(p.mode==='udp_only'&&p.udp_health&&p.udp_health.latency>0)?p.udp_health.latency:p.health.latency;
   var pingVal=(p.ping_latency&&p.ping_latency>0)?(p.ping_latency/1e6):0;
   var stTCPing=proxyTestState[p.alias+':tcping']||proxyTestState[p.alias+':ping'];
@@ -1856,7 +1859,9 @@ function lhealth(d){
     }
     groups[gid].items.push({proxy:p,index:i});
     var udpScheme=isUDPSupportedScheme(p);
-    var anyUp=p.health.available||(udpScheme&&p.udp_health&&p.udp_health.available);
+    var tcpUp=p.health.manual?p.health.available:(p.health.available&&!!p.health.last_attempt);
+    var udpUp=udpScheme&&p.udp_health&&(p.udp_health.manual?p.udp_health.available:(p.udp_health.available&&!!p.udp_health.last_attempt));
+    var anyUp=tcpUp||udpUp;
     if(anyUp)groups[gid].onlineCount++;
     var hasV6=!!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||(p.host&&p.host.indexOf(':')!==-1));
     if(hasV6)groups[gid].v6Count++;
