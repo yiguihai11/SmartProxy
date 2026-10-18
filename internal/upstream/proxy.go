@@ -339,7 +339,13 @@ func isAlphaNum(b byte) bool {
 // nodes default to UDP down (udpHealth manually disabled at construction, see NewProxy) and
 // are only UDP-probed once the user releases the circuit.
 func (p *Proxy) SchemeSupportsUDP() bool {
-	switch p.Scheme {
+	scheme := p.Scheme
+	if scheme == "" && p.URL != "" {
+		if u, err := url.Parse(p.URL); err == nil {
+			scheme = ProxyScheme(strings.ToLower(u.Scheme))
+		}
+	}
+	switch scheme {
 	case SchemeSOCKS5, SchemeSOCKS5H, SchemeSS,
 		SchemeVLESS, SchemeVMess, SchemeTrojan, SchemeHysteria2, SchemeHy2, SchemeTUIC, SchemeAnyTLS:
 		return true
@@ -609,6 +615,9 @@ func (p *Proxy) IsAvailable() bool {
 // independent of IsAvailable (TCP), so a node can be TCP-healthy and UDP-broken, or
 // UDP-healthy while its TCP path is down (udp_only).
 func (p *Proxy) IsUDPAvailable() bool {
+	if !p.SchemeSupportsUDP() {
+		return false
+	}
 	return p.udpHealth.IsAvailable()
 }
 
@@ -737,6 +746,10 @@ func newProxyParsed(proxyURL string) (*Proxy, error) {
 		if cc := inferCountryCode(p.Name, p.Host); cc != "" {
 			p.SetGeoInfo(cc, "")
 		}
+		if !p.SchemeSupportsUDP() {
+			p.udpCapability = UDPCapNone
+			p.udpHealth.SetManualState(false)
+		}
 		return p, nil
 	}
 	return parseStandardProxy(proxyURL)
@@ -833,6 +846,10 @@ func parseStandardProxy(proxyURL string) (*Proxy, error) {
 			p.udpCapability = UDPCapNone
 			p.udpHealth.SetManualState(false)
 		}
+	}
+	if !p.SchemeSupportsUDP() {
+		p.udpCapability = UDPCapNone
+		p.udpHealth.SetManualState(false)
 	}
 	return p, nil
 }

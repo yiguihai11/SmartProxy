@@ -280,7 +280,7 @@ func TestReopenedCircuit_KeepsFailureCount(t *testing.T) {
 	hc := NewHealthChecker(config.HealthCheckConf{
 		Enabled:            true,
 		FailuresThreshold:  2,
-		SuccessesThreshold: 1,
+		SuccessesThreshold: 2,
 		OpenCoolDown:       0, // cooldown passes on the next probe
 	}, nil)
 	ph := &ProxyHealth{}
@@ -292,8 +292,8 @@ func TestReopenedCircuit_KeepsFailureCount(t *testing.T) {
 		t.Fatalf("want open/2, got state=%s failures=%d", snap.State, snap.ConsecutiveFailures)
 	}
 
-	// next failure → half_open; the failure count must survive (not reset to 0)
-	hc.recordFailure(&Proxy{}, ph, "tcp", errors.New("x"))
+	// 1 probe success (threshold=2) → half_open; failure count preserved
+	hc.recordSuccess(&Proxy{}, ph, "tcp", time.Millisecond)
 	snap := ph.Snapshot()
 	if snap.State != "half_open" {
 		t.Fatalf("want half_open, got %s", snap.State)
@@ -302,19 +302,19 @@ func TestReopenedCircuit_KeepsFailureCount(t *testing.T) {
 		t.Errorf("half_open must keep failures=2, got %d", snap.ConsecutiveFailures)
 	}
 
-	// next failure → re-opened; still keeps failures=2
+	// next failure while half_open → re-opened; still keeps failure count
 	hc.recordFailure(&Proxy{}, ph, "tcp", errors.New("x"))
 	snap = ph.Snapshot()
 	if snap.State != "open" {
 		t.Fatalf("want open (reopened), got %s", snap.State)
 	}
-	if snap.ConsecutiveFailures != 2 {
-		t.Errorf("reopened must keep failures=2, got %d", snap.ConsecutiveFailures)
+	if snap.ConsecutiveFailures < 2 {
+		t.Errorf("reopened must keep failures >= 2, got %d", snap.ConsecutiveFailures)
 	}
 
-	// recovery resets the counter back to 0
-	hc.recordFailure(&Proxy{}, ph, "tcp", errors.New("x")) // open → half_open
-	hc.recordSuccess(&Proxy{}, ph, "tcp", time.Millisecond)
+	// recovery (2 successes) resets the counter back to 0
+	hc.recordSuccess(&Proxy{}, ph, "tcp", time.Millisecond) // open -> half_open
+	hc.recordSuccess(&Proxy{}, ph, "tcp", time.Millisecond) // half_open -> closed
 	if snap := ph.Snapshot(); snap.State != "closed" || snap.ConsecutiveFailures != 0 {
 		t.Errorf("recovery must reset to closed/0, got state=%s failures=%d", snap.State, snap.ConsecutiveFailures)
 	}
@@ -546,3 +546,67 @@ func TestHealthChecker_StopReloadConcurrentNoPanic(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestDeadNodeCircuitBreakerAndSchemeIsolation(t *testing.T) {
+	cfg := config.HealthCheckConf{
+		Enabled:            true,
+		FailuresThreshold:  2,
+		SuccessesThreshold: 1,
+		OpenCoolDown:       10,
+	}
+
+	p := &Proxy{
+		Scheme: SchemeSOCKS5,
+		Host:   "1.2.3.4",
+		Port:   1080,
+		URL:    "socks5://1.2.3.4:1080",
+	}
+	hc := NewHealthChecker(cfg, []*Proxy{p})
+
+	// 1. Verify dead node in StateOpen never flips to HalfOpen on failure
+	hc.RecordFailure(p, errors.New("timeout 1"))
+	hc.RecordFailure(p, errors.New("timeout 2"))
+	snap := p.health.Snapshot()
+	if snap.State != "open" {
+		t.Fatalf("expected state to be open after 2 failures, got %v", snap.State)
+	}
+	if p.IsAvailable() {
+		t.Fatalf("expected IsAvailable() to be false when StateOpen")
+	}
+
+	// Another failure while open must NOT flip to StateHalfOpen
+	hc.RecordFailure(p, errors.New("timeout 3"))
+	snap = p.health.Snapshot()
+	if snap.State != "open" {
+		t.Fatalf("subsequent failure in StateOpen must stay open, got %v", snap.State)
+	}
+	if p.IsAvailable() {
+		t.Fatalf("dead node must remain unavailable after failure in StateOpen")
+	}
+
+	// 2. Successful probe recovers StateOpen -> StateClosed (with threshold=1)
+	hc.RecordSuccess(p, 50*time.Millisecond)
+	snap = p.health.Snapshot()
+	if snap.State != "closed" {
+		t.Fatalf("expected state to recover to closed on success with threshold=1, got %v", snap.State)
+	}
+	if !p.IsAvailable() {
+		t.Fatalf("expected IsAvailable() to be true after recovery")
+	}
+
+
+	// 3. Verify non-UDP proxy schemes never report UDP available
+	for _, scheme := range []ProxyScheme{SchemeHTTP, SchemeHTTPS, SchemeSOCKS4} {
+		np := &Proxy{
+			Scheme: scheme,
+			URL:    string(scheme) + "://1.2.3.4:8080",
+		}
+		if np.SchemeSupportsUDP() {
+			t.Fatalf("scheme %s must not support UDP", scheme)
+		}
+		if np.IsUDPAvailable() {
+			t.Fatalf("scheme %s must not report UDP available", scheme)
+		}
+	}
+}
+

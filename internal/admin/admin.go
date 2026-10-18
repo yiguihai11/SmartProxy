@@ -1243,8 +1243,8 @@ func (s *Server) handleProxyTest(w http.ResponseWriter, r *http.Request) {
 	if protocol == "" {
 		protocol = r.URL.Query().Get("proto")
 	}
-	if protocol != "tcping" && protocol != "ping" && protocol != "tcp" && protocol != "udp" {
-		http.Error(w, "need ?protocol=tcping|ping|tcp|udp", http.StatusBadRequest)
+	if protocol != "tcping" && protocol != "ping" && protocol != "tcp" && protocol != "udp" && protocol != "ipv6" && protocol != "v6" {
+		http.Error(w, "need ?protocol=tcping|ping|tcp|udp|ipv6", http.StatusBadRequest)
 		return
 	}
 
@@ -1298,6 +1298,8 @@ func (s *Server) handleProxyTest(w http.ResponseWriter, r *http.Request) {
 		if info.ExitIP != "" {
 			respData["exit_ip"] = info.ExitIP
 		}
+		respData["supports_ipv6"] = info.SupportsIPv6
+		respData["ipv6_capability"] = info.IPv6Capability
 	}
 	json.NewEncoder(w).Encode(respData)
 }

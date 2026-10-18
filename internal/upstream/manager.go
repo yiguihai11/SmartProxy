@@ -354,7 +354,9 @@ func (m *Manager) rebuildLocked() map[string]json.RawMessage {
 			proxy.applyUDPInTCPDefaults()
 			if m.healthCheckEnabledForProxiesLocked(len(allEntries)) {
 				proxy.health.SetInitialUnverified()
-				proxy.udpHealth.SetInitialUnverified()
+				if proxy.SchemeSupportsUDP() {
+					proxy.udpHealth.SetInitialUnverified()
+				}
 			}
 		}
 
@@ -1342,6 +1344,12 @@ func (m *Manager) Proxies() []ProxyInfo {
 		alias := reverseMap[proxy]
 		hSnap := proxy.health.Snapshot()
 		uSnap := proxy.udpHealth.Snapshot()
+		udpCap := string(proxy.UDPCapability())
+		if !proxy.SchemeSupportsUDP() {
+			uSnap.Available = false
+			uSnap.State = "n/a"
+			udpCap = "none"
+		}
 		isManualDown := (hSnap.Manual && !hSnap.Available) && (uSnap.Manual && !uSnap.Available)
 		infos = append(infos, ProxyInfo{
 			Alias:          alias,
@@ -1354,7 +1362,7 @@ func (m *Manager) Proxies() []ProxyInfo {
 			Enable:         !isManualDown,
 			Enabled:        !isManualDown,
 			Mode:           proxy.EffectiveMode(),
-			UDPCapability:  string(proxy.UDPCapability()),
+			UDPCapability:  udpCap,
 			IPv6Capability: string(proxy.IPv6Capability()),
 			SupportsIPv6:   proxy.SupportsIPv6(),
 			Health:         hSnap,
@@ -1483,7 +1491,7 @@ func (m *Manager) ResetAutoOpenedCircuits() int {
 		if proxy.health.resetAutoOpened() {
 			n++
 		}
-		if proxy.udpHealth.resetAutoOpened() {
+		if proxy.SchemeSupportsUDP() && proxy.udpHealth.resetAutoOpened() {
 			n++
 		}
 	}
@@ -1510,7 +1518,9 @@ func (m *Manager) HandleNetworkChange() {
 	for _, p := range allAliases {
 		if p != nil {
 			p.health.ResetFailures()
-			p.udpHealth.ResetFailures()
+			if p.SchemeSupportsUDP() {
+				p.udpHealth.ResetFailures()
+			}
 		}
 	}
 
@@ -1696,8 +1706,20 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 				m.healthChecker.RecordUDPFailure(proxy, err)
 			}
 		}
+	case "ipv6", "v6":
+		if m.healthChecker != nil {
+			latency, err = m.healthChecker.ProbeIPv6(ctx, proxy)
+		} else {
+			dummyHC := NewHealthChecker(config.HealthCheckConf{}, nil)
+			latency, err = dummyHC.ProbeIPv6(ctx, proxy)
+		}
+		if err == nil {
+			proxy.SetIPv6Capability(IPv6CapSupported)
+		} else {
+			proxy.SetIPv6Capability(IPv6CapUnsupported)
+		}
 	default:
-		return 0, fmt.Errorf("invalid protocol %q, must be ping, tcp or udp", protocol)
+		return 0, fmt.Errorf("invalid protocol %q, must be ping, tcp, udp or ipv6", protocol)
 	}
 
 	return latency, err

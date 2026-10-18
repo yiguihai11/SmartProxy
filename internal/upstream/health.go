@@ -171,13 +171,7 @@ func (ph *ProxyHealth) ResetFailures() {
 func (ph *ProxyHealth) IsAvailable() bool {
 	ph.mu.RLock()
 	defer ph.mu.RUnlock()
-	if ph.state == StateClosed {
-		return true
-	}
-	if ph.state == StateHalfOpen {
-		return true
-	}
-	return false
+	return ph.state == StateClosed
 }
 
 type ProxyHealthSnapshot struct {
@@ -202,7 +196,7 @@ func (ph *ProxyHealth) Snapshot() ProxyHealthSnapshot {
 	}
 	s := ProxyHealthSnapshot{
 		State:                state,
-		Available:            ph.state != StateOpen,
+		Available:            ph.state == StateClosed,
 		Manual:               ph.manual != nil,
 		Latency:              ph.latency,
 		ConsecutiveFailures:  ph.consecutiveFailures,
@@ -1246,13 +1240,16 @@ func (hc *HealthChecker) recordSuccess(p *Proxy, ph *ProxyHealth, circuit string
 	case StateOpen:
 		// checkProxy skips probing while Open and inside the cool-down, so reaching here
 		// means the cool-down has passed and this probe succeeded — the node is recovering.
-		// Move to half-open and count this success toward the recovery threshold. Without
-		// this, an Open circuit could only ever recover by failing again (recordFailure is
-		// the only other Open→HalfOpen path), which defeats the breaker's failover purpose:
-		// the node would stay permanently skipped despite probes succeeding.
-		ph.state = StateHalfOpen
 		ph.consecutiveSuccesses = 1
-		slog.Info("proxy circuit half-open on probe success", "url", MaskProxyURL(p.URL), "circuit", circuit, "latency", latency)
+		if ph.consecutiveSuccesses >= cfg.SuccessesThreshold {
+			ph.state = StateClosed
+			ph.consecutiveFailures = 0
+			ph.consecutiveSuccesses = 0
+			slog.Info("proxy recovered", "url", MaskProxyURL(p.URL), "circuit", circuit, "latency", latency)
+		} else {
+			ph.state = StateHalfOpen
+			slog.Info("proxy circuit half-open on probe success", "url", MaskProxyURL(p.URL), "circuit", circuit, "latency", latency)
+		}
 		hc.notifyFirstProbeDone()
 		hc.notifyCircuitProbeDone(circuit)
 	case StateHalfOpen:
@@ -1291,19 +1288,16 @@ func (hc *HealthChecker) recordFailure(p *Proxy, ph *ProxyHealth, circuit string
 			slog.Warn("proxy circuit opened", "url", MaskProxyURL(p.URL), "circuit", circuit, "failures", ph.consecutiveFailures, "error", err)
 		}
 	case StateOpen:
-		if time.Since(ph.openSince) >= time.Duration(cfg.OpenCoolDown)*time.Second {
-			ph.state = StateHalfOpen
-			ph.consecutiveSuccesses = 0
-			// Keep consecutiveFailures at the count that opened the circuit: a circuit that
-			// half-opens and re-opens repeatedly must keep showing a real failure count in the
-			// dashboard, not a misleading 0 next to a "down" badge. Recovery resets it to 0
-			// (recordSuccess in StateHalfOpen).
-			slog.Info("proxy circuit half-open", "url", MaskProxyURL(p.URL), "circuit", circuit)
-		}
+		// A probe was attempted after cool-down passed, but it failed again.
+		// Keep the circuit Open, renew openSince to restart the cool-down window.
+		ph.openSince = time.Now()
+		ph.consecutiveFailures++
+		slog.Warn("proxy circuit probe failed while open, renewing cool-down", "url", MaskProxyURL(p.URL), "circuit", circuit, "failures", ph.consecutiveFailures, "error", err)
 	case StateHalfOpen:
 		ph.state = StateOpen
 		ph.openSince = time.Now()
 		ph.consecutiveSuccesses = 0
-		slog.Warn("proxy circuit re-opened", "url", MaskProxyURL(p.URL), "circuit", circuit, "error", err)
+		ph.consecutiveFailures++
+		slog.Warn("proxy circuit re-opened", "url", MaskProxyURL(p.URL), "circuit", circuit, "failures", ph.consecutiveFailures, "error", err)
 	}
 }

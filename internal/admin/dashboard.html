@@ -1048,9 +1048,11 @@ function ltraf(d){
 var healthD={health:{proxies:[]}};
 function isUDPSupportedScheme(p){
   if(!p)return false;
-  if(p.udp_capability&&p.udp_capability!=='none')return true;
   var s=(typeof p==='string'?p:(p.scheme||'')).toLowerCase();
-  return /^(socks5|socks5h|ss|shadowsocks|vless|vmess|trojan|hysteria2|hy2|tuic|anytls)$/.test(s);
+  if(s==='http'||s==='https'||s==='socks4')return false;
+  if(p.udp_capability==='none')return false;
+  if(p.udp_capability&&p.udp_capability!=='unknown')return true;
+  return /^(socks5|socks5h|ss|shadowsocks|vless|vmess|trojan|hysteria2|hy2|tuic|anytls)$/.test(s)||(!!p.singbox_tag);
 }
 // Per-circuit connectivity badge: up / half (recovering) / down (circuit open) /
 // unknown (never probed yet, e.g. health check disabled) / n/a (scheme without UDP).
@@ -1058,6 +1060,7 @@ function isUDPSupportedScheme(p){
 function circuitStat(snap,supports){
   if(!supports)return {c:'na',t:'n/a',m:false};
   if(!snap)return {c:'na',t:'unknown',m:false};
+  if(snap.state==='n/a')return {c:'na',t:'n/a',m:false};
   var m=!!snap.manual;
   // A manually-pinned circuit displays its pinned availability directly: the pin holds the
   // state fixed across probe cycles, so "up"/"down" is authoritative even before the first
@@ -1066,10 +1069,7 @@ function circuitStat(snap,supports){
   if(m)return snap.available?{c:'up',t:'up',m:true}:{c:'down',t:'down',m:true};
   if(snap.state==='open')return {c:'down',t:'down',m:m};
   if(snap.state==='half_open')return {c:'half',t:'half',m:m};
-  // 从未探测过(健康检查禁用 / 单节点 auto_disable_if_single_proxy 跳过 / 首个周期未跑):
-  // 显示 "unknown" 但仍允许点击——点击 = 强制关闭(force down)该电路,否则单节点用户
-  // 永远看到 "TCP unknown" 且关不掉。c 用 'unknown'(而非 'na')使 badge 保持可点,
-  // 真正无此电路(scheme 不支持)的 n/a 才禁点。
+  if(snap.state==='closed')return {c:'up',t:'up',m:m};
   return snap.last_attempt?{c:'up',t:'up',m:m}:{c:'unknown',t:'unknown',m:m};
 }
 // Click a badge to flip that circuit: up → disable (force down), down → enable (force up),
@@ -1103,6 +1103,29 @@ async function testProxy(i,proto){
     var res=await resp.json();
     if(res.country_code)p.country_code=res.country_code;
     if(res.exit_ip)p.exit_ip=res.exit_ip;
+    if(res.ipv6_capability)p.ipv6_capability=res.ipv6_capability;
+    if(res.supports_ipv6!==undefined)p.supports_ipv6=res.supports_ipv6;
+    if(proto==='tcp'&&p.health){
+      p.health.available=!!res.available;
+      p.health.state=res.available?'closed':'open';
+      p.health.last_attempt=new Date().toISOString();
+      if(res.available){
+        p.health.latency=Math.round((res.latency_ms||0)*1e6);
+        p.health.consecutive_failures=0;
+      }else{
+        p.health.consecutive_failures=(p.health.consecutive_failures||0)+1;
+      }
+    }else if(proto==='udp'&&p.udp_health){
+      p.udp_health.available=!!res.available;
+      p.udp_health.state=res.available?'closed':'open';
+      p.udp_health.last_attempt=new Date().toISOString();
+      if(res.available){
+        p.udp_health.latency=Math.round((res.latency_ms||0)*1e6);
+        p.udp_health.consecutive_failures=0;
+      }else{
+        p.udp_health.consecutive_failures=(p.udp_health.consecutive_failures||0)+1;
+      }
+    }
     proxyTestState[key]={
       testing:false,
       available:!!res.available,
@@ -1258,6 +1281,29 @@ async function testGroupProxies(gid, proto, btn){
         if(node){
           if(res.country_code)node.country_code=res.country_code;
           if(res.exit_ip)node.exit_ip=res.exit_ip;
+          if(res.ipv6_capability)node.ipv6_capability=res.ipv6_capability;
+          if(res.supports_ipv6!==undefined)node.supports_ipv6=res.supports_ipv6;
+          if(task.proto==='tcp'&&node.health){
+            node.health.available=!!res.available;
+            node.health.state=res.available?'closed':'open';
+            node.health.last_attempt=new Date().toISOString();
+            if(res.available){
+              node.health.latency=Math.round((res.latency_ms||0)*1e6);
+              node.health.consecutive_failures=0;
+            }else{
+              node.health.consecutive_failures=(node.health.consecutive_failures||0)+1;
+            }
+          }else if(task.proto==='udp'&&node.udp_health){
+            node.udp_health.available=!!res.available;
+            node.udp_health.state=res.available?'closed':'open';
+            node.udp_health.last_attempt=new Date().toISOString();
+            if(res.available){
+              node.udp_health.latency=Math.round((res.latency_ms||0)*1e6);
+              node.udp_health.consecutive_failures=0;
+            }else{
+              node.udp_health.consecutive_failures=(node.udp_health.consecutive_failures||0)+1;
+            }
+          }
         }
         proxyTestState[task.alias+':'+task.proto]={
           testing:false,
