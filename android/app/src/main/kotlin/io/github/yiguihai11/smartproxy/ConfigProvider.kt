@@ -149,12 +149,12 @@ object ConfigProvider {
         return up.optString("strategy").ifBlank { up.optString("default", "latency") }.ifBlank { "latency" }
     }
 
-    /** 保存上游选路策略至 config.json，同时同步 default 与 strategy 字段以兼容 Go 核心与 Android。 */
+    /** 保存上游选路策略至 config.json，仅写入 strategy 字段并清理遗留 default 字段。 */
     fun setUpstreamStrategy(context: Context, strategy: String) {
         val json = readConfig(context)
         val upstream = json.optJSONObject("upstream") ?: JSONObject().also { json.put("upstream", it) }
         upstream.put("strategy", strategy)
-        upstream.put("default", strategy)
+        upstream.remove("default")
         writeConfig(context, json)
     }
 

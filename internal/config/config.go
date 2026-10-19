@@ -135,7 +135,7 @@ type AuthConf struct {
 }
 
 type UpstreamConf struct {
-	Default       string             `json:"default"`
+	Default       string             `json:"default,omitempty"`
 	Strategy      string             `json:"strategy,omitempty"`
 	HealthCheck   HealthCheckConf    `json:"health_check"`
 	Proxies       []ProxyEntry       `json:"proxies"`

@@ -1297,8 +1297,8 @@ func (e *Engine) SetUpstreamStrategy(strategy string) {
 		e.UpstreamMgr.SetStrategy(strategy)
 		if cur := e.Config.Load(); cur != nil {
 			cp := cur.Clone()
-			cp.Upstream.Default = strategy
 			cp.Upstream.Strategy = strategy
+			cp.Upstream.Default = ""
 			e.Config.Store(cp)
 		}
 	}
@@ -1310,8 +1310,8 @@ func (e *Engine) CycleUpstreamStrategy() string {
 		newStrat := e.UpstreamMgr.CycleStrategy()
 		if cur := e.Config.Load(); cur != nil {
 			cp := cur.Clone()
-			cp.Upstream.Default = newStrat
 			cp.Upstream.Strategy = newStrat
+			cp.Upstream.Default = ""
 			e.Config.Store(cp)
 		}
 		return newStrat

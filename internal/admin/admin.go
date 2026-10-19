@@ -1760,6 +1760,10 @@ func (s *Server) saveConfig(mutate func(c *config.Config)) (*config.Config, erro
 	}
 	next := src.Clone()
 	mutate(next)
+	if next.Upstream.Strategy == "" && next.Upstream.Default != "" {
+		next.Upstream.Strategy = next.Upstream.Default
+	}
+	next.Upstream.Default = ""
 	if err := next.Validate(); err != nil {
 		return nil, err, nil
 	}
