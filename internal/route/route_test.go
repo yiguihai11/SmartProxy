@@ -562,16 +562,20 @@ func startMockSOCKS5Server(t *testing.T, hitChan chan<- struct{}) (string, func(
 				if _, err := c.Write([]byte{0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 80}); err != nil {
 					return
 				}
-				// Ignore background manager geo/health probes (e.g. cp.cloudflare.com, 2606:4700:4700::1111)
+				// Ignore background manager geo/health probes (e.g. cp.cloudflare.com, 2606:4700:4700::1111, OpenDNS UDP)
 				isProbe := false
-				if n > 5 && buf[3] == 0x03 {
+				if buf[1] == 0x03 {
+					isProbe = true
+				} else if n > 5 && buf[3] == 0x03 {
 					dLen := int(buf[4])
-					if 5+dLen <= n && strings.Contains(string(buf[5:5+dLen]), "cloudflare") {
+					if 5+dLen <= n && (strings.Contains(string(buf[5:5+dLen]), "cloudflare") || strings.Contains(string(buf[5:5+dLen]), "opendns") || strings.Contains(string(buf[5:5+dLen]), "cymru")) {
 						isProbe = true
 					}
+				} else if n >= 8 && buf[3] == 0x01 && buf[4] == 208 && buf[5] == 67 {
+					isProbe = true
 				} else if n >= 22 && buf[3] == 0x04 {
 					ip := net.IP(buf[4:20])
-					if strings.HasPrefix(ip.String(), "2606:4700:") {
+					if strings.HasPrefix(ip.String(), "2606:4700:") || strings.HasPrefix(ip.String(), "2620:0:ccc:") {
 						isProbe = true
 					}
 				}

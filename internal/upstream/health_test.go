@@ -5,9 +5,12 @@ import (
 	"errors"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/miekg/dns"
 
 	"smartproxy/internal/config"
 )
@@ -710,4 +713,97 @@ func TestDeadNodeCircuitBreakerAndSchemeIsolation(t *testing.T) {
 		}
 	}
 }
+
+func TestHealthChecker_ProbeIPv6_ZeroByteEOF(t *testing.T) {
+	// Remote proxy accepts connection and sends SOCKS5 handshake, but closes immediately when probe request is sent
+	addr, done := startIPv6TraceMockSOCKS5(t, "")
+	defer done()
+
+	host, portStr, _ := net.SplitHostPort(addr)
+	port := parsePort(portStr)
+
+	p := &Proxy{
+		Scheme: SchemeSOCKS5,
+		Host:   host,
+		Port:   port,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := probeIPv6(ctx, p)
+	if err == nil {
+		t.Fatalf("expected probeIPv6 to fail on 0-byte EOF, but got nil error")
+	}
+	if p.IPv6Capability() != IPv6CapUnsupported {
+		t.Fatalf("expected capability to be IPv6CapUnsupported, got %v", p.IPv6Capability())
+	}
+}
+
+func TestQueryCymruCountry_IPv4_and_IPv6(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, err := serverConn.Read(buf)
+			if err != nil {
+				return
+			}
+			payload, err := parseUDPFrame(buf[:n])
+			if err != nil {
+				return
+			}
+			var q dns.Msg
+			if err := q.Unpack(payload); err != nil {
+				return
+			}
+			resp := new(dns.Msg)
+			resp.SetReply(&q)
+			resp.Response = true
+			if len(q.Question) > 0 {
+				qName := q.Question[0].Name
+				txtRecord := ""
+				if strings.Contains(qName, "origin.asn.cymru.com") {
+					txtRecord = "50053 | 185.239.141.0/24 | ES | ripencc | 2018-01-04"
+				} else if strings.Contains(qName, "origin6.asn.cymru.com") {
+					txtRecord = "50053 | 2a0d:6c2:24::/47 | RU | ripencc | 2018-08-02"
+				}
+				if txtRecord != "" {
+					txt := &dns.TXT{
+						Hdr: dns.RR_Header{
+							Name:   qName,
+							Rrtype: dns.TypeTXT,
+							Class:  dns.ClassINET,
+							Ttl:    300,
+						},
+						Txt: []string{txtRecord},
+					}
+					resp.Answer = append(resp.Answer, txt)
+				}
+			}
+			packed, err := resp.Pack()
+			if err != nil {
+				return
+			}
+			respFrame := buildUDPFrame("208.67.222.222", 53, packed)
+			_, _ = serverConn.Write(respFrame)
+		}
+	}()
+
+	// Test IPv4 -> ES
+	cc4 := queryCymruCountry(clientConn, "208.67.222.222", 53, "185.239.141.248")
+	if cc4 != "ES" {
+		t.Errorf("expected IPv4 country code ES, got %q", cc4)
+	}
+
+	// Test IPv6 -> RU
+	cc6 := queryCymruCountry(clientConn, "208.67.222.222", 53, "2a0d:6c2:24:815d::")
+	if cc6 != "RU" {
+		t.Errorf("expected IPv6 country code RU, got %q", cc6)
+	}
+}
+
 

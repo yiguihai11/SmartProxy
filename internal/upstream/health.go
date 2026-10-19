@@ -792,21 +792,27 @@ func probeIPv6(ctx context.Context, p *Proxy) (time.Duration, error) {
 
 	if needGeo {
 		buf, rErr := io.ReadAll(io.LimitReader(conn, 2048))
-		if len(buf) == 0 && rErr != nil {
+		if len(buf) == 0 {
 			if !p.IsIPv6Pinned() {
 				p.SetIPv6Capability(IPv6CapUnsupported)
 			}
-			return 0, rErr
+			if rErr != nil {
+				return 0, rErr
+			}
+			return 0, io.ErrUnexpectedEOF
 		}
 		parseAndSaveGeoIPv6(p, buf)
 	} else {
 		buf := make([]byte, 64)
 		n, rErr := conn.Read(buf)
-		if rErr != nil && n == 0 {
+		if n == 0 {
 			if !p.IsIPv6Pinned() {
 				p.SetIPv6Capability(IPv6CapUnsupported)
 			}
-			return 0, rErr
+			if rErr != nil {
+				return 0, rErr
+			}
+			return 0, io.ErrUnexpectedEOF
 		}
 	}
 
@@ -837,6 +843,9 @@ func probeIPv6UDP(ctx context.Context, p *Proxy) (time.Duration, error) {
 	}
 	if lat <= 0 {
 		lat = time.Since(start)
+	}
+	if p.CountryCode() == "" || p.ExitIP() == "" {
+		_ = discoverGeoViaUDP(ctx, p, true)
 	}
 	return lat, nil
 }
@@ -988,6 +997,154 @@ func parseAndSaveGeoIPv6(p *Proxy, body []byte) {
 	}
 }
 
+// discoverGeoViaUDP queries OpenDNS for the proxy's public exit IP and resolves its country code via Cymru DNS TXT.
+func discoverGeoViaUDP(ctx context.Context, p *Proxy, v6 bool) error {
+	if p == nil || !p.SchemeSupportsUDP() {
+		return errors.New("udp not supported")
+	}
+	dnsServer := "208.67.222.222:53"
+	targetHost := "208.67.222.222"
+	qType := dns.TypeA
+	if v6 {
+		dnsServer = "[2620:0:ccc::2]:53"
+		targetHost = "2620:0:ccc::2"
+		qType = dns.TypeAAAA
+	}
+	conn, err := p.UDPAssociate(ctx, targetHost, 53)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	timeout := 4 * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	} else {
+		_ = conn.SetDeadline(time.Now().Add(timeout))
+	}
+
+	query := new(dns.Msg)
+	query.SetQuestion("myip.opendns.com.", qType)
+	packed, err := query.Pack()
+	if err != nil {
+		return err
+	}
+	txid := query.Id
+
+	host, portStr, err := net.SplitHostPort(dnsServer)
+	if err != nil {
+		return err
+	}
+	port := parsePort(portStr)
+
+	if _, err := conn.Write(buildUDPFrame(host, port, packed)); err != nil {
+		return err
+	}
+	buf := make([]byte, 2048)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return err
+	}
+	payload, err := parseUDPFrame(buf[:n])
+	if err != nil {
+		return err
+	}
+	var resp dns.Msg
+	if err := resp.Unpack(payload); err != nil {
+		return err
+	}
+	if resp.Id != txid || !resp.Response {
+		return errors.New("invalid dns response")
+	}
+
+	var exitIP string
+	for _, rr := range resp.Answer {
+		if a, ok := rr.(*dns.A); ok && !v6 {
+			exitIP = a.A.String()
+			break
+		}
+		if aaaa, ok := rr.(*dns.AAAA); ok && v6 {
+			exitIP = aaaa.AAAA.String()
+			break
+		}
+	}
+	if exitIP == "" {
+		return errors.New("no exit ip in dns response")
+	}
+
+	var countryCode string
+	if p.CountryCode() == "" {
+		countryCode = queryCymruCountry(conn, host, port, exitIP)
+	}
+
+	if v6 {
+		currentIP := p.ExitIP()
+		if currentIP != "" && !strings.Contains(currentIP, ":") {
+			exitIP = ""
+		}
+	}
+	if countryCode != "" || exitIP != "" {
+		p.SetGeoInfo(countryCode, exitIP)
+	}
+	return nil
+}
+
+func queryCymruCountry(conn net.Conn, dnsHost string, dnsPort int, ipStr string) string {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return ""
+	}
+	var domain string
+	if ip4 := ip.To4(); ip4 != nil {
+		domain = fmt.Sprintf("%d.%d.%d.%d.origin.asn.cymru.com.", ip4[3], ip4[2], ip4[1], ip4[0])
+	} else {
+		ip16 := ip.To16()
+		var nibbles []string
+		for i := len(ip16) - 1; i >= 0; i-- {
+			nibbles = append(nibbles, fmt.Sprintf("%x", ip16[i]&0x0f), fmt.Sprintf("%x", ip16[i]>>4))
+		}
+		domain = strings.Join(nibbles, ".") + ".origin6.asn.cymru.com."
+	}
+
+	query := new(dns.Msg)
+	query.SetQuestion(domain, dns.TypeTXT)
+	packed, err := query.Pack()
+	if err != nil {
+		return ""
+	}
+	txid := query.Id
+
+	if _, err := conn.Write(buildUDPFrame(dnsHost, dnsPort, packed)); err != nil {
+		return ""
+	}
+	buf := make([]byte, 2048)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return ""
+	}
+	payload, err := parseUDPFrame(buf[:n])
+	if err != nil {
+		return ""
+	}
+	var resp dns.Msg
+	if err := resp.Unpack(payload); err != nil || resp.Id != txid {
+		return ""
+	}
+
+	for _, rr := range resp.Answer {
+		if txt, ok := rr.(*dns.TXT); ok && len(txt.Txt) > 0 {
+			parts := strings.Split(txt.Txt[0], "|")
+			if len(parts) >= 3 {
+				cc := strings.TrimSpace(parts[2])
+				if len(cc) == 2 {
+					return strings.ToUpper(cc)
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // ProbeTCP actively probes a proxy over TCP by executing an HTTP GET to the configured
 // probe URL (or default http://cp.cloudflare.com/generate_204), returning the round-trip latency.
 // If the node's country code or exit IP has not been discovered yet, it attempts cdn-cgi/trace
@@ -1018,6 +1175,9 @@ func (hc *HealthChecker) ProbeUDP(ctx context.Context, p *Proxy) (time.Duration,
 	}
 	defer conn.Close()
 	p.classifyUDPCapability(conn)
+	if p.CountryCode() == "" || p.ExitIP() == "" {
+		_ = discoverGeoViaUDP(ctx, p, false)
+	}
 	return latency, nil
 }
 

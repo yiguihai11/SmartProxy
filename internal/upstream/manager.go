@@ -1774,6 +1774,9 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 		}
 		if err == nil {
 			proxy.udpHealth.UpdateLatency(latency)
+			if proxy.CountryCode() == "" || proxy.ExitIP() == "" {
+				_ = discoverGeoViaUDP(ctx, proxy, false)
+			}
 			if m.healthChecker != nil {
 				m.healthChecker.RecordUDPSuccess(proxy, latency)
 			}
@@ -1814,6 +1817,9 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 		if err == nil {
 			proxy.v6UDPHealth.UpdateLatency(latency)
 			proxy.SetIPv6Capability(IPv6CapSupported)
+			if proxy.CountryCode() == "" || proxy.ExitIP() == "" {
+				_ = discoverGeoViaUDP(ctx, proxy, true)
+			}
 			if m.healthChecker != nil {
 				m.healthChecker.RecordV6UDPSuccess(proxy, latency)
 			}
@@ -1903,6 +1909,8 @@ func (m *Manager) probeInitialGeo() {
 						lat, err := probeTCP(probeCtx, proxy, "http://cp.cloudflare.com/cdn-cgi/trace")
 						if err == nil {
 							proxy.health.UpdateLatency(lat)
+						} else if proxy.SchemeSupportsUDP() {
+							_ = discoverGeoViaUDP(probeCtx, proxy, false)
 						}
 					})
 				}
