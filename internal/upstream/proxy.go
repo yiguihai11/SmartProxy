@@ -146,6 +146,8 @@ type Proxy struct {
 	// countryCode (e.g. "HK", "US") and exitIP are detected via Cloudflare trace through the node.
 	countryCode atomic.Pointer[string]
 	exitIP      atomic.Pointer[string]
+	exitIPv4    atomic.Pointer[string]
+	exitIPv6    atomic.Pointer[string]
 
 	// ssMethod is the encryption implementation for the ss:// scheme (classic AEAD or
 	// none/plain), built once by NewProxy when parsing method:password; Method is immutable and safe for concurrent use.
@@ -181,22 +183,75 @@ func (p *Proxy) CountryCode() string {
 	return ""
 }
 
+func (p *Proxy) SetCountryCode(countryCode string) {
+	if countryCode != "" {
+		cc := strings.ToUpper(countryCode)
+		p.countryCode.Store(&cc)
+	}
+}
+
 func (p *Proxy) ExitIP() string {
-	if ptr := p.exitIP.Load(); ptr != nil {
+	if ptr := p.exitIPv4.Load(); ptr != nil && *ptr != "" {
+		return *ptr
+	}
+	if ptr := p.exitIP.Load(); ptr != nil && *ptr != "" {
+		return *ptr
+	}
+	if ptr := p.exitIPv6.Load(); ptr != nil && *ptr != "" {
 		return *ptr
 	}
 	return ""
 }
 
+func (p *Proxy) ExitIPv4() string {
+	if ptr := p.exitIPv4.Load(); ptr != nil && *ptr != "" {
+		return *ptr
+	}
+	if ptr := p.exitIP.Load(); ptr != nil && *ptr != "" && !strings.Contains(*ptr, ":") {
+		return *ptr
+	}
+	return ""
+}
+
+func (p *Proxy) ExitIPv6() string {
+	if ptr := p.exitIPv6.Load(); ptr != nil && *ptr != "" {
+		return *ptr
+	}
+	if ptr := p.exitIP.Load(); ptr != nil && *ptr != "" && strings.Contains(*ptr, ":") {
+		return *ptr
+	}
+	return ""
+}
+
+func (p *Proxy) SetExitIPv4(ip string) {
+	if ip != "" {
+		p.exitIPv4.Store(&ip)
+		if p.exitIP.Load() == nil {
+			p.exitIP.Store(&ip)
+		}
+	}
+}
+
+func (p *Proxy) SetExitIPv6(ip string) {
+	if ip != "" {
+		p.exitIPv6.Store(&ip)
+		if p.exitIP.Load() == nil {
+			p.exitIP.Store(&ip)
+		}
+		p.SetIPv6Capability(IPv6CapSupported)
+	}
+}
+
 func (p *Proxy) SetGeoInfo(countryCode, exitIP string) {
 	if countryCode != "" {
-		cc := strings.ToUpper(countryCode)
-		p.countryCode.Store(&cc)
+		p.SetCountryCode(countryCode)
 	}
 	if exitIP != "" {
 		p.exitIP.Store(&exitIP)
 		if strings.Contains(exitIP, ":") {
-			p.SetIPv6Capability(IPv6CapSupported)
+			p.SetExitIPv6(exitIP)
+		} else {
+			p.SetExitIPv4(exitIP)
 		}
 	}
 }
@@ -502,6 +557,9 @@ func (p *Proxy) SupportsIPv6() bool {
 		return true
 	}
 	if p.v6UDPHealth.IsAvailable() && p.v6UDPHealth.Latency() > 0 {
+		return true
+	}
+	if exitIP := p.ExitIPv6(); exitIP != "" {
 		return true
 	}
 	if exitIP := p.ExitIP(); exitIP != "" && strings.Contains(exitIP, ":") {

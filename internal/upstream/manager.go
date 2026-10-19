@@ -210,6 +210,8 @@ type savedNodeState struct {
 	pins           [4]circuitPin
 	countryCode    string
 	exitIP         string
+	exitIPv4       string
+	exitIPv6       string
 	ipv6Capability IPv6Capability
 	ipv6Pinned     *bool
 }
@@ -236,6 +238,8 @@ func (m *Manager) captureManualPins() map[string]savedNodeState {
 			},
 			countryCode:    p.CountryCode(),
 			exitIP:         p.ExitIP(),
+			exitIPv4:       p.ExitIPv4(),
+			exitIPv6:       p.ExitIPv6(),
 			ipv6Capability: p.IPv6Capability(),
 			ipv6Pinned:     p.IPv6Pin(),
 		}
@@ -255,7 +259,16 @@ func (m *Manager) restoreManualPins(states map[string]savedNodeState) {
 		// If the node's URL changed, discard stale geo info so the freshly inferred
 		// country code and a subsequent probe trace take effect.
 		if p.URL == state.url {
-			if state.countryCode != "" || state.exitIP != "" {
+			if state.countryCode != "" {
+				p.SetCountryCode(state.countryCode)
+			}
+			if state.exitIPv4 != "" {
+				p.SetExitIPv4(state.exitIPv4)
+			}
+			if state.exitIPv6 != "" {
+				p.SetExitIPv6(state.exitIPv6)
+			}
+			if state.exitIP != "" {
 				p.SetGeoInfo(state.countryCode, state.exitIP)
 			}
 			if state.ipv6Pinned != nil {
@@ -1347,6 +1360,7 @@ func (m *Manager) defaultUDPAssociate(ctx context.Context, ll *slog.Logger, host
 // IPStackCapability encapsulates the TCP and UDP capability sub-groups for a single IP stack (IPv4 or IPv6).
 type IPStackCapability struct {
 	Supported bool                `json:"supported"`
+	ExitIP    string              `json:"exit_ip,omitempty"`
 	TCP       ProxyHealthSnapshot `json:"tcp"`
 	UDP       ProxyHealthSnapshot `json:"udp"`
 }
@@ -1379,6 +1393,8 @@ type ProxyInfo struct {
 	PingLatency    time.Duration       `json:"ping_latency,omitempty"`
 	CountryCode    string              `json:"country_code,omitempty"`
 	ExitIP         string              `json:"exit_ip,omitempty"`
+	ExitIPv4       string              `json:"exit_ipv4,omitempty"`
+	ExitIPv6       string              `json:"exit_ipv6,omitempty"`
 	Provider       string              `json:"provider,omitempty"`
 	Enable         bool                `json:"enable"`
 	Enabled        bool                `json:"enabled"`
@@ -1393,6 +1409,7 @@ func buildStackCapabilities(proxy *Proxy) (v4 IPStackCapability, v6 IPStackCapab
 	}
 	v4 = IPStackCapability{
 		Supported: !strings.Contains(proxy.Host, ":"),
+		ExitIP:    proxy.ExitIPv4(),
 		TCP:       hSnap,
 		UDP:       uSnap,
 	}
@@ -1416,6 +1433,7 @@ func buildStackCapabilities(proxy *Proxy) (v4 IPStackCapability, v6 IPStackCapab
 
 	v6 = IPStackCapability{
 		Supported: v6Supported,
+		ExitIP:    proxy.ExitIPv6(),
 		TCP:       v6TCPSnap,
 		UDP:       v6UDPSnap,
 	}
@@ -1463,6 +1481,8 @@ func (m *Manager) Proxies() []ProxyInfo {
 			PingLatency:    proxy.PingLatency(),
 			CountryCode:    proxy.CountryCode(),
 			ExitIP:         proxy.ExitIP(),
+			ExitIPv4:       proxy.ExitIPv4(),
+			ExitIPv6:       proxy.ExitIPv6(),
 			Provider:       proxy.Provider,
 		})
 	}
@@ -1537,6 +1557,8 @@ func (m *Manager) ProxyInfo(alias string) (ProxyInfo, bool) {
 		PingLatency:    proxy.PingLatency(),
 		CountryCode:    proxy.CountryCode(),
 		ExitIP:         proxy.ExitIP(),
+		ExitIPv4:       proxy.ExitIPv4(),
+		ExitIPv6:       proxy.ExitIPv6(),
 		Provider:       proxy.Provider,
 	}, true
 }
@@ -1841,7 +1863,7 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 		}
 		if err == nil {
 			proxy.udpHealth.UpdateLatency(latency)
-			if proxy.CountryCode() == "" || proxy.ExitIP() == "" {
+			if proxy.CountryCode() == "" || proxy.ExitIPv4() == "" {
 				_ = discoverGeoViaUDP(ctx, proxy, false)
 			}
 			if m.healthChecker != nil {
@@ -1886,7 +1908,7 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 		if err == nil {
 			proxy.v6UDPHealth.UpdateLatency(latency)
 			proxy.SetIPv6Capability(IPv6CapSupported)
-			if proxy.CountryCode() == "" || proxy.ExitIP() == "" {
+			if proxy.CountryCode() == "" || proxy.ExitIPv6() == "" {
 				_ = discoverGeoViaUDP(ctx, proxy, true)
 			}
 			if m.healthChecker != nil {
@@ -1961,9 +1983,9 @@ func (m *Manager) probeInitialGeo() {
 			if p == nil {
 				continue
 			}
-			needsGeo := p.ExitIP() == "" || p.CountryCode() == ""
+			needsGeo := p.ExitIPv4() == "" || p.CountryCode() == ""
 			canProbeIPv6 := p.IPv6Pin() == nil || *p.IPv6Pin()
-			needsIPv6 := canProbeIPv6 && (p.IPv6Capability() == IPv6CapUnknown || needsGeo)
+			needsIPv6 := canProbeIPv6 && (p.IPv6Capability() == IPv6CapUnknown || p.ExitIPv6() == "")
 			if !needsGeo && !needsIPv6 {
 				continue
 			}
@@ -1990,7 +2012,10 @@ func (m *Manager) probeInitialGeo() {
 					innerWg.Add(1)
 					safego.Go("upstream.initialGeo.ipv6", func() {
 						defer innerWg.Done()
-						_, _ = probeIPv6(probeCtx, proxy)
+						_, err := probeIPv6(probeCtx, proxy)
+						if err != nil && proxy.SchemeSupportsUDP() && proxy.ExitIPv6() == "" {
+							_ = discoverGeoViaUDP(probeCtx, proxy, true)
+						}
 					})
 				}
 				innerWg.Wait()

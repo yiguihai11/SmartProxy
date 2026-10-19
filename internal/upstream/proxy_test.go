@@ -2601,3 +2601,62 @@ func TestProxy_IPv6UDPOnlySupport(t *testing.T) {
 	}
 }
 
+func TestProxy_DualStackExitIPs(t *testing.T) {
+	p := &Proxy{Scheme: SchemeSS, Host: "185.239.141.248", Port: 8388}
+
+	// 1. Initial state: both empty
+	if p.ExitIPv4() != "" || p.ExitIPv6() != "" || p.ExitIP() != "" {
+		t.Fatalf("initial exit IPs must be empty")
+	}
+
+	// 2. Discover IPv4 exit IP
+	p.SetExitIPv4("185.239.141.248")
+	if p.ExitIPv4() != "185.239.141.248" {
+		t.Fatalf("ExitIPv4 = %q, want 185.239.141.248", p.ExitIPv4())
+	}
+	if p.ExitIPv6() != "" {
+		t.Fatalf("ExitIPv6 should be empty, got %q", p.ExitIPv6())
+	}
+	if p.ExitIP() != "185.239.141.248" {
+		t.Fatalf("ExitIP = %q, want 185.239.141.248", p.ExitIP())
+	}
+
+	// 3. Discover IPv6 exit IP (must not overwrite IPv4)
+	p.SetExitIPv6("2606:4700:4700::1111")
+	if p.ExitIPv4() != "185.239.141.248" {
+		t.Fatalf("ExitIPv4 was clobbered by IPv6, got %q", p.ExitIPv4())
+	}
+	if p.ExitIPv6() != "2606:4700:4700::1111" {
+		t.Fatalf("ExitIPv6 = %q, want 2606:4700:4700::1111", p.ExitIPv6())
+	}
+	if !p.SupportsIPv6() {
+		t.Fatalf("proxy with ExitIPv6 must report SupportsIPv6=true")
+	}
+
+	// 4. Verify stack capabilities contain both exit IPs
+	v4, v6 := buildStackCapabilities(p)
+	if v4.ExitIP != "185.239.141.248" {
+		t.Fatalf("v4.ExitIP = %q, want 185.239.141.248", v4.ExitIP)
+	}
+	if v6.ExitIP != "2606:4700:4700::1111" {
+		t.Fatalf("v6.ExitIP = %q, want 2606:4700:4700::1111", v6.ExitIP)
+	}
+
+	// 5. Test SetGeoInfo preserving existing complementary stack exit IP
+	p.SetGeoInfo("ES", "192.0.2.1")
+	if p.ExitIPv4() != "192.0.2.1" {
+		t.Fatalf("ExitIPv4 updated = %q, want 192.0.2.1", p.ExitIPv4())
+	}
+	if p.ExitIPv6() != "2606:4700:4700::1111" {
+		t.Fatalf("ExitIPv6 should be preserved across IPv4 SetGeoInfo, got %q", p.ExitIPv6())
+	}
+
+	p.SetGeoInfo("ES", "2001:db8::cafe")
+	if p.ExitIPv4() != "192.0.2.1" {
+		t.Fatalf("ExitIPv4 should be preserved across IPv6 SetGeoInfo, got %q", p.ExitIPv4())
+	}
+	if p.ExitIPv6() != "2001:db8::cafe" {
+		t.Fatalf("ExitIPv6 updated = %q, want 2001:db8::cafe", p.ExitIPv6())
+	}
+}
+

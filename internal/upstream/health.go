@@ -792,7 +792,7 @@ func probeIPv6(ctx context.Context, p *Proxy) (time.Duration, error) {
 	}
 	_ = conn.SetDeadline(dl)
 
-	needGeo := p.CountryCode() == "" || p.ExitIP() == ""
+	needGeo := p.CountryCode() == "" || p.ExitIPv6() == ""
 	path := "/generate_204"
 	if needGeo {
 		path = "/cdn-cgi/trace"
@@ -855,7 +855,7 @@ func probeIPv6UDP(ctx context.Context, p *Proxy) (time.Duration, error) {
 	if lat <= 0 {
 		lat = time.Since(start)
 	}
-	if p.CountryCode() == "" || p.ExitIP() == "" {
+	if p.CountryCode() == "" || p.ExitIPv6() == "" {
 		_ = discoverGeoViaUDP(ctx, p, true)
 	}
 	if !p.IsIPv6Pinned() {
@@ -983,8 +983,15 @@ func parseAndSaveGeo(p *Proxy, body []byte) {
 			loc = strings.ToUpper(strings.TrimPrefix(line, "loc="))
 		}
 	}
-	if loc != "" || exitIP != "" {
-		p.SetGeoInfo(loc, exitIP)
+	if loc != "" && p.CountryCode() == "" {
+		p.SetCountryCode(loc)
+	}
+	if exitIP != "" {
+		if strings.Contains(exitIP, ":") {
+			p.SetExitIPv6(exitIP)
+		} else {
+			p.SetExitIPv4(exitIP)
+		}
 	}
 }
 
@@ -1001,13 +1008,11 @@ func parseAndSaveGeoIPv6(p *Proxy, body []byte) {
 			loc = strings.ToUpper(strings.TrimPrefix(line, "loc="))
 		}
 	}
-	currentIP := p.ExitIP()
-	if currentIP != "" && !strings.Contains(currentIP, ":") {
-		// Preserve existing IPv4 exit IP if already discovered.
-		exitIP = ""
+	if loc != "" && p.CountryCode() == "" {
+		p.SetCountryCode(loc)
 	}
-	if loc != "" || exitIP != "" {
-		p.SetGeoInfo(loc, exitIP)
+	if exitIP != "" {
+		p.SetExitIPv6(exitIP)
 	}
 }
 
@@ -1091,14 +1096,15 @@ func discoverGeoViaUDP(ctx context.Context, p *Proxy, v6 bool) error {
 		countryCode = queryCymruCountry(conn, host, port, exitIP)
 	}
 
-	if v6 {
-		currentIP := p.ExitIP()
-		if currentIP != "" && !strings.Contains(currentIP, ":") {
-			exitIP = ""
-		}
+	if countryCode != "" && p.CountryCode() == "" {
+		p.SetCountryCode(countryCode)
 	}
-	if countryCode != "" || exitIP != "" {
-		p.SetGeoInfo(countryCode, exitIP)
+	if exitIP != "" {
+		if v6 {
+			p.SetExitIPv6(exitIP)
+		} else {
+			p.SetExitIPv4(exitIP)
+		}
 	}
 	return nil
 }
@@ -1170,7 +1176,7 @@ func (hc *HealthChecker) ProbeTCP(ctx context.Context, p *Proxy) (time.Duration,
 			probeURL = cfg.URL
 		}
 	}
-	if p != nil && (p.CountryCode() == "" || p.ExitIP() == "") && probeURL == "http://cp.cloudflare.com/generate_204" {
+	if p != nil && (p.CountryCode() == "" || p.ExitIPv4() == "") && probeURL == "http://cp.cloudflare.com/generate_204" {
 		probeURL = "http://cp.cloudflare.com/cdn-cgi/trace"
 	}
 	return probeTCP(ctx, p, probeURL)
@@ -1189,7 +1195,7 @@ func (hc *HealthChecker) ProbeUDP(ctx context.Context, p *Proxy) (time.Duration,
 	}
 	defer conn.Close()
 	p.classifyUDPCapability(conn)
-	if p.CountryCode() == "" || p.ExitIP() == "" {
+	if p.CountryCode() == "" || p.ExitIPv4() == "" {
 		_ = discoverGeoViaUDP(ctx, p, false)
 	}
 	return latency, nil

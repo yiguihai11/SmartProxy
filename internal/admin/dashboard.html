@@ -238,6 +238,7 @@ tr:last-child td{border-bottom:none}
 .proxy-card .stack-tag.v4-ok{background:rgba(16,185,129,.12);color:#34d399;border:1px solid rgba(16,185,129,.25)}
 .proxy-card .stack-tag.v6-ok{background:rgba(99,102,241,.15);color:#818cf8;border:1px solid rgba(99,102,241,.3)}
 .proxy-card .stack-tag.v6-none{background:transparent;color:var(--text3);border:1px solid var(--border)}
+.proxy-card .stack-box-exit{font-size:.67rem;font-family:var(--mono);color:var(--text2);background:rgba(127,127,127,.08);border-radius:3px;padding:2px 6px;margin-top:2px;word-break:break-all}
 .proxy-card .circuit-rows{display:flex;flex-direction:column;gap:5px}
 .proxy-card .circuit-row{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:.74rem}
 .proxy-card .circuit-row .circ{font-size:.68rem;padding:2px 7px}
@@ -1151,6 +1152,8 @@ async function testProxy(i,proto){
     var res=await resp.json();
     if(res.country_code)p.country_code=res.country_code;
     if(res.exit_ip)p.exit_ip=res.exit_ip;
+    if(res.exit_ipv4)p.exit_ipv4=res.exit_ipv4;
+    if(res.exit_ipv6)p.exit_ipv6=res.exit_ipv6;
     if(res.ipv6_capability)p.ipv6_capability=res.ipv6_capability;
     if(res.supports_ipv6!==undefined)p.supports_ipv6=res.supports_ipv6;
     if(res.v4)p.v4=res.v4;
@@ -1327,6 +1330,8 @@ async function testGroupProxies(gid, proto, btn){
         if(node){
           if(res.country_code)node.country_code=res.country_code;
           if(res.exit_ip)node.exit_ip=res.exit_ip;
+          if(res.exit_ipv4)node.exit_ipv4=res.exit_ipv4;
+          if(res.exit_ipv6)node.exit_ipv6=res.exit_ipv6;
           if(res.ipv6_capability)node.ipv6_capability=res.ipv6_capability;
           if(res.supports_ipv6!==undefined)node.supports_ipv6=res.supports_ipv6;
           if(res.v4)node.v4=res.v4;
@@ -1623,6 +1628,8 @@ function computeCardHash(p, i){
     stV6TCP?(stV6TCP.testing?'T':(stV6TCP.available?stV6TCP.latency_ms:'F')):'',
     stV6UDP?(stV6UDP.testing?'T':(stV6UDP.available?stV6UDP.latency_ms:'F')):'',
     p.exit_ip||'',
+    p.exit_ipv4||'',
+    p.exit_ipv6||'',
     p.country_code||'',
     p.name||'',
     v6Supported?1:0,
@@ -1774,7 +1781,22 @@ function renderProxyCard(p,i){
   }else{
     ipBadge='<span class="node-badge-ipv4" title="'+escAttr(t('IPv4 Only'))+'">IPv4</span>';
   }
-  var exitHtml=p.exit_ip?'<span class="stat-exit">exit: '+escHtml(p.exit_ip)+'</span>':'';
+  var v4Exit = p.exit_ipv4 || (p.v4 && p.v4.exit_ip) || (p.exit_ip && p.exit_ip.indexOf(':') === -1 ? p.exit_ip : '');
+  var v6Exit = p.exit_ipv6 || (p.v6 && p.v6.exit_ip) || (p.exit_ip && p.exit_ip.indexOf(':') !== -1 ? p.exit_ip : '');
+  var exitParts = [];
+  if (v4Exit && v6Exit) {
+    exitParts.push('IPv4: ' + escHtml(v4Exit));
+    exitParts.push('IPv6: ' + escHtml(v6Exit));
+  } else if (v4Exit) {
+    exitParts.push(escHtml(v4Exit));
+  } else if (v6Exit) {
+    exitParts.push('IPv6: ' + escHtml(v6Exit));
+  } else if (p.exit_ip) {
+    exitParts.push(escHtml(p.exit_ip));
+  }
+  var exitHtml = exitParts.length > 0 ? '<span class="stat-exit">exit: ' + exitParts.join(' · ') + '</span>' : '';
+  var v4ExitHtml = v4Exit ? '<div class="stack-box-exit">exit: ' + escHtml(v4Exit) + '</div>' : '';
+  var v6ExitHtml = v6Exit ? '<div class="stack-box-exit">exit: ' + escHtml(v6Exit) + '</div>' : '';
 
   var pingBtnText=pingVal>0?('TCPing '+pingLat):t('Test TCPing');
   var pingBtnStyle='',pingBtnTitle=t('Test TCPing latency'),pingBtnDis='';
@@ -1954,6 +1976,7 @@ function renderProxyCard(p,i){
         '<div class="circuit-rows">'+
           rowV4TCP+
           rowV4UDP+
+          v4ExitHtml+
         '</div>'+
       '</div>'+
       '<div class="stack-box v6-box">'+
@@ -1967,6 +1990,7 @@ function renderProxyCard(p,i){
         '<div class="circuit-rows">'+
           rowV6TCP+
           rowV6UDP+
+          v6ExitHtml+
         '</div>'+
       '</div>'+
     '</div>'+

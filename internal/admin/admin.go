@@ -1290,6 +1290,12 @@ func (s *Server) handleProxyTest(w http.ResponseWriter, r *http.Request) {
 			if info.ExitIP != "" {
 				failResp["exit_ip"] = info.ExitIP
 			}
+			if info.ExitIPv4 != "" {
+				failResp["exit_ipv4"] = info.ExitIPv4
+			}
+			if info.ExitIPv6 != "" {
+				failResp["exit_ipv6"] = info.ExitIPv6
+			}
 			failResp["supports_ipv6"] = info.SupportsIPv6
 			failResp["ipv6_capability"] = info.IPv6Capability
 			failResp["v4"] = info.V4
@@ -1314,6 +1320,12 @@ func (s *Server) handleProxyTest(w http.ResponseWriter, r *http.Request) {
 		}
 		if info.ExitIP != "" {
 			respData["exit_ip"] = info.ExitIP
+		}
+		if info.ExitIPv4 != "" {
+			respData["exit_ipv4"] = info.ExitIPv4
+		}
+		if info.ExitIPv6 != "" {
+			respData["exit_ipv6"] = info.ExitIPv6
 		}
 		respData["supports_ipv6"] = info.SupportsIPv6
 		respData["ipv6_capability"] = info.IPv6Capability
