@@ -644,9 +644,12 @@ func (hc *HealthChecker) ProbeAll() {
 					} else {
 						hc.RecordFailure(proxy, err)
 					}
-					if pin := proxy.IPv6Pin(); pin == nil || *pin {
-						hc.checkProxyIPv6WithContext(parentCtx, proxy)
-					}
+					hc.releaseProbeSem()
+				}
+			}
+			if pin := proxy.IPv6Pin(); pin == nil || *pin {
+				if err := hc.acquireProbeSem(ctx, stopCh); err == nil {
+					hc.checkProxyIPv6WithContext(parentCtx, proxy)
 					hc.releaseProbeSem()
 				}
 			}
@@ -754,7 +757,20 @@ const IPv6ProbeDefaultTarget = "2606:4700:4700::1111"
 // It connects to IPv6ProbeDefaultTarget:80 and sends an HTTP request.
 // If the node lacks country code or exit IP, it requests /cdn-cgi/trace on Cloudflare Anycast IPv6
 // so that real exit IP and geo location are discovered over IPv6.
-// An error or timeout sets IPv6CapUnsupported; a valid response sets IPv6CapSupported.
+// markV6TCPFailed marks a node's IPv6 capability as unsupported only if IPv6 UDP is not working.
+func markV6TCPFailed(p *Proxy) {
+	if !p.IsIPv6Pinned() {
+		if !p.v6UDPHealth.IsAvailable() || p.v6UDPHealth.Latency() == 0 {
+			p.SetIPv6Capability(IPv6CapUnsupported)
+		}
+	}
+}
+
+// probeIPv6 actively probes whether proxy p can connect to an IPv6 destination.
+// It connects to IPv6ProbeDefaultTarget:80 and sends an HTTP request.
+// If the node lacks country code or exit IP, it requests /cdn-cgi/trace on Cloudflare Anycast IPv6
+// so that real exit IP and geo location are discovered over IPv6.
+// An error or timeout sets IPv6CapUnsupported (if UDP is also down); a valid response sets IPv6CapSupported.
 func probeIPv6(ctx context.Context, p *Proxy) (time.Duration, error) {
 	if p == nil {
 		return 0, errors.New("nil proxy")
@@ -765,9 +781,7 @@ func probeIPv6(ctx context.Context, p *Proxy) (time.Duration, error) {
 	start := time.Now()
 	conn, err := p.Connect(ctx, IPv6ProbeDefaultTarget, 80)
 	if err != nil {
-		if !p.IsIPv6Pinned() {
-			p.SetIPv6Capability(IPv6CapUnsupported)
-		}
+		markV6TCPFailed(p)
 		return 0, err
 	}
 	defer conn.Close()
@@ -785,9 +799,7 @@ func probeIPv6(ctx context.Context, p *Proxy) (time.Duration, error) {
 	}
 	req := "GET " + path + " HTTP/1.1\r\nHost: cp.cloudflare.com\r\nUser-Agent: SmartProxy/1.0\r\nConnection: close\r\n\r\n"
 	if _, err := conn.Write([]byte(req)); err != nil {
-		if !p.IsIPv6Pinned() {
-			p.SetIPv6Capability(IPv6CapUnsupported)
-		}
+		markV6TCPFailed(p)
 		return 0, err
 	}
 
@@ -795,24 +807,18 @@ func probeIPv6(ctx context.Context, p *Proxy) (time.Duration, error) {
 	reqObj, _ := http.NewRequestWithContext(ctx, "GET", "http://cp.cloudflare.com"+path, nil)
 	resp, rErr := http.ReadResponse(br, reqObj)
 	if rErr != nil {
-		if !p.IsIPv6Pinned() {
-			p.SetIPv6Capability(IPv6CapUnsupported)
-		}
+		markV6TCPFailed(p)
 		return 0, rErr
 	}
 	defer resp.Body.Close()
 
 	if path == "/generate_204" {
 		if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-			if !p.IsIPv6Pinned() {
-				p.SetIPv6Capability(IPv6CapUnsupported)
-			}
+			markV6TCPFailed(p)
 			return 0, fmt.Errorf("unexpected status code: %d, expected 204", resp.StatusCode)
 		}
 	} else if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		if !p.IsIPv6Pinned() {
-			p.SetIPv6Capability(IPv6CapUnsupported)
-		}
+		markV6TCPFailed(p)
 		return 0, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
@@ -852,6 +858,9 @@ func probeIPv6UDP(ctx context.Context, p *Proxy) (time.Duration, error) {
 	if p.CountryCode() == "" || p.ExitIP() == "" {
 		_ = discoverGeoViaUDP(ctx, p, true)
 	}
+	if !p.IsIPv6Pinned() {
+		p.SetIPv6Capability(IPv6CapSupported)
+	}
 	return lat, nil
 }
 
@@ -886,7 +895,7 @@ func (hc *HealthChecker) checkProxyIPv6WithContext(parentCtx context.Context, p 
 			hc.RecordV6Failure(p, err)
 		}
 	}
-	if p.SchemeSupportsUDP() && !p.v6UDPHealth.IsManuallyDisabled() && p.SupportsIPv6() {
+	if p.SchemeSupportsUDP() && !p.v6UDPHealth.IsManuallyDisabled() {
 		uLat, uErr := probeIPv6UDP(ctx, p)
 		if uErr == nil {
 			hc.RecordV6UDPSuccess(p, uLat)

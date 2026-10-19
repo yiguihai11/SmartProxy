@@ -2562,3 +2562,42 @@ func TestProxy_IPv6URLQuery(t *testing.T) {
 		t.Errorf("p2(?ipv6=0) IsIPv6Pinned = false, want true")
 	}
 }
+
+func TestProxy_IPv6UDPOnlySupport(t *testing.T) {
+	p := &Proxy{Scheme: SchemeSS, Host: "185.239.141.248", Port: 8388}
+
+	// Initially unverified
+	if p.SupportsIPv6() {
+		t.Fatalf("unverified proxy should not return SupportsIPv6=true")
+	}
+
+	// Suppose IPv6 UDP succeeds (e.g. 350ms)
+	p.v6UDPHealth.UpdateLatency(350 * time.Millisecond)
+	p.SetIPv6Capability(IPv6CapSupported)
+
+	if !p.SupportsIPv6() {
+		t.Fatalf("proxy with working v6 UDP must return SupportsIPv6=true")
+	}
+	if p.IsIPv6Unsupported() {
+		t.Fatalf("proxy with working v6 UDP must not be marked IPv6Unsupported")
+	}
+
+	// Now suppose IPv6 TCP fails
+	markV6TCPFailed(p)
+	if p.IPv6Capability() == IPv6CapUnsupported {
+		t.Fatalf("markV6TCPFailed should NOT set IPv6CapUnsupported when IPv6 UDP is available")
+	}
+	if !p.SupportsIPv6() {
+		t.Fatalf("proxy must still return SupportsIPv6=true after TCP failure")
+	}
+
+	// Verify buildStackCapabilities does not destroy UDP state
+	_, v6 := buildStackCapabilities(p)
+	if !v6.Supported {
+		t.Fatalf("v6.Supported should be true")
+	}
+	if !v6.UDP.Available || v6.UDP.Latency == 0 {
+		t.Fatalf("v6.UDP must remain available with latency, got available=%v latency=%v", v6.UDP.Available, v6.UDP.Latency)
+	}
+}
+

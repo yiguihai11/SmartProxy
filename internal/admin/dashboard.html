@@ -235,6 +235,7 @@ tr:last-child td{border-bottom:none}
 .proxy-card .stack-header-right{display:flex;align-items:center;gap:5px}
 .proxy-card .btn-stack-toggle{padding:1px 6px;font-size:.65rem;line-height:1.2;cursor:pointer;border-radius:3px}
 .proxy-card .stack-tag{font-size:.65rem;font-weight:600;padding:1px 5px;border-radius:3px;letter-spacing:.2px}
+.proxy-card .stack-tag.v4-ok{background:rgba(16,185,129,.12);color:#34d399;border:1px solid rgba(16,185,129,.25)}
 .proxy-card .stack-tag.v6-ok{background:rgba(99,102,241,.15);color:#818cf8;border:1px solid rgba(99,102,241,.3)}
 .proxy-card .stack-tag.v6-none{background:transparent;color:var(--text3);border:1px solid var(--border)}
 .proxy-card .circuit-rows{display:flex;flex-direction:column;gap:5px}
@@ -1578,7 +1579,7 @@ function toggleGroupCollapse(gid){
 function computeCardHash(p, i){
   if(!p)return '';
   var udpScheme=isUDPSupportedScheme(p);
-  var v6Supported=!!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||(p.host&&p.host.indexOf(':')!==-1));
+  var isV6Host=!!(p.host&&p.host.indexOf(':')!==-1);
 
   var sV4TCP=(p.v4&&p.v4.tcp)||p.health||{};
   var sV4UDP=(p.v4&&p.v4.udp)||p.udp_health||{};
@@ -1587,14 +1588,15 @@ function computeCardHash(p, i){
 
   var tc4=circuitStat(sV4TCP,true);
   var uc4=circuitStat(sV4UDP,udpScheme);
-  var tc6=circuitStat(sV6TCP,v6Supported);
-  var uc6=circuitStat(sV6UDP,v6Supported&&udpScheme);
+  var tc6=circuitStat(sV6TCP,true);
+  var uc6=circuitStat(sV6UDP,udpScheme);
 
-  var v4TcpUp=sV4TCP.manual?sV4TCP.available:(sV4TCP.available&&!!sV4TCP.last_attempt);
-  var v4UdpUp=udpScheme&&sV4UDP&&(sV4UDP.manual?sV4UDP.available:(sV4UDP.available&&!!sV4UDP.last_attempt));
-  var v6TcpUp=v6Supported&&sV6TCP&&(sV6TCP.manual?sV6TCP.available:(sV6TCP.available&&!!sV6TCP.last_attempt));
-  var v6UdpUp=v6Supported&&udpScheme&&sV6UDP&&(sV6UDP.manual?sV6UDP.available:(sV6UDP.available&&!!sV6UDP.last_attempt));
+  var v4TcpUp=sV4TCP.manual?sV4TCP.available:(sV4TCP.available&&(sV4TCP.latency>0||!!sV4TCP.last_attempt));
+  var v4UdpUp=udpScheme&&sV4UDP&&(sV4UDP.manual?sV4UDP.available:(sV4UDP.available&&(sV4UDP.latency>0||!!sV4UDP.last_attempt)));
+  var v6TcpUp=sV6TCP&&(sV6TCP.manual?sV6TCP.available:(sV6TCP.available&&(sV6TCP.latency>0||!!sV6TCP.last_attempt)));
+  var v6UdpUp=udpScheme&&sV6UDP&&(sV6UDP.manual?sV6UDP.available:(sV6UDP.available&&(sV6UDP.latency>0||!!sV6UDP.last_attempt)));
   var anyUp=v4TcpUp||v4UdpUp||v6TcpUp||v6UdpUp;
+  var v6Supported=!!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||isV6Host||v6TcpUp||v6UdpUp);
 
   var pingVal=(p.ping_latency&&p.ping_latency>0)?(p.ping_latency/1e6):0;
   var stTCPing=proxyTestState[p.alias+':tcping']||proxyTestState[p.alias+':ping'];
@@ -1715,9 +1717,7 @@ function getNodeTCPLatency(p){
 }
 function renderProxyCard(p,i){
   var udpScheme=isUDPSupportedScheme(p);
-  var v6Supported=!!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported'));
   var isV6Host=!!(p.host&&p.host.indexOf(':')!==-1);
-  if(isV6Host)v6Supported=true;
 
   // Retrieve 4 circuit snapshots
   var sV4TCP=(p.v4&&p.v4.tcp)||p.health||{};
@@ -1727,15 +1727,16 @@ function renderProxyCard(p,i){
 
   var tc4=circuitStat(sV4TCP,true);
   var uc4=circuitStat(sV4UDP,udpScheme);
-  var tc6=circuitStat(sV6TCP,v6Supported);
-  var uc6=circuitStat(sV6UDP,v6Supported&&udpScheme);
+  var tc6=circuitStat(sV6TCP,true);
+  var uc6=circuitStat(sV6UDP,udpScheme);
 
   // Effective availability across all 4 pathways
-  var v4TcpUp=sV4TCP.manual?sV4TCP.available:(sV4TCP.available&&!!sV4TCP.last_attempt);
-  var v4UdpUp=udpScheme&&sV4UDP&&(sV4UDP.manual?sV4UDP.available:(sV4UDP.available&&!!sV4UDP.last_attempt));
-  var v6TcpUp=v6Supported&&sV6TCP&&(sV6TCP.manual?sV6TCP.available:(sV6TCP.available&&!!sV6TCP.last_attempt));
-  var v6UdpUp=v6Supported&&udpScheme&&sV6UDP&&(sV6UDP.manual?sV6UDP.available:(sV6UDP.available&&!!sV6UDP.last_attempt));
+  var v4TcpUp=sV4TCP.manual?sV4TCP.available:(sV4TCP.available&&(sV4TCP.latency>0||!!sV4TCP.last_attempt));
+  var v4UdpUp=udpScheme&&sV4UDP&&(sV4UDP.manual?sV4UDP.available:(sV4UDP.available&&(sV4UDP.latency>0||!!sV4UDP.last_attempt)));
+  var v6TcpUp=sV6TCP&&(sV6TCP.manual?sV6TCP.available:(sV6TCP.available&&(sV6TCP.latency>0||!!sV6TCP.last_attempt)));
+  var v6UdpUp=udpScheme&&sV6UDP&&(sV6UDP.manual?sV6UDP.available:(sV6UDP.available&&(sV6UDP.latency>0||!!sV6UDP.last_attempt)));
   var anyUp=v4TcpUp||v4UdpUp||v6TcpUp||v6UdpUp;
+  var v6Supported=!!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||isV6Host||v6TcpUp||v6UdpUp);
 
   var dispMode=t(anyUp?p.mode:'off');
   var capTxt=(anyUp&&p.udp_capability&&p.udp_capability!=='unknown')?' · '+t(p.udp_capability):'';
@@ -1763,7 +1764,11 @@ function renderProxyCard(p,i){
   var schemeBadge='<span class="node-scheme-badge">'+escAttr((p.scheme||'').toUpperCase())+'</span>';
   var ipBadge='';
   if(v6Supported){
-    ipBadge='<span class="node-badge-ipv6" title="'+escAttr(t('Supports IPv6 & IPv4 Dual-Stack'))+'">IPv4/v6</span>';
+    var v6Title=t('Supports IPv6 & IPv4 Dual-Stack');
+    if(!v6TcpUp&&v6UdpUp){
+      v6Title=t('Supports IPv6 (UDP) & IPv4');
+    }
+    ipBadge='<span class="node-badge-ipv6" title="'+escAttr(v6Title)+'">IPv4/v6</span>';
   }else if(isV6Host){
     ipBadge='<span class="node-badge-ipv6" title="'+escAttr(t('IPv6 Host Address'))+'">IPv6</span>';
   }else{
@@ -1884,6 +1889,50 @@ function renderProxyCard(p,i){
   var v4AllDisabled = (sV4TCP.manual && !sV4TCP.available) && (!udpScheme || (sV4UDP.manual && !sV4UDP.available));
   var v6AllDisabled = (sV6TCP && sV6TCP.manual && !sV6TCP.available) && (!udpScheme || (sV6UDP && sV6UDP.manual && !sV6UDP.available));
 
+  var v4TagText = 'IPv4';
+  var v4TagClass = 'v4-ok';
+  if (v4AllDisabled) {
+    v4TagText = t('Disabled');
+    v4TagClass = 'v6-none';
+  } else if (v4TcpUp && v4UdpUp) {
+    v4TagText = t('TCP+UDP');
+    v4TagClass = 'v4-ok';
+  } else if (!v4TcpUp && v4UdpUp) {
+    v4TagText = t('UDP Only');
+    v4TagClass = 'v4-ok';
+  } else if (v4TcpUp && !v4UdpUp) {
+    v4TagText = t('TCP Only');
+    v4TagClass = 'v4-ok';
+  } else if ((sV4TCP.consecutive_failures > 0) || (udpScheme && sV4UDP.consecutive_failures > 0)) {
+    v4TagText = t('fail');
+    v4TagClass = 'v6-none';
+  } else {
+    v4TagText = 'Stack';
+    v4TagClass = '';
+  }
+
+  var v6TagText = t('IPv4 Only');
+  var v6TagClass = 'v6-none';
+  if (v6AllDisabled) {
+    v6TagText = t('Disabled');
+    v6TagClass = 'v6-none';
+  } else if (v6TcpUp && v6UdpUp) {
+    v6TagText = t('Dual-Stack Supported');
+    v6TagClass = 'v6-ok';
+  } else if (!v6TcpUp && v6UdpUp) {
+    v6TagText = t('IPv6 (UDP Only)');
+    v6TagClass = 'v6-ok';
+  } else if (v6TcpUp && !v6UdpUp) {
+    v6TagText = t('IPv6 (TCP Only)');
+    v6TagClass = 'v6-ok';
+  } else if (v6Supported) {
+    v6TagText = t('Supported');
+    v6TagClass = 'v6-ok';
+  } else if (p.ipv6_capability === 'unsupported') {
+    v6TagText = t('IPv4 Only');
+    v6TagClass = 'v6-none';
+  }
+
   var cardHash=computeCardHash(p, i);
   return '<div class="proxy-card '+(anyUp?'is-up':'is-down')+'" data-alias="'+escAttr(p.alias)+'" data-hash="'+escAttr(cardHash)+'"><div class="top">'+
     '<div class="node-info">'+
@@ -1898,7 +1947,7 @@ function renderProxyCard(p,i){
         '<div class="stack-box-header">'+
           '<span class="stack-title">IPv4</span>'+
           '<div class="stack-header-right">'+
-            '<span class="stack-tag">Stack</span>'+
+            '<span class="stack-tag '+v4TagClass+'">'+v4TagText+'</span>'+
             '<button class="btn btn-sm btn-stack-toggle '+(v4AllDisabled?'primary':'')+'" onclick="toggleStack('+i+',\'v4\')" title="'+escAttr(v4AllDisabled?t('Enable IPv4'):t('Disable IPv4'))+'">'+(v4AllDisabled?t('Enable IPv4'):t('Disable IPv4'))+'</button>'+
           '</div>'+
         '</div>'+
@@ -1911,7 +1960,7 @@ function renderProxyCard(p,i){
         '<div class="stack-box-header">'+
           '<span class="stack-title">IPv6</span>'+
           '<div class="stack-header-right">'+
-            '<span class="stack-tag '+(v6AllDisabled?'v6-none':(v6Supported?'v6-ok':'v6-none'))+'">'+(v6AllDisabled?t('Disabled'):(v6Supported?t('Supported (Dual-Stack)'):t('IPv4 Only')))+'</span>'+
+            '<span class="stack-tag '+v6TagClass+'">'+v6TagText+'</span>'+
             '<button class="btn btn-sm btn-stack-toggle '+(v6AllDisabled?'primary':'')+'" onclick="toggleStack('+i+',\'v6\')" title="'+escAttr(v6AllDisabled?t('Enable IPv6'):t('Disable IPv6'))+'">'+(v6AllDisabled?t('Enable IPv6'):t('Disable IPv6'))+'</button>'+
           '</div>'+
         '</div>'+
@@ -1956,16 +2005,17 @@ function lhealth(d){
     }
     groups[gid].items.push({proxy:p,index:i});
     var udpScheme=isUDPSupportedScheme(p);
-    var v6Supported=!!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||(p.host&&p.host.indexOf(':')!==-1));
+    var isV6Host=!!(p.host&&p.host.indexOf(':')!==-1);
     var sV4TCP=(p.v4&&p.v4.tcp)||p.health||{};
     var sV4UDP=(p.v4&&p.v4.udp)||p.udp_health||{};
     var sV6TCP=(p.v6&&p.v6.tcp)||null;
     var sV6UDP=(p.v6&&p.v6.udp)||null;
-    var v4TcpUp=sV4TCP.manual?sV4TCP.available:(sV4TCP.available&&!!sV4TCP.last_attempt);
-    var v4UdpUp=udpScheme&&sV4UDP&&(sV4UDP.manual?sV4UDP.available:(sV4UDP.available&&!!sV4UDP.last_attempt));
-    var v6TcpUp=v6Supported&&sV6TCP&&(sV6TCP.manual?sV6TCP.available:(sV6TCP.available&&!!sV6TCP.last_attempt));
-    var v6UdpUp=v6Supported&&udpScheme&&sV6UDP&&(sV6UDP.manual?sV6UDP.available:(sV6UDP.available&&!!sV6UDP.last_attempt));
+    var v4TcpUp=sV4TCP.manual?sV4TCP.available:(sV4TCP.available&&(sV4TCP.latency>0||!!sV4TCP.last_attempt));
+    var v4UdpUp=udpScheme&&sV4UDP&&(sV4UDP.manual?sV4UDP.available:(sV4UDP.available&&(sV4UDP.latency>0||!!sV4UDP.last_attempt)));
+    var v6TcpUp=sV6TCP&&(sV6TCP.manual?sV6TCP.available:(sV6TCP.available&&(sV6TCP.latency>0||!!sV6TCP.last_attempt)));
+    var v6UdpUp=udpScheme&&sV6UDP&&(sV6UDP.manual?sV6UDP.available:(sV6UDP.available&&(sV6UDP.latency>0||!!sV6UDP.last_attempt)));
     var anyUp=v4TcpUp||v4UdpUp||v6TcpUp||v6UdpUp;
+    var v6Supported=!!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||isV6Host||v6TcpUp||v6UdpUp);
     if(anyUp)groups[gid].onlineCount++;
     if(v6Supported)groups[gid].v6Count++;
   });
@@ -2188,11 +2238,14 @@ function updateHealthBanner(d){
   var proxies=(d&&d.health&&d.health.proxies)||[];
   var anyUp=proxies.some(function(p){
     var udpScheme=isUDPSupportedScheme(p);
-    var v6Supported=!!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||(p.host&&p.host.indexOf(':')!==-1));
-    return (p.health&&p.health.available)||
-           (udpScheme&&p.udp_health&&p.udp_health.available)||
-           (v6Supported&&p.v6&&p.v6.tcp&&p.v6.tcp.available)||
-           (v6Supported&&udpScheme&&p.v6&&p.v6.udp&&p.v6.udp.available);
+    var sV4TCP=(p.v4&&p.v4.tcp)||p.health||{};
+    var sV4UDP=(p.v4&&p.v4.udp)||p.udp_health||{};
+    var sV6TCP=(p.v6&&p.v6.tcp)||null;
+    var sV6UDP=(p.v6&&p.v6.udp)||null;
+    return (sV4TCP&&sV4TCP.available)||
+           (udpScheme&&sV4UDP&&sV4UDP.available)||
+           (sV6TCP&&sV6TCP.available)||
+           (udpScheme&&sV6UDP&&sV6UDP.available);
   });
   b.style.display=(proxies.length>0&&!anyUp)?'flex':'none';
 }
@@ -2275,11 +2328,14 @@ async function tp(i){
   // "Disable" pins both circuits down; "Enable" releases both back to auto.
   // Re-enable one specific probe-down circuit via its TCP/UDP badge instead.
   var udpScheme=isUDPSupportedScheme(p);
-  var v6Supported=!!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||(p.host&&p.host.indexOf(':')!==-1));
-  var anyUp=p.health.available||
-    (udpScheme&&p.udp_health&&p.udp_health.available)||
-    (v6Supported&&p.v6&&p.v6.tcp&&p.v6.tcp.available)||
-    (v6Supported&&udpScheme&&p.v6&&p.v6.udp&&p.v6.udp.available);
+  var sV4TCP=(p.v4&&p.v4.tcp)||p.health||{};
+  var sV4UDP=(p.v4&&p.v4.udp)||p.udp_health||{};
+  var sV6TCP=(p.v6&&p.v6.tcp)||null;
+  var sV6UDP=(p.v6&&p.v6.udp)||null;
+  var anyUp=(sV4TCP&&sV4TCP.available)||
+    (udpScheme&&sV4UDP&&sV4UDP.available)||
+    (sV6TCP&&sV6TCP.available)||
+    (udpScheme&&sV6UDP&&sV6UDP.available);
   await fetch('/health/proxy?alias='+encodeURIComponent(p.alias)+'&circuit=both&action='+(anyUp?'disable':'auto'),{method:'POST'});
   loadHealth();
 }

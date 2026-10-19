@@ -654,7 +654,9 @@ func (m *Manager) ConnectDefault(ctx context.Context, host string, port int) (ne
 		}
 		onFail = func(p *Proxy, err error) {
 			if isV6Target {
-				p.SetIPv6Capability(IPv6CapUnsupported)
+				if !p.v6UDPHealth.IsAvailable() || p.v6UDPHealth.Latency() == 0 {
+					p.SetIPv6Capability(IPv6CapUnsupported)
+				}
 				ll.Warn("proxy failed on IPv6 destination, marking IPv6 unsupported", "url", MaskProxyURL(p.URL), "error", err)
 				return
 			}
@@ -677,7 +679,9 @@ func (m *Manager) connectOne(ctx context.Context, ll *slog.Logger, proxy *Proxy,
 	if err != nil {
 		ll.Warn("default proxy failed", "url", MaskProxyURL(proxy.URL), "error", err)
 		if isIPv6Address(host) {
-			proxy.SetIPv6Capability(IPv6CapUnsupported)
+			if !proxy.v6UDPHealth.IsAvailable() || proxy.v6UDPHealth.Latency() == 0 {
+				proxy.SetIPv6Capability(IPv6CapUnsupported)
+			}
 			ll.Warn("proxy failed on IPv6 destination, marking IPv6 unsupported", "url", MaskProxyURL(proxy.URL), "error", err)
 		} else if m.healthChecker != nil {
 			m.healthChecker.RecordFailure(proxy, err)
@@ -1081,7 +1085,9 @@ func (m *Manager) Connect(ctx context.Context, host string, port int, domain str
 	if err != nil {
 		ll.Error("proxy connect failed", "url", MaskProxyURL(selected.URL), "error", err)
 		if isIPv6Address(host) {
-			selected.SetIPv6Capability(IPv6CapUnsupported)
+			if !selected.v6UDPHealth.IsAvailable() || selected.v6UDPHealth.Latency() == 0 {
+				selected.SetIPv6Capability(IPv6CapUnsupported)
+			}
 			ll.Warn("proxy failed on IPv6 destination, marking IPv6 unsupported", "url", MaskProxyURL(selected.URL), "error", err)
 		} else if m.healthChecker != nil {
 			m.healthChecker.RecordFailure(selected, err)
@@ -1138,7 +1144,9 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 		dialCancel()
 		if err != nil {
 			if isV6 {
-				selected.SetIPv6Capability(IPv6CapUnsupported)
+				if !selected.v6Health.IsAvailable() || selected.v6Health.Latency() == 0 {
+					selected.SetIPv6Capability(IPv6CapUnsupported)
+				}
 			} else if m.healthChecker != nil {
 				m.healthChecker.RecordUDPFailure(selected, err)
 			}
@@ -1176,7 +1184,9 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 		dialCancel()
 		if err != nil {
 			if isV6 {
-				selected.SetIPv6Capability(IPv6CapUnsupported)
+				if !selected.v6Health.IsAvailable() || selected.v6Health.Latency() == 0 {
+					selected.SetIPv6Capability(IPv6CapUnsupported)
+				}
 			} else if m.healthChecker != nil {
 				m.healthChecker.RecordUDPFailure(selected, err)
 			}
@@ -1294,7 +1304,9 @@ func (m *Manager) defaultUDPAssociate(ctx context.Context, ll *slog.Logger, host
 		if err != nil {
 			ll.Warn("UDP proxy failed", "url", MaskProxyURL(p.URL), "error", err)
 			if isV6Target {
-				p.SetIPv6Capability(IPv6CapUnsupported)
+				if !p.v6Health.IsAvailable() || p.v6Health.Latency() == 0 {
+					p.SetIPv6Capability(IPv6CapUnsupported)
+				}
 				ll.Warn("UDP proxy failed on IPv6 destination, marking IPv6 unsupported", "url", MaskProxyURL(p.URL), "error", err)
 			} else if m.healthChecker != nil {
 				m.healthChecker.RecordUDPFailure(p, err)
@@ -1320,7 +1332,9 @@ func (m *Manager) defaultUDPAssociate(ctx context.Context, ll *slog.Logger, host
 	if m.healthChecker != nil {
 		onFail = func(p *Proxy, err error) {
 			if isV6Target {
-				p.SetIPv6Capability(IPv6CapUnsupported)
+				if !p.v6Health.IsAvailable() || p.v6Health.Latency() == 0 {
+					p.SetIPv6Capability(IPv6CapUnsupported)
+				}
 				ll.Warn("UDP proxy failed on IPv6 destination, marking IPv6 unsupported", "url", MaskProxyURL(p.URL), "error", err)
 				return
 			}
@@ -1386,11 +1400,15 @@ func buildStackCapabilities(proxy *Proxy) (v4 IPStackCapability, v6 IPStackCapab
 	v6Supported := proxy.SupportsIPv6()
 	v6TCPSnap := proxy.v6Health.Snapshot()
 	v6UDPSnap := proxy.v6UDPHealth.Snapshot()
-	if !v6Supported {
-		v6TCPSnap.State = "unsupported"
-		v6TCPSnap.Available = false
-		v6UDPSnap.State = "unsupported"
-		v6UDPSnap.Available = false
+	if !v6Supported && proxy.IsIPv6Unsupported() {
+		if !v6TCPSnap.Manual {
+			v6TCPSnap.State = "unsupported"
+			v6TCPSnap.Available = false
+		}
+		if !v6UDPSnap.Manual {
+			v6UDPSnap.State = "unsupported"
+			v6UDPSnap.Available = false
+		}
 	} else if !proxy.SchemeSupportsUDP() {
 		v6UDPSnap.Available = false
 		v6UDPSnap.State = "n/a"
@@ -1848,7 +1866,9 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 				m.healthChecker.RecordV6Success(proxy, latency)
 			}
 		} else {
-			proxy.SetIPv6Capability(IPv6CapUnsupported)
+			if !proxy.v6UDPHealth.IsAvailable() || proxy.v6UDPHealth.Latency() == 0 {
+				proxy.SetIPv6Capability(IPv6CapUnsupported)
+			}
 			if m.healthChecker != nil {
 				m.healthChecker.RecordV6Failure(proxy, err)
 			}
@@ -1873,6 +1893,9 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 				m.healthChecker.RecordV6UDPSuccess(proxy, latency)
 			}
 		} else {
+			if !proxy.v6Health.IsAvailable() || proxy.v6Health.Latency() == 0 {
+				proxy.SetIPv6Capability(IPv6CapUnsupported)
+			}
 			if m.healthChecker != nil {
 				m.healthChecker.RecordV6UDPFailure(proxy, err)
 			}

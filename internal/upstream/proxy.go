@@ -489,13 +489,19 @@ func (p *Proxy) IPv6Pin() *bool {
 }
 
 // SupportsIPv6 reports whether the node can route traffic to IPv6 destinations.
-// An explicit pin honors the pin. Otherwise, only confirmed supported nodes (auto-probed
-// or detected via IPv6 exit IP) return true. By default, all unverified nodes return false.
+// An explicit pin honors the pin. Otherwise, confirmed supported nodes (auto-probed
+// via TCP or UDP, or detected via IPv6 exit IP) return true. By default, unverified nodes return false.
 func (p *Proxy) SupportsIPv6() bool {
 	if ptr := p.ipv6Pinned.Load(); ptr != nil {
 		return *ptr
 	}
 	if p.IPv6Capability() == IPv6CapSupported {
+		return true
+	}
+	if p.v6Health.IsAvailable() && p.v6Health.Latency() > 0 {
+		return true
+	}
+	if p.v6UDPHealth.IsAvailable() && p.v6UDPHealth.Latency() > 0 {
 		return true
 	}
 	if exitIP := p.ExitIP(); exitIP != "" && strings.Contains(exitIP, ":") {
@@ -509,6 +515,9 @@ func (p *Proxy) SupportsIPv6() bool {
 func (p *Proxy) IsIPv6Unsupported() bool {
 	if ptr := p.ipv6Pinned.Load(); ptr != nil {
 		return !*ptr
+	}
+	if (p.v6Health.IsAvailable() && p.v6Health.Latency() > 0) || (p.v6UDPHealth.IsAvailable() && p.v6UDPHealth.Latency() > 0) {
+		return false
 	}
 	return p.IPv6Capability() == IPv6CapUnsupported
 }
