@@ -2178,6 +2178,7 @@ func (m *Manager) probeInitialGeo() {
 	}
 
 	safego.Go("upstream.initialGeo", func() {
+		sem := make(chan struct{}, 16)
 		var wg sync.WaitGroup
 		for _, p := range proxies {
 			if p == nil {
@@ -2189,10 +2190,18 @@ func (m *Manager) probeInitialGeo() {
 			if !needsGeo && !needsIPv6 {
 				continue
 			}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
 			wg.Add(1)
 			proxy := p
 			safego.Go("upstream.initialGeo.node", func() {
-				defer wg.Done()
+				defer func() {
+					<-sem
+					wg.Done()
+				}()
 				probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 				defer cancel()
 				var innerWg sync.WaitGroup
