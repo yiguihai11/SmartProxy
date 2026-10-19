@@ -306,3 +306,79 @@ func TestUDPAssociate_RawFastPathStillTrusted(t *testing.T) {
 	}
 	conn.Close()
 }
+
+func TestUDPAssociateSelected_FallbackToDefault(t *testing.T) {
+	rejectPort, _ := startAssociateTCP(t, "reject", deadUDPPort(t))
+	fdns, dnsPort := startFrameDNSServer(t)
+	goodPort, _ := startAssociateTCP(t, "standard", dnsPort)
+
+	m := newUDPFailoverManager(t, []string{
+		fmt.Sprintf("socks5://127.0.0.1:%d", rejectPort),
+		fmt.Sprintf("socks5://127.0.0.1:%d", goodPort),
+	}, func() { fdns.Close() })
+	m.healthCfg.UDPProbeDNS = fmt.Sprintf("127.0.0.1:%d", dnsPort)
+
+	selectedBad := m.aliasMap["n0"]
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	conn, err := m.UDPAssociateSelected(ctx, "1.1.1.1", 53, selectedBad)
+	if err != nil {
+		t.Fatalf("expected UDPAssociateSelected to fall back to default proxies, got error: %v", err)
+	}
+	defer conn.Close()
+
+	uc, ok := conn.(*UDPProxyConn)
+	if !ok {
+		t.Fatalf("expected *UDPProxyConn, got %T", conn)
+	}
+	if got := uc.Proxy().Port; got != goodPort {
+		t.Errorf("winner port=%d, want fallback healthy node %d", got, goodPort)
+	}
+}
+
+func TestDefaultUDPAssociate_ResilienceFallbackAllCircuitsOpen(t *testing.T) {
+	fdns, dnsPort := startFrameDNSServer(t)
+	goodPort, _ := startAssociateTCP(t, "standard", dnsPort)
+
+	m := newUDPFailoverManager(t, []string{
+		fmt.Sprintf("socks5://127.0.0.1:%d", goodPort),
+	}, func() { fdns.Close() })
+	m.healthCfg.UDPProbeDNS = fmt.Sprintf("127.0.0.1:%d", dnsPort)
+
+	p := m.aliasMap["n0"]
+	// Manually simulate that health checks marked the circuit as open (e.g. transient probe failure)
+	p.udpHealth.state = StateOpen
+	p.udpHealth.consecutiveFailures = 3
+	p.udpHealth.openSince = time.Now()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	conn, err := m.UDPAssociate(ctx, "1.1.1.1", 53, "", nil)
+	if err != nil {
+		t.Fatalf("expected resilience fallback to connect when all circuits open, got error: %v", err)
+	}
+	conn.Close()
+}
+
+func TestConnectDefault_ResilienceFallbackAllCircuitsOpen(t *testing.T) {
+	goodAddr, goodDone := startSOCKS5Mock(t)
+
+	m := newFailoverManager(t, []string{"socks5://" + goodAddr}, goodDone)
+
+	p := m.defaultProxies[0]
+	// Simulate circuit breaker open from prior probe failure
+	p.health.state = StateOpen
+	p.health.consecutiveFailures = 3
+	p.health.openSince = time.Now()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	conn, err := m.ConnectDefault(ctx, "example.com", 443)
+	if err != nil {
+		t.Fatalf("expected resilience fallback to connect when all TCP circuits open, got: %v", err)
+	}
+	conn.Close()
+}

@@ -735,13 +735,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 	// (每包 pktDst),回包按它写回 tun;proxySel==nil 走聚合默认 fallback(判死/黑名单命中
 	// 时传 nil 强制走默认上游)。
 	newProxyRemote := func(dst M.Socksaddr, host string, port int, proxySel *upstream.Proxy) (*udpRemoteEntry, error) {
-		var remote net.Conn
-		var err error
-		if proxySel == nil {
-			remote, err = h.upstreamMgr.UDPAssociate(ctx, host, port, "", h.ruleEng)
-		} else {
-			remote, err = proxySel.UDPAssociate(ctx, host, port)
-		}
+		remote, err := h.upstreamMgr.UDPAssociateSelected(ctx, host, port, proxySel)
 		if err != nil {
 			return nil, err
 		}

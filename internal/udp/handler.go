@@ -435,11 +435,7 @@ func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip 
 		remoteConn, err = h.upstreamMgr.UDPAssociate(ctx, ip, port, domain, nil)
 		framed = true
 	case result != "fallback":
-		if selected != nil {
-			remoteConn, err = selected.UDPAssociate(ctx, ip, port)
-		} else {
-			remoteConn, err = h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, selected)
-		}
+		remoteConn, err = h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, selected)
 		framed = true
 	default:
 		// fallback + 国外:先前已被动态黑名单(此前 TCP smart 超时 / QUIC 判死写入)的目标,
@@ -593,10 +589,6 @@ func (h *Handler) routeForeignFallback(ctx context.Context, ip string, port int,
 		default:
 			ll.Info("UDP QUIC flow: domain rule proxy",
 				"target", net.JoinHostPort(ip, strconv.Itoa(port)), "sni", sni)
-			if s2 != nil {
-				rc, err := s2.UDPAssociate(ctx, ip, port)
-				return rc, true, nil, err
-			}
 			rc, err := h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, s2)
 			return rc, true, nil, err
 		}

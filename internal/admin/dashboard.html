@@ -1200,7 +1200,9 @@ async function testProxy(i,proto){
   var v6UdpUp=isUDP?((stV6UDP&&stV6UDP.available)||(p.v6&&p.v6.udp&&p.v6.udp.available&&(!stV6UDP||stV6UDP.available))):false;
   var anyUp=v4TcpUp||v4UdpUp||v6TcpUp||v6UdpUp;
 
-  if(!anyUp){
+  var tcpExplicitlyTestedAndFailed = (stTCP && !stTCP.available) || (stTCPing && !stTCPing.available);
+  var udpExplicitlyTestedAndFailed = isUDP ? (stUDP && !stUDP.available) : true;
+  if(!anyUp && tcpExplicitlyTestedAndFailed && udpExplicitlyTestedAndFailed){
     setTimeout(function(){
       if(confirm(tf('Proxy "{0}" is completely down (TCP & UDP both failed). Delete and clean it up now?',[p.alias]))){
         cleanDeadProxies([p.alias]);
@@ -1457,12 +1459,14 @@ async function testGroupProxies(gid, proto, btn){
     if(stV6UDP&&stV6UDP.available)udpUp=true;
     else if(isUDP&&p.v6&&p.v6.udp&&p.v6.udp.available&&(!stV6UDP||stV6UDP.available))udpUp=true;
 
-    if(!tcpUp&&(!isUDP||!udpUp)){
+    var tcpTestedAndDown = (stV4TCP && !stV4TCP.available) || (stTCPing && !stTCPing.available);
+    var udpTestedAndDown = isUDP ? (stV4UDP && !stV4UDP.available) : true;
+    if(!tcpUp && (!isUDP || !udpUp) && tcpTestedAndDown && udpTestedAndDown){
       deadAliases.push(p.alias);
     }
   });
 
-  if(deadAliases.length>0){
+  if((proto==='all'||proto==='both') && !isAborted && deadAliases.length>0){
     setTimeout(function(){
       if(confirm(tf('Found {0} dead nodes (both TCP and UDP unavailable). Delete and clean them up now?',[deadAliases.length]))){
         cleanDeadProxies(deadAliases);
