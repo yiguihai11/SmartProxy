@@ -1091,11 +1091,12 @@ function circuitStat(snap,supports){
   // probe has run (last_attempt still empty). Otherwise clicking enable on a fresh node would
   // read "unknown" until the next health cycle, looking like the toggle did nothing.
   if(m)return snap.available?{c:'up',t:'pinned',m:true}:{c:'disabled',t:'disabled',m:true};
-  if(snap.state==='open')return {c:'down',t:'fail',m:m};
+  if(!snap.last_attempt&&snap.consecutive_failures===0)return {c:'unknown',t:'unknown',m:false};
+  if(snap.state==='open'||(snap.consecutive_failures>0&&!snap.available))return {c:'down',t:'fail',m:m};
   if(snap.state==='half_open')return {c:'half',t:'half',m:m};
-  if(!snap.last_attempt)return {c:'unknown',t:'unknown',m:false};
+  if(snap.state==='unsupported')return snap.consecutive_failures>0?{c:'down',t:'fail',m:m}:{c:'na',t:'n/a',m:m};
   if(snap.state==='closed')return {c:'up',t:'ok',m:m};
-  return {c:'unknown',t:'unknown',m:m};
+  return snap.consecutive_failures>0?{c:'down',t:'fail',m:m}:{c:'unknown',t:'unknown',m:m};
 }
 // Click a badge to flip that circuit: up → disable (force down), down → enable (force up),
 // manually-up → release back to automatic. A manual-down pin (e.g. the udp_in_tcp TCP default)

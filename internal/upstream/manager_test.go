@@ -2169,3 +2169,103 @@ func TestManager_DualStackStrategies(t *testing.T) {
 		t.Fatalf("expected DualStackNode=false after v4 failover to node-2")
 	}
 }
+
+func TestBuildStackCapabilities_FailedCircuitNotUnknown(t *testing.T) {
+	p, err := NewProxy("ss://aes-256-gcm:password@185.239.141.248:8388")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate IPv6 TCP failure (8 consecutive failures, tripped circuit breaker)
+	p.v6Health.state = StateOpen
+	p.v6Health.consecutiveFailures = 8
+	p.v6Health.openSince = time.Now()
+	p.v6Health.lastAttempt = time.Now()
+	p.SetIPv6Capability(IPv6CapUnsupported)
+
+	// Simulate IPv6 UDP failure (9 consecutive failures)
+	p.v6UDPHealth.state = StateOpen
+	p.v6UDPHealth.consecutiveFailures = 9
+	p.v6UDPHealth.openSince = time.Now()
+	p.v6UDPHealth.lastAttempt = time.Now()
+
+	_, v6 := buildStackCapabilities(p)
+
+	// The circuit breaker states must remain "open" so the dashboard recognizes
+	// them as failed (fail / 异常) instead of unknown (未知)!
+	if v6.TCP.State != "open" {
+		t.Fatalf("expected v6.TCP.State='open', got %q", v6.TCP.State)
+	}
+	if v6.TCP.ConsecutiveFailures != 8 {
+		t.Fatalf("expected v6.TCP.ConsecutiveFailures=8, got %d", v6.TCP.ConsecutiveFailures)
+	}
+	if v6.UDP.State != "open" {
+		t.Fatalf("expected v6.UDP.State='open', got %q", v6.UDP.State)
+	}
+	if v6.UDP.ConsecutiveFailures != 9 {
+		t.Fatalf("expected v6.UDP.ConsecutiveFailures=9, got %d", v6.UDP.ConsecutiveFailures)
+	}
+}
+
+func TestCircuitBreaker_IPv6RecoveryAndManualEnable(t *testing.T) {
+	mockAddr, done := startSOCKS5Mock(t)
+	defer done()
+
+	m, err := NewManager(UpstreamConfig{
+		Default: "failover",
+		Proxies: []ProxyEntry{
+			{Alias: "node-1", URL: "socks5://" + mockAddr},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p := m.defaultProxies[0]
+
+	// 1. Simulate auto-opened circuit and unsupported capability
+	p.v6Health.state = StateOpen
+	p.v6Health.consecutiveFailures = 5
+	p.v6Health.openSince = time.Now()
+	p.SetIPv6Capability(IPv6CapUnsupported)
+
+	if !p.IsIPv6Unsupported() {
+		t.Fatal("expected IsIPv6Unsupported=true before reset")
+	}
+
+	// 2. Reset auto opened circuits
+	n := m.ResetAutoOpenedCircuits()
+	if n != 1 {
+		t.Fatalf("expected 1 reset, got %d", n)
+	}
+	if p.v6Health.state != StateClosed {
+		t.Fatalf("expected v6Health.state=StateClosed after reset")
+	}
+	if p.IsIPv6Unsupported() {
+		t.Fatalf("expected IsIPv6Unsupported=false after reset (should be cleared to unknown)")
+	}
+
+	// 3. Re-fail and test manual enable
+	p.v6Health.state = StateOpen
+	p.v6Health.consecutiveFailures = 3
+	p.SetIPv6Capability(IPv6CapUnsupported)
+
+	err = m.SetCircuitHealth("node-1", "v6_tcp", "enable")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !p.v6Health.IsManuallyPinnedUp() {
+		t.Fatal("expected v6Health.IsManuallyPinnedUp=true after manual enable")
+	}
+	if !p.SupportsIPv6() {
+		t.Fatal("expected SupportsIPv6=true after manual enable")
+	}
+	if p.IsIPv6Unsupported() {
+		t.Fatal("expected IsIPv6Unsupported=false after manual enable")
+	}
+	if !p.V6TCPAvailable() {
+		t.Fatal("expected V6TCPAvailable=true after manual enable")
+	}
+}
+

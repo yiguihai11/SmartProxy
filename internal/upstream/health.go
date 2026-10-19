@@ -118,6 +118,13 @@ func (ph *ProxyHealth) IsManuallyDisabled() bool {
 	return ph.manual != nil && !*ph.manual
 }
 
+// IsManuallyPinnedUp reports whether the circuit is pinned up by SetManualState(true).
+func (ph *ProxyHealth) IsManuallyPinnedUp() bool {
+	ph.mu.RLock()
+	defer ph.mu.RUnlock()
+	return ph.manual != nil && *ph.manual
+}
+
 // ManualPin reports whether the circuit is manually pinned and, if so, the pinned
 // availability (true=forced up, false=forced down). The second return is meaningful
 // only when pinned is true. Used to preserve manual pins across a hot reload.
@@ -648,10 +655,7 @@ func (hc *HealthChecker) ProbeAll() {
 				}
 			}
 			if pin := proxy.IPv6Pin(); pin == nil || *pin {
-				if err := hc.acquireProbeSem(ctx, stopCh); err == nil {
-					hc.checkProxyIPv6WithContext(parentCtx, proxy)
-					hc.releaseProbeSem()
-				}
+				hc.checkProxyIPv6WithContext(parentCtx, stopCh, proxy)
 			}
 		})
 	}
@@ -747,7 +751,7 @@ func (hc *HealthChecker) checkProxyWithContext(ctx context.Context, stopCh <-cha
 		hc.checkProxyUDPWithContext(ctx, stopCh, p)
 	}
 	hc.checkProxyTCPWithContext(ctx, stopCh, p)
-	hc.checkProxyIPv6WithContext(ctx, p)
+	hc.checkProxyIPv6WithContext(ctx, stopCh, p)
 }
 
 // IPv6ProbeDefaultTarget is the default Anycast IPv6 probe target (Cloudflare public DNS IPv6).
@@ -761,6 +765,15 @@ const IPv6ProbeDefaultTarget = "2606:4700:4700::1111"
 func markV6TCPFailed(p *Proxy) {
 	if !p.IsIPv6Pinned() {
 		if !p.v6UDPHealth.IsAvailable() || p.v6UDPHealth.Latency() == 0 {
+			p.SetIPv6Capability(IPv6CapUnsupported)
+		}
+	}
+}
+
+// markV6UDPFailed marks a node's IPv6 capability as unsupported only if IPv6 TCP is not working.
+func markV6UDPFailed(p *Proxy) {
+	if !p.IsIPv6Pinned() {
+		if !p.v6Health.IsAvailable() || p.v6Health.Latency() == 0 {
 			p.SetIPv6Capability(IPv6CapUnsupported)
 		}
 	}
@@ -845,11 +858,13 @@ func probeIPv6UDP(ctx context.Context, p *Proxy) (time.Duration, error) {
 	start := time.Now()
 	conn, err := p.UDPAssociate(ctx, IPv6ProbeDefaultTarget, 53)
 	if err != nil {
+		markV6UDPFailed(p)
 		return 0, err
 	}
 	defer conn.Close()
 	lat, err := verifyUDPRelay(ctx, conn, net.JoinHostPort(IPv6ProbeDefaultTarget, "53"), "dns.google", 3*time.Second)
 	if err != nil {
+		markV6UDPFailed(p)
 		return 0, err
 	}
 	if lat <= 0 {
@@ -870,37 +885,78 @@ func (hc *HealthChecker) checkProxyIPv6(p *Proxy) {
 	}
 	hc.mu.RLock()
 	ctx := hc.ctx
+	stopCh := hc.stopCh
 	hc.mu.RUnlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	hc.checkProxyIPv6WithContext(ctx, p)
+	hc.checkProxyIPv6WithContext(ctx, stopCh, p)
 }
 
-func (hc *HealthChecker) checkProxyIPv6WithContext(parentCtx context.Context, p *Proxy) {
+func (hc *HealthChecker) checkProxyIPv6WithContext(parentCtx context.Context, stopCh <-chan struct{}, p *Proxy) {
 	if p == nil {
 		return
 	}
 	if pin := p.IPv6Pin(); pin != nil && !*pin {
 		return
 	}
-	ctx, cancel := context.WithTimeout(parentCtx, 5*time.Second)
-	defer cancel()
+	cfg := hc.cfg.Load()
+	timeout := time.Duration(cfg.Timeout) * time.Second
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
 
 	if !p.v6Health.IsManuallyDisabled() {
-		lat, err := probeIPv6(ctx, p)
-		if err == nil {
-			hc.RecordV6Success(p, lat)
-		} else {
-			hc.RecordV6Failure(p, err)
+		p.v6Health.mu.RLock()
+		tcpState := p.v6Health.state
+		tcpOpenSince := p.v6Health.openSince
+		p.v6Health.mu.RUnlock()
+
+		shouldProbeTCP := true
+		if tcpState == StateOpen {
+			if time.Since(tcpOpenSince) < time.Duration(cfg.OpenCoolDown)*time.Second {
+				shouldProbeTCP = false
+			}
+		}
+		if shouldProbeTCP {
+			ctx, cancel := context.WithTimeout(parentCtx, timeout)
+			if err := hc.acquireProbeSem(ctx, stopCh); err == nil {
+				lat, err := probeIPv6(ctx, p)
+				hc.releaseProbeSem()
+				if err == nil {
+					hc.RecordV6Success(p, lat)
+				} else {
+					hc.RecordV6Failure(p, err)
+				}
+			}
+			cancel()
 		}
 	}
+
 	if p.SchemeSupportsUDP() && !p.v6UDPHealth.IsManuallyDisabled() {
-		uLat, uErr := probeIPv6UDP(ctx, p)
-		if uErr == nil {
-			hc.RecordV6UDPSuccess(p, uLat)
-		} else {
-			hc.RecordV6UDPFailure(p, uErr)
+		p.v6UDPHealth.mu.RLock()
+		udpState := p.v6UDPHealth.state
+		udpOpenSince := p.v6UDPHealth.openSince
+		p.v6UDPHealth.mu.RUnlock()
+
+		shouldProbeUDP := true
+		if udpState == StateOpen {
+			if time.Since(udpOpenSince) < time.Duration(cfg.OpenCoolDown)*time.Second {
+				shouldProbeUDP = false
+			}
+		}
+		if shouldProbeUDP {
+			ctx, cancel := context.WithTimeout(parentCtx, timeout)
+			if err := hc.acquireProbeSem(ctx, stopCh); err == nil {
+				uLat, uErr := probeIPv6UDP(ctx, p)
+				hc.releaseProbeSem()
+				if uErr == nil {
+					hc.RecordV6UDPSuccess(p, uLat)
+				} else {
+					hc.RecordV6UDPFailure(p, uErr)
+				}
+			}
+			cancel()
 		}
 	}
 }
