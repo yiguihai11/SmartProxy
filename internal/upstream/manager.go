@@ -207,7 +207,7 @@ type circuitPin struct {
 
 type savedNodeState struct {
 	url            string
-	pins           [2]circuitPin
+	pins           [4]circuitPin
 	countryCode    string
 	exitIP         string
 	ipv6Capability IPv6Capability
@@ -224,11 +224,15 @@ func (m *Manager) captureManualPins() map[string]savedNodeState {
 		}
 		tpinned, tup := p.health.ManualPin()
 		upinned, uup := p.udpHealth.ManualPin()
+		v6tpinned, v6tup := p.v6Health.ManualPin()
+		v6upinned, v6uup := p.v6UDPHealth.ManualPin()
 		states[alias] = savedNodeState{
 			url: p.URL,
-			pins: [2]circuitPin{
+			pins: [4]circuitPin{
 				{pinned: tpinned, up: tup, defaultDriven: p.tcpDefaultDriven()},
 				{pinned: upinned, up: uup, defaultDriven: p.udpDefaultDriven()},
+				{pinned: v6tpinned, up: v6tup},
+				{pinned: v6upinned, up: v6uup},
 			},
 			countryCode:    p.CountryCode(),
 			exitIP:         p.ExitIP(),
@@ -274,15 +278,21 @@ func (m *Manager) restoreManualPins(states map[string]savedNodeState) {
 		}
 		restore(&p.health, state.pins[0], p.tcpDefaultDriven())
 		restore(&p.udpHealth, state.pins[1], p.udpDefaultDriven())
+		restore(&p.v6Health, state.pins[2], false)
+		restore(&p.v6UDPHealth, state.pins[3], false)
 	}
 	for _, entry := range m.staticProxies {
 		if p := m.aliasMap[entry.Alias]; p != nil {
 			if entry.IsDisabled() {
 				p.health.SetManualState(false)
 				p.udpHealth.SetManualState(false)
+				p.v6Health.SetManualState(false)
+				p.v6UDPHealth.SetManualState(false)
 			} else if (entry.Enable != nil && *entry.Enable) || (entry.Enabled != nil && *entry.Enabled) {
 				p.health.ClearManualState()
 				p.udpHealth.ClearManualState()
+				p.v6Health.ClearManualState()
+				p.v6UDPHealth.ClearManualState()
 			}
 		}
 	}
@@ -1297,6 +1307,13 @@ func (m *Manager) defaultUDPAssociate(ctx context.Context, ll *slog.Logger, host
 	return m.hedgedDial(ctx, ll, candidates, "UDP proxy", "no default UDP proxy available", dial, onWin, onFail)
 }
 
+// IPStackCapability encapsulates the TCP and UDP capability sub-groups for a single IP stack (IPv4 or IPv6).
+type IPStackCapability struct {
+	Supported bool                `json:"supported"`
+	TCP       ProxyHealthSnapshot `json:"tcp"`
+	UDP       ProxyHealthSnapshot `json:"udp"`
+}
+
 type ProxyInfo struct {
 	Alias string `json:"alias"`
 	URL   string `json:"url"`
@@ -1318,14 +1335,50 @@ type ProxyInfo struct {
 	UDPCapability  string              `json:"udp_capability"`
 	IPv6Capability string              `json:"ipv6_capability"`
 	SupportsIPv6   bool                `json:"supports_ipv6"`
-	Health         ProxyHealthSnapshot `json:"health"`
-	UDPHealth      ProxyHealthSnapshot `json:"udp_health"`
+	Health         ProxyHealthSnapshot `json:"health"`     // backward-compatible v4 tcp
+	UDPHealth      ProxyHealthSnapshot `json:"udp_health"` // backward-compatible v4 udp
+	V4             IPStackCapability   `json:"v4"`         // IPv4 大组: TCP / UDP 小组
+	V6             IPStackCapability   `json:"v6"`         // IPv6 大组: TCP / UDP 小组
 	PingLatency    time.Duration       `json:"ping_latency,omitempty"`
 	CountryCode    string              `json:"country_code,omitempty"`
 	ExitIP         string              `json:"exit_ip,omitempty"`
 	Provider       string              `json:"provider,omitempty"`
 	Enable         bool                `json:"enable"`
 	Enabled        bool                `json:"enabled"`
+}
+
+func buildStackCapabilities(proxy *Proxy) (v4 IPStackCapability, v6 IPStackCapability) {
+	hSnap := proxy.health.Snapshot()
+	uSnap := proxy.udpHealth.Snapshot()
+	if !proxy.SchemeSupportsUDP() {
+		uSnap.Available = false
+		uSnap.State = "n/a"
+	}
+	v4 = IPStackCapability{
+		Supported: !strings.Contains(proxy.Host, ":"),
+		TCP:       hSnap,
+		UDP:       uSnap,
+	}
+
+	v6Supported := proxy.SupportsIPv6()
+	v6TCPSnap := proxy.v6Health.Snapshot()
+	v6UDPSnap := proxy.v6UDPHealth.Snapshot()
+	if !v6Supported {
+		v6TCPSnap.State = "unsupported"
+		v6TCPSnap.Available = false
+		v6UDPSnap.State = "unsupported"
+		v6UDPSnap.Available = false
+	} else if !proxy.SchemeSupportsUDP() {
+		v6UDPSnap.Available = false
+		v6UDPSnap.State = "n/a"
+	}
+
+	v6 = IPStackCapability{
+		Supported: v6Supported,
+		TCP:       v6TCPSnap,
+		UDP:       v6UDPSnap,
+	}
+	return v4, v6
 }
 
 func (m *Manager) Proxies() []ProxyInfo {
@@ -1342,15 +1395,12 @@ func (m *Manager) Proxies() []ProxyInfo {
 	infos := make([]ProxyInfo, 0, len(m.defaultProxies))
 	for _, proxy := range m.defaultProxies {
 		alias := reverseMap[proxy]
-		hSnap := proxy.health.Snapshot()
-		uSnap := proxy.udpHealth.Snapshot()
+		v4Snap, v6Snap := buildStackCapabilities(proxy)
 		udpCap := string(proxy.UDPCapability())
 		if !proxy.SchemeSupportsUDP() {
-			uSnap.Available = false
-			uSnap.State = "n/a"
 			udpCap = "none"
 		}
-		isManualDown := (hSnap.Manual && !hSnap.Available) && (uSnap.Manual && !uSnap.Available)
+		isManualDown := (v4Snap.TCP.Manual && !v4Snap.TCP.Available) && (v4Snap.UDP.Manual && !v4Snap.UDP.Available)
 		infos = append(infos, ProxyInfo{
 			Alias:          alias,
 			URL:            proxy.URL,
@@ -1365,8 +1415,10 @@ func (m *Manager) Proxies() []ProxyInfo {
 			UDPCapability:  udpCap,
 			IPv6Capability: string(proxy.IPv6Capability()),
 			SupportsIPv6:   proxy.SupportsIPv6(),
-			Health:         hSnap,
-			UDPHealth:      uSnap,
+			Health:         v4Snap.TCP,
+			UDPHealth:      v4Snap.UDP,
+			V4:             v4Snap,
+			V6:             v6Snap,
 			PingLatency:    proxy.PingLatency(),
 			CountryCode:    proxy.CountryCode(),
 			ExitIP:         proxy.ExitIP(),
@@ -1424,28 +1476,33 @@ func (m *Manager) ProxyInfo(alias string) (ProxyInfo, bool) {
 	if proxy == nil {
 		return ProxyInfo{}, false
 	}
+	v4Snap, v6Snap := buildStackCapabilities(proxy)
 	return ProxyInfo{
-		Alias:         canonicalAlias,
-		URL:           proxy.URL,
-		Name:          proxy.Name,
-		Host:          proxy.Host,
-		Port:          proxy.Port,
-		Scheme:        string(proxy.Scheme),
-		UDPInTCP:      proxy.UDPInTCP,
-		Mode:          proxy.EffectiveMode(),
-		UDPCapability: string(proxy.UDPCapability()),
-		Health:        proxy.health.Snapshot(),
-		UDPHealth:     proxy.udpHealth.Snapshot(),
-		PingLatency:   proxy.PingLatency(),
-		CountryCode:   proxy.CountryCode(),
-		ExitIP:        proxy.ExitIP(),
-		Provider:      proxy.Provider,
+		Alias:          canonicalAlias,
+		URL:            proxy.URL,
+		Name:           proxy.Name,
+		Host:           proxy.Host,
+		Port:           proxy.Port,
+		Scheme:         string(proxy.Scheme),
+		UDPInTCP:       proxy.UDPInTCP,
+		Mode:           proxy.EffectiveMode(),
+		UDPCapability:  string(proxy.UDPCapability()),
+		IPv6Capability: string(proxy.IPv6Capability()),
+		SupportsIPv6:   proxy.SupportsIPv6(),
+		Health:         v4Snap.TCP,
+		UDPHealth:      v4Snap.UDP,
+		V4:             v4Snap,
+		V6:             v6Snap,
+		PingLatency:    proxy.PingLatency(),
+		CountryCode:    proxy.CountryCode(),
+		ExitIP:         proxy.ExitIP(),
+		Provider:       proxy.Provider,
 	}, true
 }
 
-// SetCircuitHealth pins or releases one (or both) of a proxy's circuits. circuit is
-// "tcp", "udp" or "both"; action is "enable" (force up), "disable" (force down) or
-// "auto" (release back to automatic health-check control). Pinned circuits stay put
+// SetCircuitHealth pins or releases one (or all) of a proxy's circuits. circuit is
+// "v4_tcp", "v4_udp", "v6_tcp", "v6_udp", "tcp", "udp" or "both"; action is "enable" (force up),
+// "disable" (force down) or "auto" (release back to automatic health-check control). Pinned circuits stay put
 // across probe cycles until released.
 func (m *Manager) SetCircuitHealth(alias, circuit, action string) error {
 	m.mu.RLock()
@@ -1465,13 +1522,19 @@ func (m *Manager) SetCircuitHealth(alias, circuit, action string) error {
 		}
 	}
 	switch circuit {
-	case "tcp":
+	case "v4_tcp", "tcp", "tcp4":
 		apply(&proxy.health)
-	case "udp":
+	case "v4_udp", "udp", "udp4":
 		apply(&proxy.udpHealth)
-	default: // "both"
+	case "v6_tcp", "v6", "ipv6", "tcp6":
+		apply(&proxy.v6Health)
+	case "v6_udp", "udp6":
+		apply(&proxy.v6UDPHealth)
+	default: // "both", "all"
 		apply(&proxy.health)
 		apply(&proxy.udpHealth)
+		apply(&proxy.v6Health)
+		apply(&proxy.v6UDPHealth)
 	}
 	slog.Info("manual proxy health set", "alias", alias, "circuit", circuit, "action", action)
 	return nil
@@ -1499,6 +1562,12 @@ func (m *Manager) ResetAutoOpenedCircuits() int {
 		if proxy.SchemeSupportsUDP() && proxy.udpHealth.resetAutoOpened() {
 			n++
 		}
+		if proxy.v6Health.resetAutoOpened() {
+			n++
+		}
+		if proxy.SchemeSupportsUDP() && proxy.v6UDPHealth.resetAutoOpened() {
+			n++
+		}
 	}
 	return n
 }
@@ -1523,8 +1592,10 @@ func (m *Manager) HandleNetworkChange() {
 	for _, p := range allAliases {
 		if p != nil {
 			p.health.ResetFailures()
+			p.v6Health.ResetFailures()
 			if p.SchemeSupportsUDP() {
 				p.udpHealth.ResetFailures()
+				p.v6UDPHealth.ResetFailures()
 			}
 		}
 	}
@@ -1674,7 +1745,7 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 		latency = time.Since(start)
 		_ = conn.Close()
 		proxy.SetPingLatency(latency)
-	case "tcp":
+	case "v4_tcp", "tcp", "tcp4":
 		// Probe cdn-cgi/trace directly to resolve real latency, exit IP, and country code
 		latency, err = probeTCP(ctx, proxy, "http://cp.cloudflare.com/cdn-cgi/trace")
 		if err != nil && m.healthChecker != nil {
@@ -1691,7 +1762,7 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 				m.healthChecker.RecordFailure(proxy, err)
 			}
 		}
-	case "udp":
+	case "v4_udp", "udp", "udp4":
 		if !proxy.SchemeSupportsUDP() {
 			return 0, fmt.Errorf("proxy scheme %s does not support UDP", proxy.Scheme)
 		}
@@ -1711,7 +1782,7 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 				m.healthChecker.RecordUDPFailure(proxy, err)
 			}
 		}
-	case "ipv6", "v6":
+	case "v6_tcp", "ipv6", "v6", "tcp6":
 		if m.healthChecker != nil {
 			latency, err = m.healthChecker.ProbeIPv6(ctx, proxy)
 		} else {
@@ -1719,12 +1790,40 @@ func (m *Manager) TestProxy(ctx context.Context, alias, protocol string) (time.D
 			latency, err = dummyHC.ProbeIPv6(ctx, proxy)
 		}
 		if err == nil {
+			proxy.v6Health.UpdateLatency(latency)
 			proxy.SetIPv6Capability(IPv6CapSupported)
+			if m.healthChecker != nil {
+				m.healthChecker.RecordV6Success(proxy, latency)
+			}
 		} else {
 			proxy.SetIPv6Capability(IPv6CapUnsupported)
+			if m.healthChecker != nil {
+				m.healthChecker.RecordV6Failure(proxy, err)
+			}
+		}
+	case "v6_udp", "udp6":
+		if !proxy.SchemeSupportsUDP() {
+			return 0, fmt.Errorf("proxy scheme %s does not support UDP", proxy.Scheme)
+		}
+		if m.healthChecker != nil {
+			latency, err = m.healthChecker.ProbeIPv6UDP(ctx, proxy)
+		} else {
+			dummyHC := NewHealthChecker(config.HealthCheckConf{}, nil)
+			latency, err = dummyHC.ProbeIPv6UDP(ctx, proxy)
+		}
+		if err == nil {
+			proxy.v6UDPHealth.UpdateLatency(latency)
+			proxy.SetIPv6Capability(IPv6CapSupported)
+			if m.healthChecker != nil {
+				m.healthChecker.RecordV6UDPSuccess(proxy, latency)
+			}
+		} else {
+			if m.healthChecker != nil {
+				m.healthChecker.RecordV6UDPFailure(proxy, err)
+			}
 		}
 	default:
-		return 0, fmt.Errorf("invalid protocol %q, must be ping, tcp, udp or ipv6", protocol)
+		return 0, fmt.Errorf("invalid protocol %q, must be ping, tcp, udp, v6_tcp, or v6_udp", protocol)
 	}
 
 	return latency, err

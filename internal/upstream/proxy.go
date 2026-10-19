@@ -130,6 +130,11 @@ type Proxy struct {
 	// relay (the udp_only use case) and a dead UDP path does not disable TCP routing.
 	udpHealth ProxyHealth
 
+	// v6Health is an independent circuit breaker for IPv6 TCP.
+	v6Health ProxyHealth
+	// v6UDPHealth is an independent circuit breaker for IPv6 UDP.
+	v6UDPHealth ProxyHealth
+
 	// ipv6Capability records whether this node can route IPv6 outbound.
 	ipv6Capability atomic.Pointer[string]
 	// ipv6Pinned is non-nil if IPv6 capability is manually pinned by config or URL query parameter.
@@ -643,9 +648,39 @@ func (p *Proxy) IsTCPAvailable(isV6 bool) bool {
 		return false
 	}
 	if isV6 {
-		return p.SupportsIPv6() && !p.IsIPv6Unsupported()
+		return p.SupportsIPv6() && !p.IsIPv6Unsupported() && p.v6Health.IsAvailable()
 	}
 	return !p.IsUDPOnly() && p.IsAvailable()
+}
+
+// V6Health returns the independent IPv6 TCP health circuit.
+func (p *Proxy) V6Health() *ProxyHealth {
+	return &p.v6Health
+}
+
+// V6UDPHealth returns the independent IPv6 UDP health circuit.
+func (p *Proxy) V6UDPHealth() *ProxyHealth {
+	return &p.v6UDPHealth
+}
+
+// V4TCPAvailable reports whether IPv4 TCP can be routed to this upstream.
+func (p *Proxy) V4TCPAvailable() bool {
+	return !p.IsTCPManuallyDisabled() && !p.IsUDPOnly() && p.health.IsAvailable()
+}
+
+// V4UDPAvailable reports whether IPv4 UDP can be routed to this upstream.
+func (p *Proxy) V4UDPAvailable() bool {
+	return !p.IsUDPManuallyDisabled() && p.SupportsUDP() && p.udpHealth.IsAvailable()
+}
+
+// V6TCPAvailable reports whether IPv6 TCP can be routed to this upstream.
+func (p *Proxy) V6TCPAvailable() bool {
+	return !p.IsTCPManuallyDisabled() && p.SupportsIPv6() && !p.IsIPv6Unsupported() && p.v6Health.IsAvailable()
+}
+
+// V6UDPAvailable reports whether IPv6 UDP can be routed to this upstream.
+func (p *Proxy) V6UDPAvailable() bool {
+	return !p.IsUDPManuallyDisabled() && p.SupportsIPv6() && !p.IsIPv6Unsupported() && p.SupportsUDP() && p.v6UDPHealth.IsAvailable()
 }
 
 // pluginFromRawQuery extracts the ?plugin= SIP003 parameter directly from a URL's raw

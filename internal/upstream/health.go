@@ -556,9 +556,9 @@ func (hc *HealthChecker) notifyAllFirstProbesDoneLocked() {
 // notifyCircuitProbeDone 按探测成功的电路关闭对应的分闸门。
 func (hc *HealthChecker) notifyCircuitProbeDone(circuit string) {
 	switch circuit {
-	case "tcp":
+	case "tcp", "v4_tcp", "v6_tcp":
 		hc.notifyFirstTCPProbeDone()
-	case "udp":
+	case "udp", "v4_udp", "v6_udp":
 		hc.notifyFirstUDPProbeDone()
 	}
 }
@@ -783,6 +783,30 @@ func probeIPv6(ctx context.Context, p *Proxy) (time.Duration, error) {
 	return lat, nil
 }
 
+// probeIPv6UDP actively probes whether proxy p can relay IPv6 UDP traffic (DNS to 2606:4700:4700::1111:53).
+func probeIPv6UDP(ctx context.Context, p *Proxy) (time.Duration, error) {
+	if p == nil {
+		return 0, errors.New("nil proxy")
+	}
+	if !p.SchemeSupportsUDP() {
+		return 0, errors.New("scheme does not support UDP")
+	}
+	start := time.Now()
+	conn, err := p.UDPAssociate(ctx, IPv6ProbeDefaultTarget, 53)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+	lat, err := verifyUDPRelay(ctx, conn, net.JoinHostPort(IPv6ProbeDefaultTarget, "53"), "dns.google", 3*time.Second)
+	if err != nil {
+		return 0, err
+	}
+	if lat <= 0 {
+		lat = time.Since(start)
+	}
+	return lat, nil
+}
+
 func (hc *HealthChecker) checkProxyIPv6(p *Proxy) {
 	if hc == nil {
 		return
@@ -800,18 +824,35 @@ func (hc *HealthChecker) checkProxyIPv6WithContext(parentCtx context.Context, p 
 	if p == nil || p.IsIPv6Pinned() {
 		return
 	}
-	// Skip probing if TCP is manually disabled by the user.
-	if p.health.IsManuallyDisabled() {
-		return
-	}
 	ctx, cancel := context.WithTimeout(parentCtx, 5*time.Second)
 	defer cancel()
-	_, _ = probeIPv6(ctx, p)
+
+	if !p.v6Health.IsManuallyDisabled() {
+		lat, err := probeIPv6(ctx, p)
+		if err == nil {
+			hc.RecordV6Success(p, lat)
+		} else {
+			hc.RecordV6Failure(p, err)
+		}
+	}
+	if p.SchemeSupportsUDP() && !p.v6UDPHealth.IsManuallyDisabled() && p.SupportsIPv6() {
+		uLat, uErr := probeIPv6UDP(ctx, p)
+		if uErr == nil {
+			hc.RecordV6UDPSuccess(p, uLat)
+		} else {
+			hc.RecordV6UDPFailure(p, uErr)
+		}
+	}
 }
 
 // ProbeIPv6 actively tests whether a proxy can route IPv6 traffic.
 func (hc *HealthChecker) ProbeIPv6(ctx context.Context, p *Proxy) (time.Duration, error) {
 	return probeIPv6(ctx, p)
+}
+
+// ProbeIPv6UDP actively tests whether a proxy can route IPv6 UDP traffic.
+func (hc *HealthChecker) ProbeIPv6UDP(ctx context.Context, p *Proxy) (time.Duration, error) {
+	return probeIPv6UDP(ctx, p)
 }
 
 // probeTCP executes an HTTP GET probe through proxy p to targetURL and returns the round-trip latency.
@@ -1209,6 +1250,26 @@ func (hc *HealthChecker) RecordFailure(p *Proxy, err error) {
 // RecordUDPFailure records a UDP failure on the independent UDP circuit (p.udpHealth).
 func (hc *HealthChecker) RecordUDPFailure(p *Proxy, err error) {
 	hc.recordFailure(p, &p.udpHealth, "udp", err)
+}
+
+// RecordV6Success records an IPv6 TCP success on the IPv6 TCP circuit (p.v6Health).
+func (hc *HealthChecker) RecordV6Success(p *Proxy, latency time.Duration) {
+	hc.recordSuccess(p, &p.v6Health, "v6_tcp", latency)
+}
+
+// RecordV6Failure records an IPv6 TCP failure on the IPv6 TCP circuit (p.v6Health).
+func (hc *HealthChecker) RecordV6Failure(p *Proxy, err error) {
+	hc.recordFailure(p, &p.v6Health, "v6_tcp", err)
+}
+
+// RecordV6UDPSuccess records an IPv6 UDP success on the IPv6 UDP circuit (p.v6UDPHealth).
+func (hc *HealthChecker) RecordV6UDPSuccess(p *Proxy, latency time.Duration) {
+	hc.recordSuccess(p, &p.v6UDPHealth, "v6_udp", latency)
+}
+
+// RecordV6UDPFailure records an IPv6 UDP failure on the IPv6 UDP circuit (p.v6UDPHealth).
+func (hc *HealthChecker) RecordV6UDPFailure(p *Proxy, err error) {
+	hc.recordFailure(p, &p.v6UDPHealth, "v6_udp", err)
 }
 
 func (hc *HealthChecker) recordSuccess(p *Proxy, ph *ProxyHealth, circuit string, latency time.Duration) {

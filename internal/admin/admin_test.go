@@ -731,6 +731,32 @@ func TestAdmin_HealthProxyBadCircuit(t *testing.T) {
 		t.Errorf("expected 400 for bad circuit, got %d", resp.StatusCode)
 	}
 }
+
+func TestAdmin_HealthProxyFourCircuits(t *testing.T) {
+	s := newTestServer(t)
+	startServer(t, s)
+
+	for _, circ := range []string{"v4_tcp", "v4_udp", "v6_tcp", "v6_udp"} {
+		resp, err := httpPost(s.sockPath, "/health/proxy?alias=ss-local&circuit="+circ+"&action=disable")
+		if err != nil {
+			t.Fatalf("POST disable %s failed: %v", circ, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 for circuit=%s disable, got %d", circ, resp.StatusCode)
+		}
+
+		respAuto, err := httpPost(s.sockPath, "/health/proxy?alias=ss-local&circuit="+circ+"&action=auto")
+		if err != nil {
+			t.Fatalf("POST auto %s failed: %v", circ, err)
+		}
+		respAuto.Body.Close()
+		if respAuto.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 for circuit=%s auto, got %d", circ, respAuto.StatusCode)
+		}
+	}
+}
+
 func TestAdmin_ConfigReloadAvailable(t *testing.T) {
 	s := newTestServer(t)
 	reloaded := false
@@ -1730,6 +1756,31 @@ func TestAdmin_ProxyTest(t *testing.T) {
 	}
 	if resTCPing["available"] != false {
 		t.Errorf("expected available=false for offline tcping, got %v", resTCPing["available"])
+	}
+
+	// 8. Test 4-circuit protocols: v4_tcp, v4_udp, v6_tcp, v6_udp
+	for _, proto := range []string{"v4_tcp", "v4_udp", "v6_tcp", "v6_udp"} {
+		respProto, err := httpPost(s.sockPath, "/proxy/test?alias=ss-local&protocol="+proto+"&timeout=1")
+		if err != nil {
+			t.Fatalf("POST /proxy/test?protocol=%s failed: %v", proto, err)
+		}
+		defer respProto.Body.Close()
+		if respProto.StatusCode != http.StatusOK {
+			t.Errorf("expected 200 for %s test result, got %d", proto, respProto.StatusCode)
+		}
+		var resProto map[string]interface{}
+		if err := json.NewDecoder(respProto.Body).Decode(&resProto); err != nil {
+			t.Fatalf("decode json failed for %s: %v", proto, err)
+		}
+		if resProto["protocol"] != proto {
+			t.Errorf("expected protocol=%s, got %v", proto, resProto["protocol"])
+		}
+		if _, ok := resProto["v4"]; !ok {
+			t.Errorf("expected 'v4' in test response for %s", proto)
+		}
+		if _, ok := resProto["v6"]; !ok {
+			t.Errorf("expected 'v6' in test response for %s", proto)
+		}
 	}
 }
 

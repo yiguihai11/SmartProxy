@@ -273,16 +273,24 @@ var zhStrings = map[string]string{
 	"IPv6 Host Address":               "IPv6 节点主机",
 	"IPv6 Capability":                 "IPv6 出口能力",
 	"Supported (Dual-Stack)":          "支持 (双栈)",
+	"Supported":                       "已支持",
+	"Not Supported":                   "未支持",
 	"IPv6 Host":                       "IPv6 主机",
 
 	// proxy cards — buttons / tooltips / badges
 	"Disable": "停用", "Enable": "启用",
-	"Click to toggle TCP":                           "点击切换 TCP",
-	"Click to toggle UDP":                           "点击切换 UDP",
-	"TCP manually up — click to restore auto":       "TCP 手动开启 — 点击恢复自动",
-	"TCP manually down — click to force up":         "TCP 手动关闭 — 点击强制开启",
-	"UDP manually up — click to restore auto":       "UDP 手动开启 — 点击恢复自动",
-	"UDP manually down — click to force up":         "UDP 手动关闭 — 点击强制开启",
+	"Click to toggle IPv4 TCP":                      "点击切换 IPv4 TCP",
+	"Click to toggle IPv4 UDP":                      "点击切换 IPv4 UDP",
+	"Click to toggle IPv6 TCP":                      "点击切换 IPv6 TCP",
+	"Click to toggle IPv6 UDP":                      "点击切换 IPv6 UDP",
+	"IPv4 TCP manually up — click to restore auto":   "IPv4 TCP 手动开启 — 点击恢复自动",
+	"IPv4 TCP manually down — click to force up":     "IPv4 TCP 手动关闭 — 点击强制开启",
+	"IPv4 UDP manually up — click to restore auto":   "IPv4 UDP 手动开启 — 点击恢复自动",
+	"IPv4 UDP manually down — click to force up":     "IPv4 UDP 手动关闭 — 点击强制开启",
+	"IPv6 TCP manually up — click to restore auto":   "IPv6 TCP 手动开启 — 点击恢复自动",
+	"IPv6 TCP manually down — click to force up":     "IPv6 TCP 手动关闭 — 点击强制开启",
+	"IPv6 UDP manually up — click to restore auto":   "IPv6 UDP 手动开启 — 点击恢复自动",
+	"IPv6 UDP manually down — click to force up":     "IPv6 UDP 手动关闭 — 点击强制开启",
 	"Copy the ss:// share link or show its QR code": "复制 ss:// 分享链接或查看二维码",
 	"Test TCPing":                             "测TCPing",
 	"Test TCP":                                "测TCP",
@@ -469,6 +477,8 @@ var zhStrings = map[string]string{
 // model token like tcp_only has no static English text to match).
 var zhDynamicKeys = map[string]bool{
 	"tcp_only":                               true, // p.mode token fed to t()
+	"udp_only":                               true,
+	"tcp_and_udp":                            true,
 	"Auto-scroll: ON":                        true, // updateLogsScrollBtn composes 'Auto-scroll: '+…
 	"Auto-scroll: OFF":                       true,
 	"Testing...":                             true,

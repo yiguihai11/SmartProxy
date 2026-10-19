@@ -1174,8 +1174,10 @@ func (s *Server) handleHealthProxy(w http.ResponseWriter, r *http.Request) {
 	if circuit == "" {
 		circuit = "both"
 	}
-	if circuit != "tcp" && circuit != "udp" && circuit != "both" {
-		http.Error(w, "need ?circuit=tcp|udp|both", http.StatusBadRequest)
+	switch strings.ToLower(circuit) {
+	case "tcp", "udp", "both", "all", "v4_tcp", "v4_udp", "v6_tcp", "v6_udp", "tcp4", "udp4", "tcp6", "udp6":
+	default:
+		http.Error(w, "need ?circuit=tcp|udp|both|v4_tcp|v4_udp|v6_tcp|v6_udp", http.StatusBadRequest)
 		return
 	}
 	err := s.mgr.SetCircuitHealth(alias, circuit, action)
@@ -1184,7 +1186,7 @@ func (s *Server) handleHealthProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("admin: proxy health set", "alias", alias, "circuit", circuit, "action", action)
-	if (circuit == "both" || circuit == "") && s.configSrc != nil && s.configPath != "" {
+	if (circuit == "both" || circuit == "all" || circuit == "") && s.configSrc != nil && s.configPath != "" {
 		var enableVal *bool
 		if action == "disable" {
 			f := false
@@ -1227,7 +1229,7 @@ func (s *Server) handleHealthResetAuto(w http.ResponseWriter, r *http.Request) {
 // handleProxyTest handles on-demand testing of a proxy node's Ping, TCP or UDP availability.
 // Query parameters:
 //   - alias: proxy alias to test (required)
-//   - protocol: "ping", "tcp" or "udp" (required)
+//   - protocol: "ping", "tcp", "udp", "v4_tcp", "v4_udp", "v6_tcp", "v6_udp" (required)
 //   - timeout: optional timeout in seconds (default 5, 1..30)
 func (s *Server) handleProxyTest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodGet {
@@ -1243,8 +1245,10 @@ func (s *Server) handleProxyTest(w http.ResponseWriter, r *http.Request) {
 	if protocol == "" {
 		protocol = r.URL.Query().Get("proto")
 	}
-	if protocol != "tcping" && protocol != "ping" && protocol != "tcp" && protocol != "udp" && protocol != "ipv6" && protocol != "v6" {
-		http.Error(w, "need ?protocol=tcping|ping|tcp|udp|ipv6", http.StatusBadRequest)
+	switch strings.ToLower(protocol) {
+	case "tcping", "ping", "tcp", "udp", "ipv6", "v6", "v4_tcp", "v4_udp", "v6_tcp", "v6_udp", "tcp4", "udp4", "tcp6", "udp6":
+	default:
+		http.Error(w, "need ?protocol=tcping|ping|v4_tcp|v4_udp|v6_tcp|v6_udp|tcp|udp|ipv6", http.StatusBadRequest)
 		return
 	}
 
@@ -1272,13 +1276,26 @@ func (s *Server) handleProxyTest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Warn("admin: proxy test failed", "alias", alias, "protocol", protocol, "error", err)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		failResp := map[string]interface{}{
 			"status":    "ok",
 			"alias":     alias,
 			"protocol":  protocol,
 			"available": false,
 			"error":     err.Error(),
-		})
+		}
+		if info, ok := s.mgr.ProxyInfo(alias); ok {
+			if info.CountryCode != "" {
+				failResp["country_code"] = info.CountryCode
+			}
+			if info.ExitIP != "" {
+				failResp["exit_ip"] = info.ExitIP
+			}
+			failResp["supports_ipv6"] = info.SupportsIPv6
+			failResp["ipv6_capability"] = info.IPv6Capability
+			failResp["v4"] = info.V4
+			failResp["v6"] = info.V6
+		}
+		json.NewEncoder(w).Encode(failResp)
 		return
 	}
 
@@ -1300,6 +1317,8 @@ func (s *Server) handleProxyTest(w http.ResponseWriter, r *http.Request) {
 		}
 		respData["supports_ipv6"] = info.SupportsIPv6
 		respData["ipv6_capability"] = info.IPv6Capability
+		respData["v4"] = info.V4
+		respData["v6"] = info.V6
 	}
 	json.NewEncoder(w).Encode(respData)
 }
