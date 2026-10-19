@@ -123,7 +123,7 @@ func ipv6ProxySpec(upAddr string) engineSpec {
 	return engineSpec{
 		chnroute: "::1/128\n",
 		acl:      "proxy cidr ::1/128 up\n",
-		upstream: []config.ProxyEntry{{Alias: "up", URL: "socks5://" + upAddr}},
+		upstream: []config.ProxyEntry{{Alias: "up", URL: "socks5://" + upAddr + "?ipv6=1"}},
 		listen:   "::1",
 	}
 }

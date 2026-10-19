@@ -740,6 +740,36 @@ func TestHealthChecker_ProbeIPv6_ZeroByteEOF(t *testing.T) {
 	}
 }
 
+func TestHealthChecker_ProbeIPv6_Non204Error(t *testing.T) {
+	// Remote server returns HTTP 502 Bad Gateway instead of HTTP 204
+	addr, done := startIPv6TraceMockSOCKS5(t, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+	defer done()
+
+	host, portStr, _ := net.SplitHostPort(addr)
+	port := parsePort(portStr)
+
+	p := &Proxy{
+		Scheme: SchemeSOCKS5,
+		Host:   host,
+		Port:   port,
+	}
+	p.SetGeoInfo("US", "1.1.1.1") // already has geo, so it tests /generate_204
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := probeIPv6(ctx, p)
+	if err == nil {
+		t.Fatalf("expected probeIPv6 to fail on HTTP 502 status, got nil error")
+	}
+	if !strings.Contains(err.Error(), "502") {
+		t.Fatalf("expected error mentioning status code 502, got %v", err)
+	}
+	if p.IPv6Capability() != IPv6CapUnsupported {
+		t.Fatalf("expected capability to be IPv6CapUnsupported, got %v", p.IPv6Capability())
+	}
+}
+
 func TestQueryCymruCountry_IPv4_and_IPv6(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()

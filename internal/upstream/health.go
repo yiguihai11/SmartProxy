@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -790,30 +791,34 @@ func probeIPv6(ctx context.Context, p *Proxy) (time.Duration, error) {
 		return 0, err
 	}
 
+	br := bufio.NewReader(conn)
+	reqObj, _ := http.NewRequestWithContext(ctx, "GET", "http://cp.cloudflare.com"+path, nil)
+	resp, rErr := http.ReadResponse(br, reqObj)
+	if rErr != nil {
+		if !p.IsIPv6Pinned() {
+			p.SetIPv6Capability(IPv6CapUnsupported)
+		}
+		return 0, rErr
+	}
+	defer resp.Body.Close()
+
+	if path == "/generate_204" {
+		if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+			if !p.IsIPv6Pinned() {
+				p.SetIPv6Capability(IPv6CapUnsupported)
+			}
+			return 0, fmt.Errorf("unexpected status code: %d, expected 204", resp.StatusCode)
+		}
+	} else if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		if !p.IsIPv6Pinned() {
+			p.SetIPv6Capability(IPv6CapUnsupported)
+		}
+		return 0, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
 	if needGeo {
-		buf, rErr := io.ReadAll(io.LimitReader(conn, 2048))
-		if len(buf) == 0 {
-			if !p.IsIPv6Pinned() {
-				p.SetIPv6Capability(IPv6CapUnsupported)
-			}
-			if rErr != nil {
-				return 0, rErr
-			}
-			return 0, io.ErrUnexpectedEOF
-		}
+		buf, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		parseAndSaveGeoIPv6(p, buf)
-	} else {
-		buf := make([]byte, 64)
-		n, rErr := conn.Read(buf)
-		if n == 0 {
-			if !p.IsIPv6Pinned() {
-				p.SetIPv6Capability(IPv6CapUnsupported)
-			}
-			if rErr != nil {
-				return 0, rErr
-			}
-			return 0, io.ErrUnexpectedEOF
-		}
 	}
 
 	lat := time.Since(start)
