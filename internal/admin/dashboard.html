@@ -225,11 +225,15 @@ tr:last-child td{border-bottom:none}
 .proxy-card .circ.unknown{color:var(--text3)}
 .proxy-card .circ.unknown .dot{background:var(--text3)}
 .proxy-card .circ.manual{border-style:dashed}
+.proxy-card .circ.disabled{color:var(--text3);border-color:var(--border);background:rgba(127,127,127,.08);opacity:0.85}
+.proxy-card .circ.disabled .dot{background:var(--text3);box-shadow:none}
 .proxy-card .stack-boxes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:2px}
 @media(max-width:540px){.proxy-card .stack-boxes{grid-template-columns:1fr}}
 .proxy-card .stack-box{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;display:flex;flex-direction:column;gap:6px}
 .proxy-card .stack-box-header{display:flex;align-items:center;justify-content:space-between;gap:6px;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:5px}
 .proxy-card .stack-title{font-size:.76rem;font-weight:700;color:var(--text);letter-spacing:.3px;display:flex;align-items:center;gap:4px}
+.proxy-card .stack-header-right{display:flex;align-items:center;gap:5px}
+.proxy-card .btn-stack-toggle{padding:1px 6px;font-size:.65rem;line-height:1.2;cursor:pointer;border-radius:3px}
 .proxy-card .stack-tag{font-size:.65rem;font-weight:600;padding:1px 5px;border-radius:3px;letter-spacing:.2px}
 .proxy-card .stack-tag.v6-ok{background:rgba(99,102,241,.15);color:#818cf8;border:1px solid rgba(99,102,241,.3)}
 .proxy-card .stack-tag.v6-none{background:transparent;color:var(--text3);border:1px solid var(--border)}
@@ -240,7 +244,9 @@ tr:last-child td{border-bottom:none}
 .proxy-card .circuit-row-stats .lat{font-family:var(--mono);font-weight:500}
 .proxy-card .circuit-row-stats .fail{color:var(--text3);font-size:.68rem}
 .proxy-card .circuit-row-stats .fail.warn{color:var(--red);font-weight:600}
+.proxy-card .circuit-row-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}
 .proxy-card .circuit-row .btn-circ-test{padding:2px 7px;font-size:.68rem;line-height:1.3;flex-shrink:0;min-width:52px;text-align:center}
+.proxy-card .circuit-row .btn-circ-toggle{padding:2px 6px;font-size:.68rem;line-height:1.3;flex-shrink:0;min-width:38px;text-align:center;border-radius:4px}
 .proxy-card .actions{display:flex;flex-direction:column;gap:8px;margin-top:2px}
 .proxy-card .card-test-bar{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;width:100%}
 .proxy-card .card-test-bar .btn{justify-content:center;text-align:center;padding:5px 4px;font-size:.76rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
@@ -1082,11 +1088,11 @@ function circuitStat(snap,supports){
   // state fixed across probe cycles, so "up"/"down" is authoritative even before the first
   // probe has run (last_attempt still empty). Otherwise clicking enable on a fresh node would
   // read "unknown" until the next health cycle, looking like the toggle did nothing.
-  if(m)return snap.available?{c:'up',t:'up',m:true}:{c:'down',t:'down',m:true};
-  if(snap.state==='open')return {c:'down',t:'down',m:m};
+  if(m)return snap.available?{c:'up',t:'pinned',m:true}:{c:'disabled',t:'disabled',m:true};
+  if(snap.state==='open')return {c:'down',t:'fail',m:m};
   if(snap.state==='half_open')return {c:'half',t:'half',m:m};
   if(!snap.last_attempt)return {c:'unknown',t:'unknown',m:false};
-  if(snap.state==='closed')return {c:'up',t:'up',m:m};
+  if(snap.state==='closed')return {c:'up',t:'ok',m:m};
   return {c:'unknown',t:'unknown',m:m};
 }
 // Click a badge to flip that circuit: up → disable (force down), down → enable (force up),
@@ -1108,9 +1114,23 @@ async function toggleCircuit(i,c){
   }else if(c==='v6_udp'||c==='udp6'){
     s=(p.v6&&p.v6.udp);
   }
-  if(!s)return;
-  var action=s.manual?(s.available?'auto':'enable'):(s.available?'disable':'enable');
+  var action='auto';
+  if(!s){
+    action='disable';
+  }else{
+    action=s.manual?(s.available?'auto':'enable'):(s.available?'disable':'enable');
+  }
   await fetch('/health/proxy?alias='+encodeURIComponent(p.alias)+'&circuit='+encodeURIComponent(c)+'&action='+action,{method:'POST'});
+  loadHealth();
+}
+async function toggleStack(i,stack){
+  var p=healthD.health.proxies[i];
+  if(!p)return;
+  var sTcp=(stack==='v4'?((p.v4&&p.v4.tcp)||p.health):(p.v6&&p.v6.tcp));
+  var sUdp=(stack==='v4'?((p.v4&&p.v4.udp)||p.udp_health):(p.v6&&p.v6.udp));
+  var allDisabled=(sTcp&&sTcp.manual&&!sTcp.available)&&(!sUdp||(sUdp.manual&&!sUdp.available));
+  var action=allDisabled?'auto':'disable';
+  await fetch('/health/proxy?alias='+encodeURIComponent(p.alias)+'&circuit='+encodeURIComponent(stack)+'&action='+action,{method:'POST'});
   loadHealth();
 }
 var proxyTestState={};
@@ -1798,17 +1818,14 @@ function renderProxyCard(p,i){
     var isFailWarn=!snap||(!snap.manual&&snap.consecutive_failures>0);
     var failHtml=(snap&&snap.consecutive_failures>0)?'<span class="fail '+(isFailWarn?'warn':'')+'">'+failCount+' fail</span>':'';
 
-    var clickAttr=(stat.c==='na'||!isSupported)?'':' onclick="toggleCircuit('+i+',\''+circuitKey+'\')"';
-    var circTitle='';
-    if(proto==='v4_tcp'){
-      circTitle=stat.m?(snap&&snap.available?'IPv4 TCP manually up — click to restore auto':'IPv4 TCP manually down — click to force up'):'Click to toggle IPv4 TCP';
-    }else if(proto==='v4_udp'){
-      circTitle=stat.m?(snap&&snap.available?'IPv4 UDP manually up — click to restore auto':'IPv4 UDP manually down — click to force up'):'Click to toggle IPv4 UDP';
-    }else if(proto==='v6_tcp'){
-      circTitle=stat.m?(snap&&snap.available?'IPv6 TCP manually up — click to restore auto':'IPv6 TCP manually down — click to force up'):'Click to toggle IPv6 TCP';
-    }else if(proto==='v6_udp'){
-      circTitle=stat.m?(snap&&snap.available?'IPv6 UDP manually up — click to restore auto':'IPv6 UDP manually down — click to force up'):'Click to toggle IPv6 UDP';
-    }
+    var isManualDown = snap && snap.manual && !snap.available;
+    var isManualUp = snap && snap.manual && snap.available;
+    var toggleBtnText = isManualDown ? t('Enable') : t('Disable');
+    var toggleBtnClass = isManualDown ? 'btn btn-sm btn-circ-toggle primary' : 'btn btn-sm btn-circ-toggle';
+    var toggleBtnTitle = isManualDown ? tf('Click to enable {0}',[proto.toUpperCase()]) : tf('Click to disable {0}',[proto.toUpperCase()]);
+
+    var clickAttr=(stat.c==='na'&&!isSupported)?'':' onclick="toggleCircuit('+i+',\''+circuitKey+'\')"';
+    var circTitle=isManualDown ? tf('{0} manually disabled — click to enable',[proto.toUpperCase()]) : (isManualUp ? tf('{0} pinned up — click to restore auto',[proto.toUpperCase()]) : tf('Click to toggle {0}',[proto.toUpperCase()]));
 
     return '<div class="circuit-row">'+
       '<span class="circ '+(stat.c+(stat.m?' manual':''))+'" title="'+escAttr(circTitle)+'"'+clickAttr+'><i class="dot"></i>'+label+' '+t(stat.t)+'</span>'+
@@ -1816,7 +1833,10 @@ function renderProxyCard(p,i){
         (lat!=='--'?'<span class="lat">'+lat+'</span>':'')+
         failHtml+
       '</div>'+
-      '<button class="btn btn-sm btn-circ-test" id="test-'+proto+'-'+i+'" onclick="testProxy('+i+',\''+proto+'\')" style="'+btnStyle+'" title="'+escAttr(btnTitle)+'"'+btnDis+'>'+btnText+'</button>'+
+      '<div class="circuit-row-actions">'+
+        '<button class="btn btn-sm btn-circ-test" id="test-'+proto+'-'+i+'" onclick="testProxy('+i+',\''+proto+'\')" style="'+btnStyle+'" title="'+escAttr(btnTitle)+'"'+btnDis+'>'+btnText+'</button>'+
+        (isSupported ? '<button class="'+toggleBtnClass+'" onclick="toggleCircuit('+i+',\''+circuitKey+'\')" title="'+escAttr(toggleBtnTitle)+'">'+toggleBtnText+'</button>' : '')+
+      '</div>'+
     '</div>';
   }
 
@@ -1861,6 +1881,9 @@ function renderProxyCard(p,i){
       '</div>';
   }
 
+  var v4AllDisabled = (sV4TCP.manual && !sV4TCP.available) && (!udpScheme || (sV4UDP.manual && !sV4UDP.available));
+  var v6AllDisabled = (sV6TCP && sV6TCP.manual && !sV6TCP.available) && (!udpScheme || (sV6UDP && sV6UDP.manual && !sV6UDP.available));
+
   var cardHash=computeCardHash(p, i);
   return '<div class="proxy-card '+(anyUp?'is-up':'is-down')+'" data-alias="'+escAttr(p.alias)+'" data-hash="'+escAttr(cardHash)+'"><div class="top">'+
     '<div class="node-info">'+
@@ -1874,7 +1897,10 @@ function renderProxyCard(p,i){
       '<div class="stack-box v4-box">'+
         '<div class="stack-box-header">'+
           '<span class="stack-title">IPv4</span>'+
-          '<span class="stack-tag">Stack</span>'+
+          '<div class="stack-header-right">'+
+            '<span class="stack-tag">Stack</span>'+
+            '<button class="btn btn-sm btn-stack-toggle '+(v4AllDisabled?'primary':'')+'" onclick="toggleStack('+i+',\'v4\')" title="'+escAttr(v4AllDisabled?t('Enable IPv4'):t('Disable IPv4'))+'">'+(v4AllDisabled?t('Enable IPv4'):t('Disable IPv4'))+'</button>'+
+          '</div>'+
         '</div>'+
         '<div class="circuit-rows">'+
           rowV4TCP+
@@ -1884,7 +1910,10 @@ function renderProxyCard(p,i){
       '<div class="stack-box v6-box">'+
         '<div class="stack-box-header">'+
           '<span class="stack-title">IPv6</span>'+
-          '<span class="stack-tag '+(v6Supported?'v6-ok':'v6-none')+'">'+(v6Supported?t('Supported (Dual-Stack)'):t('IPv4 Only'))+'</span>'+
+          '<div class="stack-header-right">'+
+            '<span class="stack-tag '+(v6AllDisabled?'v6-none':(v6Supported?'v6-ok':'v6-none'))+'">'+(v6AllDisabled?t('Disabled'):(v6Supported?t('Supported (Dual-Stack)'):t('IPv4 Only')))+'</span>'+
+            '<button class="btn btn-sm btn-stack-toggle '+(v6AllDisabled?'primary':'')+'" onclick="toggleStack('+i+',\'v6\')" title="'+escAttr(v6AllDisabled?t('Enable IPv6'):t('Disable IPv6'))+'">'+(v6AllDisabled?t('Enable IPv6'):t('Disable IPv6'))+'</button>'+
+          '</div>'+
         '</div>'+
         '<div class="circuit-rows">'+
           rowV6TCP+

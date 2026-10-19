@@ -605,16 +605,24 @@ func (m *Manager) ConnectDefault(ctx context.Context, host string, port int) (ne
 	isV6Target := isIPv6Address(host)
 	candidates := make([]*Proxy, 0, len(m.defaultProxies))
 	for _, proxy := range m.orderedProxies() {
-		if proxy.health.IsManuallyDisabled() {
-			ll.Debug("skipping manually disabled proxy for TCP", "url", MaskProxyURL(proxy.URL))
-			continue
-		}
 		if isV6Target {
+			if proxy.v6Health.IsManuallyDisabled() {
+				ll.Debug("skipping manually disabled proxy for IPv6 TCP", "url", MaskProxyURL(proxy.URL))
+				continue
+			}
 			if !proxy.SupportsIPv6() || proxy.IsIPv6Unsupported() {
 				ll.Debug("skipping proxy without IPv6 support for IPv6 target", "url", MaskProxyURL(proxy.URL))
 				continue
 			}
+			if !proxy.v6Health.IsAvailable() {
+				ll.Debug("skipping unhealthy proxy for IPv6 TCP", "url", MaskProxyURL(proxy.URL))
+				continue
+			}
 		} else {
+			if proxy.health.IsManuallyDisabled() {
+				ll.Debug("skipping manually disabled proxy for TCP", "url", MaskProxyURL(proxy.URL))
+				continue
+			}
 			if proxy.IsUDPOnly() {
 				ll.Debug("skipping udp_only proxy for TCP", "url", MaskProxyURL(proxy.URL))
 				continue
@@ -1243,13 +1251,28 @@ func (m *Manager) defaultUDPAssociate(ctx context.Context, ll *slog.Logger, host
 		if !proxy.SupportsUDP() {
 			continue
 		}
-		if !proxy.IsUDPAvailable() {
-			ll.Debug("UDPAssociate: skipping unhealthy proxy", "proxy", MaskProxyURL(proxy.URL))
-			continue
-		}
-		if isV6Target && !proxy.SupportsIPv6() {
-			ll.Debug("UDPAssociate: skipping proxy without IPv6 support for IPv6 target", "proxy", MaskProxyURL(proxy.URL))
-			continue
+		if isV6Target {
+			if proxy.v6UDPHealth.IsManuallyDisabled() {
+				ll.Debug("UDPAssociate: skipping manually disabled proxy for IPv6 UDP", "proxy", MaskProxyURL(proxy.URL))
+				continue
+			}
+			if !proxy.SupportsIPv6() || proxy.IsIPv6Unsupported() {
+				ll.Debug("UDPAssociate: skipping proxy without IPv6 support for IPv6 target", "proxy", MaskProxyURL(proxy.URL))
+				continue
+			}
+			if !proxy.v6UDPHealth.IsAvailable() {
+				ll.Debug("UDPAssociate: skipping unhealthy proxy for IPv6 UDP", "proxy", MaskProxyURL(proxy.URL))
+				continue
+			}
+		} else {
+			if proxy.udpHealth.IsManuallyDisabled() {
+				ll.Debug("UDPAssociate: skipping manually disabled proxy for UDP", "proxy", MaskProxyURL(proxy.URL))
+				continue
+			}
+			if !proxy.IsUDPAvailable() {
+				ll.Debug("UDPAssociate: skipping unhealthy proxy", "proxy", MaskProxyURL(proxy.URL))
+				continue
+			}
 		}
 		candidates = append(candidates, proxy)
 	}
@@ -1522,19 +1545,45 @@ func (m *Manager) SetCircuitHealth(alias, circuit, action string) error {
 		}
 	}
 	switch circuit {
-	case "v4_tcp", "tcp", "tcp4":
+	case "v4_tcp", "tcp4":
 		apply(&proxy.health)
-	case "v4_udp", "udp", "udp4":
+	case "v4_udp", "udp4":
 		apply(&proxy.udpHealth)
-	case "v6_tcp", "v6", "ipv6", "tcp6":
+	case "v6_tcp", "tcp6":
 		apply(&proxy.v6Health)
 	case "v6_udp", "udp6":
 		apply(&proxy.v6UDPHealth)
-	default: // "both", "all"
+	case "v4", "ipv4":
+		apply(&proxy.health)
+		apply(&proxy.udpHealth)
+	case "v6", "ipv6":
+		apply(&proxy.v6Health)
+		apply(&proxy.v6UDPHealth)
+		if action == "enable" {
+			proxy.PinIPv6(true)
+		} else if action == "disable" {
+			proxy.PinIPv6(false)
+		} else if action == "auto" {
+			proxy.ClearIPv6Pin()
+		}
+	case "tcp":
+		apply(&proxy.health)
+		apply(&proxy.v6Health)
+	case "udp":
+		apply(&proxy.udpHealth)
+		apply(&proxy.v6UDPHealth)
+	default: // "both", "all", ""
 		apply(&proxy.health)
 		apply(&proxy.udpHealth)
 		apply(&proxy.v6Health)
 		apply(&proxy.v6UDPHealth)
+		if action == "enable" {
+			proxy.PinIPv6(true)
+		} else if action == "disable" {
+			proxy.PinIPv6(false)
+		} else if action == "auto" {
+			proxy.ClearIPv6Pin()
+		}
 	}
 	slog.Info("manual proxy health set", "alias", alias, "circuit", circuit, "action", action)
 	return nil

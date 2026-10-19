@@ -1175,9 +1175,9 @@ func (s *Server) handleHealthProxy(w http.ResponseWriter, r *http.Request) {
 		circuit = "both"
 	}
 	switch strings.ToLower(circuit) {
-	case "tcp", "udp", "both", "all", "v4_tcp", "v4_udp", "v6_tcp", "v6_udp", "tcp4", "udp4", "tcp6", "udp6":
+	case "tcp", "udp", "both", "all", "v4_tcp", "v4_udp", "v6_tcp", "v6_udp", "tcp4", "udp4", "tcp6", "udp6", "v4", "ipv4", "v6", "ipv6":
 	default:
-		http.Error(w, "need ?circuit=tcp|udp|both|v4_tcp|v4_udp|v6_tcp|v6_udp", http.StatusBadRequest)
+		http.Error(w, "need ?circuit=tcp|udp|both|v4_tcp|v4_udp|v6_tcp|v6_udp|v4|v6", http.StatusBadRequest)
 		return
 	}
 	err := s.mgr.SetCircuitHealth(alias, circuit, action)
