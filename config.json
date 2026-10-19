@@ -41,7 +41,7 @@
     "blocked_uids": []
   },
   "upstream": {
-    "default": "failover",
+    "strategy": "latency",
     "health_check": {
       "enabled": true,
       "url": "http://cp.cloudflare.com/generate_204",
