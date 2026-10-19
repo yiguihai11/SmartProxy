@@ -1936,6 +1936,72 @@ func TestManager_IPv6Selection(t *testing.T) {
 	}
 }
 
+func TestManager_IPv6Selection_TCPDownIPv6Up(t *testing.T) {
+	m, err := NewManager(UpstreamConfig{
+		Default: "failover",
+		Proxies: []ProxyEntry{
+			{Alias: "v6-node", URL: "socks5://127.0.0.1:1080?ipv6=1"},
+			{Alias: "v4-node", URL: "socks5://127.0.0.2:1080"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	v6Node := m.aliasMap["v6-node"]
+	v4Node := m.aliasMap["v4-node"]
+
+	// Simulate v6Node's IPv4 TCP circuit broken (StateOpen / IsAvailable == false)
+	v6Node.health.mu.Lock()
+	v6Node.health.state = StateOpen
+	v6Node.health.consecutiveFailures = 5
+	v6Node.health.mu.Unlock()
+
+	// v4Node is healthy on IPv4
+	v4Node.health.mu.Lock()
+	v4Node.health.state = StateClosed
+	v4Node.health.mu.Unlock()
+
+	if v6Node.IsAvailable() {
+		t.Fatal("expected v6Node IPv4 TCP circuit to be unavailable")
+	}
+	if !v6Node.SupportsIPv6() {
+		t.Fatal("expected v6Node to support IPv6")
+	}
+
+	// 1. Dialing IPv6 destination: candidates must include v6Node (even though its IPv4 TCP is down).
+	// Because only v6Node supports IPv6 (v4Node doesn't), v6Node is chosen.
+	candidatesV6 := make([]*Proxy, 0)
+	for _, p := range m.orderedProxies() {
+		if p.health.IsManuallyDisabled() {
+			continue
+		}
+		if !p.SupportsIPv6() || p.IsIPv6Unsupported() {
+			continue
+		}
+		candidatesV6 = append(candidatesV6, p)
+	}
+	if len(candidatesV6) != 1 || candidatesV6[0] != v6Node {
+		t.Fatalf("expected candidate for IPv6 to be v6Node, got %v", candidatesV6)
+	}
+
+	// 2. Dialing IPv4 destination: candidates must exclude v6Node (its IPv4 TCP is down) and choose v4Node.
+	candidatesV4 := make([]*Proxy, 0)
+	for _, p := range m.orderedProxies() {
+		if p.health.IsManuallyDisabled() {
+			continue
+		}
+		if p.IsUDPOnly() || !p.IsAvailable() {
+			continue
+		}
+		candidatesV4 = append(candidatesV4, p)
+	}
+	if len(candidatesV4) != 1 || candidatesV4[0] != v4Node {
+		t.Fatalf("expected candidate for IPv4 to be v4Node, got %v", candidatesV4)
+	}
+}
+
 func TestManager_DisabledProxyOnStartupAndReload(t *testing.T) {
 	disabledFalse := false
 	enabledTrue := true

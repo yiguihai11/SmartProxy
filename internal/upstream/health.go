@@ -638,15 +638,15 @@ func (hc *HealthChecker) ProbeAll() {
 			if !proxy.health.IsManuallyDisabled() {
 				if err := hc.acquireProbeSem(ctx, stopCh); err == nil {
 					latency, err := hc.ProbeTCP(ctx, proxy)
-					hc.releaseProbeSem()
 					if err == nil {
 						hc.RecordSuccess(proxy, latency)
-						if !proxy.IsIPv6Pinned() {
-							hc.checkProxyIPv6WithContext(parentCtx, proxy)
-						}
 					} else {
 						hc.RecordFailure(proxy, err)
 					}
+					if !proxy.IsIPv6Pinned() {
+						hc.checkProxyIPv6WithContext(parentCtx, proxy)
+					}
+					hc.releaseProbeSem()
 				}
 			}
 		})
@@ -800,8 +800,8 @@ func (hc *HealthChecker) checkProxyIPv6WithContext(parentCtx context.Context, p 
 	if p == nil || p.IsIPv6Pinned() {
 		return
 	}
-	// Skip probing if the node's general TCP circuit is down or manually disabled.
-	if p.health.IsManuallyDisabled() || !p.health.IsAvailable() {
+	// Skip probing if TCP is manually disabled by the user.
+	if p.health.IsManuallyDisabled() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(parentCtx, 5*time.Second)

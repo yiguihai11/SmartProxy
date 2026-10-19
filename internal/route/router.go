@@ -202,13 +202,29 @@ func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 		return conn, true, nil
 	case result != "fallback":
 		isV6 := isIPv6Address(host)
-		if selected.IsUDPOnly() || !selected.IsAvailable() || (isV6 && selected.IsIPv6Unsupported()) {
-			reason := "unhealthy"
-			if selected.IsUDPOnly() {
-				reason = "udp_only"
-			} else if isV6 && selected.IsIPv6Unsupported() {
+		var unsuitable bool
+		var reason string
+		if isV6 {
+			if selected.IsTCPManuallyDisabled() {
+				unsuitable = true
+				reason = "manually_disabled"
+			} else if selected.IsIPv6Unsupported() {
+				unsuitable = true
 				reason = "ipv6_unsupported"
 			}
+		} else {
+			if selected.IsTCPManuallyDisabled() {
+				unsuitable = true
+				reason = "manually_disabled"
+			} else if selected.IsUDPOnly() {
+				unsuitable = true
+				reason = "udp_only"
+			} else if !selected.IsAvailable() {
+				unsuitable = true
+				reason = "unhealthy"
+			}
+		}
+		if unsuitable {
 			ll.Warn("rule selected proxy unsuitable, falling back to default proxy", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port, "domain", domain, "reason", reason)
 			conn, err := r.upstreamMgr.ConnectDefault(ctx, host, port)
 			if err != nil {
@@ -332,13 +348,29 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 		return conn, nil, true, nil
 	case result != "fallback":
 		isV6 := isIPv6Address(host)
-		if selected.IsUDPOnly() || !selected.IsAvailable() || (isV6 && selected.IsIPv6Unsupported()) {
-			reason := "unhealthy"
-			if selected.IsUDPOnly() {
-				reason = "udp_only"
-			} else if isV6 && selected.IsIPv6Unsupported() {
+		var unsuitable bool
+		var reason string
+		if isV6 {
+			if selected.IsTCPManuallyDisabled() {
+				unsuitable = true
+				reason = "manually_disabled"
+			} else if selected.IsIPv6Unsupported() {
+				unsuitable = true
 				reason = "ipv6_unsupported"
 			}
+		} else {
+			if selected.IsTCPManuallyDisabled() {
+				unsuitable = true
+				reason = "manually_disabled"
+			} else if selected.IsUDPOnly() {
+				unsuitable = true
+				reason = "udp_only"
+			} else if !selected.IsAvailable() {
+				unsuitable = true
+				reason = "unhealthy"
+			}
+		}
+		if unsuitable {
 			ll.Warn("rule selected proxy unsuitable, falling back to default proxy", "url", upstream.MaskProxyURL(selected.URL), "host", host, "port", port, "domain", domain, "reason", reason)
 			conn, err := r.upstreamMgr.ConnectDefault(ctx, host, port)
 			if err != nil {

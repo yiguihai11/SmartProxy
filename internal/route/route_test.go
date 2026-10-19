@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"smartproxy/internal/chnroute"
+	"smartproxy/internal/config"
 	"smartproxy/internal/rules"
 	"smartproxy/internal/upstream"
 )
@@ -1256,5 +1257,114 @@ func TestSmartConnectWithFallback_HedgedProxyFailsBeforeDirectDoesNotDeadlock(t 
 	elapsed := time.Since(start)
 	if elapsed >= 1800*time.Millisecond {
 		t.Fatalf("SmartConnectWithFallback took %v, deadlock occurred!", elapsed)
+	}
+}
+
+func TestEstablishConnection_IPv6TCPIndependentOfIPv4(t *testing.T) {
+	ruleProxyHit := make(chan struct{}, 10)
+	ruleAddr, stopRule := startMockSOCKS5Server(t, ruleProxyHit)
+	defer stopRule()
+
+	defaultProxyHit := make(chan struct{}, 10)
+	defaultAddr, stopDefault := startMockSOCKS5Server(t, defaultProxyHit)
+	defer stopDefault()
+
+	cn := chnroute.New()
+	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
+		Default: "failover",
+		HealthCheck: config.HealthCheckConf{
+			Enabled:           true,
+			FailuresThreshold: 2,
+		},
+		Proxies: []upstream.ProxyEntry{
+			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s", defaultAddr)},
+			{Alias: "v6_capable_node", URL: fmt.Sprintf("socks5://%s?ipv6=1", ruleAddr)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Stop()
+
+	// Pin default_proxy up so simulated background probes don't affect it
+	_ = mgr.SetCircuitHealth("default_proxy", "tcp", "enable")
+
+	// Simulate node having IPv4 TCP circuit broken (tripped breaker)
+	p := mgr.FindProxy("v6_capable_node")
+	if p == nil {
+		t.Fatal("v6_capable_node not found")
+	}
+	for i := 0; i < 5; i++ {
+		mgr.HealthChecker().RecordFailure(p, errors.New("simulated ipv4 failure"))
+	}
+	if p.IsAvailable() {
+		t.Fatal("expected v6_capable_node IPv4 TCP circuit to be open/unavailable")
+	}
+	if !p.SupportsIPv6() {
+		t.Fatal("expected v6_capable_node to still support IPv6")
+	}
+
+	r := New(cn, mgr, true, 3*time.Second, nil, 300*time.Second)
+
+	dir := t.TempDir()
+	rulesFile := filepath.Join(dir, "rules.txt")
+	os.WriteFile(rulesFile, []byte("proxy ip 2001:db8::1 v6_capable_node\nproxy ip 1.2.3.4 v6_capable_node\n"), 0644)
+	eng, err := rules.New(rulesFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Drain startup probe connections
+	time.Sleep(50 * time.Millisecond)
+	for len(ruleProxyHit) > 0 {
+		<-ruleProxyHit
+	}
+	for len(defaultProxyHit) > 0 {
+		<-defaultProxyHit
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 1. IPv6 destination: rule matches v6_capable_node. Even though IPv4 TCP is down, IPv6 TCP works!
+	// It must connect through v6_capable_node (ruleAddr) directly and NOT fall back to default_proxy.
+	connV6, isProxyV6, err := r.EstablishConnection(ctx, "2001:db8::1", 80, "", eng)
+	if err != nil {
+		t.Fatalf("expected IPv6 connection to succeed via v6_capable_node, got error: %v", err)
+	}
+	if connV6 != nil {
+		connV6.Close()
+	}
+	if !isProxyV6 {
+		t.Errorf("expected isProxyV6=true, got false")
+	}
+	select {
+	case <-ruleProxyHit:
+		// success: routed through rule proxy!
+	case <-defaultProxyHit:
+		t.Fatal("IPv6 traffic unexpectedly fell back to default proxy instead of using v6_capable_node")
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for proxy connection")
+	}
+
+	// 2. IPv4 destination: rule matches v6_capable_node. But v6_capable_node's IPv4 TCP is down!
+	// It must automatically fall back to default_proxy!
+	connV4, isProxyV4, err := r.EstablishConnection(ctx, "1.2.3.4", 80, "", eng)
+	if err != nil {
+		t.Fatalf("expected IPv4 connection to fall back to default proxy, got error: %v", err)
+	}
+	if connV4 != nil {
+		connV4.Close()
+	}
+	if !isProxyV4 {
+		t.Errorf("expected isProxyV4=true, got false")
+	}
+	select {
+	case <-defaultProxyHit:
+		// success: degraded/fallen back to default proxy!
+	case <-ruleProxyHit:
+		t.Fatal("IPv4 traffic was sent to v6_capable_node whose IPv4 TCP is down!")
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for fallback default proxy connection")
 	}
 }

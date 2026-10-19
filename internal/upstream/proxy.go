@@ -621,6 +621,33 @@ func (p *Proxy) IsUDPAvailable() bool {
 	return p.udpHealth.IsAvailable()
 }
 
+// IsTCPManuallyDisabled reports whether the general TCP circuit is pinned down.
+func (p *Proxy) IsTCPManuallyDisabled() bool {
+	return p.health.IsManuallyDisabled()
+}
+
+// IsUDPManuallyDisabled reports whether the UDP circuit is pinned down.
+func (p *Proxy) IsUDPManuallyDisabled() bool {
+	return p.udpHealth.IsManuallyDisabled()
+}
+
+// IsTCPAvailable reports whether the proxy is currently eligible to relay TCP traffic
+// for the given IP version (isV6).
+// For IPv6 targets (isV6 == true), the proxy must not have TCP manually disabled,
+// and must support IPv6 (confirmed or auto-detected). The IPv4 TCP circuit state
+// does not block IPv6 TCP traffic.
+// For IPv4 targets (isV6 == false), the proxy must not be udp_only, its TCP circuit
+// must be available, and must not have TCP manually disabled.
+func (p *Proxy) IsTCPAvailable(isV6 bool) bool {
+	if p.health.IsManuallyDisabled() {
+		return false
+	}
+	if isV6 {
+		return p.SupportsIPv6() && !p.IsIPv6Unsupported()
+	}
+	return !p.IsUDPOnly() && p.IsAvailable()
+}
+
 // pluginFromRawQuery extracts the ?plugin= SIP003 parameter directly from a URL's raw
 // query string. It cannot use u.Query()/url.ParseQuery: Go's query parser silently drops
 // the WHOLE query when a value contains a literal ';' (ss-android share links commonly use

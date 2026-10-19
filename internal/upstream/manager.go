@@ -595,17 +595,24 @@ func (m *Manager) ConnectDefault(ctx context.Context, host string, port int) (ne
 	isV6Target := isIPv6Address(host)
 	candidates := make([]*Proxy, 0, len(m.defaultProxies))
 	for _, proxy := range m.orderedProxies() {
-		if proxy.IsUDPOnly() {
-			ll.Debug("skipping udp_only proxy for TCP", "url", MaskProxyURL(proxy.URL))
+		if proxy.health.IsManuallyDisabled() {
+			ll.Debug("skipping manually disabled proxy for TCP", "url", MaskProxyURL(proxy.URL))
 			continue
 		}
-		if !proxy.IsAvailable() {
-			ll.Debug("skipping unhealthy proxy", "url", MaskProxyURL(proxy.URL))
-			continue
-		}
-		if isV6Target && !proxy.SupportsIPv6() {
-			ll.Debug("skipping proxy without IPv6 support for IPv6 target", "url", MaskProxyURL(proxy.URL))
-			continue
+		if isV6Target {
+			if !proxy.SupportsIPv6() || proxy.IsIPv6Unsupported() {
+				ll.Debug("skipping proxy without IPv6 support for IPv6 target", "url", MaskProxyURL(proxy.URL))
+				continue
+			}
+		} else {
+			if proxy.IsUDPOnly() {
+				ll.Debug("skipping udp_only proxy for TCP", "url", MaskProxyURL(proxy.URL))
+				continue
+			}
+			if !proxy.IsAvailable() {
+				ll.Debug("skipping unhealthy proxy", "url", MaskProxyURL(proxy.URL))
+				continue
+			}
 		}
 		candidates = append(candidates, proxy)
 	}
@@ -1468,6 +1475,11 @@ func (m *Manager) SetCircuitHealth(alias, circuit, action string) error {
 	}
 	slog.Info("manual proxy health set", "alias", alias, "circuit", circuit, "action", action)
 	return nil
+}
+
+// HealthChecker returns the upstream health checker instance, or nil if none is configured.
+func (m *Manager) HealthChecker() *HealthChecker {
+	return m.healthChecker
 }
 
 // ResetAutoOpenedCircuits is the "one-click recover nodes" action: every circuit the
