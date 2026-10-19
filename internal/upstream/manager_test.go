@@ -2066,3 +2066,106 @@ func TestManager_DisabledProxyOnStartupAndReload(t *testing.T) {
 		}
 	}
 }
+
+func TestManager_DualStackStrategies(t *testing.T) {
+	m, err := NewManager(UpstreamConfig{
+		Default: "latency",
+		Proxies: []ProxyEntry{
+			{Alias: "node-1", URL: "socks5://127.0.0.1:1080?ipv6=1"},
+			{Alias: "node-2", URL: "socks5://127.0.0.1:1081?ipv6=1"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	p1, _ := m.findProxyLocked("node-1")
+	p2, _ := m.findProxyLocked("node-2")
+
+	// Set health & latencies:
+	// p1: IPv4 is fast (50ms), IPv6 is slow (300ms)
+	p1.health.mu.Lock()
+	p1.health.state = StateClosed
+	p1.health.latency = 50 * time.Millisecond
+	p1.health.mu.Unlock()
+
+	p1.v6Health.mu.Lock()
+	p1.v6Health.state = StateClosed
+	p1.v6Health.latency = 300 * time.Millisecond
+	p1.v6Health.mu.Unlock()
+
+	// p2: IPv4 is slow (200ms), IPv6 is fast (30ms)
+	p2.health.mu.Lock()
+	p2.health.state = StateClosed
+	p2.health.latency = 200 * time.Millisecond
+	p2.health.mu.Unlock()
+
+	p2.v6Health.mu.Lock()
+	p2.v6Health.state = StateClosed
+	p2.v6Health.latency = 30 * time.Millisecond
+	p2.v6Health.mu.Unlock()
+
+	// Invalidate any cached bands
+	for i := range m.order {
+		m.order[i].band.Store(nil)
+	}
+
+	// 1. Under "latency" strategy:
+	// IPv4 TCP ordering should put p1 first (50ms < 200ms)
+	v4Order := m.orderedProxies()
+	if len(v4Order) < 2 || v4Order[0] != p1 {
+		t.Fatalf("expected p1 first for IPv4 TCP latency, got %v", v4Order[0].DisplayName())
+	}
+
+	// IPv6 TCP ordering should put p2 first (30ms < 300ms)
+	v6Order := m.orderedProxiesV6()
+	if len(v6Order) < 2 || v6Order[0] != p2 {
+		t.Fatalf("expected p2 first for IPv6 TCP latency, got %v", v6Order[0].DisplayName())
+	}
+
+	// ActiveNodeStatus under latency
+	status := m.ActiveNodeStatus()
+	if status.V4Node != p1.DisplayName() || status.V4LatencyMs != 50 {
+		t.Fatalf("expected V4Node=node-1 (50ms), got %s (%dms)", status.V4Node, status.V4LatencyMs)
+	}
+	if status.V6Node != p2.DisplayName() || status.V6LatencyMs != 30 {
+		t.Fatalf("expected V6Node=node-2 (30ms), got %s (%dms)", status.V6Node, status.V6LatencyMs)
+	}
+	if status.DualStackNode {
+		t.Fatalf("expected DualStackNode=false when primary v4 and v6 nodes differ")
+	}
+
+	// 2. Switch to "failover" strategy:
+	m.SetStrategy("failover")
+	v4Failover := m.orderedProxies()
+	v6Failover := m.orderedProxiesV6()
+	if v4Failover[0] != p1 || v6Failover[0] != p1 {
+		t.Fatalf("expected p1 first in failover config order for both v4 and v6")
+	}
+
+	statusFailover := m.ActiveNodeStatus()
+	if statusFailover.V4Node != p1.DisplayName() || statusFailover.V6Node != p1.DisplayName() {
+		t.Fatalf("expected both V4 and V6 to be node-1 in failover")
+	}
+	if !statusFailover.DualStackNode {
+		t.Fatalf("expected DualStackNode=true when same node is active for both")
+	}
+	if statusFailover.V6LatencyMs != 300 {
+		t.Fatalf("expected V6LatencyMs=300ms from v6Health, got %dms", statusFailover.V6LatencyMs)
+	}
+
+	// 3. Manually disable p1 IPv4 TCP:
+	// IPv4 should fail over to p2, but IPv6 should still use p1!
+	_ = m.SetCircuitHealth("node-1", "v4_tcp", "disable")
+	statusAfterDisable := m.ActiveNodeStatus()
+	if statusAfterDisable.V4Node != p2.DisplayName() {
+		t.Fatalf("expected V4Node to fail over to node-2, got %s", statusAfterDisable.V4Node)
+	}
+	if statusAfterDisable.V6Node != p1.DisplayName() {
+		t.Fatalf("expected V6Node to stay node-1, got %s", statusAfterDisable.V6Node)
+	}
+	if statusAfterDisable.DualStackNode {
+		t.Fatalf("expected DualStackNode=false after v4 failover to node-2")
+	}
+}

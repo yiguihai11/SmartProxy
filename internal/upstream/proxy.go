@@ -705,19 +705,26 @@ func (p *Proxy) IsUDPManuallyDisabled() bool {
 
 // IsTCPAvailable reports whether the proxy is currently eligible to relay TCP traffic
 // for the given IP version (isV6).
-// For IPv6 targets (isV6 == true), the proxy must not have TCP manually disabled,
+// For IPv6 targets (isV6 == true), the proxy must not have IPv6 TCP manually disabled,
 // and must support IPv6 (confirmed or auto-detected). The IPv4 TCP circuit state
 // does not block IPv6 TCP traffic.
 // For IPv4 targets (isV6 == false), the proxy must not be udp_only, its TCP circuit
-// must be available, and must not have TCP manually disabled.
+// must be available, and must not have IPv4 TCP manually disabled.
 func (p *Proxy) IsTCPAvailable(isV6 bool) bool {
-	if p.health.IsManuallyDisabled() {
-		return false
-	}
 	if isV6 {
-		return p.SupportsIPv6() && !p.IsIPv6Unsupported() && p.v6Health.IsAvailable()
+		return !p.v6Health.IsManuallyDisabled() && p.SupportsIPv6() && !p.IsIPv6Unsupported() && p.v6Health.IsAvailable()
 	}
-	return !p.IsUDPOnly() && p.IsAvailable()
+	return !p.health.IsManuallyDisabled() && !p.IsUDPOnly() && p.IsAvailable()
+}
+
+// IsV6TCPManuallyDisabled reports whether the IPv6 TCP circuit is pinned down.
+func (p *Proxy) IsV6TCPManuallyDisabled() bool {
+	return p.v6Health.IsManuallyDisabled()
+}
+
+// IsV6UDPManuallyDisabled reports whether the IPv6 UDP circuit is pinned down.
+func (p *Proxy) IsV6UDPManuallyDisabled() bool {
+	return p.v6UDPHealth.IsManuallyDisabled()
 }
 
 // V6Health returns the independent IPv6 TCP health circuit.
@@ -742,12 +749,12 @@ func (p *Proxy) V4UDPAvailable() bool {
 
 // V6TCPAvailable reports whether IPv6 TCP can be routed to this upstream.
 func (p *Proxy) V6TCPAvailable() bool {
-	return !p.IsTCPManuallyDisabled() && p.SupportsIPv6() && !p.IsIPv6Unsupported() && p.v6Health.IsAvailable()
+	return !p.IsV6TCPManuallyDisabled() && p.SupportsIPv6() && !p.IsIPv6Unsupported() && p.v6Health.IsAvailable()
 }
 
 // V6UDPAvailable reports whether IPv6 UDP can be routed to this upstream.
 func (p *Proxy) V6UDPAvailable() bool {
-	return !p.IsUDPManuallyDisabled() && p.SupportsIPv6() && !p.IsIPv6Unsupported() && p.SupportsUDP() && p.v6UDPHealth.IsAvailable()
+	return !p.IsV6UDPManuallyDisabled() && p.SupportsIPv6() && !p.IsIPv6Unsupported() && p.SupportsUDP() && p.v6UDPHealth.IsAvailable()
 }
 
 // pluginFromRawQuery extracts the ?plugin= SIP003 parameter directly from a URL's raw

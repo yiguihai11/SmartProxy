@@ -205,23 +205,26 @@ func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 		var unsuitable bool
 		var reason string
 		if isV6 {
-			if selected.IsTCPManuallyDisabled() {
+			if !selected.V6TCPAvailable() {
 				unsuitable = true
-				reason = "manually_disabled"
-			} else if selected.IsIPv6Unsupported() {
-				unsuitable = true
-				reason = "ipv6_unsupported"
+				if selected.IsV6TCPManuallyDisabled() {
+					reason = "manually_disabled"
+				} else if !selected.SupportsIPv6() || selected.IsIPv6Unsupported() {
+					reason = "ipv6_unsupported"
+				} else {
+					reason = "unhealthy"
+				}
 			}
 		} else {
-			if selected.IsTCPManuallyDisabled() {
+			if !selected.V4TCPAvailable() {
 				unsuitable = true
-				reason = "manually_disabled"
-			} else if selected.IsUDPOnly() {
-				unsuitable = true
-				reason = "udp_only"
-			} else if !selected.IsAvailable() {
-				unsuitable = true
-				reason = "unhealthy"
+				if selected.IsTCPManuallyDisabled() {
+					reason = "manually_disabled"
+				} else if selected.IsUDPOnly() {
+					reason = "udp_only"
+				} else {
+					reason = "unhealthy"
+				}
 			}
 		}
 		if unsuitable {

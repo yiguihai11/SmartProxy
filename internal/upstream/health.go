@@ -564,7 +564,7 @@ func (hc *HealthChecker) notifyCircuitProbeDone(circuit string) {
 	}
 }
 
-// HasAnyTCPAvailable reports whether at least one proxy is verified available for TCP.
+// HasAnyTCPAvailable reports whether at least one proxy is verified available for TCP (IPv4 or IPv6).
 func (hc *HealthChecker) HasAnyTCPAvailable() bool {
 	if hc == nil {
 		return true
@@ -573,14 +573,14 @@ func (hc *HealthChecker) HasAnyTCPAvailable() bool {
 	proxies := hc.proxies
 	hc.mu.RUnlock()
 	for _, p := range proxies {
-		if !p.IsUDPOnly() && p.IsAvailable() {
+		if p.V4TCPAvailable() || p.V6TCPAvailable() {
 			return true
 		}
 	}
 	return false
 }
 
-// HasAnyUDPAvailable reports whether at least one proxy is verified available for UDP.
+// HasAnyUDPAvailable reports whether at least one proxy is verified available for UDP (IPv4 or IPv6).
 func (hc *HealthChecker) HasAnyUDPAvailable() bool {
 	if hc == nil {
 		return true
@@ -589,7 +589,7 @@ func (hc *HealthChecker) HasAnyUDPAvailable() bool {
 	proxies := hc.proxies
 	hc.mu.RUnlock()
 	for _, p := range proxies {
-		if p.SupportsUDP() && p.IsUDPAvailable() {
+		if p.V4UDPAvailable() || p.V6UDPAvailable() {
 			return true
 		}
 	}

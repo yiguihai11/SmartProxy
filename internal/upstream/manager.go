@@ -21,35 +21,49 @@ import (
 	"smartproxy/internal/trace"
 )
 
-// transport 区分 TCP 建连与 UDP 关联这两条独立的选路路径。
+// transport 区分 IPv4/IPv6 下 TCP 建连与 UDP 关联四条独立的选路路径。
 type transport int
 
 const (
-	transportTCP transport = iota
-	transportUDP
+	transportV4TCP transport = iota
+	transportV4UDP
+	transportV6TCP
+	transportV6UDP
 	// transportCount 是路径总数,用来给 Manager.order 定长。
 	transportCount
 )
 
-// latencyOf 返回该路径该看哪个电路的延迟样本。TCP 建连看 TCP 电路,UDP 关联看 UDP
-// 电路——两条电路的延迟由彼此独立的探测记录(health.go 里 RecordSuccess 与
-// RecordUDPSuccess 分别写 health.latency / udpHealth.latency),拿 TCP 的数字给 UDP
-// 排序等于用错了尺子:一个 TCP 快 UDP 烂的节点会被派去当中继。
+const (
+	transportTCP = transportV4TCP
+	transportUDP = transportV4UDP
+)
+
+// latencyOf 返回该路径该看哪个电路的延迟样本。
 func (t transport) latencyOf(p *Proxy) time.Duration {
-	if t == transportUDP {
+	switch t {
+	case transportV4UDP:
 		return p.udpHealth.Latency()
+	case transportV6TCP:
+		return p.v6Health.Latency()
+	case transportV6UDP:
+		return p.v6UDPHealth.Latency()
+	default:
+		return p.health.Latency()
 	}
-	return p.health.Latency()
 }
 
-// availableFor 按路径自己的电路判定节点能不能进候选集。TCP 路径只看 TCP 熔断器;
-// UDP 路径还要求节点本身支持 UDP、且 UDP 熔断器闭合——两个熔断器互相独立,一个 TCP
-// 被手工关掉的 udp_only 节点在 UDP 路径上是正经候选,不能因为 TCP 的状态被沉到队尾。
+// availableFor 按路径自己的电路判定节点能不能进候选集。
 func (t transport) availableFor(p *Proxy) bool {
-	if t == transportUDP {
-		return p.SupportsUDP() && p.IsUDPAvailable()
+	switch t {
+	case transportV4UDP:
+		return p.V4UDPAvailable()
+	case transportV6TCP:
+		return p.V6TCPAvailable()
+	case transportV6UDP:
+		return p.V6UDPAvailable()
+	default:
+		return p.V4TCPAvailable()
 	}
-	return p.IsAvailable()
 }
 
 // rotationState 是单条路径自己的选路状态,两条路径各持一份(Manager.order)。共用会让
@@ -616,32 +630,22 @@ func (m *Manager) ConnectDefault(ctx context.Context, host string, port int) (ne
 	}
 
 	isV6Target := isIPv6Address(host)
+	var ordered []*Proxy
+	if isV6Target {
+		ordered = m.orderedProxiesV6()
+	} else {
+		ordered = m.orderedProxies()
+	}
 	candidates := make([]*Proxy, 0, len(m.defaultProxies))
-	for _, proxy := range m.orderedProxies() {
+	for _, proxy := range ordered {
 		if isV6Target {
-			if proxy.v6Health.IsManuallyDisabled() {
-				ll.Debug("skipping manually disabled proxy for IPv6 TCP", "url", MaskProxyURL(proxy.URL))
-				continue
-			}
-			if !proxy.SupportsIPv6() || proxy.IsIPv6Unsupported() {
-				ll.Debug("skipping proxy without IPv6 support for IPv6 target", "url", MaskProxyURL(proxy.URL))
-				continue
-			}
-			if !proxy.v6Health.IsAvailable() {
-				ll.Debug("skipping unhealthy proxy for IPv6 TCP", "url", MaskProxyURL(proxy.URL))
+			if !proxy.V6TCPAvailable() {
+				ll.Debug("skipping proxy for IPv6 TCP", "url", MaskProxyURL(proxy.URL))
 				continue
 			}
 		} else {
-			if proxy.health.IsManuallyDisabled() {
-				ll.Debug("skipping manually disabled proxy for TCP", "url", MaskProxyURL(proxy.URL))
-				continue
-			}
-			if proxy.IsUDPOnly() {
-				ll.Debug("skipping udp_only proxy for TCP", "url", MaskProxyURL(proxy.URL))
-				continue
-			}
-			if !proxy.IsAvailable() {
-				ll.Debug("skipping unhealthy proxy", "url", MaskProxyURL(proxy.URL))
+			if !proxy.V4TCPAvailable() {
+				ll.Debug("skipping proxy for TCP", "url", MaskProxyURL(proxy.URL))
 				continue
 			}
 		}
@@ -842,16 +846,24 @@ func (m *Manager) hedgedDial(
 	}
 }
 
-// orderedProxies 返回按当前策略排好序的节点列表,TCP 侧使用(round_robin 下推进 TCP 的
-// 轮转指针)。
+// orderedProxies 返回按当前策略排好序的节点列表,IPv4 TCP 侧使用。
 func (m *Manager) orderedProxies() []*Proxy {
-	return m.orderedProxiesFor(transportTCP)
+	return m.orderedProxiesFor(transportV4TCP)
 }
 
-// orderedProxiesUDP 与 orderedProxies 同一套排序,但用的是 UDP 那条路径自己的选路状态
-// 和 UDP 电路的延迟样本。UDP 关联不该扰动 TCP 的顺序,也不该拿 TCP 的延迟给自己排序。
+// orderedProxiesUDP 返回按当前策略排好序的节点列表,IPv4 UDP 侧使用。
 func (m *Manager) orderedProxiesUDP() []*Proxy {
-	return m.orderedProxiesFor(transportUDP)
+	return m.orderedProxiesFor(transportV4UDP)
+}
+
+// orderedProxiesV6 返回按当前策略排好序的节点列表,IPv6 TCP 侧使用。
+func (m *Manager) orderedProxiesV6() []*Proxy {
+	return m.orderedProxiesFor(transportV6TCP)
+}
+
+// orderedProxiesV6UDP 返回按当前策略排好序的节点列表,IPv6 UDP 侧使用。
+func (m *Manager) orderedProxiesV6UDP() []*Proxy {
+	return m.orderedProxiesFor(transportV6UDP)
 }
 
 // orderedProxiesFor 返回按当前策略排好序的节点列表。t 决定用哪条路径的选路状态
@@ -1070,27 +1082,36 @@ func (m *Manager) Connect(ctx context.Context, host string, port int, domain str
 	if selected == nil {
 		return nil, "failed"
 	}
-	if selected.IsUDPOnly() {
-		ll.Warn("rule selected a udp_only proxy for TCP, connection failed", "url", MaskProxyURL(selected.URL))
-		return nil, "failed"
-	}
-	if isIPv6Address(host) && selected.IsIPv6Unsupported() {
-		ll.Warn("rule selected an ipv4-only proxy for IPv6 target, falling back to default IPv6 proxy", "url", MaskProxyURL(selected.URL), "target", host)
-		conn, err := m.ConnectDefault(ctx, host, port)
-		if err != nil {
-			return nil, "failed"
+	if isIPv6Address(host) {
+		if !selected.V6TCPAvailable() {
+			if selected.IsV6TCPManuallyDisabled() {
+				ll.Warn("rule selected a manually-disabled proxy for IPv6 TCP, connection failed", "url", MaskProxyURL(selected.URL))
+				return nil, "failed"
+			}
+			ll.Warn("rule selected proxy unsuitable for IPv6 target, falling back to default IPv6 proxy", "url", MaskProxyURL(selected.URL), "target", host)
+			conn, err := m.ConnectDefault(ctx, host, port)
+			if err != nil {
+				return nil, "failed"
+			}
+			return conn, "proxy"
 		}
-		return conn, "proxy"
-	}
-	// An explicit manual "Disable" is honored even by rule routing: a disabled node must
-	// never carry traffic, whatever the rule says. Auto-opened circuits (probe failures)
-	// are still tried — rules are explicit intent and a live recovery may succeed.
-	if selected.health.IsManuallyDisabled() {
-		ll.Warn("rule selected a manually-disabled proxy for TCP, connection failed", "url", MaskProxyURL(selected.URL))
-		return nil, "failed"
-	}
-	if !selected.IsAvailable() {
-		ll.Warn("selected proxy is unhealthy but still using it due to rule", "alias", MaskProxyURL(selected.URL))
+	} else {
+		if !selected.V4TCPAvailable() {
+			if selected.IsTCPManuallyDisabled() {
+				ll.Warn("rule selected a manually-disabled proxy for TCP, connection failed", "url", MaskProxyURL(selected.URL))
+				return nil, "failed"
+			}
+			if selected.IsUDPOnly() {
+				ll.Warn("rule selected a udp_only proxy for TCP, connection failed", "url", MaskProxyURL(selected.URL))
+				return nil, "failed"
+			}
+			ll.Warn("rule selected proxy unhealthy for TCP, falling back to default proxy", "url", MaskProxyURL(selected.URL))
+			conn, err := m.ConnectDefault(ctx, host, port)
+			if err != nil {
+				return nil, "failed"
+			}
+			return conn, "proxy"
+		}
 	}
 	dialCtx, dialCancel := context.WithTimeout(ctx, 5*time.Second)
 	conn, err := selected.Connect(dialCtx, host, port)
@@ -1140,13 +1161,30 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 	}
 	if selected != nil {
 		isV6 := isIPv6Address(host)
-		if selected.udpHealth.IsManuallyDisabled() || !selected.IsUDPAvailable() || (isV6 && selected.IsIPv6Unsupported()) {
-			reason := "unhealthy"
-			if selected.udpHealth.IsManuallyDisabled() {
-				reason = "manually_disabled"
-			} else if isV6 && selected.IsIPv6Unsupported() {
-				reason = "ipv6_unsupported"
+		var unsuitable bool
+		var reason string
+		if isV6 {
+			if !selected.V6UDPAvailable() {
+				unsuitable = true
+				if selected.IsV6UDPManuallyDisabled() {
+					reason = "manually_disabled"
+				} else if !selected.SupportsIPv6() || selected.IsIPv6Unsupported() {
+					reason = "ipv6_unsupported"
+				} else {
+					reason = "unhealthy"
+				}
 			}
+		} else {
+			if !selected.V4UDPAvailable() {
+				unsuitable = true
+				if selected.IsUDPManuallyDisabled() {
+					reason = "manually_disabled"
+				} else {
+					reason = "unhealthy"
+				}
+			}
+		}
+		if unsuitable {
 			ll.Warn("rule selected proxy unsuitable for UDP, falling back to default UDP proxies", "url", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port), "reason", reason)
 			return m.defaultUDPAssociate(ctx, ll, host, port)
 		}
@@ -1180,13 +1218,30 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 	ll := trace.Log(ctx)
 	if selected != nil {
 		isV6 := isIPv6Address(host)
-		if selected.udpHealth.IsManuallyDisabled() || !selected.IsUDPAvailable() || (isV6 && selected.IsIPv6Unsupported()) {
-			reason := "unhealthy"
-			if selected.udpHealth.IsManuallyDisabled() {
-				reason = "manually_disabled"
-			} else if isV6 && selected.IsIPv6Unsupported() {
-				reason = "ipv6_unsupported"
+		var unsuitable bool
+		var reason string
+		if isV6 {
+			if !selected.V6UDPAvailable() {
+				unsuitable = true
+				if selected.IsV6UDPManuallyDisabled() {
+					reason = "manually_disabled"
+				} else if !selected.SupportsIPv6() || selected.IsIPv6Unsupported() {
+					reason = "ipv6_unsupported"
+				} else {
+					reason = "unhealthy"
+				}
 			}
+		} else {
+			if !selected.V4UDPAvailable() {
+				unsuitable = true
+				if selected.IsUDPManuallyDisabled() {
+					reason = "manually_disabled"
+				} else {
+					reason = "unhealthy"
+				}
+			}
+		}
+		if unsuitable {
 			ll.Warn("pre-selected proxy unsuitable for UDP, falling back to default UDP proxies", "url", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port), "reason", reason)
 			return m.defaultUDPAssociate(ctx, ll, host, port)
 		}
@@ -1269,31 +1324,22 @@ func (m *Manager) defaultUDPAssociate(ctx context.Context, ll *slog.Logger, host
 	}
 
 	isV6Target := isIPv6Address(host)
+	var ordered []*Proxy
+	if isV6Target {
+		ordered = m.orderedProxiesV6UDP()
+	} else {
+		ordered = m.orderedProxiesUDP()
+	}
 	candidates := make([]*Proxy, 0)
-	for _, proxy := range m.orderedProxiesUDP() {
-		if !proxy.SupportsUDP() {
-			continue
-		}
+	for _, proxy := range ordered {
 		if isV6Target {
-			if proxy.v6UDPHealth.IsManuallyDisabled() {
-				ll.Debug("UDPAssociate: skipping manually disabled proxy for IPv6 UDP", "proxy", MaskProxyURL(proxy.URL))
-				continue
-			}
-			if !proxy.SupportsIPv6() || proxy.IsIPv6Unsupported() {
-				ll.Debug("UDPAssociate: skipping proxy without IPv6 support for IPv6 target", "proxy", MaskProxyURL(proxy.URL))
-				continue
-			}
-			if !proxy.v6UDPHealth.IsAvailable() {
-				ll.Debug("UDPAssociate: skipping unhealthy proxy for IPv6 UDP", "proxy", MaskProxyURL(proxy.URL))
+			if !proxy.V6UDPAvailable() {
+				ll.Debug("UDPAssociate: skipping proxy for IPv6 UDP", "proxy", MaskProxyURL(proxy.URL))
 				continue
 			}
 		} else {
-			if proxy.udpHealth.IsManuallyDisabled() {
-				ll.Debug("UDPAssociate: skipping manually disabled proxy for UDP", "proxy", MaskProxyURL(proxy.URL))
-				continue
-			}
-			if !proxy.IsUDPAvailable() {
-				ll.Debug("UDPAssociate: skipping unhealthy proxy", "proxy", MaskProxyURL(proxy.URL))
+			if !proxy.V4UDPAvailable() {
+				ll.Debug("UDPAssociate: skipping proxy for UDP", "proxy", MaskProxyURL(proxy.URL))
 				continue
 			}
 		}
@@ -1720,8 +1766,9 @@ func (m *Manager) SetStrategy(strategy string) {
 		strategy = "failover"
 	}
 	m.strategy = strategy
-	m.order[transportTCP].band.Store(nil)
-	m.order[transportUDP].band.Store(nil)
+	for i := range m.order {
+		m.order[i].band.Store(nil)
+	}
 	slog.Info("upstream manager strategy dynamically updated", "strategy", m.strategy)
 }
 
@@ -1743,8 +1790,9 @@ func (m *Manager) CycleStrategy() string {
 		next = "latency"
 	}
 	m.strategy = next
-	m.order[transportTCP].band.Store(nil)
-	m.order[transportUDP].band.Store(nil)
+	for i := range m.order {
+		m.order[i].band.Store(nil)
+	}
 	slog.Info("upstream manager strategy cycled", "strategy", m.strategy)
 	return m.strategy
 }
@@ -1753,8 +1801,9 @@ func (m *Manager) CycleStrategy() string {
 // and invalidates the latency candidate bands so the latest fast node is immediately picked.
 func (m *Manager) ProbeAll() {
 	m.ResetAutoOpenedCircuits()
-	m.order[transportTCP].band.Store(nil)
-	m.order[transportUDP].band.Store(nil)
+	for i := range m.order {
+		m.order[i].band.Store(nil)
+	}
 
 	m.mu.RLock()
 	hc := m.healthChecker
@@ -1776,22 +1825,30 @@ func (m *Manager) ActiveNodeStatus() UpstreamActiveNodeStatus {
 		status.Strategy = "failover"
 	}
 
-	ordered := m.orderedProxies()
+	orderedV4 := m.orderedProxiesFor(transportV4TCP)
+	orderedV6 := m.orderedProxiesFor(transportV6TCP)
 	var v4Proxy *Proxy
 	var v6Proxy *Proxy
 
-	for _, p := range ordered {
-		if p.IsUDPOnly() || !p.IsAvailable() {
-			continue
-		}
-		if v4Proxy == nil {
+	for _, p := range orderedV4 {
+		if p.V4TCPAvailable() {
 			v4Proxy = p
-		}
-		if v6Proxy == nil && p.SupportsIPv6() {
-			v6Proxy = p
-		}
-		if v4Proxy != nil && v6Proxy != nil {
 			break
+		}
+	}
+
+	for _, p := range orderedV6 {
+		if p.V6TCPAvailable() {
+			v6Proxy = p
+			break
+		}
+	}
+	if v6Proxy == nil {
+		for _, p := range m.orderedProxiesFor(transportV6UDP) {
+			if p.V6UDPAvailable() {
+				v6Proxy = p
+				break
+			}
 		}
 	}
 
@@ -1801,7 +1858,11 @@ func (m *Manager) ActiveNodeStatus() UpstreamActiveNodeStatus {
 	}
 	if v6Proxy != nil {
 		status.V6Node = v6Proxy.DisplayName()
-		status.V6LatencyMs = v6Proxy.health.Latency().Milliseconds()
+		v6Lat := v6Proxy.v6Health.Latency()
+		if v6Lat <= 0 {
+			v6Lat = v6Proxy.v6UDPHealth.Latency()
+		}
+		status.V6LatencyMs = v6Lat.Milliseconds()
 	}
 	if v4Proxy != nil && v6Proxy != nil && v4Proxy == v6Proxy {
 		status.DualStackNode = true
