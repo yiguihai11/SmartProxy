@@ -468,6 +468,7 @@ func (p *Proxy) applyUDPInTCPDefaults() {
 		return
 	}
 	p.health.SetManualState(false)
+	p.v6Health.SetManualState(false)
 }
 
 // tcpDefaultDriven reports whether the TCP circuit's construction-time default is force-down:
@@ -987,11 +988,13 @@ func parseStandardProxy(proxyURL string) (*Proxy, error) {
 			// reachable directly the node then comes up as UDP-capable (see SchemeSupportsUDP).
 			p.udpCapability = UDPCapNone
 			p.udpHealth.SetManualState(false)
+			p.v6UDPHealth.SetManualState(false)
 		}
 	}
 	if !p.SchemeSupportsUDP() {
 		p.udpCapability = UDPCapNone
 		p.udpHealth.SetManualState(false)
+		p.v6UDPHealth.SetManualState(false)
 	}
 	return p, nil
 }

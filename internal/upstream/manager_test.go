@@ -2269,3 +2269,201 @@ func TestCircuitBreaker_IPv6RecoveryAndManualEnable(t *testing.T) {
 	}
 }
 
+func TestManager_DisabledProxyPinsAllFourCircuits(t *testing.T) {
+	falseVal := false
+	m, err := NewManager(UpstreamConfig{
+		Default: "failover",
+		Proxies: []ProxyEntry{
+			{Alias: "p-disabled", URL: "socks5://127.0.0.1:1080", Disabled: true},
+			{Alias: "p-enable-false", URL: "socks5://127.0.0.1:1081", Enable: &falseVal},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	for _, alias := range []string{"p-disabled", "p-enable-false"} {
+		p := m.aliasMap[alias]
+		if p == nil {
+			t.Fatalf("proxy %s not found", alias)
+		}
+		if !p.IsTCPManuallyDisabled() {
+			t.Errorf("[%s] expected v4 TCP to be manually disabled", alias)
+		}
+		if !p.IsUDPManuallyDisabled() {
+			t.Errorf("[%s] expected v4 UDP to be manually disabled", alias)
+		}
+		if !p.IsV6TCPManuallyDisabled() {
+			t.Errorf("[%s] expected v6 TCP to be manually disabled", alias)
+		}
+		if !p.IsV6UDPManuallyDisabled() {
+			t.Errorf("[%s] expected v6 UDP to be manually disabled", alias)
+		}
+	}
+}
+
+func TestManager_ReloadClearsConfigIPv6PinWhenRemoved(t *testing.T) {
+	falseVal := false
+	m, err := NewManager(UpstreamConfig{
+		Default: "failover",
+		Proxies: []ProxyEntry{
+			{Alias: "p1", URL: "socks5://127.0.0.1:1080", IPv6: &falseVal},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	p1 := m.aliasMap["p1"]
+	if p1.IPv6Pin() == nil || *p1.IPv6Pin() != false {
+		t.Fatalf("expected p1 to have IPv6 pinned to false initially")
+	}
+
+	// Reload config with IPv6 pin removed
+	m.Reload(UpstreamConfig{
+		Default: "failover",
+		Proxies: []ProxyEntry{
+			{Alias: "p1", URL: "socks5://127.0.0.1:1080", IPv6: nil},
+		},
+	})
+
+	p1Reloaded := m.aliasMap["p1"]
+	if p1Reloaded.IPv6Pin() != nil {
+		t.Fatalf("expected p1 IPv6 pin to be cleared after reload with IPv6:nil, got %v", *p1Reloaded.IPv6Pin())
+	}
+}
+
+func TestManager_ReloadClearsConfigDisabledWhenRemoved(t *testing.T) {
+	m, err := NewManager(UpstreamConfig{
+		Default: "failover",
+		Proxies: []ProxyEntry{
+			{Alias: "p1", URL: "socks5://127.0.0.1:1080", Disabled: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	p1 := m.aliasMap["p1"]
+	if !p1.IsTCPManuallyDisabled() || !p1.IsUDPManuallyDisabled() || !p1.IsV6TCPManuallyDisabled() || !p1.IsV6UDPManuallyDisabled() {
+		t.Fatalf("expected p1 all 4 circuits to be manually disabled initially")
+	}
+
+	// Reload config with Disabled: false (or removed)
+	m.Reload(UpstreamConfig{
+		Default: "failover",
+		Proxies: []ProxyEntry{
+			{Alias: "p1", URL: "socks5://127.0.0.1:1080", Disabled: false},
+		},
+	})
+
+	p1Reloaded := m.aliasMap["p1"]
+	if p1Reloaded.IsTCPManuallyDisabled() {
+		t.Errorf("expected v4 TCP manual disable to be cleared after reload")
+	}
+	if p1Reloaded.IsUDPManuallyDisabled() {
+		t.Errorf("expected v4 UDP manual disable to be cleared after reload")
+	}
+	if p1Reloaded.IsV6TCPManuallyDisabled() {
+		t.Errorf("expected v6 TCP manual disable to be cleared after reload")
+	}
+	if p1Reloaded.IsV6UDPManuallyDisabled() {
+		t.Errorf("expected v6 UDP manual disable to be cleared after reload")
+	}
+}
+
+func TestManager_ReloadPreservesDashboardPinWhenConfigHasNoIPv6(t *testing.T) {
+	m, err := NewManager(UpstreamConfig{
+		Default: "failover",
+		Proxies: []ProxyEntry{
+			{Alias: "p1", URL: "socks5://127.0.0.1:1080"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	// Simulate user manually disabling IPv6 from admin dashboard
+	if err := m.SetCircuitHealth("p1", "ipv6", "disable"); err != nil {
+		t.Fatalf("SetCircuitHealth: %v", err)
+	}
+
+	p1 := m.aliasMap["p1"]
+	if p1.IPv6Pin() == nil || *p1.IPv6Pin() != false {
+		t.Fatalf("expected p1 to have IPv6 pinned to false via dashboard")
+	}
+
+	// Reload config without IPv6 field
+	m.Reload(UpstreamConfig{
+		Default: "failover",
+		Proxies: []ProxyEntry{
+			{Alias: "p1", URL: "socks5://127.0.0.1:1080"},
+		},
+	})
+
+	p1Reloaded := m.aliasMap["p1"]
+	if p1Reloaded.IPv6Pin() == nil || *p1Reloaded.IPv6Pin() != false {
+		t.Fatalf("expected p1 dashboard IPv6 manual pin to be preserved across reload")
+	}
+}
+
+func TestManager_StrategyNormalization(t *testing.T) {
+	m, err := NewManager(UpstreamConfig{
+		Strategy: "latency",
+		Proxies: []ProxyEntry{
+			{Alias: "p1", URL: "socks5://127.0.0.1:1080"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	if m.strategy != "latency" {
+		t.Fatalf("expected strategy 'latency', got %q", m.strategy)
+	}
+
+	m.Reload(UpstreamConfig{
+		Strategy: "round_robin",
+		Proxies: []ProxyEntry{
+			{Alias: "p1", URL: "socks5://127.0.0.1:1080"},
+		},
+	})
+
+	if m.strategy != "round_robin" {
+		t.Fatalf("expected strategy 'round_robin', got %q", m.strategy)
+	}
+}
+
+func TestManager_UDPInTCP_DefaultsV6TCPDown(t *testing.T) {
+	m, err := NewManager(UpstreamConfig{
+		Default: "failover",
+		Proxies: []ProxyEntry{
+			{Alias: "hev", URL: "socks5://127.0.0.1:1080", UDPInTCP: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	hev := m.aliasMap["hev"]
+	if hev == nil {
+		t.Fatal("hev node not found")
+	}
+	if !hev.IsTCPManuallyDisabled() {
+		t.Error("hev v4 TCP should be manually disabled by default")
+	}
+	if !hev.IsV6TCPManuallyDisabled() {
+		t.Error("hev v6 TCP should be manually disabled by default")
+	}
+	if !hev.SupportsUDP() {
+		t.Error("hev should support UDP (framed over TCP carrier)")
+	}
+}
+
+

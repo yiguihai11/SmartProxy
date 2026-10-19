@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -126,7 +127,11 @@ func NewManager(cfg UpstreamConfig) (*Manager, error) {
 	}
 	m.staticProxies = cfg.Proxies
 	m.healthCfg = cfg.HealthCheck
-	m.strategy = cfg.Default
+	strat := cfg.Strategy
+	if strat == "" {
+		strat = cfg.Default
+	}
+	m.strategy = strat
 	activeSB := m.rebuildLocked()
 	_ = singbox.GlobalEngine().SyncOutbounds(activeSB)
 	m.healthChecker = NewHealthChecker(cfg.HealthCheck, m.defaultProxies)
@@ -148,8 +153,12 @@ func (m *Manager) Reload(cfg UpstreamConfig) {
 	pins := m.captureManualPins()
 	m.staticProxies = cfg.Proxies
 	m.healthCfg = cfg.HealthCheck
-	if cfg.Default != "" {
-		m.strategy = cfg.Default
+	strat := cfg.Strategy
+	if strat == "" {
+		strat = cfg.Default
+	}
+	if strat != "" {
+		m.strategy = strat
 	}
 	activeSB := m.rebuildLocked()
 	newProxies := m.defaultProxies
@@ -228,11 +237,19 @@ type savedNodeState struct {
 	exitIPv6       string
 	ipv6Capability IPv6Capability
 	ipv6Pinned     *bool
+	configIPv6     bool // pre-reload node had its IPv6 pin set by staticProxies config entry
+	configDisabled bool // pre-reload node was disabled by staticProxies config entry
 }
 
 // captureManualPins records each proxy's manual circuit pins and resolved geo info keyed by alias.
 // Caller must hold m.mu (any level).
 func (m *Manager) captureManualPins() map[string]savedNodeState {
+	staticMap := make(map[string]ProxyEntry, len(m.staticProxies))
+	for _, entry := range m.staticProxies {
+		if entry.Alias != "" {
+			staticMap[entry.Alias] = entry
+		}
+	}
 	states := make(map[string]savedNodeState, len(m.aliasMap))
 	for alias, p := range m.aliasMap {
 		if p == nil {
@@ -242,13 +259,14 @@ func (m *Manager) captureManualPins() map[string]savedNodeState {
 		upinned, uup := p.udpHealth.ManualPin()
 		v6tpinned, v6tup := p.v6Health.ManualPin()
 		v6upinned, v6uup := p.v6UDPHealth.ManualPin()
+		oldEntry, hasStatic := staticMap[alias]
 		states[alias] = savedNodeState{
 			url: p.URL,
 			pins: [4]circuitPin{
 				{pinned: tpinned, up: tup, defaultDriven: p.tcpDefaultDriven()},
 				{pinned: upinned, up: uup, defaultDriven: p.udpDefaultDriven()},
-				{pinned: v6tpinned, up: v6tup},
-				{pinned: v6upinned, up: v6uup},
+				{pinned: v6tpinned, up: v6tup, defaultDriven: p.tcpDefaultDriven()},
+				{pinned: v6upinned, up: v6uup, defaultDriven: p.udpDefaultDriven()},
 			},
 			countryCode:    p.CountryCode(),
 			exitIP:         p.ExitIP(),
@@ -256,6 +274,8 @@ func (m *Manager) captureManualPins() map[string]savedNodeState {
 			exitIPv6:       p.ExitIPv6(),
 			ipv6Capability: p.IPv6Capability(),
 			ipv6Pinned:     p.IPv6Pin(),
+			configIPv6:     hasStatic && oldEntry.IPv6 != nil,
+			configDisabled: hasStatic && oldEntry.IsDisabled(),
 		}
 	}
 	return states
@@ -265,6 +285,12 @@ func (m *Manager) captureManualPins() map[string]savedNodeState {
 func (m *Manager) restoreManualPins(states map[string]savedNodeState) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	newStaticMap := make(map[string]ProxyEntry, len(m.staticProxies))
+	for _, entry := range m.staticProxies {
+		if entry.Alias != "" {
+			newStaticMap[entry.Alias] = entry
+		}
+	}
 	for alias, state := range states {
 		p, ok := m.aliasMap[alias]
 		if !ok || p == nil {
@@ -285,7 +311,11 @@ func (m *Manager) restoreManualPins(states map[string]savedNodeState) {
 			if state.exitIP != "" {
 				p.SetGeoInfo(state.countryCode, state.exitIP)
 			}
-			if state.ipv6Pinned != nil {
+			newEntry, hasNewStatic := newStaticMap[alias]
+			if state.configIPv6 && hasNewStatic && newEntry.IPv6 == nil {
+				// The previous IPv6 pin came from static config, which has now removed it.
+				// Do not restore the stale pin; let the cleared or URL pin stand.
+			} else if state.ipv6Pinned != nil {
 				p.PinIPv6(*state.ipv6Pinned)
 			} else if state.ipv6Capability != "" && state.ipv6Capability != IPv6CapUnknown {
 				p.SetIPv6Capability(state.ipv6Capability)
@@ -305,8 +335,8 @@ func (m *Manager) restoreManualPins(states map[string]savedNodeState) {
 		}
 		restore(&p.health, state.pins[0], p.tcpDefaultDriven())
 		restore(&p.udpHealth, state.pins[1], p.udpDefaultDriven())
-		restore(&p.v6Health, state.pins[2], false)
-		restore(&p.v6UDPHealth, state.pins[3], false)
+		restore(&p.v6Health, state.pins[2], p.tcpDefaultDriven())
+		restore(&p.v6UDPHealth, state.pins[3], p.udpDefaultDriven())
 	}
 	for _, entry := range m.staticProxies {
 		if p := m.aliasMap[entry.Alias]; p != nil {
@@ -320,6 +350,33 @@ func (m *Manager) restoreManualPins(states map[string]savedNodeState) {
 				p.udpHealth.ClearManualState()
 				p.v6Health.ClearManualState()
 				p.v6UDPHealth.ClearManualState()
+			} else if state, ok := states[entry.Alias]; ok && state.configDisabled {
+				// Old config had disabled: true, and new config removed it
+				p.health.ClearManualState()
+				p.udpHealth.ClearManualState()
+				p.v6Health.ClearManualState()
+				p.v6UDPHealth.ClearManualState()
+				if p.tcpDefaultDriven() {
+					p.health.SetManualState(false)
+					p.v6Health.SetManualState(false)
+				}
+				if p.udpDefaultDriven() {
+					p.udpHealth.SetManualState(false)
+					p.v6UDPHealth.SetManualState(false)
+				}
+			}
+			if entry.IPv6 != nil {
+				p.PinIPv6(*entry.IPv6)
+			} else if state, ok := states[entry.Alias]; ok && state.configIPv6 {
+				var urlPin *bool
+				if u, err := url.Parse(entry.URL); err == nil {
+					urlPin = parseBoolPtrFromRawQuery(u.RawQuery, "ipv6")
+				}
+				if urlPin != nil {
+					p.PinIPv6(*urlPin)
+				} else {
+					p.ClearIPv6Pin()
+				}
 			}
 		}
 	}
@@ -400,10 +457,22 @@ func (m *Manager) rebuildLocked() map[string]json.RawMessage {
 		if entry.IsDisabled() {
 			proxy.health.SetManualState(false)
 			proxy.udpHealth.SetManualState(false)
+			proxy.v6Health.SetManualState(false)
+			proxy.v6UDPHealth.SetManualState(false)
 		}
 
 		if entry.IPv6 != nil {
 			proxy.PinIPv6(*entry.IPv6)
+		} else {
+			var urlPin *bool
+			if u, err := url.Parse(entry.URL); err == nil {
+				urlPin = parseBoolPtrFromRawQuery(u.RawQuery, "ipv6")
+			}
+			if urlPin != nil {
+				proxy.PinIPv6(*urlPin)
+			} else {
+				proxy.ClearIPv6Pin()
+			}
 		}
 
 		if proxy.CountryCode() == "" {
@@ -529,6 +598,7 @@ func (m *Manager) RemoveProviderNodes(aliases []string) int {
 
 type UpstreamConfig struct {
 	Default     string
+	Strategy    string
 	HealthCheck config.HealthCheckConf
 	Proxies     []ProxyEntry
 }

@@ -79,8 +79,16 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 		return nil, fmt.Errorf("failed to load ACL rules: %w", err)
 	}
 
+	strategy := cfg.Upstream.Strategy
+	if strategy == "" {
+		strategy = cfg.Upstream.Default
+	}
+	if strategy == "" {
+		strategy = "failover"
+	}
 	upstreamCfg := upstream.UpstreamConfig{
-		Default:     cfg.Upstream.Default,
+		Default:     strategy,
+		Strategy:    strategy,
 		HealthCheck: cfg.Upstream.HealthCheck,
 	}
 	for _, p := range cfg.Upstream.Proxies {
@@ -1104,8 +1112,12 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 	if strategy == "" {
 		strategy = newCfg.Upstream.Default
 	}
+	if strategy == "" {
+		strategy = "failover"
+	}
 	upstreamCfg := upstream.UpstreamConfig{
 		Default:     strategy,
+		Strategy:    strategy,
 		HealthCheck: newCfg.Upstream.HealthCheck,
 	}
 	for _, p := range newCfg.Upstream.Proxies {
