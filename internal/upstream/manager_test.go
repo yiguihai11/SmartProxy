@@ -444,12 +444,12 @@ func TestReload_RefreshGeoOnURLEdit(t *testing.T) {
 	})
 
 	reloadedNode1 := m.aliasMap["node1"]
-	// node1 URL changed: stale exitIP must be cleared, countryCode updated from new URL (JP)
+	// node1 URL changed: stale exitIP and countryCode must be cleared (waiting for real probe)
 	if reloadedNode1.ExitIP() != "" {
 		t.Errorf("expected exitIP to be cleared for edited URL, got %q", reloadedNode1.ExitIP())
 	}
-	if reloadedNode1.CountryCode() != "JP" {
-		t.Errorf("expected CountryCode to be inferred as JP, got %q", reloadedNode1.CountryCode())
+	if reloadedNode1.CountryCode() != "" {
+		t.Errorf("expected CountryCode to be cleared for edited URL, got %q", reloadedNode1.CountryCode())
 	}
 
 	reloadedNode2 := m.aliasMap["node2"]

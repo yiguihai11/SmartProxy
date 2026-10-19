@@ -1292,6 +1292,7 @@ func TestEstablishConnection_IPv6TCPIndependentOfIPv4(t *testing.T) {
 
 	// Pin default_proxy up so simulated background probes don't affect it
 	_ = mgr.SetCircuitHealth("default_proxy", "tcp", "enable")
+	_ = mgr.SetCircuitHealth("v6_capable_node", "v6_tcp", "enable")
 
 	// Simulate node having IPv4 TCP circuit broken (tripped breaker)
 	p := mgr.FindProxy("v6_capable_node")

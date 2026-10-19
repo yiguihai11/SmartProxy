@@ -192,6 +192,7 @@ tr:last-child td{border-bottom:none}
 .proxy-card::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:var(--border);transition:background .2s}
 .proxy-card.is-up::before{background:linear-gradient(90deg,var(--green),rgba(60,207,142,.25))}
 .proxy-card.is-down::before{background:var(--red);opacity:.75}
+.proxy-card.is-pending::before{background:var(--text3);opacity:.4}
 .proxy-card:hover{border-color:var(--border2);box-shadow:0 6px 20px rgba(0,0,0,.09)}
 .proxy-card .top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
 .proxy-card .node-info{display:flex;flex-direction:column;gap:5px;min-width:0;flex:1}
@@ -1749,8 +1750,9 @@ function renderProxyCard(p,i){
   var v6UdpUp=udpScheme&&sV6UDP&&(sV6UDP.manual?sV6UDP.available:(sV6UDP.available&&(sV6UDP.latency>0||!!sV6UDP.last_attempt)));
   var anyUp=v4TcpUp||v4UdpUp||v6TcpUp||v6UdpUp;
   var v6Supported=!!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||isV6Host||v6TcpUp||v6UdpUp);
+  var isPending=(!sV4TCP.last_attempt&&sV4TCP.consecutive_failures===0)&&(!sV4UDP.last_attempt&&sV4UDP.consecutive_failures===0)&&(!sV6TCP||(!sV6TCP.last_attempt&&sV6TCP.consecutive_failures===0));
 
-  var dispMode=t(anyUp?p.mode:'off');
+  var dispMode=isPending?t('Pending'):t(anyUp?p.mode:'off');
   var capTxt=(anyUp&&p.udp_capability&&p.udp_capability!=='unknown')?' · '+t(p.udp_capability):'';
   var dispName=p.name||p.alias;
   var aliasTxt=(p.name&&p.name!==p.alias)?' · '+p.alias:'';
@@ -1934,11 +1936,12 @@ function renderProxyCard(p,i){
     v4TagText = t('fail');
     v4TagClass = 'v6-none';
   } else {
-    v4TagText = 'Stack';
-    v4TagClass = '';
+    v4TagText = t('Pending');
+    v4TagClass = 'v6-none';
   }
 
-  var v6TagText = t('IPv4 Only');
+  var v6Pending = (!sV6TCP || (!sV6TCP.last_attempt && sV6TCP.consecutive_failures === 0)) && (!sV6UDP || (!sV6UDP.last_attempt && sV6UDP.consecutive_failures === 0));
+  var v6TagText = t('Pending');
   var v6TagClass = 'v6-none';
   if (v6AllDisabled) {
     v6TagText = t('Disabled');
@@ -1958,10 +1961,13 @@ function renderProxyCard(p,i){
   } else if (p.ipv6_capability === 'unsupported') {
     v6TagText = t('IPv4 Only');
     v6TagClass = 'v6-none';
+  } else if (v6Pending || p.ipv6_capability === 'unknown' || !p.ipv6_capability) {
+    v6TagText = t('Pending');
+    v6TagClass = 'v6-none';
   }
 
   var cardHash=computeCardHash(p, i);
-  return '<div class="proxy-card '+(anyUp?'is-up':'is-down')+'" data-alias="'+escAttr(p.alias)+'" data-hash="'+escAttr(cardHash)+'"><div class="top">'+
+  return '<div class="proxy-card '+(isPending?'is-pending':(anyUp?'is-up':'is-down'))+'" data-alias="'+escAttr(p.alias)+'" data-hash="'+escAttr(cardHash)+'"><div class="top">'+
     '<div class="node-info">'+
     '<div class="alias-row">'+flagHtml+'<span class="alias">'+dispName+'</span>'+schemeBadge+ipBadge+regBadgeHtml+'</div>'+
     '<div class="url">'+escHtml(dispUrl)+aliasTxt+' · '+dispMode+capTxt+'</div>'+

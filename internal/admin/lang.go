@@ -266,7 +266,7 @@ var zhStrings = map[string]string{
 	// proxy card mode / capability / circuit-state labels (values t()'d at render)
 	"off": "关闭", "tcp_and_udp": "TCP+UDP", "tcp_only": "仅 TCP",
 	"udp_only": "仅 UDP", "raw": "原生", "standard": "标准",
-	"manual": "手动", "unknown": "未知",
+	"manual": "手动", "unknown": "待测", "Pending": "待测",
 	"up": "连通", "down": "断开", "half": "恢复中", "n/a": "不支持", "unsupported": "不支持",
 	"disabled": "已停用", "pinned": "锁定启用", "fail": "异常", "ok": "连通",
 	"Supports IPv6 & IPv4 Dual-Stack": "支持 IPv6 与 IPv4 双栈",

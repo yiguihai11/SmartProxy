@@ -443,6 +443,10 @@ func (m *Manager) rebuildLocked() map[string]json.RawMessage {
 				if proxy.SchemeSupportsUDP() {
 					proxy.udpHealth.SetInitialUnverified()
 				}
+				proxy.v6Health.SetInitialUnverified()
+				if proxy.SchemeSupportsUDP() {
+					proxy.v6UDPHealth.SetInitialUnverified()
+				}
 			}
 		}
 
@@ -464,12 +468,6 @@ func (m *Manager) rebuildLocked() map[string]json.RawMessage {
 				proxy.PinIPv6(*urlPin)
 			} else {
 				proxy.ClearIPv6Pin()
-			}
-		}
-
-		if proxy.CountryCode() == "" {
-			if cc := inferCountryCode(alias, proxy.Name, proxy.Host); cc != "" {
-				proxy.SetGeoInfo(cc, "")
 			}
 		}
 		aliasMap[alias] = proxy

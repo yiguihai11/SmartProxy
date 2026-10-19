@@ -2466,29 +2466,6 @@ func TestUDPInTCP_ProbeTCPIsNoop(t *testing.T) {
 	}
 }
 
-func TestInferCountryCode(t *testing.T) {
-	tests := []struct {
-		input []string
-		want  string
-	}{
-		{[]string{"🇭🇰 香港 01"}, "HK"},
-		{[]string{"🇺🇸 US BGP 100M"}, "US"},
-		{[]string{"🇯🇵 东京专线"}, "JP"},
-		{[]string{"新加坡-02"}, "SG"},
-		{[]string{"node-tw-premium"}, "TW"},
-		{[]string{"custom-node-without-country"}, ""},
-		{[]string{"UK-London-Direct"}, "GB"},
-		{[]string{"", "🇨🇳 广港专线"}, "CN"},
-	}
-
-	for _, tt := range tests {
-		got := inferCountryCode(tt.input...)
-		if got != tt.want {
-			t.Errorf("inferCountryCode(%v) = %q, want %q", tt.input, got, tt.want)
-		}
-	}
-}
-
 func TestProxy_IPv6Capability(t *testing.T) {
 	p := &Proxy{Scheme: SchemeSOCKS5, Host: "127.0.0.1", Port: 1080}
 	if p.IPv6Capability() != IPv6CapUnknown {
