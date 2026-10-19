@@ -127,11 +127,7 @@ func NewManager(cfg UpstreamConfig) (*Manager, error) {
 	}
 	m.staticProxies = cfg.Proxies
 	m.healthCfg = cfg.HealthCheck
-	strat := cfg.Strategy
-	if strat == "" {
-		strat = cfg.Default
-	}
-	m.strategy = strat
+	m.strategy = cfg.Strategy
 	activeSB := m.rebuildLocked()
 	_ = singbox.GlobalEngine().SyncOutbounds(activeSB)
 	m.healthChecker = NewHealthChecker(cfg.HealthCheck, m.defaultProxies)
@@ -153,12 +149,8 @@ func (m *Manager) Reload(cfg UpstreamConfig) {
 	pins := m.captureManualPins()
 	m.staticProxies = cfg.Proxies
 	m.healthCfg = cfg.HealthCheck
-	strat := cfg.Strategy
-	if strat == "" {
-		strat = cfg.Default
-	}
-	if strat != "" {
-		m.strategy = strat
+	if cfg.Strategy != "" {
+		m.strategy = cfg.Strategy
 	}
 	activeSB := m.rebuildLocked()
 	newProxies := m.defaultProxies
@@ -345,7 +337,7 @@ func (m *Manager) restoreManualPins(states map[string]savedNodeState) {
 				p.udpHealth.SetManualState(false)
 				p.v6Health.SetManualState(false)
 				p.v6UDPHealth.SetManualState(false)
-			} else if (entry.Enable != nil && *entry.Enable) || (entry.Enabled != nil && *entry.Enabled) {
+			} else if entry.Enabled != nil && *entry.Enabled {
 				p.health.ClearManualState()
 				p.udpHealth.ClearManualState()
 				p.v6Health.ClearManualState()
@@ -597,7 +589,6 @@ func (m *Manager) RemoveProviderNodes(aliases []string) int {
 }
 
 type UpstreamConfig struct {
-	Default     string
 	Strategy    string
 	HealthCheck config.HealthCheckConf
 	Proxies     []ProxyEntry
@@ -611,23 +602,12 @@ type ProxyEntry struct {
 	UDPInTCP bool
 	Provider string
 	IPv6     *bool
-	Enable   *bool
 	Enabled  *bool
-	Disabled bool
 }
 
 // IsDisabled reports whether this proxy entry is configured as disabled.
 func (p ProxyEntry) IsDisabled() bool {
-	if p.Disabled {
-		return true
-	}
-	if p.Enabled != nil && !*p.Enabled {
-		return true
-	}
-	if p.Enable != nil && !*p.Enable {
-		return true
-	}
-	return false
+	return p.Enabled != nil && !*p.Enabled
 }
 
 func (m *Manager) SelectProxy(ctx context.Context, targetIP string, targetPort int, domain string, engine *rules.Engine) (string, *Proxy) {

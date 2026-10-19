@@ -63,7 +63,7 @@ func newTestManager(t *testing.T) *upstream.Manager {
 	deadLn.Close()
 
 	cfg := upstream.UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []upstream.ProxyEntry{
 			{Alias: "ss-local", URL: "socks5://" + deadAddr},
 		},

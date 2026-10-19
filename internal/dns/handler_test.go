@@ -641,7 +641,7 @@ func TestHandleDNS_ForeignFailureAnswersSERVFAIL(t *testing.T) {
 	deadLn.Close()
 
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []upstream.ProxyEntry{
 			{Alias: "dead", URL: "socks5://" + deadAddr},
 		},
@@ -689,7 +689,7 @@ func TestHandleDNS_ProxyRuleRoutesToForeign(t *testing.T) {
 	deadLn.Close()
 
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []upstream.ProxyEntry{
 			{Alias: "dead", URL: "socks5://" + deadAddr},
 		},
@@ -1422,7 +1422,7 @@ func TestHandleDNS_DomesticSlowHedgeForeignFails_DomesticStillWins(t *testing.T)
 
 	// Upstream manager with a dead proxy (foreign hedge will fail quickly upon 150ms timeout)
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []upstream.ProxyEntry{
 			{Alias: "dead_proxy", URL: "socks5://127.0.0.1:1"},
 		},

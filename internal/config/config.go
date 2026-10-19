@@ -142,6 +142,24 @@ type UpstreamConf struct {
 	Subscriptions []SubscriptionConf `json:"subscriptions,omitempty"`
 }
 
+// UnmarshalJSON unmarshals an UpstreamConf, transparently normalizing legacy "default" into Strategy.
+func (u *UpstreamConf) UnmarshalJSON(b []byte) error {
+	type Alias UpstreamConf
+	var aux struct {
+		Alias
+		LegacyDefault string `json:"default"`
+	}
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	*u = UpstreamConf(aux.Alias)
+	if u.Strategy == "" && aux.LegacyDefault != "" {
+		u.Strategy = aux.LegacyDefault
+	}
+	u.Default = ""
+	return nil
+}
+
 type SubscriptionConf struct {
 	Name           string `json:"name"`
 	URL            string `json:"url"`
@@ -184,24 +202,36 @@ type ProxyEntry struct {
 	// IPv6 allows manually forcing IPv6 outbound capability (true = force enable, false = force disable).
 	// If omitted or nil, SmartProxy automatically probes and discovers whether the node can reach IPv6 targets.
 	IPv6 *bool `json:"ipv6,omitempty"`
-	// Enable/Enabled controls whether this node is active. If false, node starts disabled.
-	Enable   *bool `json:"enable,omitempty"`
-	Enabled  *bool `json:"enabled,omitempty"`
-	Disabled bool  `json:"disabled,omitempty"`
+	// Enabled controls whether this node is active. If false, node starts disabled.
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// UnmarshalJSON unmarshals a ProxyEntry, transparently normalizing legacy "enable" or "disabled" fields into Enabled.
+func (p *ProxyEntry) UnmarshalJSON(b []byte) error {
+	type Alias ProxyEntry
+	var aux struct {
+		Alias
+		LegacyEnable   *bool `json:"enable"`
+		LegacyDisabled bool  `json:"disabled"`
+	}
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	*p = ProxyEntry(aux.Alias)
+	if p.Enabled == nil {
+		if aux.LegacyEnable != nil {
+			p.Enabled = aux.LegacyEnable
+		} else if aux.LegacyDisabled {
+			f := false
+			p.Enabled = &f
+		}
+	}
+	return nil
 }
 
 // IsDisabled reports whether this proxy entry has been explicitly turned off in config.
 func (p ProxyEntry) IsDisabled() bool {
-	if p.Disabled {
-		return true
-	}
-	if p.Enabled != nil && !*p.Enabled {
-		return true
-	}
-	if p.Enable != nil && !*p.Enable {
-		return true
-	}
-	return false
+	return p.Enabled != nil && !*p.Enabled
 }
 
 type RoutingConf struct {
@@ -383,7 +413,22 @@ func (c *Config) Clone() *Config {
 			cp.Upstream.Proxies = []ProxyEntry{}
 		} else {
 			cp.Upstream.Proxies = make([]ProxyEntry, len(c.Upstream.Proxies))
-			copy(cp.Upstream.Proxies, c.Upstream.Proxies)
+			for i, p := range c.Upstream.Proxies {
+				cp.Upstream.Proxies[i] = p
+				cp.Upstream.Proxies[i].IPv6 = cloneBoolPtr(p.IPv6)
+				cp.Upstream.Proxies[i].Enabled = cloneBoolPtr(p.Enabled)
+			}
+		}
+	}
+	if c.Upstream.Subscriptions != nil {
+		if len(c.Upstream.Subscriptions) == 0 {
+			cp.Upstream.Subscriptions = []SubscriptionConf{}
+		} else {
+			cp.Upstream.Subscriptions = make([]SubscriptionConf, len(c.Upstream.Subscriptions))
+			for i, s := range c.Upstream.Subscriptions {
+				cp.Upstream.Subscriptions[i] = s
+				cp.Upstream.Subscriptions[i].UseProxy = cloneBoolPtr(s.UseProxy)
+			}
 		}
 	}
 
@@ -406,6 +451,19 @@ func (c *Config) Clone() *Config {
 			}
 		}
 	}
+	cp.DNS.Adblock.AutoUpdate = cloneBoolPtr(c.DNS.Adblock.AutoUpdate)
+	if c.DNS.Adblock.Lists != nil {
+		if len(c.DNS.Adblock.Lists) == 0 {
+			cp.DNS.Adblock.Lists = []AdblockListConf{}
+		} else {
+			cp.DNS.Adblock.Lists = make([]AdblockListConf, len(c.DNS.Adblock.Lists))
+			for i, l := range c.DNS.Adblock.Lists {
+				cp.DNS.Adblock.Lists[i] = l
+				cp.DNS.Adblock.Lists[i].UseProxy = cloneBoolPtr(l.UseProxy)
+			}
+		}
+	}
+	cp.DNS.Adblock.Whitelist = cloneStringSlice(c.DNS.Adblock.Whitelist)
 
 	// SmartProxy
 	cp.SmartProxy.Ports = cloneIntSlice(c.SmartProxy.Ports)
@@ -448,6 +506,14 @@ func cloneInt32Slice(s []int32) []int32 {
 	res := make([]int32, len(s))
 	copy(res, s)
 	return res
+}
+
+func cloneBoolPtr(b *bool) *bool {
+	if b == nil {
+		return nil
+	}
+	v := *b
+	return &v
 }
 
 func (c *Config) Validate() error {
@@ -781,7 +847,6 @@ func DefaultConfig() *Config {
 			RouteExcludePorts: []int{22},
 		},
 		Upstream: UpstreamConf{
-			Default:  "failover",
 			Strategy: "failover",
 			HealthCheck: HealthCheckConf{
 				Enabled:            false,

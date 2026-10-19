@@ -158,7 +158,7 @@ func TestSingBoxProxy_DirectConnectInProcess(t *testing.T) {
 
 func TestManager_SetProviderProxies_SingBoxOutbounds(t *testing.T) {
 	mgr, err := NewManager(UpstreamConfig{
-		Default: "round_robin",
+		Strategy: "round_robin",
 		Proxies: []ProxyEntry{
 			{
 				Alias: "static-1",

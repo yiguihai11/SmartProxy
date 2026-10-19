@@ -1098,7 +1098,7 @@ func TestRemoteUDPReader_Direct_HeaderHeadroom(t *testing.T) {
 func TestTUNHandler_BypassLAN_ExcludesUDP53(t *testing.T) {
 	// Verifies the invariant: LAN bypass applies to LAN destinations EXCEPT UDP port 53.
 	cn := chnroute.New()
-	mgr, _ := upstream.NewManager(upstream.UpstreamConfig{Default: "failover"})
+	mgr, _ := upstream.NewManager(upstream.UpstreamConfig{Strategy: "failover"})
 	r := route.New(cn, mgr, true, 3*time.Second, nil, 300*time.Second)
 
 	if !r.BypassLAN() {

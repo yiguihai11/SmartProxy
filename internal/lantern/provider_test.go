@@ -10,7 +10,7 @@ import (
 
 func TestProvider_LifecycleAndNodeInjection(t *testing.T) {
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
-		Default: "round_robin",
+		Strategy: "round_robin",
 		Proxies: []upstream.ProxyEntry{
 			{
 				Alias: "static-proxy",

@@ -87,7 +87,6 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 		strategy = "failover"
 	}
 	upstreamCfg := upstream.UpstreamConfig{
-		Default:     strategy,
 		Strategy:    strategy,
 		HealthCheck: cfg.Upstream.HealthCheck,
 	}
@@ -97,9 +96,7 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 			URL:      p.URL,
 			UDPInTCP: p.UDPInTCP,
 			IPv6:     p.IPv6,
-			Enable:   p.Enable,
 			Enabled:  p.Enabled,
-			Disabled: p.Disabled,
 		})
 	}
 	upstreamMgr, err := upstream.NewManager(upstreamCfg)
@@ -1116,7 +1113,6 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 		strategy = "failover"
 	}
 	upstreamCfg := upstream.UpstreamConfig{
-		Default:     strategy,
 		Strategy:    strategy,
 		HealthCheck: newCfg.Upstream.HealthCheck,
 	}
@@ -1126,9 +1122,7 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 			URL:      p.URL,
 			UDPInTCP: p.UDPInTCP,
 			IPv6:     p.IPv6,
-			Enable:   p.Enable,
 			Enabled:  p.Enabled,
-			Disabled: p.Disabled,
 		})
 	}
 	e.UpstreamMgr.Reload(upstreamCfg)

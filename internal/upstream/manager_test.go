@@ -229,7 +229,7 @@ func TestReload_UserReEnableSurvivesUnchangedReload(t *testing.T) {
 
 func TestNewManager_WithProxies(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
 			{Alias: "us", URL: "socks5://us.proxy:1080"},
 			{Alias: "eu", URL: "http://eu.proxy:8080"},
@@ -461,7 +461,7 @@ func TestReload_RefreshGeoOnURLEdit(t *testing.T) {
 
 func TestOrderedProxies_Failover(t *testing.T) {
 	m, _ := NewManager(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
 			{Alias: "a", URL: "socks5://a:1080"},
 			{Alias: "b", URL: "socks5://b:1080"},
@@ -479,7 +479,7 @@ func TestOrderedProxies_Failover(t *testing.T) {
 
 func TestOrderedProxies_RoundRobin(t *testing.T) {
 	m, _ := NewManager(UpstreamConfig{
-		Default: "round_robin",
+		Strategy: "round_robin",
 		Proxies: []ProxyEntry{
 			{Alias: "a", URL: "socks5://a:1080"},
 			{Alias: "b", URL: "socks5://b:1080"},
@@ -506,7 +506,7 @@ func TestOrderedProxies_RoundRobinCounterWrap(t *testing.T) {
 	for i, h := range hosts {
 		entries[i] = ProxyEntry{Alias: h, URL: "socks5://" + h + ":1080"}
 	}
-	m, _ := NewManager(UpstreamConfig{Default: "round_robin", Proxies: entries})
+	m, _ := NewManager(UpstreamConfig{Strategy: "round_robin", Proxies: entries})
 	n := uint64(len(hosts))
 
 	// 回绕前一拍、回绕那一拍(旧代码必 panic 的点)、回绕后一拍。
@@ -543,7 +543,7 @@ func TestOrderedProxies_RoundRobinCountersIndependent(t *testing.T) {
 	for i, h := range hosts {
 		entries[i] = ProxyEntry{Alias: h, URL: "socks5://" + h + ":1080"}
 	}
-	m, _ := NewManager(UpstreamConfig{Default: "round_robin", Proxies: entries})
+	m, _ := NewManager(UpstreamConfig{Strategy: "round_robin", Proxies: entries})
 
 	// UDP 侧先推两次(2 不是 n 的倍数,指针被顶偏),TCP 侧的轮转必须一点不受影响。
 	m.orderedProxiesUDP()
@@ -568,7 +568,7 @@ func newLatencyManager(t *testing.T, hosts ...string) *Manager {
 	for i, h := range hosts {
 		entries[i] = ProxyEntry{Alias: h, URL: "socks5://" + h + ":1080"}
 	}
-	m, err := NewManager(UpstreamConfig{Default: "latency", Proxies: entries})
+	m, err := NewManager(UpstreamConfig{Strategy: "latency", Proxies: entries})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -802,7 +802,7 @@ func TestOrderedProxies_LatencyBandUDPAvailability(t *testing.T) {
 
 func TestOrderedProxies_Random(t *testing.T) {
 	m, _ := NewManager(UpstreamConfig{
-		Default: "random",
+		Strategy: "random",
 		Proxies: []ProxyEntry{
 			{Alias: "a", URL: "socks5://a:1080"},
 			{Alias: "b", URL: "socks5://b:1080"},
@@ -823,7 +823,7 @@ func TestOrderedProxies_Random(t *testing.T) {
 
 func TestOrderedProxies_SingleProxy(t *testing.T) {
 	m, _ := NewManager(UpstreamConfig{
-		Default: "round_robin",
+		Strategy: "round_robin",
 		Proxies: []ProxyEntry{
 			{Alias: "a", URL: "socks5://a:1080"},
 		},
@@ -939,7 +939,7 @@ func TestReload_AddProxy(t *testing.T) {
 	}
 
 	m.Reload(UpstreamConfig{
-		Default: "random",
+		Strategy: "random",
 		Proxies: []ProxyEntry{
 			{Alias: "p1", URL: "socks5://a:1080"},
 			{Alias: "p2", URL: "http://b:8080"},
@@ -1016,7 +1016,7 @@ func TestReload_ReplaceProxy(t *testing.T) {
 func TestReload_ConcurrentAccess(t *testing.T) {
 
 	m, _ := NewManager(UpstreamConfig{
-		Default: "round_robin",
+		Strategy: "round_robin",
 		Proxies: []ProxyEntry{
 			{Alias: "a", URL: "socks5://a:1080"},
 		},
@@ -1051,7 +1051,7 @@ func TestReload_ConcurrentAccess(t *testing.T) {
 			default:
 			}
 			m.Reload(UpstreamConfig{
-				Default: "failover",
+				Strategy: "failover",
 				Proxies: []ProxyEntry{
 					{Alias: "a", URL: "socks5://a:1080"},
 					{Alias: "b", URL: "socks5://b:1080"},
@@ -1225,7 +1225,7 @@ func newEngineWithRules(content string) *rules.Engine {
 
 func TestSetCircuitHealth_DisableBoth(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
 			{Alias: "ss-local", URL: "socks5://127.0.0.1:1081"},
 		},
@@ -1265,7 +1265,7 @@ func TestSetCircuitHealth_DisableBoth(t *testing.T) {
 // the auto-derived effective mode becomes udp_only.
 func TestSetCircuitHealth_DisableTCPOnly(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
 			{Alias: "ss-local", URL: "socks5://127.0.0.1:1081"},
 		},
@@ -1297,7 +1297,7 @@ func TestSetCircuitHealth_DisableTCPOnly(t *testing.T) {
 
 func TestSetCircuitHealth_ReleaseToAuto(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
 			{Alias: "ss-local", URL: "socks5://127.0.0.1:1081"},
 		},
@@ -1326,7 +1326,7 @@ func TestSetCircuitHealth_ReleaseToAuto(t *testing.T) {
 
 func TestSetCircuitHealth_UnknownAlias(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
 			{Alias: "ss-local", URL: "socks5://127.0.0.1:1081"},
 		},
@@ -1343,7 +1343,7 @@ func TestSetCircuitHealth_UnknownAlias(t *testing.T) {
 
 func TestSetCircuitHealth_DirectAlias(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
 			{Alias: "ss-local", URL: "socks5://127.0.0.1:1081"},
 		},
@@ -1433,7 +1433,7 @@ func TestManager_ResetAutoOpenedCircuits(t *testing.T) {
 	defer done()
 
 	m, err := NewManager(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
 			{Alias: "a", URL: "socks5://" + mockAddr},
 			{Alias: "b", URL: "socks5://" + mockAddr},
@@ -1482,7 +1482,7 @@ func TestManager_UDPRoutingUsesUDPHealth(t *testing.T) {
 	defer done()
 
 	m, err := NewManager(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{{Alias: "p1", URL: "socks5://" + mockAddr}},
 	})
 	if err != nil {
@@ -1649,7 +1649,7 @@ func TestManager_TestProxy(t *testing.T) {
 
 func TestManager_SetProviderProxies(t *testing.T) {
 	mgr, err := NewManager(UpstreamConfig{
-		Default: "round_robin",
+		Strategy: "round_robin",
 		Proxies: []ProxyEntry{
 			{
 				Alias: "static-1",
@@ -1734,7 +1734,7 @@ func TestManager_SetProviderProxies(t *testing.T) {
 
 func TestManager_DuplicateAliases(t *testing.T) {
 	cfg := UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
 			{Alias: "Node-A", URL: "ss://YWVzLTEyOC1nY206cGFzczE@1.1.1.1:8388"},
 			{Alias: "Node-A", URL: "ss://YWVzLTEyOC1nY206cGFzczI@2.2.2.2:8388"},
@@ -1867,7 +1867,7 @@ func TestManager_HandleNetworkChange(t *testing.T) {
 
 func TestManager_IPv6Selection(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
-		Default: "latency",
+		Strategy: "latency",
 		Proxies: []ProxyEntry{
 			{Alias: "ss-node", URL: "socks5://127.0.0.1:1080"},
 			{Alias: "lantern-node", URL: "socks5://127.0.0.2:1080", Provider: "lantern"},
@@ -1903,7 +1903,7 @@ func TestManager_IPv6Selection(t *testing.T) {
 
 	// 1. Dialing IPv6 destination when only lantern is available: must fail immediately
 	mLanternOnly, err := NewManager(UpstreamConfig{
-		Default: "latency",
+		Strategy: "latency",
 		Proxies: []ProxyEntry{
 			{Alias: "lantern-node", URL: "socks5://127.0.0.2:1080", Provider: "lantern"},
 		},
@@ -1938,7 +1938,7 @@ func TestManager_IPv6Selection(t *testing.T) {
 
 func TestManager_IPv6Selection_TCPDownIPv6Up(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
 			{Alias: "v6-node", URL: "socks5://127.0.0.1:1080?ipv6=1"},
 			{Alias: "v4-node", URL: "socks5://127.0.0.2:1080"},
@@ -2007,11 +2007,11 @@ func TestManager_DisabledProxyOnStartupAndReload(t *testing.T) {
 	enabledTrue := true
 
 	m, err := NewManager(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
-			{Alias: "p-disabled", URL: "socks5://127.0.0.1:1080", Enable: &disabledFalse},
-			{Alias: "p-enabled", URL: "socks5://127.0.0.1:1081", Enable: &enabledTrue},
-			{Alias: "p-flag-disabled", URL: "socks5://127.0.0.1:1082", Disabled: true},
+			{Alias: "p-disabled", URL: "socks5://127.0.0.1:1080", Enabled: &disabledFalse},
+			{Alias: "p-enabled", URL: "socks5://127.0.0.1:1081", Enabled: &enabledTrue},
+			{Alias: "p-flag-disabled", URL: "socks5://127.0.0.1:1082", Enabled: &disabledFalse},
 		},
 	})
 	if err != nil {
@@ -2045,10 +2045,10 @@ func TestManager_DisabledProxyOnStartupAndReload(t *testing.T) {
 
 	// Hot reload: toggle p-disabled to enabled, and p-enabled to disabled
 	m.Reload(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
-			{Alias: "p-disabled", URL: "socks5://127.0.0.1:1080", Enable: &enabledTrue},
-			{Alias: "p-enabled", URL: "socks5://127.0.0.1:1081", Enable: &disabledFalse},
+			{Alias: "p-disabled", URL: "socks5://127.0.0.1:1080", Enabled: &enabledTrue},
+			{Alias: "p-enabled", URL: "socks5://127.0.0.1:1081", Enabled: &disabledFalse},
 		},
 	})
 
@@ -2069,7 +2069,7 @@ func TestManager_DisabledProxyOnStartupAndReload(t *testing.T) {
 
 func TestManager_DualStackStrategies(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
-		Default: "latency",
+		Strategy: "latency",
 		Proxies: []ProxyEntry{
 			{Alias: "node-1", URL: "socks5://127.0.0.1:1080?ipv6=1"},
 			{Alias: "node-2", URL: "socks5://127.0.0.1:1081?ipv6=1"},
@@ -2212,7 +2212,7 @@ func TestCircuitBreaker_IPv6RecoveryAndManualEnable(t *testing.T) {
 	defer done()
 
 	m, err := NewManager(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
 			{Alias: "node-1", URL: "socks5://" + mockAddr},
 		},
@@ -2272,10 +2272,10 @@ func TestCircuitBreaker_IPv6RecoveryAndManualEnable(t *testing.T) {
 func TestManager_DisabledProxyPinsAllFourCircuits(t *testing.T) {
 	falseVal := false
 	m, err := NewManager(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
-			{Alias: "p-disabled", URL: "socks5://127.0.0.1:1080", Disabled: true},
-			{Alias: "p-enable-false", URL: "socks5://127.0.0.1:1081", Enable: &falseVal},
+			{Alias: "p-disabled", URL: "socks5://127.0.0.1:1080", Enabled: &falseVal},
+			{Alias: "p-enable-false", URL: "socks5://127.0.0.1:1081", Enabled: &falseVal},
 		},
 	})
 	if err != nil {
@@ -2306,7 +2306,7 @@ func TestManager_DisabledProxyPinsAllFourCircuits(t *testing.T) {
 func TestManager_ReloadClearsConfigIPv6PinWhenRemoved(t *testing.T) {
 	falseVal := false
 	m, err := NewManager(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
 			{Alias: "p1", URL: "socks5://127.0.0.1:1080", IPv6: &falseVal},
 		},
@@ -2323,7 +2323,7 @@ func TestManager_ReloadClearsConfigIPv6PinWhenRemoved(t *testing.T) {
 
 	// Reload config with IPv6 pin removed
 	m.Reload(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
 			{Alias: "p1", URL: "socks5://127.0.0.1:1080", IPv6: nil},
 		},
@@ -2336,10 +2336,11 @@ func TestManager_ReloadClearsConfigIPv6PinWhenRemoved(t *testing.T) {
 }
 
 func TestManager_ReloadClearsConfigDisabledWhenRemoved(t *testing.T) {
+	falseVal := false
 	m, err := NewManager(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
-			{Alias: "p1", URL: "socks5://127.0.0.1:1080", Disabled: true},
+			{Alias: "p1", URL: "socks5://127.0.0.1:1080", Enabled: &falseVal},
 		},
 	})
 	if err != nil {
@@ -2352,11 +2353,12 @@ func TestManager_ReloadClearsConfigDisabledWhenRemoved(t *testing.T) {
 		t.Fatalf("expected p1 all 4 circuits to be manually disabled initially")
 	}
 
-	// Reload config with Disabled: false (or removed)
+	// Reload config with Enabled: true (or removed)
+	trueVal := true
 	m.Reload(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
-			{Alias: "p1", URL: "socks5://127.0.0.1:1080", Disabled: false},
+			{Alias: "p1", URL: "socks5://127.0.0.1:1080", Enabled: &trueVal},
 		},
 	})
 
@@ -2377,7 +2379,7 @@ func TestManager_ReloadClearsConfigDisabledWhenRemoved(t *testing.T) {
 
 func TestManager_ReloadPreservesDashboardPinWhenConfigHasNoIPv6(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
 			{Alias: "p1", URL: "socks5://127.0.0.1:1080"},
 		},
@@ -2399,7 +2401,7 @@ func TestManager_ReloadPreservesDashboardPinWhenConfigHasNoIPv6(t *testing.T) {
 
 	// Reload config without IPv6 field
 	m.Reload(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
 			{Alias: "p1", URL: "socks5://127.0.0.1:1080"},
 		},
@@ -2441,7 +2443,7 @@ func TestManager_StrategyNormalization(t *testing.T) {
 
 func TestManager_UDPInTCP_DefaultsV6TCPDown(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []ProxyEntry{
 			{Alias: "hev", URL: "socks5://127.0.0.1:1080", UDPInTCP: true},
 		},

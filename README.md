@@ -104,10 +104,12 @@ go build -tags "with_gvisor,with_lwip" -o build/smartproxy ./cmd/smartproxy
     "name": "smartproxy0",
     "stack": "gvisor",
     "mtu": 1500,
-    "inet4_address": "172.19.0.1/30"
+    "address": [
+      "172.19.0.1/30"
+    ]
   },
   "upstream": {
-    "default": "failover",
+    "strategy": "failover",
     "proxies": [
       {
         "alias": "primary",

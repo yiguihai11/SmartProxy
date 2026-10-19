@@ -183,7 +183,7 @@ func TestSimplifyError_ConnectionRefused(t *testing.T) {
 
 func newRouter() *Router {
 	cn := chnroute.New()
-	mgr, _ := upstream.NewManager(upstream.UpstreamConfig{Default: "failover"})
+	mgr, _ := upstream.NewManager(upstream.UpstreamConfig{Strategy: "failover"})
 	return New(cn, mgr, false, 3*time.Second, nil, 300*time.Second)
 }
 
@@ -299,7 +299,7 @@ func TestRouter_AddToBlacklists_LANAndBenchmark(t *testing.T) {
 
 func TestRouter_UpdateConfig(t *testing.T) {
 	cn := chnroute.New()
-	mgr, _ := upstream.NewManager(upstream.UpstreamConfig{Default: "failover"})
+	mgr, _ := upstream.NewManager(upstream.UpstreamConfig{Strategy: "failover"})
 	r := New(cn, mgr, true, 3*time.Second, nil, 300*time.Second)
 
 	cfg := r.cfg.Load()
@@ -499,7 +499,7 @@ func TestIsTLSClientHello(t *testing.T) {
 
 func TestRouter_BypassLAN(t *testing.T) {
 	cn := chnroute.New()
-	mgr, _ := upstream.NewManager(upstream.UpstreamConfig{Default: "failover"})
+	mgr, _ := upstream.NewManager(upstream.UpstreamConfig{Strategy: "failover"})
 
 	// Initially false
 	r1 := New(cn, mgr, false, 3*time.Second, nil, 300*time.Second)
@@ -608,7 +608,7 @@ func TestEstablishConnection_ProxyDefault(t *testing.T) {
 	cn.Insert(netip.MustParsePrefix("114.114.114.114/32"))
 
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []upstream.ProxyEntry{
 			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s", addr)},
 		},
@@ -657,7 +657,7 @@ func TestSmartConnectWithFallback_ProxyDefault(t *testing.T) {
 	cn.Insert(netip.MustParsePrefix("114.114.114.114/32"))
 
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []upstream.ProxyEntry{
 			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s", addr)},
 		},
@@ -700,7 +700,7 @@ func TestSmartConnectWithFallback_ProxyDefault(t *testing.T) {
 func TestRouter_AddToBlacklistAndWatchdogTimeout(t *testing.T) {
 	cn := chnroute.New()
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []upstream.ProxyEntry{
 			{Alias: "p1", URL: "socks5://127.0.0.1:1080"},
 		},
@@ -755,7 +755,7 @@ func TestEstablishConnection_UDPOnlyFallback(t *testing.T) {
 
 	cn := chnroute.New()
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []upstream.ProxyEntry{
 			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s", addr)},
 			{Alias: "udp_only_proxy", URL: "socks5://127.0.0.1:54321", UDPInTCP: true},
@@ -803,7 +803,7 @@ func TestSmartConnectWithFallback_UDPOnlyFallback(t *testing.T) {
 
 	cn := chnroute.New()
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []upstream.ProxyEntry{
 			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s", addr)},
 			{Alias: "udp_only_proxy", URL: "socks5://127.0.0.1:54321", UDPInTCP: true},
@@ -851,7 +851,7 @@ func TestEstablishConnection_RuleProxyFailuresFallback(t *testing.T) {
 
 	cn := chnroute.New()
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []upstream.ProxyEntry{
 			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s?ipv6=1", addr)},
 			{Alias: "failing_proxy", URL: "socks5://127.0.0.1:54322"},
@@ -985,7 +985,7 @@ func TestSmartConnectWithFallback_HedgeRace(t *testing.T) {
 	cn := chnroute.New()
 
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []upstream.ProxyEntry{
 			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s", addr)},
 		},
@@ -1096,7 +1096,7 @@ func TestSmartConnectWithFallback_IdempotentHTTPReplay_RST(t *testing.T) {
 
 	cn := chnroute.New()
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []upstream.ProxyEntry{
 			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s", proxyAddr)},
 		},
@@ -1170,7 +1170,7 @@ func TestSmartConnectWithFallback_IdempotentHTTP_EOFNotReplayed(t *testing.T) {
 
 	cn := chnroute.New()
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []upstream.ProxyEntry{
 			{Alias: "default_proxy", URL: fmt.Sprintf("socks5://%s", proxyAddr)},
 		},
@@ -1222,7 +1222,7 @@ func TestSmartConnectWithFallback_HedgedProxyFailsBeforeDirectDoesNotDeadlock(t 
 
 	// Upstream proxy points to a dead port that refuses connection immediately
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		Proxies: []upstream.ProxyEntry{
 			{Alias: "dead_proxy", URL: "socks5://127.0.0.1:1"},
 		},
@@ -1275,7 +1275,7 @@ func TestEstablishConnection_IPv6TCPIndependentOfIPv4(t *testing.T) {
 
 	cn := chnroute.New()
 	mgr, err := upstream.NewManager(upstream.UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		HealthCheck: config.HealthCheckConf{
 			Enabled:           true,
 			FailuresThreshold: 2,

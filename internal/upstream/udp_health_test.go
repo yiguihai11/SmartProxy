@@ -502,7 +502,7 @@ func TestZeroTrust_InitialStateUnverified(t *testing.T) {
 
 	// When Manager is initialized with health checking enabled, multi-nodes start unverified
 	cfg := UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		HealthCheck: config.HealthCheckConf{
 			Enabled:           true,
 			AutoDisableSingle: false,
@@ -593,7 +593,7 @@ func TestBoundedConcurrency_WorkerPool(t *testing.T) {
 
 func TestReportDNSUDPError_TripsBreaker(t *testing.T) {
 	cfg := UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		HealthCheck: config.HealthCheckConf{
 			Enabled:           true,
 			FailuresThreshold: 1,
@@ -654,7 +654,7 @@ func TestManager_TestProxy_TripsBreakerOnError(t *testing.T) {
 	p.udpHealth.ClearManualState()
 
 	cfg := UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 		HealthCheck: config.HealthCheckConf{
 			Enabled:           true,
 			FailuresThreshold: 1,

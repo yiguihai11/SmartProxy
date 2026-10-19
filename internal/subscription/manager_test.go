@@ -48,7 +48,7 @@ func TestManager_LifecycleAndCache(t *testing.T) {
 	defer ts.Close()
 
 	mgrConfig := upstream.UpstreamConfig{
-		Default: "failover",
+		Strategy: "failover",
 	}
 	upMgr, err := upstream.NewManager(mgrConfig)
 	if err != nil {
@@ -134,7 +134,7 @@ func TestManager_LifecycleAndCache(t *testing.T) {
 func TestManager_ErrorHandling(t *testing.T) {
 	tempDir := t.TempDir()
 
-	mgrConfig := upstream.UpstreamConfig{Default: "failover"}
+	mgrConfig := upstream.UpstreamConfig{Strategy: "failover"}
 	upMgr, _ := upstream.NewManager(mgrConfig)
 
 	// Sub pointing to invalid URL
@@ -172,7 +172,7 @@ func TestManager_DuplicateAliases(t *testing.T) {
 	}))
 	defer server.Close()
 
-	mgrConfig := upstream.UpstreamConfig{Default: "failover"}
+	mgrConfig := upstream.UpstreamConfig{Strategy: "failover"}
 	upMgr, _ := upstream.NewManager(mgrConfig)
 
 	subsConf := []config.SubscriptionConf{
@@ -219,7 +219,7 @@ func boolPtr(b bool) *bool { return &b }
 // 都被正确解析为运行时 ItemState.UseProxy。
 func TestManager_UseProxyResolution(t *testing.T) {
 	tempDir := t.TempDir()
-	upMgr, _ := upstream.NewManager(upstream.UpstreamConfig{Default: "failover"})
+	upMgr, _ := upstream.NewManager(upstream.UpstreamConfig{Strategy: "failover"})
 
 	// nil → 默认 true;显式 false → false。
 	subs := []config.SubscriptionConf{
@@ -260,7 +260,7 @@ func TestManager_RefreshClientSelection(t *testing.T) {
 	}))
 	defer server.Close()
 
-	upMgr, _ := upstream.NewManager(upstream.UpstreamConfig{Default: "failover"})
+	upMgr, _ := upstream.NewManager(upstream.UpstreamConfig{Strategy: "failover"})
 
 	// 直连:成功。
 	direct := NewManager(tempDir, []config.SubscriptionConf{
@@ -273,7 +273,7 @@ func TestManager_RefreshClientSelection(t *testing.T) {
 
 	// 走代理但无节点:用独立的空 upstream manager,应立即失败且 LastError
 	// 指向代理出口,证明选择了代理客户端。
-	emptyUpMgr, _ := upstream.NewManager(upstream.UpstreamConfig{Default: "failover"})
+	emptyUpMgr, _ := upstream.NewManager(upstream.UpstreamConfig{Strategy: "failover"})
 	viaproxy := NewManager(t.TempDir(), []config.SubscriptionConf{
 		{Name: "viaproxy", URL: server.URL, Enabled: true, UseProxy: boolPtr(true)},
 	}, emptyUpMgr)

@@ -56,11 +56,11 @@
 
 | Go 字段 | JSON 键 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `Default` | `default` | `"failover"` | 默认代理选择策略 |
+| `Strategy` | `strategy` | `"failover"` | 默认代理选择策略（可选 `"failover"`、`"latency"`、`"round_robin"`、`"random"`；平滑兼容旧 `default` 字段） |
 | `HealthCheck` | `health_check` | 见下 | 健康检查配置 |
-| `Proxies` | `proxies` | `[]` | 代理列表，每项 `{alias, url, udp_in_tcp?}` |
+| `Proxies` | `proxies` | `[]` | 代理列表，每项 `{alias, url, udp_in_tcp?, enabled?}` |
 
-`proxies` 每项 `ProxyEntry` 字段：`alias`（缺省自动命名 `proxy<N>`）、`url`（协议 URL，如 SS / VMess）、`udp_in_tcp`（可选，socks5/socks5h 专用，见下）；**没有 type 字段，也没有 mode 字段** —— 每个上游的 TCP/UDP 能力由 scheme + 双熔断**自动辨识**（见 `docs/upstream.md` §3.2）。`health_check` 子字段：
+`proxies` 每项 `ProxyEntry` 字段：`alias`（缺省自动命名 `proxy<N>`）、`url`（协议 URL，如 SS / VMess）、`udp_in_tcp`（可选，socks5/socks5h 专用，见下）、`enabled`（可选布尔值，`false` 时节点初始禁用；平滑兼容旧 `enable` / `disabled` 字段）；**没有 type 字段，也没有 mode 字段** —— 每个上游的 TCP/UDP 能力由 scheme + 双熔断**自动辨识**（见 `docs/upstream.md` §3.2）。`health_check` 子字段：
 
 | 字段 | JSON 键 | 默认值 | 说明 |
 | --- | --- | --- | --- |

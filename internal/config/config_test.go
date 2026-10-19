@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -21,8 +22,11 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Listen.Port != 1080 {
 		t.Errorf("expected Listen.Port=1080, got %d", cfg.Listen.Port)
 	}
-	if cfg.Upstream.Default != "failover" {
-		t.Errorf("expected Upstream.Default=failover, got %s", cfg.Upstream.Default)
+	if cfg.Upstream.Strategy != "failover" {
+		t.Errorf("expected Upstream.Strategy=failover, got %s", cfg.Upstream.Strategy)
+	}
+	if cfg.Upstream.Default != "" {
+		t.Errorf("expected Upstream.Default to be empty, got %s", cfg.Upstream.Default)
 	}
 	if cfg.SmartProxy.Timeout != 2 {
 		t.Errorf("expected SmartProxy.Timeout=2, got %d", cfg.SmartProxy.Timeout)
@@ -182,8 +186,11 @@ func TestLoad_MinimalConfig(t *testing.T) {
 	if cfg.Listen.Port != 9999 {
 		t.Errorf("expected port 9999, got %d", cfg.Listen.Port)
 	}
-	if cfg.Upstream.Default != "round_robin" {
-		t.Errorf("expected round_robin, got %s", cfg.Upstream.Default)
+	if cfg.Upstream.Strategy != "round_robin" {
+		t.Errorf("expected round_robin, got %s", cfg.Upstream.Strategy)
+	}
+	if cfg.Upstream.Default != "" {
+		t.Errorf("expected Upstream.Default to be empty, got %s", cfg.Upstream.Default)
 	}
 
 	if cfg.Listen.Host != "::" {
@@ -276,8 +283,11 @@ func TestLoad_FullConfig(t *testing.T) {
 			t.Errorf("Auth.Password: got %s", cfg.Listen.Auth.Password)
 		}
 	}
-	if cfg.Upstream.Default != "random" {
-		t.Errorf("Upstream.Default: got %s", cfg.Upstream.Default)
+	if cfg.Upstream.Strategy != "random" {
+		t.Errorf("Upstream.Strategy: got %s", cfg.Upstream.Strategy)
+	}
+	if cfg.Upstream.Default != "" {
+		t.Errorf("expected Upstream.Default to be empty, got %s", cfg.Upstream.Default)
 	}
 	if len(cfg.Upstream.Proxies) != 2 {
 		t.Errorf("expected 2 proxies, got %d", len(cfg.Upstream.Proxies))
@@ -380,8 +390,11 @@ func TestApplyDefaults_EmptyFields(t *testing.T) {
 	if cfg.Listen.Port != 0 {
 		t.Errorf("Listen.Port: got %d, want 0 (applyDefaults must not touch port)", cfg.Listen.Port)
 	}
-	if cfg.Upstream.Default != "failover" {
-		t.Errorf("Upstream.Default: got %s", cfg.Upstream.Default)
+	if cfg.Upstream.Strategy != "failover" {
+		t.Errorf("Upstream.Strategy: got %s", cfg.Upstream.Strategy)
+	}
+	if cfg.Upstream.Default != "" {
+		t.Errorf("expected Upstream.Default to be empty, got %s", cfg.Upstream.Default)
 	}
 	if cfg.Routing.ChnrouteFile != "chnroute.txt" {
 		t.Errorf("ChnrouteFile: got %s", cfg.Routing.ChnrouteFile)
@@ -764,10 +777,20 @@ func TestConfig_Clone_FullDeepCopy(t *testing.T) {
 		},
 		Upstream: UpstreamConf{
 			Proxies: []ProxyEntry{
-				{Alias: "p1", URL: "socks5://1.2.3.4:1080", UDPInTCP: true},
+				{Alias: "p1", URL: "socks5://1.2.3.4:1080", UDPInTCP: true, Enabled: ptrBool(true), IPv6: ptrBool(false)},
+			},
+			Subscriptions: []SubscriptionConf{
+				{Name: "sub1", URL: "https://example.com/sub", UseProxy: ptrBool(true)},
 			},
 		},
 		DNS: DNSConf{
+			Adblock: AdblockConf{
+				AutoUpdate: ptrBool(true),
+				Lists: []AdblockListConf{
+					{Name: "list1", URL: "https://example.com/list", UseProxy: ptrBool(true)},
+				},
+				Whitelist: []string{"white.com"},
+			},
 			StaticRecords: []StaticRecord{
 				{Host: "example.com", IP: IPList{"1.2.3.4", "::1"}},
 			},
@@ -785,6 +808,11 @@ func TestConfig_Clone_FullDeepCopy(t *testing.T) {
 	// 1. Mutate pointers in cloned
 	cloned.Listen.Auth.Username = "mutated_user"
 	cloned.Listen.AdminAuth.Username = "mutated_admin"
+	*cloned.Upstream.Proxies[0].Enabled = false
+	*cloned.Upstream.Proxies[0].IPv6 = true
+	*cloned.Upstream.Subscriptions[0].UseProxy = false
+	*cloned.DNS.Adblock.AutoUpdate = false
+	*cloned.DNS.Adblock.Lists[0].UseProxy = false
 
 	// 2. Mutate slices in cloned
 	cloned.Listen.AdminCertSANs[0] = "mutated_san"
@@ -793,6 +821,7 @@ func TestConfig_Clone_FullDeepCopy(t *testing.T) {
 	cloned.TUN.RouteExcludePorts[0] = 9999
 	cloned.TUN.BlockedUIDs[0] = 9999
 	cloned.Upstream.Proxies[0].Alias = "mutated_alias"
+	cloned.DNS.Adblock.Whitelist[0] = "mutated_white.com"
 	cloned.DNS.StaticRecords[0].Host = "mutated.com"
 	cloned.DNS.StaticRecords[0].IP[0] = "9.9.9.9"
 	cloned.SmartProxy.Ports[0] = 8080
@@ -808,6 +837,24 @@ func TestConfig_Clone_FullDeepCopy(t *testing.T) {
 	}
 	if orig.Listen.AdminAuth.Username != "admin" {
 		t.Errorf("original Listen.AdminAuth mutated: %s", orig.Listen.AdminAuth.Username)
+	}
+	if *orig.Upstream.Proxies[0].Enabled != true {
+		t.Errorf("original Upstream.Proxies[0].Enabled mutated: %v", *orig.Upstream.Proxies[0].Enabled)
+	}
+	if *orig.Upstream.Proxies[0].IPv6 != false {
+		t.Errorf("original Upstream.Proxies[0].IPv6 mutated: %v", *orig.Upstream.Proxies[0].IPv6)
+	}
+	if *orig.Upstream.Subscriptions[0].UseProxy != true {
+		t.Errorf("original Upstream.Subscriptions[0].UseProxy mutated: %v", *orig.Upstream.Subscriptions[0].UseProxy)
+	}
+	if *orig.DNS.Adblock.AutoUpdate != true {
+		t.Errorf("original DNS.Adblock.AutoUpdate mutated: %v", *orig.DNS.Adblock.AutoUpdate)
+	}
+	if *orig.DNS.Adblock.Lists[0].UseProxy != true {
+		t.Errorf("original DNS.Adblock.Lists[0].UseProxy mutated: %v", *orig.DNS.Adblock.Lists[0].UseProxy)
+	}
+	if orig.DNS.Adblock.Whitelist[0] != "white.com" {
+		t.Errorf("original DNS.Adblock.Whitelist mutated: %s", orig.DNS.Adblock.Whitelist[0])
 	}
 	if orig.Listen.AdminCertSANs[0] != "192.168.1.1" {
 		t.Errorf("original AdminCertSANs mutated: %s", orig.Listen.AdminCertSANs[0])
@@ -838,6 +885,84 @@ func TestConfig_Clone_FullDeepCopy(t *testing.T) {
 	}
 	if orig.SmartProxy.Quic.Ports[0] != 443 {
 		t.Errorf("original SmartProxy.Quic.Ports mutated: %d", orig.SmartProxy.Quic.Ports[0])
+	}
+}
+
+func ptrBool(b bool) *bool {
+	return &b
+}
+
+func TestProxyEntry_UnmarshalJSON_LegacyNormalization(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		wantDisabled bool
+		wantEnabled  *bool
+	}{
+		{
+			name:         "canonical enabled true",
+			input:        `{"alias":"p1","url":"socks5://1.1.1.1:1080","enabled":true}`,
+			wantDisabled: false,
+			wantEnabled:  ptrBool(true),
+		},
+		{
+			name:         "canonical enabled false",
+			input:        `{"alias":"p1","url":"socks5://1.1.1.1:1080","enabled":false}`,
+			wantDisabled: true,
+			wantEnabled:  ptrBool(false),
+		},
+		{
+			name:         "legacy enable false",
+			input:        `{"alias":"p1","url":"socks5://1.1.1.1:1080","enable":false}`,
+			wantDisabled: true,
+			wantEnabled:  ptrBool(false),
+		},
+		{
+			name:         "legacy disabled true",
+			input:        `{"alias":"p1","url":"socks5://1.1.1.1:1080","disabled":true}`,
+			wantDisabled: true,
+			wantEnabled:  ptrBool(false),
+		},
+		{
+			name:         "omitted defaults to enabled",
+			input:        `{"alias":"p1","url":"socks5://1.1.1.1:1080"}`,
+			wantDisabled: false,
+			wantEnabled:  nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var p ProxyEntry
+			if err := json.Unmarshal([]byte(tc.input), &p); err != nil {
+				t.Fatalf("unexpected unmarshal error: %v", err)
+			}
+			if p.IsDisabled() != tc.wantDisabled {
+				t.Errorf("IsDisabled() = %v, want %v", p.IsDisabled(), tc.wantDisabled)
+			}
+			if tc.wantEnabled == nil {
+				if p.Enabled != nil {
+					t.Errorf("Enabled = %v, want nil", *p.Enabled)
+				}
+			} else {
+				if p.Enabled == nil || *p.Enabled != *tc.wantEnabled {
+					t.Errorf("Enabled = %v, want %v", p.Enabled, *tc.wantEnabled)
+				}
+			}
+
+			// Ensure marshaling never outputs legacy fields
+			marshaled, err := json.Marshal(p)
+			if err != nil {
+				t.Fatalf("marshal error: %v", err)
+			}
+			outStr := string(marshaled)
+			if strings.Contains(outStr, `"enable":`) {
+				t.Errorf("marshaled output contains legacy 'enable': %s", outStr)
+			}
+			if strings.Contains(outStr, `"disabled":`) {
+				t.Errorf("marshaled output contains legacy 'disabled': %s", outStr)
+			}
+		})
 	}
 }
 
