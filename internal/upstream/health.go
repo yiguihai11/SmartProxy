@@ -1039,7 +1039,7 @@ func parseAndSaveGeo(p *Proxy, body []byte) {
 			loc = strings.ToUpper(strings.TrimPrefix(line, "loc="))
 		}
 	}
-	if loc != "" && p.CountryCode() == "" {
+	if loc != "" && loc != "XX" {
 		p.SetCountryCode(loc)
 	}
 	if exitIP != "" {
@@ -1064,7 +1064,7 @@ func parseAndSaveGeoIPv6(p *Proxy, body []byte) {
 			loc = strings.ToUpper(strings.TrimPrefix(line, "loc="))
 		}
 	}
-	if loc != "" && p.CountryCode() == "" {
+	if loc != "" && loc != "XX" {
 		p.SetCountryCode(loc)
 	}
 	if exitIP != "" {
@@ -1147,12 +1147,8 @@ func discoverGeoViaUDP(ctx context.Context, p *Proxy, v6 bool) error {
 		return errors.New("no exit ip in dns response")
 	}
 
-	var countryCode string
-	if p.CountryCode() == "" {
-		countryCode = queryCymruCountry(conn, host, port, exitIP)
-	}
-
-	if countryCode != "" && p.CountryCode() == "" {
+	countryCode := queryCymruCountry(conn, host, port, exitIP)
+	if countryCode != "" && countryCode != "XX" {
 		p.SetCountryCode(countryCode)
 	}
 	if exitIP != "" {

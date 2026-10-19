@@ -367,6 +367,46 @@ func TestParseAndSaveGeo(t *testing.T) {
 	}
 }
 
+func TestParseAndSaveGeo_AutoCorrection(t *testing.T) {
+	// Node was statically inferred as "HK" from alias name
+	p := &Proxy{}
+	p.SetCountryCode("HK")
+	if p.CountryCode() != "HK" {
+		t.Fatalf("expected initial country code HK, got %q", p.CountryCode())
+	}
+
+	// Real Cloudflare trace probe detects Japan exit IP and loc=JP
+	body := []byte("fl=123\nip=153.120.45.67\nts=123456\nloc=JP\ncolo=NRT\n")
+	parseAndSaveGeo(p, body)
+
+	// Inferred country code must be auto-corrected by real probe observation
+	if p.CountryCode() != "JP" {
+		t.Errorf("expected auto-corrected country code JP, got %q", p.CountryCode())
+	}
+	if p.ExitIPv4() != "153.120.45.67" {
+		t.Errorf("expected ExitIPv4 153.120.45.67, got %q", p.ExitIPv4())
+	}
+
+	// Unknown loc=XX from Cloudflare should NOT overwrite an existing valid country code
+	bodyXX := []byte("fl=123\nip=153.120.45.68\nts=123456\nloc=XX\ncolo=NRT\n")
+	parseAndSaveGeo(p, bodyXX)
+	if p.CountryCode() != "JP" {
+		t.Errorf("expected country code to remain JP when loc=XX, got %q", p.CountryCode())
+	}
+
+	// IPv6 auto-correction
+	p6 := &Proxy{}
+	p6.SetCountryCode("US")
+	body6 := []byte("fl=456\nip=2400:cb00::1\nts=123456\nloc=SG\ncolo=SIN\n")
+	parseAndSaveGeoIPv6(p6, body6)
+	if p6.CountryCode() != "SG" {
+		t.Errorf("expected IPv6 auto-corrected country code SG, got %q", p6.CountryCode())
+	}
+	if p6.ExitIPv6() != "2400:cb00::1" {
+		t.Errorf("expected ExitIPv6 2400:cb00::1, got %q", p6.ExitIPv6())
+	}
+}
+
 func TestProxyHealth_ResetFailures(t *testing.T) {
 	// 1. Auto-opened circuit recovers on ResetFailures
 	ph := &ProxyHealth{
