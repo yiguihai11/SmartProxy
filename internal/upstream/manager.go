@@ -1884,7 +1884,8 @@ func (m *Manager) probeInitialGeo() {
 				continue
 			}
 			needsGeo := p.ExitIP() == "" || p.CountryCode() == ""
-			needsIPv6 := !p.IsIPv6Pinned() && p.IPv6Capability() == IPv6CapUnknown
+			canProbeIPv6 := p.IPv6Pin() == nil || *p.IPv6Pin()
+			needsIPv6 := canProbeIPv6 && (p.IPv6Capability() == IPv6CapUnknown || needsGeo)
 			if !needsGeo && !needsIPv6 {
 				continue
 			}

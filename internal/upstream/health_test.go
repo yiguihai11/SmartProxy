@@ -519,6 +519,107 @@ func TestHealthChecker_ProbeIPv6(t *testing.T) {
 	}
 }
 
+func startIPv6TraceMockSOCKS5(t *testing.T, resp string) (string, func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 512)
+				n, err := c.Read(buf)
+				if err != nil || n < 3 {
+					return
+				}
+				// Reply auth OK
+				c.Write([]byte{0x05, 0x00})
+				n, err = c.Read(buf)
+				if err != nil || n < 4 {
+					return
+				}
+				// SOCKS5 reply Success (0x00)
+				c.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+				// Read HTTP request and reply with trace response
+				n, err = c.Read(buf)
+				if err == nil && n > 0 {
+					c.Write([]byte(resp))
+				}
+			}(conn)
+		}
+	}()
+	return ln.Addr().String(), func() {
+		ln.Close()
+	}
+}
+
+func TestHealthChecker_ProbeIPv6_GeoDiscovery(t *testing.T) {
+	traceResp := "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nfl=123\nh=cp.cloudflare.com\nip=2606:4700::1111\nloc=JP\n"
+	addr, done := startIPv6TraceMockSOCKS5(t, traceResp)
+	defer done()
+
+	host, portStr, _ := net.SplitHostPort(addr)
+	port := parsePort(portStr)
+
+	// 1. Initial proxy with unknown geo info resolves country code and IPv6 exit IP
+	p := &Proxy{
+		Scheme: SchemeSOCKS5,
+		Host:   host,
+		Port:   port,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := probeIPv6(ctx, p)
+	if err != nil {
+		t.Fatalf("expected probeIPv6 to succeed, got %v", err)
+	}
+	if p.CountryCode() != "JP" {
+		t.Fatalf("expected country code JP, got %q", p.CountryCode())
+	}
+	if p.ExitIP() != "2606:4700::1111" {
+		t.Fatalf("expected exit IP 2606:4700::1111, got %q", p.ExitIP())
+	}
+
+	// 2. Proxy with existing IPv4 exit IP preserves IPv4 exit IP while updating country code
+	p2 := &Proxy{
+		Scheme: SchemeSOCKS5,
+		Host:   host,
+		Port:   port,
+	}
+	p2.SetGeoInfo("", "198.51.100.1")
+
+	_, err = probeIPv6(ctx, p2)
+	if err != nil {
+		t.Fatalf("expected probeIPv6 to succeed on p2, got %v", err)
+	}
+	if p2.CountryCode() != "JP" {
+		t.Fatalf("expected p2 country code JP, got %q", p2.CountryCode())
+	}
+	if p2.ExitIP() != "198.51.100.1" {
+		t.Fatalf("expected p2 to preserve IPv4 exit IP 198.51.100.1, got %q", p2.ExitIP())
+	}
+
+	// 3. Pinned disabled IPv6 is skipped
+	p3 := &Proxy{
+		Scheme: SchemeSOCKS5,
+		Host:   host,
+		Port:   port,
+	}
+	p3.PinIPv6(false)
+	_, err = probeIPv6(ctx, p3)
+	if err == nil {
+		t.Fatalf("expected probeIPv6 to error on pinned disabled IPv6")
+	}
+}
+
 func TestHealthChecker_StopReloadConcurrentNoPanic(t *testing.T) {
 	cfg := config.HealthCheckConf{
 		Enabled:  true,

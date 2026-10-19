@@ -643,7 +643,7 @@ func (hc *HealthChecker) ProbeAll() {
 					} else {
 						hc.RecordFailure(proxy, err)
 					}
-					if !proxy.IsIPv6Pinned() {
+					if pin := proxy.IPv6Pin(); pin == nil || *pin {
 						hc.checkProxyIPv6WithContext(parentCtx, proxy)
 					}
 					hc.releaseProbeSem()
@@ -750,36 +750,70 @@ func (hc *HealthChecker) checkProxyWithContext(ctx context.Context, stopCh <-cha
 const IPv6ProbeDefaultTarget = "2606:4700:4700::1111"
 
 // probeIPv6 actively probes whether proxy p can connect to an IPv6 destination.
-// It connects to IPv6ProbeDefaultTarget:80 and sends a minimal HTTP request.
+// It connects to IPv6ProbeDefaultTarget:80 and sends an HTTP request.
+// If the node lacks country code or exit IP, it requests /cdn-cgi/trace on Cloudflare Anycast IPv6
+// so that real exit IP and geo location are discovered over IPv6.
 // An error or timeout sets IPv6CapUnsupported; a valid response sets IPv6CapSupported.
 func probeIPv6(ctx context.Context, p *Proxy) (time.Duration, error) {
 	if p == nil {
 		return 0, errors.New("nil proxy")
 	}
-	if p.IsIPv6Pinned() {
-		return 0, nil
+	if pin := p.IPv6Pin(); pin != nil && !*pin {
+		return 0, errors.New("ipv6 disabled by configuration")
 	}
 	start := time.Now()
 	conn, err := p.Connect(ctx, IPv6ProbeDefaultTarget, 80)
 	if err != nil {
-		p.SetIPv6Capability(IPv6CapUnsupported)
+		if !p.IsIPv6Pinned() {
+			p.SetIPv6Capability(IPv6CapUnsupported)
+		}
 		return 0, err
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
-	req := "GET /generate_204 HTTP/1.1\r\nHost: [" + IPv6ProbeDefaultTarget + "]\r\nUser-Agent: SmartProxy/1.0\r\nConnection: close\r\n\r\n"
+
+	dl := time.Now().Add(3 * time.Second)
+	if ctxDl, ok := ctx.Deadline(); ok && ctxDl.Before(dl) {
+		dl = ctxDl
+	}
+	_ = conn.SetDeadline(dl)
+
+	needGeo := p.CountryCode() == "" || p.ExitIP() == ""
+	path := "/generate_204"
+	if needGeo {
+		path = "/cdn-cgi/trace"
+	}
+	req := "GET " + path + " HTTP/1.1\r\nHost: cp.cloudflare.com\r\nUser-Agent: SmartProxy/1.0\r\nConnection: close\r\n\r\n"
 	if _, err := conn.Write([]byte(req)); err != nil {
-		p.SetIPv6Capability(IPv6CapUnsupported)
+		if !p.IsIPv6Pinned() {
+			p.SetIPv6Capability(IPv6CapUnsupported)
+		}
 		return 0, err
 	}
-	buf := make([]byte, 64)
-	n, err := conn.Read(buf)
-	if err != nil && n == 0 {
-		p.SetIPv6Capability(IPv6CapUnsupported)
-		return 0, err
+
+	if needGeo {
+		buf, rErr := io.ReadAll(io.LimitReader(conn, 2048))
+		if len(buf) == 0 && rErr != nil {
+			if !p.IsIPv6Pinned() {
+				p.SetIPv6Capability(IPv6CapUnsupported)
+			}
+			return 0, rErr
+		}
+		parseAndSaveGeoIPv6(p, buf)
+	} else {
+		buf := make([]byte, 64)
+		n, rErr := conn.Read(buf)
+		if rErr != nil && n == 0 {
+			if !p.IsIPv6Pinned() {
+				p.SetIPv6Capability(IPv6CapUnsupported)
+			}
+			return 0, rErr
+		}
 	}
+
 	lat := time.Since(start)
-	p.SetIPv6Capability(IPv6CapSupported)
+	if !p.IsIPv6Pinned() {
+		p.SetIPv6Capability(IPv6CapSupported)
+	}
 	return lat, nil
 }
 
@@ -821,7 +855,10 @@ func (hc *HealthChecker) checkProxyIPv6(p *Proxy) {
 }
 
 func (hc *HealthChecker) checkProxyIPv6WithContext(parentCtx context.Context, p *Proxy) {
-	if p == nil || p.IsIPv6Pinned() {
+	if p == nil {
+		return
+	}
+	if pin := p.IPv6Pin(); pin != nil && !*pin {
 		return
 	}
 	ctx, cancel := context.WithTimeout(parentCtx, 5*time.Second)
@@ -922,6 +959,29 @@ func parseAndSaveGeo(p *Proxy, body []byte) {
 		} else if strings.HasPrefix(line, "loc=") {
 			loc = strings.ToUpper(strings.TrimPrefix(line, "loc="))
 		}
+	}
+	if loc != "" || exitIP != "" {
+		p.SetGeoInfo(loc, exitIP)
+	}
+}
+
+func parseAndSaveGeoIPv6(p *Proxy, body []byte) {
+	if p == nil || len(body) == 0 {
+		return
+	}
+	var exitIP, loc string
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "ip=") {
+			exitIP = strings.TrimPrefix(line, "ip=")
+		} else if strings.HasPrefix(line, "loc=") {
+			loc = strings.ToUpper(strings.TrimPrefix(line, "loc="))
+		}
+	}
+	currentIP := p.ExitIP()
+	if currentIP != "" && !strings.Contains(currentIP, ":") {
+		// Preserve existing IPv4 exit IP if already discovered.
+		exitIP = ""
 	}
 	if loc != "" || exitIP != "" {
 		p.SetGeoInfo(loc, exitIP)
