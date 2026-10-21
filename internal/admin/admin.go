@@ -2215,6 +2215,9 @@ func (s *Server) handleACL(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Info("admin: ACL file saved", "path", path)
+		if s.reloadConfig != nil {
+			s.reloadConfig()
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
@@ -2383,6 +2386,9 @@ func (s *Server) handleChnroute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Info("admin: chnroute file saved", "path", path)
+		if s.reloadConfig != nil {
+			s.reloadConfig()
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 

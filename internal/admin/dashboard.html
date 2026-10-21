@@ -986,16 +986,28 @@ function ldash(d){
       var elPx=document.getElementById('dash-v-proxies');if(elPx)elPx.textContent=pxCount;
       var elBl=document.getElementById('dash-v-bl');if(elBl)elBl.textContent=blCount;
       var elCa=document.getElementById('cache-ov');if(elCa)elCa.textContent=ca;
-      var elGc=document.getElementById('dash-v-gc');if(elGc)elGc.innerHTML='<span><span style="color:var(--text2)">Pause</span> '+gcPause+'</span><span><span style="color:var(--text2)">Count</span> '+gcCount+'</span>';
+      var elGc=document.getElementById('dash-v-gc');
+      if(elGc){
+        var gcHtml='<span><span style="color:var(--text2)">Pause</span> '+gcPause+'</span><span><span style="color:var(--text2)">Count</span> '+gcCount+'</span>';
+        if(elGc._renderedHtml!==gcHtml){elGc.innerHTML=gcHtml;elGc._renderedHtml=gcHtml;}
+      }
       var elTraf=document.getElementById('dash-v-traffic');if(elTraf)elTraf.textContent=fmtNum(tt);
       var elFill=document.getElementById('dash-v-traffic-fill');if(elFill)elFill.style.width=Math.min(100,tt>0?pp/tt*100:0)+'%';
-      var elTsub=document.getElementById('dash-v-traffic-sub');if(elTsub)elTsub.innerHTML='<span>Proxy: '+fmtNum(pp)+'</span><span>Direct: '+fmtNum(tt-pp)+'</span>';
+      var elTsub=document.getElementById('dash-v-traffic-sub');
+      if(elTsub){
+        var tsubHtml='<span>Proxy: '+fmtNum(pp)+'</span><span>Direct: '+fmtNum(tt-pp)+'</span>';
+        if(elTsub._renderedHtml!==tsubHtml){elTsub.innerHTML=tsubHtml;elTsub._renderedHtml=tsubHtml;}
+      }
       var elRt=document.getElementById('dash-v-route');if(elRt)elRt.textContent=rEntries;
-      var elRts=document.getElementById('dash-v-route-sub');if(elRts)elRts.innerHTML='<span style="color:var(--green)">IPv4: '+rV4+'</span><span style="color:var(--yellow)">IPv6: '+rV6+'</span>';
+      var elRts=document.getElementById('dash-v-route-sub');
+      if(elRts){
+        var rtsHtml='<span style="color:var(--green)">IPv4: '+rV4+'</span><span style="color:var(--yellow)">IPv6: '+rV6+'</span>';
+        if(elRts._renderedHtml!==rtsHtml){elRts.innerHTML=rtsHtml;elRts._renderedHtml=rtsHtml;}
+      }
     }
   }
   var dc2=document.getElementById('dash-cards2');
-  if(dc2){dc2.innerHTML='';dc2.style.display='none';}
+  if(dc2&&dc2.style.display!=='none'){dc2.innerHTML='';dc2.style.display='none';}
   st('dash-time');
   drawCPUGauge(s.cpu_percent||0);
 }
@@ -1125,7 +1137,7 @@ async function toggleCircuit(i,c){
     action=s.manual?(s.available?'auto':'enable'):(s.available?'disable':'enable');
   }
   await fetch('/health/proxy?alias='+encodeURIComponent(p.alias)+'&circuit='+encodeURIComponent(c)+'&action='+action,{method:'POST'});
-  loadHealth();
+  await loadHealth();
 }
 async function toggleStack(i,stack){
   var p=healthD.health.proxies[i];
@@ -1135,7 +1147,7 @@ async function toggleStack(i,stack){
   var allDisabled=(sTcp&&sTcp.manual&&!sTcp.available)&&(!sUdp||(sUdp.manual&&!sUdp.available));
   var action=allDisabled?'auto':'disable';
   await fetch('/health/proxy?alias='+encodeURIComponent(p.alias)+'&circuit='+encodeURIComponent(stack)+'&action='+action,{method:'POST'});
-  loadHealth();
+  await loadHealth();
 }
 var proxyTestState={};
 async function testProxy(i,proto){
@@ -1665,7 +1677,10 @@ function renderGroupCards(gid, container){
     }else{
       emptyMsg=t('No entries');
     }
-    container.innerHTML='<div style="color:var(--text2);padding:24px;text-align:center;grid-column:1/-1;">'+emptyMsg+'</div>';
+    if(container._renderedEmptyMsg!==emptyMsg){
+      container.innerHTML='<div style="color:var(--text2);padding:24px;text-align:center;grid-column:1/-1;">'+emptyMsg+'</div>';
+      container._renderedEmptyMsg=emptyMsg;
+    }
     return;
   }
   g.items.sort(function(a,b){
@@ -2148,7 +2163,11 @@ function lhealth(d){
   if(!container)return;
 
   if(proxies.length===0&&!lanternInfo&&currentSubs.length===0){
-    container.innerHTML='<div style="color:var(--text2);padding:24px;text-align:center">'+t('No proxy nodes to test')+'</div>';
+    var noProxyHtml='<div style="color:var(--text2);padding:24px;text-align:center">'+t('No proxy nodes to test')+'</div>';
+    if(container._renderedHtml!==noProxyHtml){
+      container.innerHTML=noProxyHtml;
+      container._renderedHtml=noProxyHtml;
+    }
     st('health-time');
     return;
   }
@@ -2317,7 +2336,7 @@ async function resetAutoCircuits(){
     var toast=document.getElementById('copy-toast');
     if(toast)showCopyToast(toast,msg);else alert(msg);
   }catch(e){ alert(e.message) }
-  loadHealth();
+  await loadHealth();
 }
 async function loadDashboard(){
   try{
@@ -2396,7 +2415,7 @@ async function tp(i){
     (sV6TCP&&sV6TCP.available)||
     (udpScheme&&sV6UDP&&sV6UDP.available);
   await fetch('/health/proxy?alias='+encodeURIComponent(p.alias)+'&circuit=both&action='+(anyUp?'disable':'auto'),{method:'POST'});
-  loadHealth();
+  await loadHealth();
 }
 function setProxyScheme(v){
   var g=document.getElementById('proxy-scheme-group');
@@ -3295,7 +3314,7 @@ async function refreshLanternNodes(btn){
     }
     var res=await r.json();
     showToast(tf('Successfully refreshed {0} Lantern nodes',[res.count||0]));
-    loadHealth();
+    await loadHealth();
   }catch(e){
     alert(tf('Refresh failed: {0}',[e.message]));
   }finally{
@@ -3310,7 +3329,7 @@ async function toggleLantern(enable){
       throw new Error(msg||('HTTP '+r.status));
     }
     showToast(t(enable?'Lantern provider enabled':'Lantern provider disabled'));
-    loadHealth();
+    await loadHealth();
   }catch(e){
     alert(tf('Operation failed: {0}',[e.message]));
   }
@@ -3332,7 +3351,10 @@ function renderSubscriptions(subs){
     html+='<div style="color:var(--text2);padding:24px;text-align:center;font-size:0.85rem">'+
       t('No subscriptions added yet. Click "+ Add Subscription" to import nodes from URL.')+
     '</div></div>';
-    el.innerHTML=html;
+    if(el._renderedHtml!==html){
+      el.innerHTML=html;
+      el._renderedHtml=html;
+    }
     return;
   }
   html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px">';
@@ -4256,7 +4278,7 @@ function setBLFilter(v){
 }
 async function dbl(h){
   await fetch('/blacklist?host='+encodeURIComponent(h),{method:'DELETE'});
-  loadBlacklist()
+  await loadBlacklist();
 }
 async function blDeleteSelected(){
   var keys=Object.keys(blSelected);
@@ -4459,10 +4481,14 @@ function renderStatic(){
   var rows=staticGetFiltered();
   document.getElementById('static-info').textContent=tf('{0} records',[rows.length]);
   if(!rows.length){
-    el.innerHTML='<div style="padding:32px;text-align:center;color:var(--text2)">No static records</div>';
+    var emptyHtml='<div style="padding:32px;text-align:center;color:var(--text2)">No static records</div>';
+    if(el._renderedHtml!==emptyHtml){
+      el.innerHTML=emptyHtml;
+      el._renderedHtml=emptyHtml;
+    }
     return;
   }
-  el.innerHTML='<table><thead><tr><th>Host</th><th>Addresses</th><th></th></tr></thead><tbody>'+
+  var html='<table><thead><tr><th>Host</th><th>Addresses</th><th></th></tr></thead><tbody>'+
     rows.map(function(e){
       var host=(e.host||'').replace(/'/g,"\\'");
       var ipsStr=(e.ip||[]).join(', ').replace(/'/g,"\\'");
@@ -4474,6 +4500,10 @@ function renderStatic(){
         '<td class="clickable" title="Click to edit" style="font-family:var(--mono);font-size:.8rem;word-break:break-all" onclick="openStaticEditDialog(\''+host+'\',\''+ipsStr+'\')">'+chips+'</td>'+
         '<td style="text-align:right"><button class="btn btn-sm danger" onclick="staticDeleteHost(\''+host+'\')">Delete</button></td></tr>';
     }).join('')+'</tbody></table>';
+  if(el._renderedHtml!==html){
+    el.innerHTML=html;
+    el._renderedHtml=html;
+  }
 }
 function staticOnSearch(){staticSearch=document.getElementById('static-search').value;renderStatic()}
 function openStaticAddDialog(){
@@ -6442,7 +6472,7 @@ async function disconnectDevice(ip) {
       alert(t('Error') + ': ' + txt);
       return;
     }
-    loadDevices();
+    await loadDevices();
   } catch(e) {
     alert(t('Error') + ': ' + e.message);
   }
@@ -6459,7 +6489,7 @@ async function blockDevice(ip, mac, hostname) {
       alert(t('Error') + ': ' + txt);
       return;
     }
-    loadDevices();
+    await loadDevices();
   } catch(e) {
     alert(t('Error') + ': ' + e.message);
   }
@@ -6474,7 +6504,7 @@ async function unblockDevice(ip, mac) {
       alert(t('Error') + ': ' + txt);
       return;
     }
-    loadDevices();
+    await loadDevices();
   } catch(e) {
     alert(t('Error') + ': ' + e.message);
   }
