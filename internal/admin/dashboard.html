@@ -2198,49 +2198,7 @@ function lhealth(d){
     }
   }
 
-  if(canPatchSections){
-    groupOrder.forEach(function(gid, sIdx){
-      var g=groups[gid];
-      var sec=existingSections[sIdx];
-      var isHidden=(proxyGroupFilter!=='all'&&proxyGroupFilter!==gid);
-      var isCollapsed=_forceOpenGroups[gid]?false:(proxyGroupsCollapsed[gid]!==undefined?!!proxyGroupsCollapsed[gid]:true);
-      var v6Suffix=(g.v6Count>0)?(' · IPv6: '+g.v6Count):'';
-      var badgeText=g.disabled?t('Disabled'):(tf('{0} nodes',[g.items.length])+' · '+tf('{0} online',[g.onlineCount])+v6Suffix);
-
-      sec.classList.toggle('collapsed',isCollapsed);
-      sec.classList.toggle('hidden',isHidden);
-
-      var badgeEl=sec.querySelector('.proxy-group-badge');
-      if(badgeEl){
-        badgeEl.textContent=badgeText;
-        badgeEl.className='proxy-group-badge '+(g.onlineCount>0?'online':'');
-      }
-
-      var collapseBtn=sec.querySelector('.proxy-group-collapse-btn');
-      if(collapseBtn)collapseBtn.textContent=t(isCollapsed?'Expand':'Collapse');
-
-      var cardsEl=document.getElementById('group-cards-'+gid);
-      if(cardsEl){
-        if(isCollapsed){
-          if(cardsEl.children.length>0)cardsEl.innerHTML='';
-        }else{
-          renderGroupCards(gid, cardsEl);
-        }
-      }
-    });
-    st('health-time');
-    return;
-  }
-
-  var sectionsHtml='';
-  groupOrder.forEach(function(gid){
-    var g=groups[gid];
-    var isHidden=(proxyGroupFilter!=='all'&&proxyGroupFilter!==gid);
-    var isCollapsed=_forceOpenGroups[gid]?false:(proxyGroupsCollapsed[gid]!==undefined?!!proxyGroupsCollapsed[gid]:true);
-    var groupIcon=(gid==='lantern'?'🏮':gid==='custom'?'📌':gid.indexOf('sub:')===0?'📑':'🌐');
-    var v6Suffix=(g.v6Count>0)?(' · IPv6: '+g.v6Count):'';
-    var badgeText=g.disabled?t('Disabled'):(tf('{0} nodes',[g.items.length])+' · '+tf('{0} online',[g.onlineCount])+v6Suffix);
-
+  function buildGroupActionsHtml(gid, g, isCollapsed){
     var actionsHtml='';
     if(gid==='lantern'){
       if(lanternEnabled){
@@ -2270,6 +2228,62 @@ function lhealth(d){
     }
 
     actionsHtml+='<button class="btn btn-sm ghost proxy-group-collapse-btn" onclick="toggleGroupCollapse(\''+gid+'\')">'+t(isCollapsed?'Expand':'Collapse')+'</button>';
+    return actionsHtml;
+  }
+
+  if(canPatchSections){
+    groupOrder.forEach(function(gid, sIdx){
+      var g=groups[gid];
+      var sec=existingSections[sIdx];
+      var isHidden=(proxyGroupFilter!=='all'&&proxyGroupFilter!==gid);
+      var isCollapsed=_forceOpenGroups[gid]?false:(proxyGroupsCollapsed[gid]!==undefined?!!proxyGroupsCollapsed[gid]:true);
+      var v6Suffix=(g.v6Count>0)?(' · IPv6: '+g.v6Count):'';
+      var badgeText=g.disabled?t('Disabled'):(tf('{0} nodes',[g.items.length])+' · '+tf('{0} online',[g.onlineCount])+v6Suffix);
+
+      sec.classList.toggle('collapsed',isCollapsed);
+      sec.classList.toggle('hidden',isHidden);
+
+      var badgeEl=sec.querySelector('.proxy-group-badge');
+      if(badgeEl){
+        badgeEl.textContent=badgeText;
+        badgeEl.className='proxy-group-badge '+(g.onlineCount>0?'online':'');
+      }
+
+      var collapseBtn=sec.querySelector('.proxy-group-collapse-btn');
+      if(collapseBtn)collapseBtn.textContent=t(isCollapsed?'Expand':'Collapse');
+
+      var actionsEl=sec.querySelector('.proxy-group-actions');
+      if(actionsEl){
+        var newActionsHtml=buildGroupActionsHtml(gid, g, isCollapsed);
+        if(actionsEl._renderedHtml!==newActionsHtml){
+          actionsEl.innerHTML=newActionsHtml;
+          actionsEl._renderedHtml=newActionsHtml;
+        }
+      }
+
+      var cardsEl=document.getElementById('group-cards-'+gid);
+      if(cardsEl){
+        if(isCollapsed){
+          if(cardsEl.children.length>0)cardsEl.innerHTML='';
+        }else{
+          renderGroupCards(gid, cardsEl);
+        }
+      }
+    });
+    st('health-time');
+    return;
+  }
+
+  var sectionsHtml='';
+  groupOrder.forEach(function(gid){
+    var g=groups[gid];
+    var isHidden=(proxyGroupFilter!=='all'&&proxyGroupFilter!==gid);
+    var isCollapsed=_forceOpenGroups[gid]?false:(proxyGroupsCollapsed[gid]!==undefined?!!proxyGroupsCollapsed[gid]:true);
+    var groupIcon=(gid==='lantern'?'🏮':gid==='custom'?'📌':gid.indexOf('sub:')===0?'📑':'🌐');
+    var v6Suffix=(g.v6Count>0)?(' · IPv6: '+g.v6Count):'';
+    var badgeText=g.disabled?t('Disabled'):(tf('{0} nodes',[g.items.length])+' · '+tf('{0} online',[g.onlineCount])+v6Suffix);
+
+    var actionsHtml=buildGroupActionsHtml(gid, g, isCollapsed);
 
     var cardsHtml='';
     if(!isCollapsed){
