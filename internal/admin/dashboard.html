@@ -3502,6 +3502,9 @@ async function saveSubscriptionBtn(){
     showToast(t('Subscription saved successfully!'));
     loadHealth();
     if(document.querySelector('#view-config.active'))loadConfig();
+    if(enabled){
+      refreshSub(name);
+    }
   }catch(e){
     alert(tf('Save failed: {0}',[e.message]));
   }finally{

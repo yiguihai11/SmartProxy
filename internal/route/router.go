@@ -569,7 +569,11 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 			// Direct failed!
 			shortReason := simplifyError(res.err, host, port)
 			ll.Warn("direct connection failed, falling back to proxy", "host", host, "port", port, "domain", domain, "duration_ms", time.Since(start).Milliseconds(), "reason", shortReason)
-			r.addToBlacklists(host, port, domain, shortReason)
+			if !isNetworkUnreachable(res.err) && !isLocalNetworkErrorReason(shortReason) {
+				r.addToBlacklists(host, port, domain, shortReason)
+			} else {
+				ll.Debug("skipping dynamic blacklist addition for local network failure", "host", host, "port", port, "domain", domain, "reason", shortReason)
+			}
 
 			// If data was partially written, only replay-safe payloads (TLS ClientHello on any failure,
 			// or idempotent HTTP requests on RST / timeout) can be replayed over upstream proxy.
@@ -815,7 +819,7 @@ func isTLSClientHello(pkt []byte) bool {
 }
 
 func (r *Router) addToBlacklists(host string, port int, domain, reason string) {
-	if netutil.IsLAN(host) {
+	if netutil.IsLAN(host) || isLocalNetworkErrorReason(reason) {
 		return
 	}
 	cfg := r.cfg.Load()
@@ -856,6 +860,9 @@ func (r *Router) IsDomainBlacklisted(domain string, port int) bool {
 // BlacklistIP 把目标 IP 加入动态黑名单(QUIC 判死回调 / 其它"直连判死"后调用),
 // 生存期取 blacklist_ttl。之后该 IP 的 TCP smart 直连与 UDP 路由都会改走代理。
 func (r *Router) BlacklistIP(ip string, port int, reason string) {
+	if isLocalNetworkErrorReason(reason) {
+		return
+	}
 	cfg := r.cfg.Load()
 	if cfg != nil && cfg.disableIPBlacklist {
 		slog.Debug("skipping BlacklistIP (disable_ip_blacklist enabled)", "ip", ip, "port", port, "reason", reason)
@@ -867,6 +874,9 @@ func (r *Router) BlacklistIP(ip string, port int, reason string) {
 
 // BlacklistDomain 把目标域名加入动态黑名单(UDP 域名型目标判死时按 SNI/ATYP 域名写)。
 func (r *Router) BlacklistDomain(domain string, port int, reason string) {
+	if isLocalNetworkErrorReason(reason) {
+		return
+	}
 	cfg := r.cfg.Load()
 	r.domainBlacklist.Add(domain, port, cfg.blacklistTTL, reason)
 	slog.Info("blacklisted domain (UDP smart)", "domain", domain, "port", port, "reason", reason)
@@ -918,12 +928,33 @@ func isNetworkUnreachable(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH) {
+	if errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETDOWN) {
 		return true
 	}
-	msg := err.Error()
+	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "network is unreachable") ||
-		strings.Contains(msg, "no route to host")
+		strings.Contains(msg, "network unreachable") ||
+		strings.Contains(msg, "no route to host") ||
+		strings.Contains(msg, "network is down") ||
+		strings.Contains(msg, "host is down")
+}
+
+// isLocalNetworkErrorReason reports whether reason represents a local routing/network failure
+// (such as no local network connection, interface down, or no route in local routing table)
+// rather than remote blockage or GFW intervention. These errors must NOT be recorded in the
+// dynamic blacklist to prevent temporary local network glitches from polluting routing rules.
+func isLocalNetworkErrorReason(reason string) bool {
+	r := strings.ToLower(reason)
+	return r == "network unreachable" ||
+		r == "no route to host" ||
+		r == "network is unreachable" ||
+		r == "network is down" ||
+		r == "host is down" ||
+		strings.Contains(r, "network is unreachable") ||
+		strings.Contains(r, "network unreachable") ||
+		strings.Contains(r, "no route to host") ||
+		strings.Contains(r, "network is down") ||
+		strings.Contains(r, "host is down")
 }
 
 // dialDirectTCP dials host:port with timeout. If the dial fails due to the local network

@@ -297,6 +297,49 @@ func TestRouter_AddToBlacklists_LANAndBenchmark(t *testing.T) {
 	}
 }
 
+func TestRouter_AddToBlacklists_LocalNetworkErrorsIgnored(t *testing.T) {
+	r := newRouter()
+
+	localFailures := []string{
+		"network unreachable",
+		"no route to host",
+		"network is unreachable",
+		"connect: network is unreachable",
+		"dial tcp: no route to host",
+		"network is down",
+		"host is down",
+	}
+
+	for _, reason := range localFailures {
+		r.addToBlacklists("1.2.3.4", 443, "example.com", reason)
+		if r.ipBlacklist.IsBlacklisted("1.2.3.4", 443) {
+			t.Errorf("ip should NOT be blacklisted for reason %q", reason)
+		}
+		if r.domainBlacklist.IsBlacklisted("example.com", 443) {
+			t.Errorf("domain should NOT be blacklisted for reason %q", reason)
+		}
+
+		r.BlacklistIP("1.2.3.4", 443, reason)
+		if r.ipBlacklist.IsBlacklisted("1.2.3.4", 443) {
+			t.Errorf("BlacklistIP should ignore local network failure %q", reason)
+		}
+
+		r.BlacklistDomain("example.com", 443, reason)
+		if r.domainBlacklist.IsBlacklisted("example.com", 443) {
+			t.Errorf("BlacklistDomain should ignore local network failure %q", reason)
+		}
+	}
+
+	// Remote failure reasons MUST still be blacklisted
+	r.addToBlacklists("1.2.3.4", 443, "example.com", "i/o timeout")
+	if !r.ipBlacklist.IsBlacklisted("1.2.3.4", 443) {
+		t.Error("ip should be blacklisted for remote timeout")
+	}
+	if !r.domainBlacklist.IsBlacklisted("example.com", 443) {
+		t.Error("domain should be blacklisted for remote timeout")
+	}
+}
+
 func TestRouter_UpdateConfig(t *testing.T) {
 	cn := chnroute.New()
 	mgr, _ := upstream.NewManager(upstream.UpstreamConfig{Strategy: "failover"})
@@ -931,11 +974,20 @@ func TestIsNetworkUnreachable(t *testing.T) {
 	if !isNetworkUnreachable(syscall.EHOSTUNREACH) {
 		t.Error("expected EHOSTUNREACH to be recognized as unreachable")
 	}
+	if !isNetworkUnreachable(syscall.ENETDOWN) {
+		t.Error("expected ENETDOWN to be recognized as unreachable")
+	}
 	if !isNetworkUnreachable(errors.New("dial tcp [2408::1]:443: connect: network is unreachable")) {
 		t.Error("expected network is unreachable string to be recognized")
 	}
 	if !isNetworkUnreachable(errors.New("dial tcp: no route to host")) {
 		t.Error("expected no route to host string to be recognized")
+	}
+	if !isNetworkUnreachable(errors.New("connect: network is down")) {
+		t.Error("expected network is down string to be recognized")
+	}
+	if !isNetworkUnreachable(errors.New("connect: host is down")) {
+		t.Error("expected host is down string to be recognized")
 	}
 	if isNetworkUnreachable(errors.New("connection reset by peer")) {
 		t.Error("connection reset should not be unreachable")
