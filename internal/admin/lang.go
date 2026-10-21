@@ -416,8 +416,14 @@ var zhStrings = map[string]string{
 	"{0} — {1} record": "{0} — {1} 记录",
 
 	// config page
-	"Clear the editor content": "清空编辑器内容",
-	"ACL":                      "ACL", "Chnroute": "Chnroute",
+	"Clear the editor content":              "清空编辑器内容",
+	"ACL":                                   "ACL",
+	"Chnroute":                              "Chnroute",
+	"Paste":                                 "粘贴",
+	"Paste from clipboard":                  "从剪贴板粘贴",
+	"Pasted from clipboard":                 "已从剪贴板粘贴",
+	"Please long-press the editor to paste": "请长按编辑器区域进行粘贴",
+	"Clipboard is empty":                    "剪贴板为空",
 
 	// validation / feedback (whole strings or tf templates)
 	"Alias is required":                                        "别名不能为空",

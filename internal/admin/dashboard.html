@@ -275,6 +275,9 @@ tr:last-child td{border-bottom:none}
 .toggle-btn.active{background:var(--accent);color:#fff}
 .config-editor{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:0;width:100%;height:600px;color:var(--text);resize:vertical;overflow:hidden;outline:none}
 .config-editor .CodeMirror{height:100%;font-family:var(--mono);font-size:.8rem;line-height:1.55}
+.config-editor .CodeMirror-scroll{min-height:100%}
+.config-editor .CodeMirror-sizer{min-height:100%!important}
+.config-editor .CodeMirror-lines{min-height:100%!important;cursor:text}
 .config-actions{display:flex;gap:8px;margin-top:8px}
 .search-input{flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 12px;color:var(--text);font-family:var(--font);font-size:.82rem;outline:none;transition:border-color .15s}
 .search-input:focus{border-color:var(--accent)}
@@ -5380,24 +5383,94 @@ function showCfg(i){
   document.getElementById('cfg-content').innerHTML=
     '<div class="config-section"><div id="'+k+'-wrap" class="config-editor"></div><div class="config-actions">'+
     '<button class="btn primary btn-sm" onclick="sv(\''+k+'\')">Save</button>'+
-    '<button class="btn btn-sm" onclick="clearCfg(\''+k+'\')" title="Clear the editor content">Clear</button>'+
+    '<button class="btn btn-sm" onclick="pasteCfg(\''+k+'\')" title="'+escAttr(t('Paste from clipboard'))+'">Paste</button>'+
+    '<button class="btn btn-sm" onclick="copyCfg(\''+k+'\')" title="'+escAttr(t('Copy'))+'">Copy</button>'+
+    '<button class="btn btn-sm" onclick="clearCfg(\''+k+'\')" title="'+escAttr(t('Clear the editor content'))+'">Clear</button>'+
     (k==='cfg'?'<button class="btn btn-sm" onclick="loadConfig()">Reset</button>':'')+
-    (k==='cfg'?'<button class="btn btn-sm" onclick="copyCfg()">Copy</button>':'')+
-    (k==='cfg'?'<button class="btn btn-sm" onclick="exportCfg(\'cfg\')">Export</button>':'')+
-    (k==='acl'?'<button class="btn btn-sm" onclick="exportCfg(\'acl\')">Export</button>':'')+
-    (k==='chn'?'<button class="btn btn-sm" onclick="exportCfg(\'chn\')">Export</button>':'')+
+    '<button class="btn btn-sm" onclick="exportCfg(\''+k+'\')">Export</button>'+
     (k==='chn'?'<button class="btn btn-sm" onclick="uploadChn()">Upload</button>':'')+
     (k==='acl'||k==='chn'?'<button class="btn btn-sm" onclick="openFileBrowser(\''+k+'\')">Select File</button>':'')+
     (k==='acl'?'<button class="btn btn-sm" id="acl-audit-btn" onclick="checkACLInvalidUpstreams(true)" title="'+escAttr(t('Check for missing/invalid proxy upstreams in ACL rules'))+'">🔍 '+t('Audit Upstreams')+'</button>':'')+
     '</div></div>';
-  var opts={value:cfgD[k]||'',theme:effTheme()==='light'?'default':'dracula',lineNumbers:k==='cfg',lineWrapping:true,autofocus:false};
+  var opts={value:cfgD[k]||'',theme:effTheme()==='light'?'default':'dracula',lineNumbers:k==='cfg',lineWrapping:true,autofocus:false,inputStyle:'textarea'};
   if(k==='cfg'){opts.mode={name:'javascript',json:true};opts.indentUnit=2;opts.tabSize=2}
   else if(k==='acl'){opts.mode={name:'acl'}}
-  window['cm_'+k]=CodeMirror(document.getElementById(k+'-wrap'),opts);
+  var cm=CodeMirror(document.getElementById(k+'-wrap'),opts);
+  window['cm_'+k]=cm;
+  makeCMTouchFriendly(cm);
   if(k==='acl'){
     window._aclAuditDismissed=false;
     setTimeout(function(){ checkACLInvalidUpstreams(false); }, 150);
   }
+}
+function makeCMTouchFriendly(cm){
+  if(!cm)return;
+  var wrapper=cm.getWrapperElement();
+  var input=cm.getInputField();
+  if(!wrapper||!input)return;
+  var inputWrap=input.parentNode;
+
+  var touchTimer=null,startX=0,startY=0;
+  function resetInput(){
+    if(touchTimer){clearTimeout(touchTimer);touchTimer=null}
+    if(inputWrap){
+      inputWrap.style.left='';
+      inputWrap.style.top='';
+      inputWrap.style.width='1px';
+      inputWrap.style.height='1px';
+      inputWrap.style.zIndex='';
+      inputWrap.style.opacity='0';
+    }
+  }
+
+  wrapper.addEventListener('touchstart',function(e){
+    if(!e.touches||e.touches.length!==1)return;
+    var t0=e.touches[0];
+    startX=t0.clientX;
+    startY=t0.clientY;
+
+    var pos=cm.coordsChar({left:startX,top:startY},'window');
+    if(pos)cm.setCursor(pos);
+
+    if(inputWrap){
+      var wRect=wrapper.getBoundingClientRect();
+      var relX=startX-wRect.left;
+      var relY=startY-wRect.top;
+      inputWrap.style.position='absolute';
+      inputWrap.style.left=Math.max(0,relX-24)+'px';
+      inputWrap.style.top=Math.max(0,relY-24)+'px';
+      inputWrap.style.width='48px';
+      inputWrap.style.height='48px';
+      inputWrap.style.zIndex='9999';
+      inputWrap.style.opacity='0.01';
+      input.style.width='100%';
+      input.style.height='100%';
+      input.style.position='absolute';
+      input.style.left='0';
+      input.style.top='0';
+      try{input.focus()}catch(_e){}
+    }
+  },{passive:true});
+
+  wrapper.addEventListener('touchmove',function(e){
+    if(!e.touches||e.touches.length!==1)return;
+    var dx=Math.abs(e.touches[0].clientX-startX);
+    var dy=Math.abs(e.touches[0].clientY-startY);
+    if(dx>8||dy>8)resetInput();
+  },{passive:true});
+
+  wrapper.addEventListener('touchend',function(){
+    setTimeout(resetInput,400);
+  },{passive:true});
+
+  wrapper.addEventListener('touchcancel',function(){
+    setTimeout(resetInput,100);
+  },{passive:true});
+
+  wrapper.addEventListener('contextmenu',function(){
+    try{input.focus()}catch(_e){}
+    setTimeout(resetInput,500);
+  },{passive:true});
 }
 async function sv(name){
   var map={cfg:['cfg-editor','/config','Config'],acl:['acl-editor','/acl','ACL'],chn:['chn-editor','/chnroute','Chnroute']};
@@ -5430,20 +5503,49 @@ async function sv(name){
     revert()
   }
 }
-function copyCfg(){
-  var cm=window['cm_cfg'];
+function copyCfg(k){
+  k=k||'cfg';
+  var cm=window['cm_'+k];
   if(!cm)return;
   var text=cm.getValue();
   var toast=document.getElementById('copy-toast');
+  var msg=k==='cfg'?'Config copied':'Copied!';
   if(navigator.clipboard&&navigator.clipboard.writeText){
     navigator.clipboard.writeText(text).then(function(){
-      showCopyToast(toast,'Config copied');
+      showCopyToast(toast,msg);
     }).catch(function(){
       fallbackCopy(text,toast);
     });
   }else{
     fallbackCopy(text,toast);
   }
+}
+async function pasteCfg(k){
+  k=k||'cfg';
+  var cm=window['cm_'+k];
+  if(!cm)return;
+  var toast=document.getElementById('copy-toast');
+  try{
+    if(navigator.clipboard&&navigator.clipboard.readText){
+      var text=await navigator.clipboard.readText();
+      if(!text){
+        if(toast)showCopyToast(toast,'Clipboard is empty');
+        return;
+      }
+      var doc=cm.getDoc();
+      if(doc.somethingSelected()){
+        doc.replaceSelection(text);
+      }else{
+        var cursor=doc.getCursor();
+        doc.replaceRange(text,cursor);
+      }
+      cm.focus();
+      if(toast)showCopyToast(toast,'Pasted from clipboard');
+      return;
+    }
+  }catch(_e){}
+  cm.focus();
+  if(toast)showCopyToast(toast,'Please long-press the editor to paste');
 }
 // 一键清理:清空当前 tab 的编辑器内容。不落盘,保存仍走 Save。
 function clearCfg(k){
