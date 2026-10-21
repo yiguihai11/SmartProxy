@@ -1446,9 +1446,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Info("admin: config saved to disk", "path", s.configPath)
-		// Reload is owned by the config file watcher (fsnotify watches configPath),
-		// which fires on this write. Calling reloadConfig here as well would
-		// double-trigger a full upstream/engine reload on every save.
+		if s.reloadConfig != nil {
+			s.reloadConfig()
+		}
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 
 	default:
@@ -1744,10 +1744,10 @@ func (s *Server) handleProxiesCleanDead(w http.ResponseWriter, r *http.Request) 
 }
 
 // saveConfig copies the live config, applies mutate to the copy, validates it,
-// and writes it to disk — the same persistence path as handleConfig, where the
-// actual reload is owned by the config file watcher (fsnotify) so no manual
-// reloadConfig call happens here. Returns the updated copy plus two errors:
-// validationErr (client-facing, 400) and writeErr (server-facing, 500).
+// writes it to disk, and triggers reloadConfig if configured so that in-memory
+// engine components update immediately without waiting for fsnotify debounce.
+// Returns the updated copy plus two errors: validationErr (client-facing, 400)
+// and writeErr (server-facing, 500).
 func (s *Server) saveConfig(mutate func(c *config.Config)) (*config.Config, error, error) {
 	if s.configSrc == nil || s.configPath == "" {
 		return nil, nil, errors.New("config persistence not configured")
@@ -1774,6 +1774,9 @@ func (s *Server) saveConfig(mutate func(c *config.Config)) (*config.Config, erro
 		return nil, nil, err
 	}
 	slog.Info("admin: config saved to disk", "path", s.configPath)
+	if s.reloadConfig != nil {
+		s.reloadConfig()
+	}
 	return next, nil, nil
 }
 

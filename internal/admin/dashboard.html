@@ -1490,7 +1490,7 @@ async function cleanDeadProxies(aliases){
     }
     var res=await r.json();
     showToast(tf('Successfully cleaned up {0} dead nodes',[res.count||aliases.length]));
-    loadHealth();
+    await loadHealth();
     if(document.querySelector('#view-config.active'))loadConfig();
   }catch(e){
     alert(tf('Clean up failed: {0}',[e.message]));
@@ -3524,7 +3524,7 @@ async function saveSubscriptionBtn(){
     }
     closeSubscriptionDialog();
     showToast(t('Subscription saved successfully!'));
-    loadHealth();
+    await loadHealth();
     if(document.querySelector('#view-config.active'))loadConfig();
     if(enabled){
       refreshSub(name);
@@ -3547,7 +3547,7 @@ async function refreshSub(name, btn){
     }
     var res=await r.json();
     showToast(tf('Successfully refreshed {0} subscription nodes',[res.count||0]));
-    loadHealth();
+    await loadHealth();
   }catch(e){
     alert(tf('Refresh failed: {0}',[e.message]));
   }finally{
@@ -3562,7 +3562,15 @@ async function toggleSub(name, enable){
       throw new Error(msg||('HTTP '+r.status));
     }
     showToast(t(enable?'Subscription enabled':'Subscription disabled'));
-    loadHealth();
+    if(window._lastKnownSubs){
+      window._lastKnownSubs.forEach(function(s){
+        if(s.name===name||s.name.toLowerCase()===name.toLowerCase()){
+          s.enabled=enable;
+        }
+      });
+      renderSubscriptions(window._lastKnownSubs);
+    }
+    await loadHealth();
     if(document.querySelector('#view-config.active'))loadConfig();
   }catch(e){
     alert(tf('Operation failed: {0}',[e.message]));
@@ -3577,7 +3585,13 @@ async function deleteSub(name){
       throw new Error(msg||('HTTP '+r.status));
     }
     showToast(t('Subscription deleted'));
-    loadHealth();
+    if(window._lastKnownSubs){
+      window._lastKnownSubs=window._lastKnownSubs.filter(function(s){
+        return s.name!==name && s.name.toLowerCase()!==name.toLowerCase();
+      });
+      renderSubscriptions(window._lastKnownSubs);
+    }
+    await loadHealth();
     if(document.querySelector('#view-config.active'))loadConfig();
   }catch(e){
     alert(tf('Delete failed: {0}',[e.message]));
