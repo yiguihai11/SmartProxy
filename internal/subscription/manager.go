@@ -220,6 +220,16 @@ func (m *Manager) Refresh(ctx context.Context, name string) (int, error) {
 	m.mu.RLock()
 	item, exists := m.subs[name]
 	if !exists {
+		for k, v := range m.subs {
+			if strings.EqualFold(k, name) {
+				item = v
+				exists = true
+				name = k
+				break
+			}
+		}
+	}
+	if !exists {
 		m.mu.RUnlock()
 		return 0, fmt.Errorf("subscription %q not found", name)
 	}
@@ -521,7 +531,17 @@ func (m *Manager) recordError(name, errStr string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if item, ok := m.subs[name]; ok {
+	item, ok := m.subs[name]
+	if !ok {
+		for k, v := range m.subs {
+			if strings.EqualFold(k, name) {
+				item = v
+				ok = true
+				break
+			}
+		}
+	}
+	if ok {
 		item.LastError = errStr
 	}
 	if !m.stopped {

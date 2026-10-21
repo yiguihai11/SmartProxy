@@ -78,6 +78,15 @@ func TestManager_LifecycleAndCache(t *testing.T) {
 		t.Errorf("expected 2 nodes, got %d", count)
 	}
 
+	// 1b. Test case-insensitive refresh
+	countLower, err := subMgr.Refresh(context.Background(), "testsub")
+	if err != nil {
+		t.Fatalf("case-insensitive Refresh failed: %v", err)
+	}
+	if countLower != 2 {
+		t.Errorf("expected 2 nodes from case-insensitive refresh, got %d", countLower)
+	}
+
 	// Verify status
 	status := subMgr.Status()
 	if len(status) != 1 {

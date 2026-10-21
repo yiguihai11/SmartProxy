@@ -1600,7 +1600,7 @@ func (s *Server) handleSubscriptionsDelete(w http.ResponseWriter, r *http.Reques
 	_, valErr, writeErr := s.saveConfig(func(c *config.Config) {
 		var filtered []config.SubscriptionConf
 		for _, sub := range c.Upstream.Subscriptions {
-			if sub.Name != name {
+			if !strings.EqualFold(sub.Name, name) && sub.Name != name {
 				filtered = append(filtered, sub)
 			}
 		}
@@ -1630,7 +1630,7 @@ func (s *Server) handleSubscriptionsToggle(w http.ResponseWriter, r *http.Reques
 
 	_, valErr, writeErr := s.saveConfig(func(c *config.Config) {
 		for i, sub := range c.Upstream.Subscriptions {
-			if sub.Name == name {
+			if strings.EqualFold(sub.Name, name) || sub.Name == name {
 				c.Upstream.Subscriptions[i].Enabled = enable
 				break
 			}

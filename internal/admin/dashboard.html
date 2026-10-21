@@ -1549,13 +1549,16 @@ function saveProxyGroupsCollapsed(){
   try{localStorage.setItem('sp_proxy_groups_collapsed_v2',JSON.stringify(proxyGroupsCollapsed))}catch(_){}
 }
 function getProxyGroup(p){
-  var prov=(p.provider||'').toLowerCase();
-  if(prov==='lantern')return 'lantern';
+  var prov=p.provider||'';
+  if(prov.toLowerCase()==='lantern')return 'lantern';
   if(prov)return prov;
   if(p.alias&&p.alias.indexOf('[Lantern]')===0)return 'lantern';
   if(p.name&&p.name.indexOf('[Lantern]')===0)return 'lantern';
   var m=p.alias&&p.alias.match(/^\[(.*?)\]/);
-  if(m&&m[1])return m[1].toLowerCase();
+  if(m&&m[1]){
+    if(m[1].toLowerCase()==='lantern')return 'lantern';
+    return m[1];
+  }
   return 'custom';
 }
 function getProxyGroupLabel(gid){
@@ -2026,14 +2029,25 @@ function lhealth(d){
   }
   var currentSubs=window._lastKnownSubs||(d&&d.health&&d.health.subscriptions)||[];
   var subsByName={};
+  var subsByLowerName={};
   currentSubs.forEach(function(s){
-    if(s&&s.name)subsByName[s.name]=s;
+    if(s&&s.name){
+      subsByName[s.name]=s;
+      subsByLowerName[s.name.toLowerCase()]=s;
+    }
   });
 
   var groups={};
   var groupOrder=[];
   proxies.forEach(function(p,i){
     var gid=getProxyGroup(p);
+    if(gid.indexOf('sub:')===0){
+      var rawSub=gid.slice(4);
+      var matchedSub=subsByName[rawSub]||subsByLowerName[rawSub.toLowerCase()];
+      if(matchedSub){
+        gid='sub:'+matchedSub.name;
+      }
+    }
     if(!groups[gid]){
       groups[gid]={id:gid,label:getProxyGroupLabel(gid),items:[],onlineCount:0,v6Count:0};
       groupOrder.push(gid);
@@ -2058,7 +2072,17 @@ function lhealth(d){
   currentSubs.forEach(function(s){
     var gid='sub:'+s.name;
     var subEnabled=!!s.enabled;
-    if(!groups[gid]){
+    var targetGid=gid;
+    if(!groups[targetGid]){
+      var lowerGid=gid.toLowerCase();
+      for(var k in groups){
+        if(k.toLowerCase()===lowerGid){
+          targetGid=k;
+          break;
+        }
+      }
+    }
+    if(!groups[targetGid]){
       groups[gid]={
         id:gid,
         label:subEnabled?getProxyGroupLabel(gid):(getProxyGroupLabel(gid)+' ('+t('Disabled')+')'),
@@ -2070,11 +2094,11 @@ function lhealth(d){
       };
       groupOrder.push(gid);
     }else{
-      groups[gid].subName=s.name;
-      groups[gid].subEnabled=subEnabled;
+      groups[targetGid].subName=s.name;
+      groups[targetGid].subEnabled=subEnabled;
       if(!subEnabled){
-        groups[gid].disabled=true;
-        groups[gid].label=getProxyGroupLabel(gid)+' ('+t('Disabled')+')';
+        groups[targetGid].disabled=true;
+        groups[targetGid].label=getProxyGroupLabel(targetGid)+' ('+t('Disabled')+')';
       }
     }
   });
