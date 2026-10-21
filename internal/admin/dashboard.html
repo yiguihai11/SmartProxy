@@ -1264,25 +1264,34 @@ async function testGroupProxies(gid, proto, btn){
   if(gid&&gid!=='all'){
     proxies=allProxies.filter(function(p){return getProxyGroup(p)===gid;});
   }
+  var allowV4 = !healthD || healthD.allow_ipv4 !== false;
+  var allowV6 = !healthD || healthD.allow_ipv6 !== false;
+  var doV4 = allowV4 || proto==='tcp'||proto==='v4_tcp'||proto==='udp'||proto==='v4_udp';
+  var doV6 = allowV6 || proto==='v6_tcp'||proto==='ipv6'||proto==='v6'||proto==='v6_udp';
+
   var tasks=[];
   for(var i=0;i<proxies.length;i++){
     var p=proxies[i];
     var udpScheme=isUDPSupportedScheme(p);
-    if(proto==='tcping'||proto==='ping'||proto==='all'||proto==='both'){
+    if(proto==='tcping'||proto==='ping'||(doV4 && (proto==='all'||proto==='both'))){
       tasks.push({alias:p.alias,proto:'tcping'});
     }
-    if(proto==='tcp'||proto==='v4_tcp'||proto==='all'||proto==='both'){
-      tasks.push({alias:p.alias,proto:'v4_tcp'});
+    if(doV4){
+      if(proto==='tcp'||proto==='v4_tcp'||proto==='all'||proto==='both'){
+        tasks.push({alias:p.alias,proto:'v4_tcp'});
+      }
+      if((proto==='udp'||proto==='v4_udp'||proto==='all'||proto==='both')&&udpScheme){
+        tasks.push({alias:p.alias,proto:'v4_udp'});
+      }
     }
-    if((proto==='udp'||proto==='v4_udp'||proto==='all'||proto==='both')&&udpScheme){
-      tasks.push({alias:p.alias,proto:'v4_udp'});
-    }
-    var hasV6=!!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||(p.host&&p.host.indexOf(':')!==-1));
-    if((proto==='all'||proto==='v6_tcp'||proto==='ipv6'||proto==='v6')&&hasV6){
-      tasks.push({alias:p.alias,proto:'v6_tcp'});
-    }
-    if((proto==='all'||proto==='v6_udp')&&hasV6&&udpScheme){
-      tasks.push({alias:p.alias,proto:'v6_udp'});
+    if(doV6){
+      var hasV6=!!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||(p.host&&p.host.indexOf(':')!==-1));
+      if((proto==='all'||proto==='v6_tcp'||proto==='ipv6'||proto==='v6')&&hasV6){
+        tasks.push({alias:p.alias,proto:'v6_tcp'});
+      }
+      if((proto==='all'||proto==='v6_udp')&&hasV6&&udpScheme){
+        tasks.push({alias:p.alias,proto:'v6_udp'});
+      }
     }
   }
   var toast=document.getElementById('copy-toast');

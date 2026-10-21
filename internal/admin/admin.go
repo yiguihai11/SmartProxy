@@ -1000,12 +1000,17 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	resp := map[string]interface{}{
 		"strategy":      s.mgr.Strategy(),
 		"proxies":       s.mgr.Proxies(),
 		"lantern":       s.getLanternStatus(),
 		"subscriptions": s.getSubscriptionsStatus(),
-	})
+	}
+	if s.mgr != nil {
+		resp["allow_ipv4"] = s.mgr.IsIPv4Enabled()
+		resp["allow_ipv6"] = s.mgr.IsIPv6Enabled()
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 // ---- cache ----

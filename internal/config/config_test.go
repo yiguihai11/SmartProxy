@@ -1177,3 +1177,47 @@ func TestWatcher_DoubleStopNoPanic(t *testing.T) {
 	// Second Stop call must not panic
 	w.Stop()
 }
+
+func TestConfig_ProtocolForwarding(t *testing.T) {
+	t.Run("tun disabled defaults to both enabled", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.TUN.Enabled = false
+		if !cfg.HasIPv4Forwarding() || !cfg.HasIPv6Forwarding() {
+			t.Errorf("expected both true, got v4=%v v6=%v", cfg.HasIPv4Forwarding(), cfg.HasIPv6Forwarding())
+		}
+	})
+
+	t.Run("filter_aaaa disables ipv6", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.DNS.FilterAAAA = true
+		if cfg.HasIPv6Forwarding() {
+			t.Errorf("expected ipv6 forwarding false when FilterAAAA=true")
+		}
+	})
+
+	t.Run("tun ipv4 only", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.TUN.Enabled = true
+		cfg.TUN.Address = []string{"10.0.0.1/24"}
+		cfg.TUN.Inet6Address = nil
+		if !cfg.HasIPv4Forwarding() {
+			t.Errorf("expected ipv4 forwarding true")
+		}
+		if cfg.HasIPv6Forwarding() {
+			t.Errorf("expected ipv6 forwarding false")
+		}
+	})
+
+	t.Run("tun ipv6 only", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.TUN.Enabled = true
+		cfg.TUN.Address = []string{"fdfe:dcba:9876::1/64"}
+		cfg.TUN.Inet4Address = nil
+		if cfg.HasIPv4Forwarding() {
+			t.Errorf("expected ipv4 forwarding false")
+		}
+		if !cfg.HasIPv6Forwarding() {
+			t.Errorf("expected ipv6 forwarding true")
+		}
+	})
+}

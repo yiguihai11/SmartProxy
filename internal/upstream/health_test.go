@@ -876,4 +876,41 @@ func TestQueryCymruCountry_IPv4_and_IPv6(t *testing.T) {
 	}
 }
 
+func TestHealthChecker_ProtocolFilter(t *testing.T) {
+	hc := NewHealthChecker(config.HealthCheckConf{Enabled: true}, nil)
+	if !hc.IsIPv4Enabled() || !hc.IsIPv6Enabled() {
+		t.Errorf("expected default true for both, got v4=%v v6=%v", hc.IsIPv4Enabled(), hc.IsIPv6Enabled())
+	}
+
+	// Disable v6
+	hc.SetProtocolFilter(true, false)
+	if !hc.IsIPv4Enabled() {
+		t.Errorf("expected v4 true")
+	}
+	if hc.IsIPv6Enabled() {
+		t.Errorf("expected v6 false")
+	}
+
+	// Disable v4
+	hc.SetProtocolFilter(false, true)
+	if hc.IsIPv4Enabled() {
+		t.Errorf("expected v4 false")
+	}
+	if !hc.IsIPv6Enabled() {
+		t.Errorf("expected v6 true")
+	}
+
+	// Gates should be closed when v4 is disabled
+	select {
+	case <-hc.FirstTCPProbeDone():
+	default:
+		t.Errorf("FirstTCPProbeDone should be closed when v4 is disabled")
+	}
+	select {
+	case <-hc.FirstUDPProbeDone():
+	default:
+		t.Errorf("FirstUDPProbeDone should be closed when v4 is disabled")
+	}
+}
+
 

@@ -99,6 +99,8 @@ type Manager struct {
 	aliasMap       map[string]*Proxy
 	defaultProxies []*Proxy
 	strategy       string
+	allowIPv4      atomic.Bool
+	allowIPv6      atomic.Bool
 	// order 按 transport 索引(transportTCP / transportUDP),见 rotationState。
 	order           [transportCount]rotationState
 	healthChecker   *HealthChecker
@@ -125,16 +127,53 @@ func NewManager(cfg UpstreamConfig) (*Manager, error) {
 		ctx:             ctx,
 		cancel:          cancel,
 	}
+	m.allowIPv4.Store(true)
+	m.allowIPv6.Store(true)
+	if cfg.AllowIPv4 != nil {
+		m.allowIPv4.Store(*cfg.AllowIPv4)
+	}
+	if cfg.AllowIPv6 != nil {
+		m.allowIPv6.Store(*cfg.AllowIPv6)
+	}
 	m.staticProxies = cfg.Proxies
 	m.healthCfg = cfg.HealthCheck
 	m.strategy = cfg.Strategy
 	activeSB := m.rebuildLocked()
 	_ = singbox.GlobalEngine().SyncOutbounds(activeSB)
 	m.healthChecker = NewHealthChecker(cfg.HealthCheck, m.defaultProxies)
+	m.healthChecker.SetProtocolFilter(m.allowIPv4.Load(), m.allowIPv6.Load())
 	m.healthChecker.Start()
 	m.probeInitialGeo()
 	slog.Info("upstream manager initialized", "aliases", len(m.aliasMap), "strategy", m.strategy)
 	return m, nil
+}
+
+func (m *Manager) SetProtocolFilter(allowIPv4, allowIPv6 bool) {
+	if m == nil {
+		return
+	}
+	m.allowIPv4.Store(allowIPv4)
+	m.allowIPv6.Store(allowIPv6)
+	m.mu.RLock()
+	hc := m.healthChecker
+	m.mu.RUnlock()
+	if hc != nil {
+		hc.SetProtocolFilter(allowIPv4, allowIPv6)
+	}
+}
+
+func (m *Manager) IsIPv4Enabled() bool {
+	if m == nil {
+		return true
+	}
+	return m.allowIPv4.Load()
+}
+
+func (m *Manager) IsIPv6Enabled() bool {
+	if m == nil {
+		return true
+	}
+	return m.allowIPv6.Load()
 }
 
 func (m *Manager) Reload(cfg UpstreamConfig) {
@@ -174,7 +213,14 @@ func (m *Manager) Reload(cfg UpstreamConfig) {
 	// construction defaults.
 	m.restoreManualPins(pins)
 
+	if cfg.AllowIPv4 != nil {
+		m.allowIPv4.Store(*cfg.AllowIPv4)
+	}
+	if cfg.AllowIPv6 != nil {
+		m.allowIPv6.Store(*cfg.AllowIPv6)
+	}
 	if m.healthChecker != nil {
+		m.healthChecker.SetProtocolFilter(m.allowIPv4.Load(), m.allowIPv6.Load())
 		m.healthChecker.Reload(cfg.HealthCheck, newProxies)
 	}
 	m.probeInitialGeo()
@@ -590,6 +636,8 @@ type UpstreamConfig struct {
 	Strategy    string
 	HealthCheck config.HealthCheckConf
 	Proxies     []ProxyEntry
+	AllowIPv4   *bool
+	AllowIPv6   *bool
 }
 
 type ProxyEntry struct {
@@ -2177,6 +2225,9 @@ func (m *Manager) probeInitialGeo() {
 		return
 	}
 
+	allowV4 := m.allowIPv4.Load()
+	allowV6 := m.allowIPv6.Load()
+
 	safego.Go("upstream.initialGeo", func() {
 		sem := make(chan struct{}, 16)
 		var wg sync.WaitGroup
@@ -2184,9 +2235,9 @@ func (m *Manager) probeInitialGeo() {
 			if p == nil {
 				continue
 			}
-			needsGeo := p.ExitIPv4() == "" || p.CountryCode() == ""
+			needsGeo := allowV4 && (p.ExitIPv4() == "" || p.CountryCode() == "")
 			canProbeIPv6 := p.IPv6Pin() == nil || *p.IPv6Pin()
-			needsIPv6 := canProbeIPv6 && (p.IPv6Capability() == IPv6CapUnknown || p.ExitIPv6() == "")
+			needsIPv6 := allowV6 && canProbeIPv6 && (p.IPv6Capability() == IPv6CapUnknown || p.ExitIPv6() == "")
 			if !needsGeo && !needsIPv6 {
 				continue
 			}

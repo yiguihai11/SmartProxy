@@ -220,15 +220,17 @@ func (ph *ProxyHealth) Snapshot() ProxyHealthSnapshot {
 }
 
 type HealthChecker struct {
-	mu       sync.RWMutex
-	running  bool
-	cfg      atomic.Pointer[config.HealthCheckConf]
-	proxies  []*Proxy
-	stopCh   chan struct{}
-	wg       *sync.WaitGroup
-	ctx      context.Context
-	cancel   context.CancelFunc
-	probeSem chan struct{}
+	mu        sync.RWMutex
+	running   bool
+	cfg       atomic.Pointer[config.HealthCheckConf]
+	allowIPv4 atomic.Bool
+	allowIPv6 atomic.Bool
+	proxies   []*Proxy
+	stopCh    chan struct{}
+	wg        *sync.WaitGroup
+	ctx       context.Context
+	cancel    context.CancelFunc
+	probeSem  chan struct{}
 	// firstProbeDone 是"任意电路"的聚合闸门(任一探测成功或初始探测全部结束即关闭)。
 	// firstTCPProbeDone/firstUDPProbeDone 按电路分别关门:ConnectDefault 必须等 TCP 闸门,
 	// UDP ASSOCIATE 必须等 UDP 闸门。早期共用一个 firstProbeDone 时,checkProxy 先探 UDP
@@ -255,8 +257,42 @@ func NewHealthChecker(cfg config.HealthCheckConf, proxies []*Proxy) *HealthCheck
 		firstTCPProbeDone: make(chan struct{}),
 		firstUDPProbeDone: make(chan struct{}),
 	}
+	hc.allowIPv4.Store(true)
+	hc.allowIPv6.Store(true)
 	hc.cfg.Store(&cfg)
 	return hc
+}
+
+// SetProtocolFilter dynamically sets whether IPv4 and/or IPv6 probes should be executed.
+// If allowIPv4 is false, the TCP/UDP initial probe gates are notified immediately
+// so dependent callers (e.g. ConnectDefault) do not block waiting for skipped IPv4 probes.
+func (hc *HealthChecker) SetProtocolFilter(allowIPv4, allowIPv6 bool) {
+	if hc == nil {
+		return
+	}
+	hc.allowIPv4.Store(allowIPv4)
+	hc.allowIPv6.Store(allowIPv6)
+	if !allowIPv4 {
+		hc.notifyFirstTCPProbeDone()
+		hc.notifyFirstUDPProbeDone()
+		hc.notifyFirstProbeDone()
+	}
+}
+
+// IsIPv4Enabled reports whether IPv4 health probes are enabled.
+func (hc *HealthChecker) IsIPv4Enabled() bool {
+	if hc == nil {
+		return true
+	}
+	return hc.allowIPv4.Load()
+}
+
+// IsIPv6Enabled reports whether IPv6 health probes are enabled.
+func (hc *HealthChecker) IsIPv6Enabled() bool {
+	if hc == nil {
+		return true
+	}
+	return hc.allowIPv6.Load()
 }
 
 func (hc *HealthChecker) Start() {
@@ -626,36 +662,42 @@ func (hc *HealthChecker) ProbeAll() {
 	}
 
 	timeout := time.Duration(timeoutSec) * time.Second
+	allowV4 := hc.allowIPv4.Load()
+	allowV6 := hc.allowIPv6.Load()
 	for _, p := range proxies {
 		proxy := p
 		safego.Go("upstream.health.probeOnNetworkChange", func() {
 			ctx, cancel := context.WithTimeout(parentCtx, timeout)
 			defer cancel()
 
-			if proxy.SchemeSupportsUDP() && !proxy.udpHealth.IsManuallyDisabled() {
-				if err := hc.acquireProbeSem(ctx, stopCh); err == nil {
-					latency, err := hc.ProbeUDP(ctx, proxy)
-					hc.releaseProbeSem()
-					if err == nil {
-						hc.RecordUDPSuccess(proxy, latency)
-					} else {
-						hc.RecordUDPFailure(proxy, err)
+			if allowV4 {
+				if proxy.SchemeSupportsUDP() && !proxy.udpHealth.IsManuallyDisabled() {
+					if err := hc.acquireProbeSem(ctx, stopCh); err == nil {
+						latency, err := hc.ProbeUDP(ctx, proxy)
+						hc.releaseProbeSem()
+						if err == nil {
+							hc.RecordUDPSuccess(proxy, latency)
+						} else {
+							hc.RecordUDPFailure(proxy, err)
+						}
+					}
+				}
+				if !proxy.health.IsManuallyDisabled() {
+					if err := hc.acquireProbeSem(ctx, stopCh); err == nil {
+						latency, err := hc.ProbeTCP(ctx, proxy)
+						if err == nil {
+							hc.RecordSuccess(proxy, latency)
+						} else {
+							hc.RecordFailure(proxy, err)
+						}
+						hc.releaseProbeSem()
 					}
 				}
 			}
-			if !proxy.health.IsManuallyDisabled() {
-				if err := hc.acquireProbeSem(ctx, stopCh); err == nil {
-					latency, err := hc.ProbeTCP(ctx, proxy)
-					if err == nil {
-						hc.RecordSuccess(proxy, latency)
-					} else {
-						hc.RecordFailure(proxy, err)
-					}
-					hc.releaseProbeSem()
+			if allowV6 {
+				if pin := proxy.IPv6Pin(); pin == nil || *pin {
+					hc.checkProxyIPv6WithContext(parentCtx, stopCh, proxy)
 				}
-			}
-			if pin := proxy.IPv6Pin(); pin == nil || *pin {
-				hc.checkProxyIPv6WithContext(parentCtx, stopCh, proxy)
 			}
 		})
 	}
@@ -747,11 +789,18 @@ func (hc *HealthChecker) checkProxyWithContext(ctx context.Context, stopCh <-cha
 	default:
 	}
 
-	if p.SchemeSupportsUDP() {
-		hc.checkProxyUDPWithContext(ctx, stopCh, p)
+	allowV4 := hc.allowIPv4.Load()
+	allowV6 := hc.allowIPv6.Load()
+
+	if allowV4 {
+		if p.SchemeSupportsUDP() {
+			hc.checkProxyUDPWithContext(ctx, stopCh, p)
+		}
+		hc.checkProxyTCPWithContext(ctx, stopCh, p)
 	}
-	hc.checkProxyTCPWithContext(ctx, stopCh, p)
-	hc.checkProxyIPv6WithContext(ctx, stopCh, p)
+	if allowV6 {
+		hc.checkProxyIPv6WithContext(ctx, stopCh, p)
+	}
 }
 
 // IPv6ProbeDefaultTarget is the default Anycast IPv6 probe target (Cloudflare public DNS IPv6).

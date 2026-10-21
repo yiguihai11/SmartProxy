@@ -86,9 +86,13 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 	if strategy == "" {
 		strategy = "failover"
 	}
+	allowV4 := cfg.HasIPv4Forwarding()
+	allowV6 := cfg.HasIPv6Forwarding()
 	upstreamCfg := upstream.UpstreamConfig{
 		Strategy:    strategy,
 		HealthCheck: cfg.Upstream.HealthCheck,
+		AllowIPv4:   &allowV4,
+		AllowIPv6:   &allowV6,
 	}
 	for _, p := range cfg.Upstream.Proxies {
 		upstreamCfg.Proxies = append(upstreamCfg.Proxies, upstream.ProxyEntry{
@@ -1112,9 +1116,13 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 	if strategy == "" {
 		strategy = "failover"
 	}
+	allowV4 := newCfg.HasIPv4Forwarding()
+	allowV6 := newCfg.HasIPv6Forwarding()
 	upstreamCfg := upstream.UpstreamConfig{
 		Strategy:    strategy,
 		HealthCheck: newCfg.Upstream.HealthCheck,
+		AllowIPv4:   &allowV4,
+		AllowIPv6:   &allowV6,
 	}
 	for _, p := range newCfg.Upstream.Proxies {
 		upstreamCfg.Proxies = append(upstreamCfg.Proxies, upstream.ProxyEntry{

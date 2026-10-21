@@ -55,6 +55,21 @@ type TUNConfig struct {
 	BlockedUIDs []int32 `json:"blocked_uids"`
 }
 
+// HasIPv4 reports whether any IPv4 address prefix is configured in Address or Inet4Address.
+func (t TUNConfig) HasIPv4() bool {
+	for _, s := range t.Address {
+		if p, err := netip.ParsePrefix(s); err == nil && p.Addr().Is4() {
+			return true
+		}
+	}
+	for _, s := range t.Inet4Address {
+		if p, err := netip.ParsePrefix(s); err == nil && p.Addr().Is4() {
+			return true
+		}
+	}
+	return false
+}
+
 // HasIPv6 reports whether any IPv6 address prefix is configured in Address or Inet6Address.
 func (t TUNConfig) HasIPv6() bool {
 	for _, s := range t.Address {
@@ -514,6 +529,31 @@ func cloneBoolPtr(b *bool) *bool {
 	}
 	v := *b
 	return &v
+}
+
+// HasIPv4Forwarding reports whether IPv4 traffic interception / forwarding is enabled.
+func (c *Config) HasIPv4Forwarding() bool {
+	if c == nil {
+		return true
+	}
+	if c.TUN.Enabled {
+		return c.TUN.HasIPv4()
+	}
+	return true
+}
+
+// HasIPv6Forwarding reports whether IPv6 traffic interception / forwarding is enabled.
+func (c *Config) HasIPv6Forwarding() bool {
+	if c == nil {
+		return true
+	}
+	if c.DNS.FilterAAAA {
+		return false
+	}
+	if c.TUN.Enabled {
+		return c.TUN.HasIPv6()
+	}
+	return true
 }
 
 func (c *Config) Validate() error {

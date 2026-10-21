@@ -184,6 +184,12 @@ func TestAdmin_Health(t *testing.T) {
 	if strat != "failover" {
 		t.Errorf("expected strategy failover, got %s", strat)
 	}
+	if data["allow_ipv4"] != true {
+		t.Errorf("expected allow_ipv4=true, got %v", data["allow_ipv4"])
+	}
+	if data["allow_ipv6"] != true {
+		t.Errorf("expected allow_ipv6=true, got %v", data["allow_ipv6"])
+	}
 }
 func TestAdmin_Blacklist(t *testing.T) {
 	s := newTestServer(t)

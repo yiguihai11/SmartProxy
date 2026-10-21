@@ -2468,4 +2468,50 @@ func TestManager_UDPInTCP_DefaultsV6TCPDown(t *testing.T) {
 	}
 }
 
+func TestManager_ProtocolFilter(t *testing.T) {
+	falseVal := false
+	trueVal := true
+	m, err := NewManager(UpstreamConfig{
+		Strategy: "failover",
+		Proxies: []ProxyEntry{
+			{Alias: "p1", URL: "socks5://127.0.0.1:1080"},
+		},
+		AllowIPv4: &trueVal,
+		AllowIPv6: &falseVal,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	if !m.IsIPv4Enabled() {
+		t.Errorf("expected IsIPv4Enabled true")
+	}
+	if m.IsIPv6Enabled() {
+		t.Errorf("expected IsIPv6Enabled false")
+	}
+
+	// Dynamic toggle
+	m.SetProtocolFilter(false, true)
+	if m.IsIPv4Enabled() {
+		t.Errorf("expected IsIPv4Enabled false after SetProtocolFilter")
+	}
+	if !m.IsIPv6Enabled() {
+		t.Errorf("expected IsIPv6Enabled true after SetProtocolFilter")
+	}
+
+	// Reload with filter
+	m.Reload(UpstreamConfig{
+		Strategy: "failover",
+		Proxies: []ProxyEntry{
+			{Alias: "p1", URL: "socks5://127.0.0.1:1080"},
+		},
+		AllowIPv4: &trueVal,
+		AllowIPv6: &trueVal,
+	})
+	if !m.IsIPv4Enabled() || !m.IsIPv6Enabled() {
+		t.Errorf("expected both true after reload")
+	}
+}
+
 
