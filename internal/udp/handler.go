@@ -429,10 +429,16 @@ func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip 
 		// 保证两端直连行为一致。
 		d := net.Dialer{Timeout: 5 * time.Second, Control: DirectUDPControl}
 		remoteConn, err = d.DialContext(ctx, "udp", net.JoinHostPort(ip, strconv.Itoa(port)))
-	case result == "proxy_default":
-		trace.Log(ctx).Warn("UDP proxy rule matched but alias not found, forcing default proxy",
-			"target", net.JoinHostPort(ip, strconv.Itoa(port)), "domain", domain)
-		remoteConn, err = h.upstreamMgr.UDPAssociate(ctx, ip, port, domain, nil)
+	case strings.HasPrefix(result, "proxy_default"):
+		filter := upstream.ParseGeoFilter(strings.TrimPrefix(result, "proxy_default"))
+		if filter != nil {
+			trace.Log(ctx).Info("UDP proxy rule matched default with geo filter",
+				"target", net.JoinHostPort(ip, strconv.Itoa(port)), "domain", domain, "filter", filter.String())
+		} else {
+			trace.Log(ctx).Warn("UDP proxy rule matched but alias not found, forcing default proxy",
+				"target", net.JoinHostPort(ip, strconv.Itoa(port)), "domain", domain)
+		}
+		remoteConn, err = h.upstreamMgr.UDPAssociateFiltered(ctx, ip, port, domain, nil, filter)
 		framed = true
 	case result != "fallback":
 		remoteConn, err = h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, selected)

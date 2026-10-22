@@ -94,3 +94,30 @@ allow 严格优先于 block；匹配 proxy 规则前先做 allow 判定，命中
 3. 解析用 `net/netip`；`parseCIDRInto` 对裸地址做 `/bitlen` 退化，IPv6 单地址同理（`TestEngine_ProxyRuleCIDR_IPv6_SingleHost`）。
 4. 域名匹配统一走 `normalizeDomain`（去尾点 + 转小写）。
 5. 广告过滤规则属于独立订阅功能（详见 [DNS AdBlock](adblock.md)），仅在 DNS 层生效。ACL 引擎 `internal/rules` 不参与广告过滤，ACL 的 `allow domain` 亦不豁免广告过滤。
+
+## §6 默认池区域过滤（default 排除与限定）
+
+当规则指定走 `default`（由低延迟优先/轮询自动选路）时，支持通过后缀操作符对候选代理池进行**国家与区域过滤**，兼顾自动化负载均衡与特定业务的区域合规/内容解锁需求。
+
+### 语法格式
+
+| 语法格式 | 模式 | 说明 | 示例 |
+| :--- | :--- | :--- | :--- |
+| `default!<regions>` | **排除模式** | 从默认池中选路，但**排除**指定的区域或国家 | `proxy domain *.x.com default!eu,au,cn` |
+| `default@<regions>` | **限定模式** | **仅在**指定的国家/区域节点中按延迟优选 | `proxy domain *.openai.com default@us,jp,sg` |
+| `default` | **全量模式** | 默认池全量优选（无过滤） | `proxy domain *.github.com default` |
+
+### 规则特性
+
+1. **大小写不敏感**：区域代码支持全大写（`EU,AU`）、全小写（`eu,au`）或混写（`Eu,Au`），解析时自动规范化。
+2. **多区域逗号分隔**：支持逗号分隔多个区域，允许带空格（如 `default!eu, au, cn`）。
+3. **内置区域宏（Region Macros）**：
+   - `EU`：自动展开为欧盟 27 个成员国（`AT`, `BE`, `BG`, `HR`, `CY`, `CZ`, `DK`, `EE`, `FI`, `FR`, `DE`, `GR`, `HU`, `IE`, `IT`, `LV`, `LT`, `LU`, `MT`, `NL`, `PL`, `PT`, `RO`, `SK`, `SI`, `ES`, `SE`）。
+   - `UK`：英国（`GB`）。
+   - `AU`：澳大利亚（`AU`）。
+   - `CN`：中国（`CN`）。
+   - `NA`：北美（`US`, `CA`, `MX`）。
+   - `AP`：亚太（`HK`, `TW`, `JP`, `KR`, `SG`）。
+   - 以及任何标准 ISO 3166-1 两位国家代码（如 `US`, `JP`, `HK`, `DE` 等）。
+4. **真实出口国家码精准匹配**：严格基于 Cloudflare Anycast trace / Cymru DNS 真实探测得到的出口 IP 国家码（`p.CountryCode()`），不依赖任何易被虚标伪造的节点名称硬编码推测。未完成实测探测的节点在排除模式下默认不误杀，确保网络平滑过渡。
+5. **容灾兜底（Resilience Fallback）**：若订阅池中所有节点均被过滤排除，系统会自动回退至未过滤的健康节点并记录 Warn 日志，避免发生完全断网。

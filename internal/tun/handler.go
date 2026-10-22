@@ -734,8 +734,8 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 	// newProxyRemote 建一条走 UDP-capable 上游的代理 remote。dst 为该条 UDP 流的真实目标
 	// (每包 pktDst),回包按它写回 tun;proxySel==nil 走聚合默认 fallback(判死/黑名单命中
 	// 时传 nil 强制走默认上游)。
-	newProxyRemote := func(dst M.Socksaddr, host string, port int, proxySel *upstream.Proxy) (*udpRemoteEntry, error) {
-		remote, err := h.upstreamMgr.UDPAssociateSelected(ctx, host, port, proxySel)
+	newProxyRemote := func(dst M.Socksaddr, host string, port int, proxySel *upstream.Proxy, filter *upstream.GeoFilter) (*udpRemoteEntry, error) {
+		remote, err := h.upstreamMgr.UDPAssociateSelectedFiltered(ctx, host, port, proxySel, filter)
 		if err != nil {
 			return nil, err
 		}
@@ -779,7 +779,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 	// 判死前的直连(会话被并发替换/清理),丢弃新建代理不破坏现状;代理回包地址沿用旧
 	// 直连的 dst,保证只切换出向路径、回包路径不变。
 	switchToProxy := func(key, host string, port int) {
-		pentry, err := newProxyRemote(destination, host, port, nil)
+		pentry, err := newProxyRemote(destination, host, port, nil, nil)
 		if err != nil {
 			ll.Warn("QUIC flow dead but proxy fallback dial failed, staying direct",
 				"dst", destination, "error", err)
@@ -814,11 +814,16 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 		switch {
 		case result == "direct":
 			return startDirectRemote(dst, host, port, nil) // ACL 强制直连
-		case result == "proxy_default":
-			ll.Warn("proxy rule matched but alias not found, forcing default proxy", "dst", dst)
-			return newProxyRemote(dst, host, port, nil) // ACL 指定代理但节点缺失，兜底走默认代理
+		case strings.HasPrefix(result, "proxy_default"):
+			filter := upstream.ParseGeoFilter(strings.TrimPrefix(result, "proxy_default"))
+			if filter != nil {
+				ll.Info("proxy rule matched default with geo filter", "dst", dst, "filter", filter.String())
+			} else {
+				ll.Warn("proxy rule matched but alias not found, forcing default proxy", "dst", dst)
+			}
+			return newProxyRemote(dst, host, port, nil, filter) // ACL 指定代理但节点缺失或走默认池
 		case result != "fallback":
-			return newProxyRemote(dst, host, port, selected) // ACL 指定代理
+			return newProxyRemote(dst, host, port, selected, nil) // ACL 指定代理
 		}
 
 		// bypass_lan: 局域网地址直连,但绝对不能放行 UDP 53 端口!
@@ -832,10 +837,10 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 		}
 		if h.router.IsIPBlacklisted(host, port) {
 			ll.Info("UDP target on dynamic blacklist, going proxy", "dst", dst)
-			return newProxyRemote(dst, host, port, nil)
+			return newProxyRemote(dst, host, port, nil, nil)
 		}
 		if !q.Enabled || !intIn(q.Ports, port) {
-			return newProxyRemote(dst, host, port, nil) // 普通国外 UDP 走代理(现状)
+			return newProxyRemote(dst, host, port, nil, nil) // 普通国外 UDP 走代理(现状)
 		}
 
 		// B 候选(国外 + QUIC 端口):首包短窗嗅探确认 QUIC,并尽力抠 SNI 走域名规则
@@ -843,7 +848,7 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 		sniff.Ingest(firstDgram)
 		if !sniff.QUIC() {
 			ll.Info("UDP QUIC flow: non-QUIC payload on QUIC port, proxying", "dst", dst)
-			return newProxyRemote(dst, host, port, nil) // 该端口上的非 QUIC 载荷(罕见)照旧代理
+			return newProxyRemote(dst, host, port, nil, nil) // 该端口上的非 QUIC 载荷(罕见)照旧代理
 		}
 		sni := sniff.SNI()
 		if e := sniff.ECH(); e != nil && e.Real {
@@ -861,23 +866,29 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 			// 域名换 IP 的 QUIC 目标(CDN/Google 轮换)直接走代理,不再对新 IP 重复直连判死。
 			if h.router.IsDomainBlacklisted(sni, port) {
 				ll.Info("UDP target on dynamic blacklist, going proxy", "dst", dst, "sni", sni)
-				return newProxyRemote(dst, host, port, nil)
+				return newProxyRemote(dst, host, port, nil, nil)
 			}
 			r2, s2 := h.upstreamMgr.SelectProxy(ctx, host, port, sni, h.ruleEng)
-			switch r2 {
-			case "direct":
+			switch {
+			case r2 == "direct":
 				ll.Info("UDP QUIC flow: domain rule direct, no blackhole watch",
 					"dst", dst, "sni", sni)
 				return startDirectRemote(dst, host, port, nil) // 域名规则强制直连
-			case "proxy_default":
-				ll.Warn("UDP QUIC flow: domain rule proxy but alias not found, forcing default proxy",
-					"dst", dst, "sni", sni)
-				return newProxyRemote(dst, host, port, nil) // 域名规则指定代理但节点缺失，兜底走默认代理
-			case "fallback":
+			case strings.HasPrefix(r2, "proxy_default"):
+				filter := upstream.ParseGeoFilter(strings.TrimPrefix(r2, "proxy_default"))
+				if filter != nil {
+					ll.Info("UDP QUIC flow: domain rule matched default with geo filter",
+						"dst", dst, "sni", sni, "filter", filter.String())
+				} else {
+					ll.Warn("UDP QUIC flow: domain rule proxy but alias not found, forcing default proxy",
+						"dst", dst, "sni", sni)
+				}
+				return newProxyRemote(dst, host, port, nil, filter) // 域名规则指定代理但节点缺失或走过滤默认池
+			case r2 == "fallback":
 				// 域名 ACL 未命中 → 国外 QUIC 目标,落到下方 B 直连判死观察
 			default:
 				ll.Info("UDP QUIC flow: domain rule proxy", "dst", dst, "sni", sni)
-				return newProxyRemote(dst, host, port, s2) // 域名规则指定代理
+				return newProxyRemote(dst, host, port, s2, nil) // 域名规则指定代理
 			}
 		}
 

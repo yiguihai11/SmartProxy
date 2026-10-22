@@ -193,9 +193,14 @@ func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 		ll.Info("proxy rule forces direct connection", "host", host, "port", port, "domain", domain)
 		conn, err := dialDirectTCP(ctx, host, port, domain, defaultDirectTimeout)
 		return conn, false, err
-	case result == "proxy_default":
-		ll.Info("proxy rule matched, using default proxy", "host", host, "port", port, "domain", domain)
-		conn, err := r.upstreamMgr.ConnectDefault(ctx, host, port)
+	case strings.HasPrefix(result, "proxy_default"):
+		filter := upstream.ParseGeoFilter(strings.TrimPrefix(result, "proxy_default"))
+		if filter != nil {
+			ll.Info("proxy rule matched, using default proxy with geo filter", "host", host, "port", port, "domain", domain, "filter", filter.String())
+		} else {
+			ll.Info("proxy rule matched, using default proxy", "host", host, "port", port, "domain", domain)
+		}
+		conn, err := r.upstreamMgr.ConnectDefaultFiltered(ctx, host, port, filter)
 		if err != nil {
 			return nil, false, errors.New("failed to connect via default upstream proxy")
 		}
@@ -345,9 +350,14 @@ func (r *Router) SmartConnectWithFallback(ctx context.Context, host string, port
 			return nil, nil, false, err
 		}
 		return conn, nil, false, nil
-	case result == "proxy_default":
-		ll.Info("proxy rule matched, using default proxy", "host", host, "port", port, "domain", domain)
-		conn, err := r.upstreamMgr.ConnectDefault(ctx, host, port)
+	case strings.HasPrefix(result, "proxy_default"):
+		filter := upstream.ParseGeoFilter(strings.TrimPrefix(result, "proxy_default"))
+		if filter != nil {
+			ll.Info("proxy rule matched, using default proxy with geo filter", "host", host, "port", port, "domain", domain, "filter", filter.String())
+		} else {
+			ll.Info("proxy rule matched, using default proxy", "host", host, "port", port, "domain", domain)
+		}
+		conn, err := r.upstreamMgr.ConnectDefaultFiltered(ctx, host, port, filter)
 		if err != nil {
 			return nil, nil, false, err
 		}

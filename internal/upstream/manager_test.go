@@ -417,6 +417,43 @@ func TestSelectProxy_DefaultAlias(t *testing.T) {
 	}
 }
 
+func TestSelectProxy_DefaultWithGeoFilter(t *testing.T) {
+	m, _ := NewManager(UpstreamConfig{
+		Proxies: []ProxyEntry{
+			{Alias: "p1", URL: "socks5://127.0.0.1:1080"},
+		},
+	})
+
+	// 1. Lowercase exclusion
+	eng1 := newEngineWithRules("proxy domain x.com default!eu,au,cn\n")
+	res1, p1 := m.SelectProxy(context.Background(), "", 0, "x.com", eng1)
+	if res1 != "proxy_default!eu,au,cn" {
+		t.Errorf("expected 'proxy_default!eu,au,cn', got %q", res1)
+	}
+	if p1 != nil {
+		t.Error("proxy should be nil for default with filter")
+	}
+
+	filter1 := ParseGeoFilter(strings.TrimPrefix(res1, "proxy_default"))
+	if filter1 == nil || filter1.Mode != "exclude" || !filter1.Regions["IT"] || !filter1.Regions["AU"] || !filter1.Regions["CN"] {
+		t.Errorf("unexpected parsed filter: %+v", filter1)
+	}
+
+	// 2. Uppercase inclusion
+	eng2 := newEngineWithRules("proxy domain openai.com default@US,JP\n")
+	res2, p2 := m.SelectProxy(context.Background(), "", 0, "openai.com", eng2)
+	if res2 != "proxy_default@US,JP" {
+		t.Errorf("expected 'proxy_default@US,JP', got %q", res2)
+	}
+	if p2 != nil {
+		t.Error("proxy should be nil")
+	}
+	filter2 := ParseGeoFilter(strings.TrimPrefix(res2, "proxy_default"))
+	if filter2 == nil || filter2.Mode != "include" || !filter2.Regions["US"] || !filter2.Regions["JP"] {
+		t.Errorf("unexpected parsed filter: %+v", filter2)
+	}
+}
+
 func TestReload_RefreshGeoOnURLEdit(t *testing.T) {
 	m, err := NewManager(UpstreamConfig{
 		Proxies: []ProxyEntry{

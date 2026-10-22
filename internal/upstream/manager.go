@@ -139,7 +139,9 @@ func NewManager(cfg UpstreamConfig) (*Manager, error) {
 	m.healthCfg = cfg.HealthCheck
 	m.strategy = cfg.Strategy
 	activeSB := m.rebuildLocked()
-	_ = singbox.GlobalEngine().SyncOutbounds(activeSB)
+	if err := singbox.GlobalEngine().SyncOutbounds(activeSB); err != nil {
+		slog.Warn("failed to sync sing-box outbounds on init", "error", err)
+	}
 	m.healthChecker = NewHealthChecker(cfg.HealthCheck, m.defaultProxies)
 	m.healthChecker.SetProtocolFilter(m.allowIPv4.Load(), m.allowIPv6.Load())
 	m.healthChecker.Start()
@@ -195,7 +197,9 @@ func (m *Manager) Reload(cfg UpstreamConfig) {
 	newProxies := m.defaultProxies
 	m.mu.Unlock()
 
-	_ = singbox.GlobalEngine().SyncOutbounds(activeSB)
+	if err := singbox.GlobalEngine().SyncOutbounds(activeSB); err != nil {
+		slog.Warn("failed to sync sing-box outbounds on reload", "error", err)
+	}
 
 	if m.dnsUDPPool != nil {
 		m.dnsUDPPool.Close()
@@ -566,7 +570,9 @@ func (m *Manager) SetProviderProxies(provider string, entries []ProxyEntry) {
 	healthCfg := m.healthCfg
 	m.mu.Unlock()
 
-	_ = singbox.GlobalEngine().SyncOutbounds(activeSB)
+	if err := singbox.GlobalEngine().SyncOutbounds(activeSB); err != nil {
+		slog.Warn("failed to sync sing-box outbounds on provider update", "error", err)
+	}
 	m.restoreManualPins(pins)
 
 	if m.healthChecker != nil {
@@ -619,7 +625,9 @@ func (m *Manager) RemoveProviderNodes(aliases []string) int {
 		healthCfg := m.healthCfg
 		m.mu.Unlock()
 
-		_ = singbox.GlobalEngine().SyncOutbounds(activeSB)
+		if err := singbox.GlobalEngine().SyncOutbounds(activeSB); err != nil {
+			slog.Warn("failed to sync sing-box outbounds on node removal", "error", err)
+		}
 		m.restoreManualPins(pins)
 		if m.healthChecker != nil {
 			m.healthChecker.Reload(healthCfg, newProxies)
@@ -678,6 +686,9 @@ func (m *Manager) SelectProxy(ctx context.Context, targetIP string, targetPort i
 		if strings.EqualFold(alias, "default") {
 			return "proxy_default", nil
 		}
+		if IsDefaultWithFilter(alias) {
+			return "proxy_" + strings.TrimSpace(alias), nil
+		}
 		m.mu.RLock()
 		proxy, _ := m.findProxyLocked(alias)
 		m.mu.RUnlock()
@@ -713,6 +724,10 @@ func isIPv6Address(host string) bool {
 }
 
 func (m *Manager) ConnectDefault(ctx context.Context, host string, port int) (net.Conn, error) {
+	return m.ConnectDefaultFiltered(ctx, host, port, nil)
+}
+
+func (m *Manager) ConnectDefaultFiltered(ctx context.Context, host string, port int, filter *GeoFilter) (net.Conn, error) {
 	ll := trace.Log(ctx)
 	if m.healthChecker != nil && !m.healthChecker.HasAnyTCPAvailable() {
 		select {
@@ -764,6 +779,15 @@ func (m *Manager) ConnectDefault(ctx context.Context, host string, port int) (ne
 		}
 		if len(candidates) > 0 {
 			ll.Warn("all default proxies tripped circuit breakers, attempting emergency fallback on configured proxies", "count", len(candidates))
+		}
+	}
+	if filter != nil && filter.Mode != "" && len(candidates) > 0 {
+		filtered, wasFallback := FilterProxiesByGeo(candidates, filter)
+		if wasFallback {
+			ll.Warn("all TCP candidate proxies excluded by geo filter, falling back to unfiltered proxies", "filter", filter.Raw, "count", len(candidates))
+		} else {
+			ll.Debug("filtered TCP candidate proxies by geo", "filter", filter.Raw, "before", len(candidates), "after", len(filtered))
+			candidates = filtered
 		}
 	}
 	if len(candidates) == 0 {
@@ -1191,8 +1215,9 @@ func (m *Manager) Connect(ctx context.Context, host string, port int, domain str
 	if result == "direct" {
 		return nil, "direct"
 	}
-	if result == "fallback" || result == "proxy_default" {
-		conn, err := m.ConnectDefault(ctx, host, port)
+	if result == "fallback" || strings.HasPrefix(result, "proxy_default") {
+		filter := ParseGeoFilter(strings.TrimPrefix(result, "proxy_default"))
+		conn, err := m.ConnectDefaultFiltered(ctx, host, port, filter)
 		if err != nil {
 			return nil, "failed"
 		}
@@ -1280,10 +1305,21 @@ func (m *Manager) DiscardDNSUDP(conn net.Conn) {
 }
 
 func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domain string, engine *rules.Engine) (net.Conn, error) {
+	return m.UDPAssociateFiltered(ctx, host, port, domain, engine, nil)
+}
+
+func (m *Manager) UDPAssociateFiltered(ctx context.Context, host string, port int, domain string, engine *rules.Engine, fallbackFilter *GeoFilter) (net.Conn, error) {
 	ll := trace.Log(ctx)
 	result, selected := m.SelectProxy(ctx, host, port, domain, engine)
 	if result == "direct" {
 		return nil, fmt.Errorf("UDP direct is not supported")
+	}
+	var filter *GeoFilter = fallbackFilter
+	if strings.HasPrefix(result, "proxy_default") {
+		parsed := ParseGeoFilter(strings.TrimPrefix(result, "proxy_default"))
+		if parsed != nil {
+			filter = parsed
+		}
 	}
 	if selected != nil {
 		isV6 := isIPv6Address(host)
@@ -1312,7 +1348,7 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 		}
 		if unsuitable {
 			ll.Warn("rule selected proxy unsuitable for UDP, falling back to default UDP proxies", "url", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port), "reason", reason)
-			return m.defaultUDPAssociate(ctx, ll, host, port)
+			return m.defaultUDPAssociateFiltered(ctx, ll, host, port, filter)
 		}
 		ll.Debug("UDPAssociate: using selected proxy by rule",
 			"proxy", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port))
@@ -1332,19 +1368,23 @@ func (m *Manager) UDPAssociate(ctx context.Context, host string, port int, domai
 				m.healthChecker.RecordUDPFailure(selected, err)
 			}
 			ll.Warn("rule selected proxy failed for UDP, falling back to default UDP proxies", "url", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port), "error", err)
-			return m.defaultUDPAssociate(ctx, ll, host, port)
+			return m.defaultUDPAssociateFiltered(ctx, ll, host, port, filter)
 		}
 		if isV6 {
 			selected.SetIPv6Capability(IPv6CapSupported)
 		}
 		return conn, nil
 	}
-	return m.defaultUDPAssociate(ctx, ll, host, port)
+	return m.defaultUDPAssociateFiltered(ctx, ll, host, port, filter)
 }
 
 // UDPAssociateSelected uses a pre-selected proxy for UDP ASSOCIATE
 // (skipping the duplicate SelectProxy match)
 func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port int, selected *Proxy) (net.Conn, error) {
+	return m.UDPAssociateSelectedFiltered(ctx, host, port, selected, nil)
+}
+
+func (m *Manager) UDPAssociateSelectedFiltered(ctx context.Context, host string, port int, selected *Proxy, filter *GeoFilter) (net.Conn, error) {
 	ll := trace.Log(ctx)
 	if selected != nil {
 		isV6 := isIPv6Address(host)
@@ -1373,7 +1413,7 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 		}
 		if unsuitable {
 			ll.Warn("pre-selected proxy unsuitable for UDP, falling back to default UDP proxies", "url", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port), "reason", reason)
-			return m.defaultUDPAssociate(ctx, ll, host, port)
+			return m.defaultUDPAssociateFiltered(ctx, ll, host, port, filter)
 		}
 		ll.Debug("UDPAssociateSelected: using pre-selected proxy",
 			"proxy", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port))
@@ -1393,7 +1433,7 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 				m.healthChecker.RecordUDPFailure(selected, err)
 			}
 			ll.Warn("pre-selected proxy failed for UDP, falling back to default UDP proxies", "url", MaskProxyURL(selected.URL), "target", fmt.Sprintf("%s:%d", host, port), "error", err)
-			return m.defaultUDPAssociate(ctx, ll, host, port)
+			return m.defaultUDPAssociateFiltered(ctx, ll, host, port, filter)
 		}
 		if isV6 {
 			selected.SetIPv6Capability(IPv6CapSupported)
@@ -1401,7 +1441,7 @@ func (m *Manager) UDPAssociateSelected(ctx context.Context, host string, port in
 		return conn, nil
 	}
 	// selected == nil: fall back to default ordered selection.
-	return m.defaultUDPAssociate(ctx, ll, host, port)
+	return m.defaultUDPAssociateFiltered(ctx, ll, host, port, filter)
 }
 
 // establishUDPRelay 通过指定节点建立 UDP 中继。ASSOCIATE 标准握手成功按旧例直接记录能力
@@ -1447,6 +1487,10 @@ func (m *Manager) udpProbeTarget() (server, domain string) {
 // UDP 且独立 UDP 电路可用)→ 单节点直连、多节点错位对冲。旧实现是纯串行 for 循环,首个
 // 节点的 ASSOCIATE 握手被黑洞时每个新关联干等 10s 才试下一个,和 TCP 犯过同一个病。
 func (m *Manager) defaultUDPAssociate(ctx context.Context, ll *slog.Logger, host string, port int) (net.Conn, error) {
+	return m.defaultUDPAssociateFiltered(ctx, ll, host, port, nil)
+}
+
+func (m *Manager) defaultUDPAssociateFiltered(ctx context.Context, ll *slog.Logger, host string, port int, filter *GeoFilter) (net.Conn, error) {
 	if m.healthChecker != nil && !m.healthChecker.HasAnyUDPAvailable() {
 		select {
 		// 等 UDP 电路自己的就绪信号;TCP 先成功不该把 UDP 入口提前放行。
@@ -1496,6 +1540,15 @@ func (m *Manager) defaultUDPAssociate(ctx context.Context, ll *slog.Logger, host
 		}
 		if len(candidates) > 0 {
 			ll.Warn("all default UDP proxies tripped circuit breakers, attempting emergency fallback on configured proxies", "count", len(candidates))
+		}
+	}
+	if filter != nil && filter.Mode != "" && len(candidates) > 0 {
+		filtered, wasFallback := FilterProxiesByGeo(candidates, filter)
+		if wasFallback {
+			ll.Warn("all UDP candidate proxies excluded by geo filter, falling back to unfiltered proxies", "filter", filter.Raw, "count", len(candidates))
+		} else {
+			ll.Debug("filtered UDP candidate proxies by geo", "filter", filter.Raw, "before", len(candidates), "after", len(filtered))
+			candidates = filtered
 		}
 	}
 	if len(candidates) == 0 {

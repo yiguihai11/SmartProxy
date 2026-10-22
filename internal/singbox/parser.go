@@ -107,6 +107,18 @@ func parseRawJSON(data []byte) (*ParsedOutbound, error) {
 	}, nil
 }
 
+// sanitizeFingerprint validates uTLS fingerprints against the list supported by sing-box.
+// Unsupported or malformed values (such as "unsafe", "none", or garbage text) return "".
+func sanitizeFingerprint(fp string) string {
+	fp = strings.ToLower(strings.TrimSpace(fp))
+	switch fp {
+	case "chrome", "firefox", "safari", "ios", "android", "edge", "360", "qq", "random", "randomized":
+		return fp
+	default:
+		return ""
+	}
+}
+
 func parseVLESS(u *url.URL) (*ParsedOutbound, error) {
 	uuid := u.User.Username()
 	if uuid == "" {
@@ -147,7 +159,7 @@ func parseVLESS(u *url.URL) (*ParsedOutbound, error) {
 		tlsConfig["alpn"] = strings.Split(alpn, ",")
 	}
 
-	fp := q.Get("fp")
+	fp := sanitizeFingerprint(q.Get("fp"))
 	if fp != "" {
 		tlsConfig["utls"] = map[string]any{
 			"enabled":     true,

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 
 	box "github.com/sagernet/sing-box"
@@ -223,23 +225,50 @@ func (e *Engine) rebuildLocked(ctx context.Context) error {
 		}
 	}
 
-	cfgBytes, err := json.Marshal(cfg)
-	if err != nil {
-		return fmt.Errorf("failed to marshal sing-box config: %w", err)
-	}
-
 	boxCtx := include.Context(ctx)
-	var opts option.Options
-	if err := opts.UnmarshalJSONContext(boxCtx, cfgBytes); err != nil {
-		return fmt.Errorf("failed to parse sing-box options: %w", err)
-	}
+	var newInstance *box.Box
 
-	newInstance, err := box.New(box.Options{
-		Context: boxCtx,
-		Options: opts,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create sing-box instance: %w", err)
+	for {
+		cfgBytes, err := json.Marshal(cfg)
+		if err != nil {
+			return fmt.Errorf("failed to marshal sing-box config: %w", err)
+		}
+
+		var opts option.Options
+		if err := opts.UnmarshalJSONContext(boxCtx, cfgBytes); err != nil {
+			return fmt.Errorf("failed to parse sing-box options: %w", err)
+		}
+
+		var newErr error
+		newInstance, newErr = box.New(box.Options{
+			Context: boxCtx,
+			Options: opts,
+		})
+		if newErr == nil {
+			break
+		}
+
+		// Try to isolate the specific bad outbound if the error message pinpoints it,
+		// e.g. "initialize outbound[34]: ..."
+		errStr := newErr.Error()
+		if _, after, found := strings.Cut(errStr, "initialize outbound["); found {
+			if numStr, _, foundNum := strings.Cut(after, "]"); foundNum {
+				if badIdx, parseErr := strconv.Atoi(numStr); parseErr == nil && badIdx > 0 && badIdx < len(outboundList) {
+					var badOutbound struct {
+						Tag string `json:"tag"`
+					}
+					_ = json.Unmarshal(outboundList[badIdx], &badOutbound)
+					slog.Warn("sing-box outbound failed initialization, isolating bad outbound",
+						"tag", badOutbound.Tag, "index", badIdx, "error", newErr)
+					delete(e.outbounds, badOutbound.Tag)
+					outboundList = append(outboundList[:badIdx], outboundList[badIdx+1:]...)
+					cfg["outbounds"] = outboundList
+					continue
+				}
+			}
+		}
+
+		return fmt.Errorf("failed to create sing-box instance: %w", newErr)
 	}
 
 	oldInstance := e.instance

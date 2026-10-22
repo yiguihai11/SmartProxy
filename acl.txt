@@ -1,32 +1,17 @@
 # ─────────────────────────────────────────
-# 端口控制
+# 端口控制（可选）
 # ─────────────────────────────────────────
-#block port 135                          # 阻止危险端口
+#block port 135
 #block port 445
-#allow port 22                           # SSH 端口放行（跳过后续 block/proxy）
+#allow port 22
 
 # ─────────────────────────────────────────
-# IP / CIDR 控制
+# 隐私上报 / 云查 / 广告拦截
 # ─────────────────────────────────────────
-#allow cidr 10.0.0.0/8                  # 内网网段直连
-#allow cidr 192.168.0.0/16
-#block ip 1.2.3.4                       # 阻止特定 IP
-#proxy ip 8.8.8.8 direct                # 指定 IP 强制直连（不走代理）
-#proxy cidr 172.16.0.0/12 internal      # 特定网段走 internal 代理
-
-# ─────────────────────────────────────────
-# 域名控制（广告拦截 / 强制代理）
-# ─────────────────────────────────────────
-#block domain *.adnetwork.com           # 拦截广告域名（含所有子域名与 adnetwork.com 本身）
-#block domain tracker.example.com       # 拦截精确域名
-
-# ── vivo 浏览器隐私上报/云查拦截(逆向 v30.7.0.0 实测) ──
-# 注意: 以下两个是 .com 不是 .com.cn, *.vivo.com.cn 规则盖不住!
-block domain browsercloud.vivo.com        # Speedy 云加速网关,全流量经此转发(proxy.do/check.do),日志实证
-block domain kernelapi.vivo.com           # 配置/名单下发容灾域名(.com 版,别只拦 .com.cn)
-# 云查: 每打开一个页面 POST 完整 URL+搜索词(isLegitimate.do)
+# vivo 浏览器隐私上报/云查拦截(逆向实测)
+block domain browsercloud.vivo.com
+block domain kernelapi.vivo.com
 block domain browsercrp.vivo.com.cn
-# 行为埋点 / 广告 / 风控上报
 block domain browserreport.vivo.com.cn
 block domain stvideoreport.vivo.com.cn
 block domain videobacklog.vivo.com.cn
@@ -39,17 +24,12 @@ block domain usrsysjoint.vivo.com.cn
 block domain gaia-mix-prd.vivo.com.cn
 block domain browsersubscribe.vivo.com.cn
 block domain browserconf.vivo.com.cn
-block domain kernelapi.vivo.com.cn        # 名单下发 multiget.do(拦后名单停更)
-block domain kernelstatic.vivo.com.cn     # 名单 zip 实际下载源(multiget 返回的 URL 主机)
+block domain kernelapi.vivo.com.cn
+block domain kernelstatic.vivo.com.cn
 block domain fuli.vivo.com.cn
-# AI 搜索/助手(上传搜索词与 URL,拦后 AI 功能失效)
 block domain gptkit-proxy.vivo.com.cn
 block domain ai-search-partner-prd.vivo.com.cn
 block domain copilot-api-auth-prd.vivo.com.cn
-# 第三方(字节)URL 安全扫描
-block domain scc.bytedance.com
-# 错误页/新标签页「精彩推荐」信息流:h5 是 feeds 模块页面,数据走 browsercrp/loadAll.do(已堵),
-# 其余为内容分发/热榜/素材 CDN,堵死后推荐栏整栏空白
 block domain h5.vivo.com.cn
 block domain browserfeeds.vivo.com.cn
 block domain fdcontentdispatch.vivo.com.cn
@@ -57,31 +37,9 @@ block domain feedscontent-hot-dst.vivo.com.cn
 block domain fc-news-detail.vivo.com.cn
 block domain contentstatic.vivo.com.cn
 
-# ── vivo 软件包安装程序深度检测 / 云查杀 / 拦截策略 ──
-block domain isecure.vivo.com.cn         # 深度检测接口: /secure/app/check
-block domain httpdns.vivo.com.cn         # vivo HttpDNS (防直连绕过)
-block domain vcardsdkservice.vivo.com.cn # 拦截策略与云端风控规则下发
-block domain az.appstore.vivo.com.cn     # 应用商店防欺诈与云查杀比对
-block domain stinmmtn.vivo.com.cn        # 安装检测日志与行为上报
-
-
-#allow domain internal.corp             # 公司内部域名放行（不拦截、不代理）
-
-# ─────────────────────────────────────────
-# 代理路由（按域名选择上游）
-# ─────────────────────────────────────────
-#proxy domain *.google.com primary      # Google 服务走 primary 代理
-#proxy domain twitter.com jp            # Twitter 走 jp 代理
-#proxy domain *.netflix.com us          # Netflix 走 us 代理
-
-# 特殊值 "direct" 表示强制直连（跳过代理链）
-#proxy port 22 direct                   # SSH 端口强制直连
-
-
-proxy domain api.tripdata.app ss-local
-
+# 字节/第三方安全与广告拦截
+block domain scc.bytedance.com
 block domain cdn.wwads.cn
-
 block domain ads.mozilla.org
 
 # ─────────────────────────────────────────
@@ -115,8 +73,101 @@ block domain *.zijieapi.net
 block domain *.pstatp.com
 
 # 4. 第三方广告聚合 SDK (快手/腾讯/穿山甲联盟)
-# 注意: *.X 现已同时覆盖 apex X 本身, 故 *.kuaishou.com 会一并拦截 kuaishou.com 主站
 block domain *.kuaishou.com
 block domain *.e.kuaishou.com
 block domain *.e.kuaishouzt.com
 block domain *.ad.toutiao.com
+
+# ── vivo 统一配置中心 / 云控(UnifiedConfig)与 ABE 调度策略下发拦截 ──
+block domain vmcs-subscriber.vivo.com.cn
+block domain vmcs-register.vivo.com.cn
+block domain vmcs-lb.vivo.com.cn
+block domain vmcs-subscriber-pre.vivo.com.cn
+block domain vmcs-register-pre.vivo.com.cn
+block domain vmcs-lb-pre.vivo.com.cn
+block domain polaris-api.vivo.com.cn
+block domain vmd.vivo.com.cn
+block domain content-aware.vivo.com.cn
+block domain cota.vivo.com.cn
+block domain sysupgrade.vivo.com.cn
+block domain moni-ort-stsdk.vivo.com.cn
+block domain moni-prt-stsdk.vivo.com.cn
+block domain moni-pnrt-stsdk.vivo.com.cn
+block domain moni-onrt-stsdk.vivo.com.cn
+block domain *.stsdk.vivo.com.cn
+
+# ── vivo 软件包安装程序深度检测 / 云查杀 / 拦截策略 ──
+block domain isecure.vivo.com.cn         # 深度检测接口: /secure/app/check
+block domain httpdns.vivo.com.cn         # vivo HttpDNS (防直连绕过)
+block domain vcardsdkservice.vivo.com.cn # 拦截策略与云端风控规则下发
+block domain az.appstore.vivo.com.cn     # 应用商店防欺诈与云查杀比对
+block domain stinmmtn.vivo.com.cn        # 安装检测日志与行为上报
+
+
+# ─────────────────────────────────────────
+# 国内直连白名单（强制直连，不走代理）
+# ─────────────────────────────────────────
+proxy domain *.qq.com direct
+proxy domain *.tencent.com direct
+proxy domain *.bilibili.com direct
+
+# ─────────────────────────────────────────
+# Claude / Anthropic 专用路由（走default 自动负载均衡）
+# ─────────────────────────────────────────
+proxy domain *.anthropic.com default
+proxy domain *.claude.ai default
+
+# ─────────────────────────────────────────
+# OpenAI / ChatGPT 专用路由
+# ─────────────────────────────────────────
+proxy domain *.openai.com default
+proxy domain *.chatgpt.com default
+
+# ─────────────────────────────────────────
+# Antigravity 专有服务（走指定稳定出口）
+# ─────────────────────────────────────────
+proxy domain *.goog "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
+proxy domain *.google "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
+
+# ─────────────────────────────────────────
+# Google AI、Gemini 与 OAuth 核心（改走 指定稳定出口 根治 400 地区报错）
+# ─────────────────────────────────────────
+proxy domain *.googleapis.com "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
+proxy domain *.google.com "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
+proxy domain *.googleusercontent.com "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
+proxy domain *.gstatic.com "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
+
+# ─────────────────────────────────────────
+# GitHub 全站及资源 CDN（消除网页卡进度条）
+# ─────────────────────────────────────────
+proxy domain *.github.com default
+proxy domain *.githubusercontent.com default
+proxy domain *.githubassets.com default
+proxy domain api.deps.dev default
+proxy domain *.blob.core.windows.net default
+
+# ─────────────────────────────────────────
+# 巴哈姆特动画疯
+# ─────────────────────────────────────────
+proxy domain gamer2-cds.cdn.hinet.net "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
+proxy domain gamer-cds.cdn.hinet.net "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
+proxy domain *.bahamut.akamaized.net "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
+proxy domain *.bahamut.com.tw "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
+proxy domain *.gamer.com.tw "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
+
+# ─────────────────────────────────────────
+# 爱壹帆
+# ─────────────────────────────────────────
+proxy domain api.tripdata.app default
+
+# ─────────────────────────────────────────
+# X (Twitter) 专用路由（排除欧盟与澳洲年龄审查区域、排除国内）
+# ─────────────────────────────────────────
+proxy domain *.x.com default!eu,au,cn
+proxy domain *.twitter.com default!eu,au,cn
+proxy domain *.twimg.com default!eu,au,cn
+proxy domain *.twttr.com default!eu,au,cn
+proxy domain t.co default!eu,au,cn
+proxy domain *.tweetdeck.com default!eu,au,cn
+proxy domain *.pscp.tv default!eu,au,cn
+proxy domain *.periscope.tv default!eu,au,cn
