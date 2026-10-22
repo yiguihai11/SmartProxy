@@ -4998,6 +4998,9 @@ function loadACLUpstreams(){
       return a.localeCompare(b);
     });
     var html='<option value="direct">'+t('Direct')+'</option>';
+    html+='<option value="default">'+t('Default Strategy')+'</option>';
+    html+='<option value="default!eu,au,cn">default!eu,au,cn ('+t('Default excluding EU, AU, CN')+')</option>';
+    html+='<option value="default!eu,au">default!eu,au ('+t('Default excluding EU, AU')+')</option>';
     if(groupOrder.length>1){
       groupOrder.forEach(function(gid){
         html+='<optgroup label="'+escAttr(getProxyGroupLabel(gid))+'">';
@@ -5136,6 +5139,8 @@ function buildProxySelectOptions(proxies){
   html+='<option value="__KEEP__">'+t('(Keep unchanged)')+'</option>';
   html+='<option value="__DELETE__">'+t('🗑️ Delete these rules')+'</option>';
   html+='<option value="default">default ('+t('Fallback to default strategy')+')</option>';
+  html+='<option value="default!eu,au,cn">default!eu,au,cn ('+t('Default excluding EU, AU, CN')+')</option>';
+  html+='<option value="default!eu,au">default!eu,au ('+t('Default excluding EU, AU')+')</option>';
   html+='<option value="direct">direct ('+t('Direct connection')+')</option>';
   if(groupOrder.length>1){
     groupOrder.forEach(function(gid){
@@ -5155,6 +5160,12 @@ function buildProxySelectOptions(proxies){
     }
   }
   return html;
+}
+
+function isDefaultWithFilter(alias){
+  if(!alias)return false;
+  var a=String(alias).trim().toLowerCase();
+  return a.startsWith('default!') || a.startsWith('default@');
 }
 
 async function checkACLInvalidUpstreams(manual){
@@ -5182,7 +5193,7 @@ async function checkACLInvalidUpstreams(manual){
   var missingMap={};
   for(var i=0;i<lines.length;i++){
     var parsed=parseACLLine(lines[i]);
-    if(parsed&&!validTargets.has(parsed.alias)){
+    if(parsed&&!validTargets.has(parsed.alias)&&!isDefaultWithFilter(parsed.alias)){
       if(!missingMap[parsed.alias])missingMap[parsed.alias]=[];
       missingMap[parsed.alias].push({
         lineNum: i+1,
