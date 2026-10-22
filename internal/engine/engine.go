@@ -93,6 +93,7 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 		HealthCheck: cfg.Upstream.HealthCheck,
 		AllowIPv4:   &allowV4,
 		AllowIPv6:   &allowV6,
+		Chnroute:    cn,
 	}
 	for _, p := range cfg.Upstream.Proxies {
 		upstreamCfg.Proxies = append(upstreamCfg.Proxies, upstream.ProxyEntry{
@@ -162,6 +163,10 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 	}
 
 	subMgr := subscription.NewManager(cfgDir, cfg.Upstream.Subscriptions, upstreamMgr)
+	subMgr.SetChnroute(cn)
+	upstreamMgr.SetOnNodeRemoved(func(aliases []string) {
+		subMgr.RemoveNodes(aliases)
+	})
 	subMgr.Start()
 
 	eng := &Engine{
@@ -1101,6 +1106,12 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 	// Phase 2: Best-Effort In-Memory Publication (sequential atomic pointer updates, zero disk I/O, zero TOCTOU).
 	if newChnTrie != nil {
 		e.Chnroute.Pull(newChnTrie)
+		if e.UpstreamMgr != nil {
+			e.UpstreamMgr.SetChnroute(e.Chnroute)
+		}
+		if e.subscriptionMgr != nil {
+			e.subscriptionMgr.SetChnroute(e.Chnroute)
+		}
 	}
 	if newRuleEng != nil {
 		e.RuleEng.Pull(newRuleEng)
@@ -1123,6 +1134,7 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 		HealthCheck: newCfg.Upstream.HealthCheck,
 		AllowIPv4:   &allowV4,
 		AllowIPv6:   &allowV6,
+		Chnroute:    e.Chnroute,
 	}
 	for _, p := range newCfg.Upstream.Proxies {
 		upstreamCfg.Proxies = append(upstreamCfg.Proxies, upstream.ProxyEntry{
@@ -1247,6 +1259,12 @@ func (e *Engine) ReloadChnroute() error {
 		return err
 	}
 	e.Chnroute.Pull(newTrie)
+	if e.UpstreamMgr != nil {
+		e.UpstreamMgr.SetChnroute(e.Chnroute)
+	}
+	if e.subscriptionMgr != nil {
+		e.subscriptionMgr.SetChnroute(e.Chnroute)
+	}
 	return nil
 }
 

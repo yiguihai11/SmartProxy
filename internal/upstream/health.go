@@ -243,6 +243,7 @@ type HealthChecker struct {
 	firstTCPProbeOnce sync.Once
 	firstUDPProbeDone chan struct{}
 	firstUDPProbeOnce sync.Once
+	onNodeProbed      atomic.Pointer[func(p *Proxy)]
 }
 
 func NewHealthChecker(cfg config.HealthCheckConf, proxies []*Proxy) *HealthChecker {
@@ -261,6 +262,27 @@ func NewHealthChecker(cfg config.HealthCheckConf, proxies []*Proxy) *HealthCheck
 	hc.allowIPv6.Store(true)
 	hc.cfg.Store(&cfg)
 	return hc
+}
+
+// SetOnNodeProbed registers a callback invoked whenever geo/health probing discovers or updates a proxy node's state.
+func (hc *HealthChecker) SetOnNodeProbed(fn func(p *Proxy)) {
+	if hc == nil {
+		return
+	}
+	if fn == nil {
+		hc.onNodeProbed.Store(nil)
+	} else {
+		hc.onNodeProbed.Store(&fn)
+	}
+}
+
+func (hc *HealthChecker) notifyNodeProbed(p *Proxy) {
+	if hc == nil || p == nil {
+		return
+	}
+	if fnPtr := hc.onNodeProbed.Load(); fnPtr != nil && *fnPtr != nil {
+		(*fnPtr)(p)
+	}
 }
 
 // SetProtocolFilter dynamically sets whether IPv4 and/or IPv6 probes should be executed.
@@ -691,6 +713,7 @@ func (hc *HealthChecker) ProbeAll() {
 							hc.RecordFailure(proxy, err)
 						}
 						hc.releaseProbeSem()
+						hc.notifyNodeProbed(proxy)
 					}
 				}
 			}
@@ -1368,6 +1391,7 @@ func (hc *HealthChecker) checkProxyTCPWithContext(parentCtx context.Context, sto
 	} else {
 		hc.RecordFailure(p, err)
 	}
+	hc.notifyNodeProbed(p)
 }
 
 // checkProxyUDP actively probes a node's UDP relay with a DNS query, feeding the

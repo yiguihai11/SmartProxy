@@ -2551,4 +2551,166 @@ func TestManager_ProtocolFilter(t *testing.T) {
 	}
 }
 
+type testChnroute struct {
+	cnIPs map[string]bool
+}
+
+func (t testChnroute) Contains(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	return t.cnIPs[ip.String()]
+}
+
+func (t testChnroute) IsEmpty() bool {
+	return len(t.cnIPs) == 0
+}
+
+func TestManager_RemoveCNNode_HostInChnroute(t *testing.T) {
+	checker := testChnroute{
+		cnIPs: map[string]bool{"42.51.25.69": true},
+	}
+
+	removedChan := make(chan []string, 10)
+	m, err := NewManager(UpstreamConfig{
+		Strategy: "latency",
+		Chnroute: checker,
+		Proxies: []ProxyEntry{
+			{Alias: "us-node", URL: "socks5://1.2.3.4:1080"},
+			{Alias: "cn-transit", URL: "socks5://42.51.25.69:1080"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	m.SetOnNodeRemoved(func(aliases []string) {
+		removedChan <- aliases
+	})
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if _, exists := m.aliasMap["cn-transit"]; exists {
+		t.Fatalf("cn-transit should have been excluded from aliasMap")
+	}
+	if len(m.defaultProxies) != 1 || m.defaultProxies[0].Host != "1.2.3.4" {
+		t.Fatalf("expected only us-node in defaultProxies, got %d proxies", len(m.defaultProxies))
+	}
+	for _, p := range m.staticProxies {
+		if p.Alias == "cn-transit" {
+			t.Fatalf("cn-transit should have been removed from staticProxies")
+		}
+	}
+}
+
+func TestManager_RemoveCNNode_EgressCN(t *testing.T) {
+	checker := testChnroute{
+		cnIPs: map[string]bool{"42.51.25.69": true},
+	}
+
+	removedChan := make(chan []string, 10)
+	m, err := NewManager(UpstreamConfig{
+		Strategy: "latency",
+		Chnroute: checker,
+		Proxies: []ProxyEntry{
+			{Alias: "us-node", URL: "socks5://1.2.3.4:1080"},
+			{Alias: "secret-cn-egress", URL: "socks5://8.8.8.8:1080"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	m.SetOnNodeRemoved(func(aliases []string) {
+		removedChan <- aliases
+	})
+
+	m.mu.RLock()
+	proxy := m.aliasMap["secret-cn-egress"]
+	m.mu.RUnlock()
+	if proxy == nil {
+		t.Fatal("secret-cn-egress should initially exist")
+	}
+
+	// Simulate geo probe discovering CN egress
+	proxy.SetCountryCode("CN")
+	if !m.checkAndRemoveCNNode(proxy) {
+		t.Fatal("checkAndRemoveCNNode should return true for CN egress")
+	}
+
+	// Wait for removal goroutine
+	select {
+	case aliases := <-removedChan:
+		if len(aliases) != 1 || aliases[0] != "secret-cn-egress" {
+			t.Fatalf("unexpected removed aliases: %v", aliases)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for onNodeRemoved notification")
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, exists := m.aliasMap["secret-cn-egress"]; exists {
+		t.Fatal("secret-cn-egress should be deleted from aliasMap")
+	}
+	if len(m.defaultProxies) != 1 || m.defaultProxies[0].Host != "1.2.3.4" {
+		t.Fatalf("expected only us-node remaining, got %d proxies", len(m.defaultProxies))
+	}
+}
+
+func TestManager_RemoveCNNode_ExitIPInChnroute(t *testing.T) {
+	checker := testChnroute{
+		cnIPs: map[string]bool{"42.51.25.69": true},
+	}
+
+	removedChan := make(chan []string, 10)
+	m, err := NewManager(UpstreamConfig{
+		Strategy: "latency",
+		Chnroute: checker,
+		Proxies: []ProxyEntry{
+			{Alias: "us-node", URL: "socks5://1.2.3.4:1080"},
+			{Alias: "cn-exit-node", URL: "socks5://9.9.9.9:1080"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	m.SetOnNodeRemoved(func(aliases []string) {
+		removedChan <- aliases
+	})
+
+	m.mu.RLock()
+	proxy := m.aliasMap["cn-exit-node"]
+	m.mu.RUnlock()
+	if proxy == nil {
+		t.Fatal("cn-exit-node should exist")
+	}
+
+	// Simulate geo probe returning an exit IP that belongs to China
+	proxy.SetExitIPv4("42.51.25.69")
+	if !m.checkAndRemoveCNNode(proxy) {
+		t.Fatal("checkAndRemoveCNNode should return true for exit IP in chnroute")
+	}
+
+	select {
+	case aliases := <-removedChan:
+		if len(aliases) != 1 || aliases[0] != "cn-exit-node" {
+			t.Fatalf("unexpected removed aliases: %v", aliases)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for onNodeRemoved notification")
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, exists := m.aliasMap["cn-exit-node"]; exists {
+		t.Fatal("cn-exit-node should be deleted from aliasMap")
+	}
+}
+
 

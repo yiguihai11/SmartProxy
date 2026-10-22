@@ -52,6 +52,7 @@ type Manager struct {
 	mu            sync.RWMutex
 	cfgDir        string
 	upstreamMgr   *upstream.Manager
+	chnroute      upstream.ChnRouteChecker
 	subs          map[string]*ItemState
 	subsOrder     []string
 	httpClient    *http.Client
@@ -284,6 +285,21 @@ func (m *Manager) Refresh(ctx context.Context, name string) (int, error) {
 	if err != nil {
 		m.recordError(name, err.Error())
 		return 0, fmt.Errorf("failed to parse subscription content: %w", err)
+	}
+
+	m.mu.RLock()
+	checker := m.chnroute
+	m.mu.RUnlock()
+	if checker != nil && !checker.IsEmpty() {
+		var kept []upstream.ProxyEntry
+		for _, e := range entries {
+			if upstream.IsProxyInChnroute(e.URL, checker) {
+				slog.Warn("discarding subscription node: host IP in chnroute", "subscription", name, "alias", e.Alias)
+				continue
+			}
+			kept = append(kept, e)
+		}
+		entries = kept
 	}
 
 	// Tag nodes with provider and deduplicate aliases within the subscription
@@ -523,6 +539,51 @@ func (m *Manager) RemoveNodes(aliases []string) int {
 	if totalRemoved > 0 {
 		m.saveCacheLocked()
 		slog.Info("subscription nodes cleaned up", "removed", totalRemoved)
+	}
+	return totalRemoved
+}
+
+// SetChnroute configures the chnroute checker and filters out any existing nodes located in mainland China.
+func (m *Manager) SetChnroute(c upstream.ChnRouteChecker) {
+	m.mu.Lock()
+	m.chnroute = c
+	m.mu.Unlock()
+	m.filterCNNodes()
+}
+
+func (m *Manager) filterCNNodes() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.chnroute == nil || m.chnroute.IsEmpty() {
+		return 0
+	}
+	totalRemoved := 0
+	for _, item := range m.subs {
+		if len(item.Nodes) == 0 {
+			continue
+		}
+		var kept []upstream.ProxyEntry
+		removedHere := 0
+		for _, node := range item.Nodes {
+			if upstream.IsProxyInChnroute(node.URL, m.chnroute) {
+				slog.Warn("subscription node discarded: host IP in chnroute", "subscription", item.Name, "alias", node.Alias)
+				removedHere++
+			} else {
+				kept = append(kept, node)
+			}
+		}
+		if removedHere > 0 {
+			item.Nodes = kept
+			item.NodeCount = len(kept)
+			totalRemoved += removedHere
+			if item.Enabled && m.upstreamMgr != nil {
+				m.upstreamMgr.SetProviderProxies("sub:"+item.Name, item.Nodes)
+			}
+		}
+	}
+	if totalRemoved > 0 {
+		m.saveCacheLocked()
+		slog.Info("subscription nodes filtered by chnroute", "removed", totalRemoved)
 	}
 	return totalRemoved
 }

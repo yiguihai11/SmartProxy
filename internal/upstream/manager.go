@@ -108,6 +108,8 @@ type Manager struct {
 	healthCfg       config.HealthCheckConf
 	staticProxies   []ProxyEntry
 	providerProxies map[string][]ProxyEntry
+	chnroute        ChnRouteChecker
+	onNodeRemoved   func(aliases []string)
 	stopped         bool
 	ctx             context.Context
 	cancel          context.CancelFunc
@@ -138,11 +140,15 @@ func NewManager(cfg UpstreamConfig) (*Manager, error) {
 	m.staticProxies = cfg.Proxies
 	m.healthCfg = cfg.HealthCheck
 	m.strategy = cfg.Strategy
+	m.chnroute = cfg.Chnroute
 	activeSB := m.rebuildLocked()
 	if err := singbox.GlobalEngine().SyncOutbounds(activeSB); err != nil {
 		slog.Warn("failed to sync sing-box outbounds on init", "error", err)
 	}
 	m.healthChecker = NewHealthChecker(cfg.HealthCheck, m.defaultProxies)
+	m.healthChecker.SetOnNodeProbed(func(p *Proxy) {
+		m.checkAndRemoveCNNode(p)
+	})
 	m.healthChecker.SetProtocolFilter(m.allowIPv4.Load(), m.allowIPv6.Load())
 	m.healthChecker.Start()
 	m.probeInitialGeo()
@@ -217,6 +223,9 @@ func (m *Manager) Reload(cfg UpstreamConfig) {
 	// construction defaults.
 	m.restoreManualPins(pins)
 
+	if cfg.Chnroute != nil {
+		m.chnroute = cfg.Chnroute
+	}
 	if cfg.AllowIPv4 != nil {
 		m.allowIPv4.Store(*cfg.AllowIPv4)
 	}
@@ -225,6 +234,9 @@ func (m *Manager) Reload(cfg UpstreamConfig) {
 	}
 	if m.healthChecker != nil {
 		m.healthChecker.SetProtocolFilter(m.allowIPv4.Load(), m.allowIPv6.Load())
+		m.healthChecker.SetOnNodeProbed(func(p *Proxy) {
+			m.checkAndRemoveCNNode(p)
+		})
 		m.healthChecker.Reload(cfg.HealthCheck, newProxies)
 	}
 	m.probeInitialGeo()
@@ -446,6 +458,7 @@ func (m *Manager) rebuildLocked() map[string]json.RawMessage {
 	}
 
 	activeSB := make(map[string]json.RawMessage)
+	var cnAliases []string
 
 	for i, entry := range allEntries {
 		alias := entry.Alias
@@ -520,10 +533,55 @@ func (m *Manager) rebuildLocked() map[string]json.RawMessage {
 				proxy.ClearIPv6Pin()
 			}
 		}
+		proxy.Alias = alias
+		if isCN, reason := IsCNNode(proxy, m.chnroute); isCN {
+			slog.Warn("skipping and deleting node: egress is CN or host IP is in chnroute",
+				"alias", alias,
+				"reason", reason,
+				"host", proxy.Host,
+				"country", proxy.CountryCode(),
+				"exit_ip", proxy.ExitIP())
+			cnAliases = append(cnAliases, alias)
+			continue
+		}
+
 		aliasMap[alias] = proxy
 		defaultProxies = append(defaultProxies, proxy)
 		if proxy.singboxTag != "" && len(proxy.singboxRaw) > 0 {
 			activeSB[proxy.singboxTag] = proxy.singboxRaw
+		}
+	}
+
+	if len(cnAliases) > 0 {
+		cnSet := make(map[string]bool, len(cnAliases))
+		for _, a := range cnAliases {
+			cnSet[a] = true
+		}
+		for pName, entries := range m.providerProxies {
+			var kept []ProxyEntry
+			for _, e := range entries {
+				if !cnSet[e.Alias] {
+					kept = append(kept, e)
+				}
+			}
+			if len(kept) == 0 {
+				delete(m.providerProxies, pName)
+			} else {
+				m.providerProxies[pName] = kept
+			}
+		}
+		var keptStatic []ProxyEntry
+		for _, e := range m.staticProxies {
+			if !cnSet[e.Alias] {
+				keptStatic = append(keptStatic, e)
+			}
+		}
+		m.staticProxies = keptStatic
+
+		if onRemoved := m.onNodeRemoved; onRemoved != nil {
+			safego.Go("notifyNodeRemoved", func() {
+				onRemoved(cnAliases)
+			})
 		}
 	}
 	m.aliasMap = aliasMap
@@ -582,8 +640,94 @@ func (m *Manager) SetProviderProxies(provider string, entries []ProxyEntry) {
 	slog.Info("provider proxies updated", "provider", provider, "count", len(entries), "totalProxies", len(newProxies))
 }
 
+// SetChnroute updates the chnroute checker and immediately purges any nodes matching CN criteria.
+func (m *Manager) SetChnroute(c ChnRouteChecker) {
+	m.mu.Lock()
+	m.chnroute = c
+	m.mu.Unlock()
+	m.filterAndRemoveCNNodes()
+}
+
+// SetOnNodeRemoved registers a callback invoked whenever proxy nodes are permanently removed.
+func (m *Manager) SetOnNodeRemoved(fn func(aliases []string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onNodeRemoved = fn
+}
+
+func (m *Manager) filterAndRemoveCNNodes() {
+	m.mu.RLock()
+	if m.stopped || m.chnroute == nil || m.chnroute.IsEmpty() {
+		m.mu.RUnlock()
+		return
+	}
+	var cnAliases []string
+	for alias, p := range m.aliasMap {
+		if p == nil {
+			continue
+		}
+		if isCN, _ := IsCNNode(p, m.chnroute); isCN {
+			cnAliases = append(cnAliases, alias)
+		}
+	}
+	m.mu.RUnlock()
+	if len(cnAliases) > 0 {
+		m.RemoveNodes(cnAliases)
+	}
+}
+
+func (m *Manager) checkAndRemoveCNNode(p *Proxy) bool {
+	if p == nil {
+		return false
+	}
+	m.mu.RLock()
+	checker := m.chnroute
+	m.mu.RUnlock()
+
+	isCN, reason := IsCNNode(p, checker)
+	if !isCN {
+		return false
+	}
+
+	alias := p.Alias
+	if alias == "" {
+		m.mu.RLock()
+		for a, proxy := range m.aliasMap {
+			if proxy == p {
+				alias = a
+				break
+			}
+		}
+		m.mu.RUnlock()
+	}
+	if alias == "" {
+		alias = p.Name
+	}
+	if alias == "" {
+		alias = p.URL
+	}
+
+	slog.Warn("deleting node: egress is CN or host IP is in chnroute",
+		"alias", alias,
+		"reason", reason,
+		"host", p.Host,
+		"country", p.CountryCode(),
+		"exit_ip", p.ExitIP())
+
+	safego.Go("removeCNNode", func() {
+		m.RemoveNodes([]string{alias})
+	})
+	return true
+}
+
 // RemoveProviderNodes removes specific aliases from provider proxies and rebuilds the active pool.
 func (m *Manager) RemoveProviderNodes(aliases []string) int {
+	return m.RemoveNodes(aliases)
+}
+
+// RemoveNodes removes specific aliases from provider proxies and static proxies,
+// syncs sing-box outbounds, notifies listeners, and rebuilds the active pool.
+func (m *Manager) RemoveNodes(aliases []string) int {
 	if len(aliases) == 0 {
 		return 0
 	}
@@ -618,11 +762,27 @@ func (m *Manager) RemoveProviderNodes(aliases []string) int {
 			totalRemoved += removedHere
 		}
 	}
+
+	var keptStatic []ProxyEntry
+	removedStatic := 0
+	for _, e := range m.staticProxies {
+		if aliasSet[e.Alias] {
+			removedStatic++
+		} else {
+			keptStatic = append(keptStatic, e)
+		}
+	}
+	if removedStatic > 0 {
+		m.staticProxies = keptStatic
+		totalRemoved += removedStatic
+	}
+
 	if totalRemoved > 0 {
 		pins := m.captureManualPins()
 		activeSB := m.rebuildLocked()
 		newProxies := m.defaultProxies
 		healthCfg := m.healthCfg
+		onRemoved := m.onNodeRemoved
 		m.mu.Unlock()
 
 		if err := singbox.GlobalEngine().SyncOutbounds(activeSB); err != nil {
@@ -632,8 +792,11 @@ func (m *Manager) RemoveProviderNodes(aliases []string) int {
 		if m.healthChecker != nil {
 			m.healthChecker.Reload(healthCfg, newProxies)
 		}
+		if onRemoved != nil {
+			onRemoved(aliases)
+		}
 		m.probeInitialGeo()
-		slog.Info("provider nodes removed", "removed", totalRemoved, "remaining", len(newProxies))
+		slog.Info("nodes removed", "removed", totalRemoved, "remaining", len(newProxies))
 		return totalRemoved
 	}
 	m.mu.Unlock()
@@ -646,6 +809,7 @@ type UpstreamConfig struct {
 	Proxies     []ProxyEntry
 	AllowIPv4   *bool
 	AllowIPv6   *bool
+	Chnroute    ChnRouteChecker
 }
 
 type ProxyEntry struct {
@@ -2316,8 +2480,10 @@ func (m *Manager) probeInitialGeo() {
 						lat, err := probeTCP(probeCtx, proxy, "http://cp.cloudflare.com/cdn-cgi/trace")
 						if err == nil {
 							proxy.health.UpdateLatency(lat)
+							m.checkAndRemoveCNNode(proxy)
 						} else if proxy.SchemeSupportsUDP() {
 							_ = discoverGeoViaUDP(probeCtx, proxy, false)
+							m.checkAndRemoveCNNode(proxy)
 						}
 					})
 				}
@@ -2329,9 +2495,11 @@ func (m *Manager) probeInitialGeo() {
 						if err != nil && proxy.SchemeSupportsUDP() && proxy.ExitIPv6() == "" {
 							_ = discoverGeoViaUDP(probeCtx, proxy, true)
 						}
+						m.checkAndRemoveCNNode(proxy)
 					})
 				}
 				innerWg.Wait()
+				m.checkAndRemoveCNNode(proxy)
 			})
 		}
 		wg.Wait()

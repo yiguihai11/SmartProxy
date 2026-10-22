@@ -93,6 +93,8 @@ type Proxy struct {
 	// imported profiles. Empty when the URL has no fragment. Purely cosmetic —
 	// routing and identity use Scheme/Host/Port/Alias.
 	Name     string
+	// Alias is the configured alias or subscription name assigned to this proxy in Manager.
+	Alias    string
 	Scheme   ProxyScheme
 	Host     string
 	Port     int
@@ -1572,4 +1574,52 @@ func (u *UDPProxyConn) ProbeTCP() error {
 		return probeErr
 	}
 	return errors.New("unexpected data on UDP ASSOCIATE control channel")
+}
+
+// ChnRouteChecker is an interface for querying whether an IP belongs to mainland China.
+type ChnRouteChecker interface {
+	Contains(ip net.IP) bool
+	IsEmpty() bool
+}
+
+// IsProxyInChnroute reports whether a proxy URL's server host IP or egress is in mainland China.
+func IsProxyInChnroute(proxyURL string, checker ChnRouteChecker) bool {
+	if checker == nil || checker.IsEmpty() || proxyURL == "" {
+		return false
+	}
+	p, err := newProxyParsed(proxyURL)
+	if err != nil || p == nil {
+		return false
+	}
+	isCN, _ := IsCNNode(p, checker)
+	return isCN
+}
+
+// IsCNNode reports whether a proxy node is located in mainland China (either via host IP in chnroute
+// or via detected egress country code CN / exit IP in chnroute).
+func IsCNNode(p *Proxy, checker ChnRouteChecker) (bool, string) {
+	if p == nil {
+		return false, ""
+	}
+	// 1. Egress country code is CN
+	if strings.EqualFold(p.CountryCode(), "CN") {
+		return true, fmt.Sprintf("egress country code is CN (loc=%s)", p.CountryCode())
+	}
+	// 2. Host IP is in chnroute
+	if checker != nil && !checker.IsEmpty() {
+		if p.Host != "" {
+			if ip := net.ParseIP(p.Host); ip != nil && checker.Contains(ip) {
+				return true, fmt.Sprintf("host IP %s is in chnroute", ip.String())
+			}
+		}
+		// 3. Exit IP is in chnroute
+		for _, exitStr := range []string{p.ExitIP(), p.ExitIPv4(), p.ExitIPv6()} {
+			if exitStr != "" {
+				if ip := net.ParseIP(exitStr); ip != nil && checker.Contains(ip) {
+					return true, fmt.Sprintf("exit IP %s is in chnroute", ip.String())
+				}
+			}
+		}
+	}
+	return false, ""
 }

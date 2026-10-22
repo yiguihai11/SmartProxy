@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -299,4 +300,55 @@ func (m *Manager) findState(name string) *ItemState {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.subs[name]
+}
+
+type subChnroute struct {
+	cnIP string
+}
+
+func (s subChnroute) Contains(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	return ip.String() == s.cnIP
+}
+
+func (s subChnroute) IsEmpty() bool {
+	return s.cnIP == ""
+}
+
+func TestSubscriptionManager_ChnrouteFilter(t *testing.T) {
+	tempDir := t.TempDir()
+	upMgr, _ := upstream.NewManager(upstream.UpstreamConfig{Strategy: "failover"})
+	defer upMgr.Stop()
+
+	mgr := NewManager(tempDir, []config.SubscriptionConf{}, upMgr)
+	defer mgr.Stop()
+
+	mgr.mu.Lock()
+	mgr.subs["sub1"] = &ItemState{
+		Name:    "sub1",
+		Enabled: true,
+		Nodes: []upstream.ProxyEntry{
+			{Alias: "hk-node", URL: "socks5://1.2.3.4:1080"},
+			{Alias: "cn-transit", URL: "socks5://42.51.25.69:1080"},
+		},
+		NodeCount: 2,
+	}
+	mgr.subsOrder = []string{"sub1"}
+	mgr.mu.Unlock()
+
+	// Setting chnroute should purge cn-transit
+	mgr.SetChnroute(subChnroute{cnIP: "42.51.25.69"})
+
+	mgr.mu.RLock()
+	it := mgr.subs["sub1"]
+	mgr.mu.RUnlock()
+
+	if it.NodeCount != 1 || len(it.Nodes) != 1 {
+		t.Fatalf("expected 1 node after filter, got %d", len(it.Nodes))
+	}
+	if it.Nodes[0].Alias != "hk-node" {
+		t.Fatalf("expected hk-node, got %s", it.Nodes[0].Alias)
+	}
 }
