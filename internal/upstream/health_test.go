@@ -398,12 +398,27 @@ func TestParseAndSaveGeo_AutoCorrection(t *testing.T) {
 	p6 := &Proxy{}
 	p6.SetCountryCode("US")
 	body6 := []byte("fl=456\nip=2400:cb00::1\nts=123456\nloc=SG\ncolo=SIN\n")
-	parseAndSaveGeoIPv6(p6, body6)
+	if isIPv4 := parseAndSaveGeoIPv6(p6, body6); isIPv4 {
+		t.Errorf("expected parseAndSaveGeoIPv6 to return isIPv4=false for valid IPv6")
+	}
 	if p6.CountryCode() != "SG" {
 		t.Errorf("expected IPv6 auto-corrected country code SG, got %q", p6.CountryCode())
 	}
 	if p6.ExitIPv6() != "2400:cb00::1" {
 		t.Errorf("expected ExitIPv6 2400:cb00::1, got %q", p6.ExitIPv6())
+	}
+
+	// IPv6 probe returning IPv4 egress should be rejected for IPv6
+	p6Bad := &Proxy{}
+	body4 := []byte("fl=123\nip=192.227.247.27\nts=123456\nloc=US\ncolo=LAX\n")
+	if isIPv4 := parseAndSaveGeoIPv6(p6Bad, body4); !isIPv4 {
+		t.Errorf("expected parseAndSaveGeoIPv6 to return isIPv4=true when trace returns IPv4")
+	}
+	if p6Bad.ExitIPv6() != "" {
+		t.Errorf("ExitIPv6 must remain empty when IPv4 returned, got %q", p6Bad.ExitIPv6())
+	}
+	if p6Bad.ExitIPv4() != "192.227.247.27" {
+		t.Errorf("ExitIPv4 expected 192.227.247.27, got %q", p6Bad.ExitIPv4())
 	}
 }
 

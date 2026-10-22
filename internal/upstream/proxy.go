@@ -204,7 +204,7 @@ func (p *Proxy) ExitIP() string {
 }
 
 func (p *Proxy) ExitIPv4() string {
-	if ptr := p.exitIPv4.Load(); ptr != nil && *ptr != "" {
+	if ptr := p.exitIPv4.Load(); ptr != nil && *ptr != "" && !strings.Contains(*ptr, ":") {
 		return *ptr
 	}
 	if ptr := p.exitIP.Load(); ptr != nil && *ptr != "" && !strings.Contains(*ptr, ":") {
@@ -214,7 +214,7 @@ func (p *Proxy) ExitIPv4() string {
 }
 
 func (p *Proxy) ExitIPv6() string {
-	if ptr := p.exitIPv6.Load(); ptr != nil && *ptr != "" {
+	if ptr := p.exitIPv6.Load(); ptr != nil && *ptr != "" && strings.Contains(*ptr, ":") {
 		return *ptr
 	}
 	if ptr := p.exitIP.Load(); ptr != nil && *ptr != "" && strings.Contains(*ptr, ":") {
@@ -224,22 +224,26 @@ func (p *Proxy) ExitIPv6() string {
 }
 
 func (p *Proxy) SetExitIPv4(ip string) {
-	if ip != "" {
-		p.exitIPv4.Store(&ip)
-		if p.exitIP.Load() == nil {
-			p.exitIP.Store(&ip)
-		}
+	ip = strings.TrimSpace(ip)
+	if ip == "" || strings.Contains(ip, ":") {
+		return
+	}
+	p.exitIPv4.Store(&ip)
+	if p.exitIP.Load() == nil {
+		p.exitIP.Store(&ip)
 	}
 }
 
 func (p *Proxy) SetExitIPv6(ip string) {
-	if ip != "" {
-		p.exitIPv6.Store(&ip)
-		if p.exitIP.Load() == nil {
-			p.exitIP.Store(&ip)
-		}
-		p.SetIPv6Capability(IPv6CapSupported)
+	ip = strings.TrimSpace(ip)
+	if ip == "" || !strings.Contains(ip, ":") {
+		return
 	}
+	p.exitIPv6.Store(&ip)
+	if p.exitIP.Load() == nil {
+		p.exitIP.Store(&ip)
+	}
+	p.SetIPv6Capability(IPv6CapSupported)
 }
 
 func (p *Proxy) SetGeoInfo(countryCode, exitIP string) {

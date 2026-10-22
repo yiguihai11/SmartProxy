@@ -2635,5 +2635,20 @@ func TestProxy_DualStackExitIPs(t *testing.T) {
 	if p.ExitIPv6() != "2001:db8::cafe" {
 		t.Fatalf("ExitIPv6 updated = %q, want 2001:db8::cafe", p.ExitIPv6())
 	}
+
+	// 6. Test invalid IP address family rejections
+	pInvalid := &Proxy{}
+	pInvalid.SetExitIPv6("192.227.247.27")
+	if pInvalid.ExitIPv6() != "" {
+		t.Fatalf("SetExitIPv6 must reject IPv4, got %q", pInvalid.ExitIPv6())
+	}
+	if pInvalid.SupportsIPv6() {
+		t.Fatalf("SetExitIPv6 with IPv4 must not enable SupportsIPv6")
+	}
+
+	pInvalid.SetExitIPv4("2001:db8::1")
+	if pInvalid.ExitIPv4() != "" {
+		t.Fatalf("SetExitIPv4 must reject IPv6, got %q", pInvalid.ExitIPv4())
+	}
 }
 

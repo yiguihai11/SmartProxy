@@ -886,7 +886,10 @@ func probeIPv6(ctx context.Context, p *Proxy) (time.Duration, error) {
 
 	if needGeo {
 		buf, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		parseAndSaveGeoIPv6(p, buf)
+		if isIPv4 := parseAndSaveGeoIPv6(p, buf); isIPv4 {
+			markV6TCPFailed(p)
+			return 0, fmt.Errorf("ipv6 probe connected via ipv4 egress, not ipv6")
+		}
 	}
 
 	lat := time.Since(start)
@@ -1100,9 +1103,9 @@ func parseAndSaveGeo(p *Proxy, body []byte) {
 	}
 }
 
-func parseAndSaveGeoIPv6(p *Proxy, body []byte) {
+func parseAndSaveGeoIPv6(p *Proxy, body []byte) (isIPv4Egress bool) {
 	if p == nil || len(body) == 0 {
-		return
+		return false
 	}
 	var exitIP, loc string
 	for _, line := range strings.Split(string(body), "\n") {
@@ -1117,8 +1120,17 @@ func parseAndSaveGeoIPv6(p *Proxy, body []byte) {
 		p.SetCountryCode(loc)
 	}
 	if exitIP != "" {
-		p.SetExitIPv6(exitIP)
+		if strings.Contains(exitIP, ":") {
+			p.SetExitIPv6(exitIP)
+			return false
+		}
+		// Probe was sent to an IPv6 target, but Cloudflare saw an IPv4 egress IP.
+		// That means the proxy node routed traffic via an IPv4 gateway,
+		// and does not possess genuine IPv6 external egress.
+		p.SetExitIPv4(exitIP)
+		return true
 	}
+	return false
 }
 
 // discoverGeoViaUDP queries OpenDNS for the proxy's public exit IP and resolves its country code via Cymru DNS TXT.

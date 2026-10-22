@@ -1169,8 +1169,8 @@ async function testProxy(i,proto){
     var res=await resp.json();
     if(res.country_code)p.country_code=res.country_code;
     if(res.exit_ip)p.exit_ip=res.exit_ip;
-    if(res.exit_ipv4)p.exit_ipv4=res.exit_ipv4;
-    if(res.exit_ipv6)p.exit_ipv6=res.exit_ipv6;
+    if(res.exit_ipv4&&res.exit_ipv4.indexOf(':')===-1)p.exit_ipv4=res.exit_ipv4;
+    if(res.exit_ipv6&&res.exit_ipv6.indexOf(':')!==-1)p.exit_ipv6=res.exit_ipv6;
     if(res.ipv6_capability)p.ipv6_capability=res.ipv6_capability;
     if(res.supports_ipv6!==undefined)p.supports_ipv6=res.supports_ipv6;
     if(res.v4)p.v4=res.v4;
@@ -1358,8 +1358,8 @@ async function testGroupProxies(gid, proto, btn){
         if(node){
           if(res.country_code)node.country_code=res.country_code;
           if(res.exit_ip)node.exit_ip=res.exit_ip;
-          if(res.exit_ipv4)node.exit_ipv4=res.exit_ipv4;
-          if(res.exit_ipv6)node.exit_ipv6=res.exit_ipv6;
+          if(res.exit_ipv4&&res.exit_ipv4.indexOf(':')===-1)node.exit_ipv4=res.exit_ipv4;
+          if(res.exit_ipv6&&res.exit_ipv6.indexOf(':')!==-1)node.exit_ipv6=res.exit_ipv6;
           if(res.ipv6_capability)node.ipv6_capability=res.ipv6_capability;
           if(res.supports_ipv6!==undefined)node.supports_ipv6=res.supports_ipv6;
           if(res.v4)node.v4=res.v4;
@@ -1819,7 +1819,9 @@ function renderProxyCard(p,i){
     ipBadge='<span class="node-badge-ipv4" title="'+escAttr(t('IPv4 Only'))+'">IPv4</span>';
   }
   var v4Exit = p.exit_ipv4 || (p.v4 && p.v4.exit_ip) || (p.exit_ip && p.exit_ip.indexOf(':') === -1 ? p.exit_ip : '');
+  if (v4Exit && v4Exit.indexOf(':') !== -1) v4Exit = '';
   var v6Exit = p.exit_ipv6 || (p.v6 && p.v6.exit_ip) || (p.exit_ip && p.exit_ip.indexOf(':') !== -1 ? p.exit_ip : '');
+  if (v6Exit && v6Exit.indexOf(':') === -1) v6Exit = '';
   var exitParts = [];
   if (v4Exit && v6Exit) {
     exitParts.push('IPv4: ' + escHtml(v4Exit));
