@@ -467,6 +467,7 @@ function tf(s,a){s=t(s);if(a)for(var i=0;i<a.length;i++)s=s.split('{'+i+'}').joi
   <div class="toolbar">
     <button class="btn primary btn-sm" onclick="openProxyDialog(-1)">+ Add Proxy</button>
     <button class="btn btn-sm" onclick="openRawConfigDialog(-1)" title="Add node via raw JSON or link">+ Raw Config</button>
+    <button class="btn btn-sm" onclick="openBatchImportDialog()" title="Batch import proxy links from text or clipboard">+ Batch Import</button>
     <button class="btn btn-sm" onclick="openSubscriptionDialog('')" title="Add or manage proxy subscriptions">+ Add Subscription</button>
     <span class="filter-wrap" id="proxy-group-filter-wrap">
       <span class="filter-trigger" id="proxy-group-filter-trigger" onclick="toggleProxyGroupFilter()">Group: All ▾</span>
@@ -3328,6 +3329,185 @@ async function saveRawConfigProxy(){
     if(document.querySelector('#view-config.active'))loadConfig();
   }catch(e){
     if(e.message!=='dup')alert('Save failed: '+e.message);
+  }
+}
+
+function openBatchImportDialog(){
+  var ov=document.getElementById('batch-import-overlay');
+  if(!ov)return;
+  document.getElementById('batch-import-content').value='';
+  document.getElementById('batch-import-preview-area').style.display='none';
+  document.getElementById('batch-import-preview-list').innerHTML='';
+  var btn=document.getElementById('batch-import-confirm');
+  btn.disabled=true;
+  btn.textContent=t('Import');
+  ov.classList.add('show');
+}
+
+function closeBatchImportDialog(){
+  var ov=document.getElementById('batch-import-overlay');
+  if(ov)ov.classList.remove('show');
+  _parsedBatchNodes=[];
+}
+
+async function pasteBatchImportClipboard(){
+  try{
+    if(navigator.clipboard&&navigator.clipboard.readText){
+      var txt=await navigator.clipboard.readText();
+      if(txt){
+        var ta=document.getElementById('batch-import-content');
+        ta.value=txt;
+        previewBatchImport();
+        showToast(t('Pasted from clipboard!'));
+      }
+    }else{
+      showToast(t('Clipboard access not supported, please paste manually'));
+    }
+  }catch(e){
+    showToast(t('Clipboard access denied, please paste manually'));
+  }
+}
+
+function decodeBase64Safe(str){
+  if(!str)return '';
+  str=str.trim().replace(/-/g,'+').replace(/_/g,'/');
+  while(str.length%4)str+='=';
+  try{
+    return decodeURIComponent(escape(atob(str)));
+  }catch(e){
+    try{
+      return atob(str);
+    }catch(err){
+      return '';
+    }
+  }
+}
+
+function parseBatchNodesFromText(text){
+  if(!text)return [];
+  var trimmed=text.trim();
+  if(trimmed.indexOf('://')===-1){
+    var decoded=decodeBase64Safe(trimmed);
+    if(decoded&&decoded.indexOf('://')!==-1)trimmed=decoded;
+  }
+  var schemeRegex=/(?:vmess|vless|ss|ssr|trojan|hysteria2|hy2|hysteria|tuic|wireguard|wg|anytls|socks5|socks|http|https):\/\//gi;
+  var indices=[];
+  var match;
+  while((match=schemeRegex.exec(trimmed))!==null){
+    indices.push(match.index);
+  }
+  var nodes=[];
+  for(var i=0;i<indices.length;i++){
+    var start=indices[i];
+    var end=(i+1<indices.length)?indices[i+1]:trimmed.length;
+    var rawUrl=trimmed.substring(start,end).trim();
+    if(!rawUrl)continue;
+
+    var schemeMatch=rawUrl.match(/^([a-zA-Z0-9_-]+):\/\//);
+    var scheme=schemeMatch?schemeMatch[1].toLowerCase():'proxy';
+
+    var alias='';
+    if(scheme==='vmess'){
+      try{
+        var b64=rawUrl.substring(8);
+        var jsonStr=decodeBase64Safe(b64);
+        var obj=JSON.parse(jsonStr);
+        if(obj.ps)alias=String(obj.ps).trim();
+      }catch(e){}
+    }
+    if(!alias&&rawUrl.indexOf('#')!==-1){
+      try{
+        var hash=rawUrl.substring(rawUrl.indexOf('#')+1).trim();
+        alias=decodeURIComponent(hash);
+      }catch(e){
+        alias=rawUrl.substring(rawUrl.indexOf('#')+1).trim();
+      }
+    }
+    if(!alias){
+      alias=scheme+'-node-'+(i+1);
+    }
+    nodes.push({alias:alias,url:rawUrl,scheme:scheme});
+  }
+  return nodes;
+}
+
+var _parsedBatchNodes=[];
+
+function previewBatchImport(){
+  var ta=document.getElementById('batch-import-content');
+  var prevArea=document.getElementById('batch-import-preview-area');
+  var prevList=document.getElementById('batch-import-preview-list');
+  var prevTitle=document.getElementById('batch-import-preview-title');
+  var btn=document.getElementById('batch-import-confirm');
+  if(!ta||!btn)return;
+
+  var nodes=parseBatchNodesFromText(ta.value);
+  _parsedBatchNodes=nodes;
+
+  if(nodes.length===0){
+    prevArea.style.display='none';
+    btn.disabled=true;
+    btn.textContent=t('Import');
+    return;
+  }
+
+  prevArea.style.display='block';
+  prevTitle.textContent=tf('Detected {0} Proxies',[nodes.length]);
+  btn.disabled=false;
+  btn.textContent=tf('Import {0} Proxies',[nodes.length]);
+
+  var html='';
+  for(var i=0;i<nodes.length;i++){
+    var n=nodes[i];
+    html+='<div style="display:flex;align-items:center;gap:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+
+      '<span class="badge" style="font-size:0.7rem;text-transform:uppercase">'+escHtml(n.scheme)+'</span> '+
+      '<span style="font-weight:500;color:var(--text)">'+escHtml(n.alias)+'</span>'+
+    '</div>';
+  }
+  prevList.innerHTML=html;
+}
+
+async function confirmBatchImport(){
+  if(!_parsedBatchNodes||_parsedBatchNodes.length===0)return;
+  var btn=document.getElementById('batch-import-confirm');
+  btn.disabled=true;
+  btn.textContent=t('Importing...');
+
+  try{
+    await putProxyConfig(function(cfg){
+      if(!cfg.upstream)cfg.upstream={};
+      if(!cfg.upstream.proxies)cfg.upstream.proxies=[];
+      var existing=cfg.upstream.proxies;
+
+      var usedAliases=new Set();
+      existing.forEach(function(p){if(p&&p.alias)usedAliases.add(p.alias);});
+
+      _parsedBatchNodes.forEach(function(n){
+        var alias=n.alias;
+        var baseAlias=alias;
+        var suffix=2;
+        while(usedAliases.has(alias)){
+          alias=baseAlias+'-'+suffix;
+          suffix++;
+        }
+        usedAliases.add(alias);
+
+        existing.push({
+          alias: alias,
+          url: n.url,
+          udp_in_tcp: false
+        });
+      });
+    });
+
+    closeBatchImportDialog();
+    showToast(tf('Successfully imported {0} proxies!',[_parsedBatchNodes.length]));
+    loadHealth();
+    if(document.querySelector('#view-config.active'))loadConfig();
+  }catch(e){
+    alert('Import failed: '+e.message);
+  }finally{
+    btn.disabled=false;
   }
 }
 async function refreshLanternNodes(btn){
@@ -7021,6 +7201,30 @@ document.addEventListener('visibilitychange',function(){
       <button class="btn btn-sm" onclick="copyRawConfigContent()">Copy</button>
       <button class="btn btn-sm" onclick="closeRawConfigDialog()">Cancel</button>
       <button class="btn btn-sm primary" id="raw-config-confirm" onclick="saveRawConfigProxy()">Save as Custom</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="batch-import-overlay" onclick="if(event.target===this)closeBatchImportDialog()">
+  <div class="dialog" style="max-width:640px" onclick="event.stopPropagation()">
+    <div class="dialog-title" id="batch-import-title">Batch Import Proxies</div>
+    <div class="dialog-desc" id="batch-import-desc">Paste multiple proxy links (ss://, vmess://, vless://, trojan://, hysteria2://, etc.). Line-separated, space-separated, or concatenated links are supported.</div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <div class="dialog-label" style="margin:0" id="batch-import-label">Proxy Links</div>
+      <button type="button" class="btn btn-sm" onclick="pasteBatchImportClipboard()">📋 Paste from Clipboard</button>
+    </div>
+    <textarea class="dialog-input" id="batch-import-content" rows="9" spellcheck="false" oninput="previewBatchImport()"
+      style="font-family:var(--mono);font-size:0.8rem;line-height:1.45;resize:vertical;min-height:140px;max-height:360px;white-space:pre-wrap;word-break:break-all"
+      placeholder="hysteria2://...&#10;ss://...&#10;vless://...&#10;vmess://..."></textarea>
+
+    <div id="batch-import-preview-area" style="margin-top:10px;display:none">
+      <div class="dialog-label" id="batch-import-preview-title">Detected Nodes</div>
+      <div id="batch-import-preview-list" style="max-height:160px;overflow-y:auto;background:var(--bg3, rgba(128,128,128,0.15));padding:8px 12px;border-radius:6px;font-size:0.8rem;font-family:monospace;display:flex;flex-direction:column;gap:5px"></div>
+    </div>
+
+    <div class="dialog-actions" style="margin-top:18px">
+      <button class="btn btn-sm" onclick="closeBatchImportDialog()">Cancel</button>
+      <button class="btn btn-sm primary" id="batch-import-confirm" disabled onclick="confirmBatchImport()">Import</button>
     </div>
   </div>
 </div>
