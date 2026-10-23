@@ -249,13 +249,10 @@ object ConfigProvider {
         routing.put("acl_file", File(context.cacheDir, "acl.txt").absolutePath)
         base.put("routing", routing)
 
-        // smartproxy.lan → loopback + 手机局域网 IP(dns.static_records hosts-override)。
-        // 首页面板链接用 https://smartproxy.lan:port:VPN 运行时引擎接管手机 DNS,static
-        // record 把 smartproxy.lan 解析到手机自己(网络/系统 DNS 不认识该域名)。
-        // 记录恒建且 loopback 优先(127.0.0.1/::1):本地浏览器直连 admin,loopback 不进
-        // TUN,离线/仅流量也能开面板;LAN IP 排后供其它设备经手机 DNS 解析(纯 DNS 解析,
-        // 与证书 SAN 无关,见上)。每次启动用当前 IP 刷新,不保留旧 IP。
-        val lanIp = PanelUrl.lanIpv4()
+        // smartproxy.lan → loopback (127.0.0.1 / ::1)。
+        // 首页面板链接用 https://smartproxy.lan:port: VPN 运行时引擎接管手机 DNS, static
+        // record 把 smartproxy.lan 解析到本机 loopback (127.0.0.1/::1), 本地浏览器直连 admin,
+        // loopback 不进 TUN, 离线/仅流量也能秒开面板。不再追加物理 LAN IP, 保持记录干净稳定。
         val dns = base.optJSONObject("dns") ?: JSONObject().also { base.put("dns", it) }
         val adblock = dns.optJSONObject("adblock") ?: JSONObject().also { dns.put("adblock", it) }
         adblock.put("cache_file", File(context.cacheDir, "adblock/adblock_cache.txt").absolutePath)
@@ -270,9 +267,7 @@ object ConfigProvider {
         }
         val rec = if (found >= 0) records.getJSONObject(found)
         else JSONObject().put("host", "smartproxy.lan").also { records.put(it) }
-        val ips = JSONArray().put("127.0.0.1").put("::1")
-        lanIp?.let { ips.put(it) }
-        rec.put("ip", ips)
+        rec.put("ip", JSONArray().put("127.0.0.1").put("::1"))
         base.put("dns", dns)
 
         // admin_cert_sans 不再自动追加 LAN IP(用户要求,§8):证书 SAN 保持配置原样
