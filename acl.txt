@@ -149,11 +149,11 @@ proxy domain *.blob.core.windows.net default
 # ─────────────────────────────────────────
 # 巴哈姆特动画疯
 # ─────────────────────────────────────────
-proxy domain gamer2-cds.cdn.hinet.net "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
-proxy domain gamer-cds.cdn.hinet.net "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
-proxy domain *.bahamut.akamaized.net "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
-proxy domain *.bahamut.com.tw "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
-proxy domain *.gamer.com.tw "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
+proxy domain gamer2-cds.cdn.hinet.net default@TW
+proxy domain gamer-cds.cdn.hinet.net default@TW
+proxy domain *.bahamut.akamaized.net default@TW
+proxy domain *.bahamut.com.tw default@TW
+proxy domain *.gamer.com.tw default@TW
 
 # ─────────────────────────────────────────
 # 爱壹帆
