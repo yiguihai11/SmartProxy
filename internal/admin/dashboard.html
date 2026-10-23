@@ -3493,24 +3493,6 @@ function previewBatchImport(){
   }
   prevList.innerHTML=html;
 }
-    return;
-  }
-
-  prevArea.style.display='block';
-  prevTitle.textContent=tf('Detected {0} Proxies',[nodes.length]);
-  btn.disabled=false;
-  btn.textContent=tf('Import {0} Proxies',[nodes.length]);
-
-  var html='';
-  for(var i=0;i<nodes.length;i++){
-    var n=nodes[i];
-    html+='<div style="display:flex;align-items:center;gap:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+
-      '<span class="badge" style="font-size:0.7rem;text-transform:uppercase">'+escHtml(n.scheme)+'</span> '+
-      '<span style="font-weight:500;color:var(--text)">'+escHtml(n.alias)+'</span>'+
-    '</div>';
-  }
-  prevList.innerHTML=html;
-}
 
 async function confirmBatchImport(){
   if(!_parsedBatchNodes||_parsedBatchNodes.length===0)return;

@@ -3,23 +3,27 @@ const fs = require('fs');
 // check dashboard.html's js syntax
 const html = fs.readFileSync('internal/admin/dashboard.html', 'utf8');
 
-// locate the main script block
-const start = html.indexOf('<script>\n');
-const end = html.indexOf('</script>', start + 1);
-if (start === -1 || end === -1) {
-  console.error('ERROR: <script> block not found');
-  process.exit(1);
+// check all dashboard.html's inline js syntax
+let allJs = '';
+const scriptRegex = /<script(?:\s+[^>]*)?>([\s\S]*?)<\/script>/gi;
+let match;
+let scriptIndex = 0;
+while ((match = scriptRegex.exec(html)) !== null) {
+  scriptIndex++;
+  const code = match[1];
+  if (!code.trim()) continue; // external src script
+  try {
+    new Function(code);
+    allJs += '\n' + code;
+  } catch (e) {
+    console.error(`ERROR: dashboard.html script block #${scriptIndex} syntax error:`);
+    console.error('  ' + e.message);
+    process.exit(1);
+  }
 }
+console.log('  -> dashboard.js syntax OK (all script blocks validated)');
 
-const js = html.substring(start + 8, end);
-try {
-  new Function(js);
-  console.log('  -> dashboard.js syntax OK');
-} catch (e) {
-  console.error('ERROR: dashboard.js syntax error');
-  console.error('  ' + e.message);
-  process.exit(1);
-}
+const js = allJs;
 
 // Cross-check: an immediate property access on getElementById('X').prop must reference a
 // static id="X" in the HTML. Guards against "element removed from HTML but a reset/access
