@@ -3389,30 +3389,78 @@ async function saveRawConfigProxy(){
 }
 
 function getAvailableGroupList(){
-  var map={};
-  var proxies=(healthD&&healthD.health&&healthD.health.proxies)||[];
-  proxies.forEach(function(p){
-    var g=getProxyGroup(p);
-    if(g&&g!=='custom'&&g!=='lantern'&&g.indexOf('sub:')===-1){
-      map[g]=(map[g]||0)+1;
+  var lowerMap={};
+
+  function addGroup(rawName, count, isSub){
+    if(!rawName||typeof rawName!=='string')return;
+    var name=rawName.trim();
+    if(name.toLowerCase().indexOf('sub:')===0){
+      name=name.slice(4).trim();
+      isSub=true;
     }
+    if(!name)return;
+    var lower=name.toLowerCase();
+    if(lower==='custom'||lower==='lantern'||lower==='all'||lower==='全部'||lower==='default')return;
+
+    if(Object.prototype.hasOwnProperty.call(lowerMap,lower)){
+      var existing=lowerMap[lower];
+      if(count>0)existing.count=(existing.count||0)+count;
+      if(isSub)existing.isSub=true;
+    }else{
+      lowerMap[lower]={name:name,count:count||0,isSub:!!isSub};
+    }
+  }
+
+  // 1. From window._currentProxyGroups (the exact groups active on the control panel)
+  if(window._currentProxyGroups){
+    for(var gid in window._currentProxyGroups){
+      if(Object.prototype.hasOwnProperty.call(window._currentProxyGroups,gid)){
+        var g=window._currentProxyGroups[gid];
+        var cnt=(g.items&&g.items.length)||0;
+        addGroup(gid, cnt, gid.toLowerCase().indexOf('sub:')===0);
+      }
+    }
+  }
+
+  // 2. From all subscriptions (even if empty, disabled, or pending update)
+  var subs=(healthD&&healthD.subscriptions)||(healthD&&healthD.config&&healthD.config.upstream&&healthD.config.upstream.subscriptions)||window._lastKnownSubs||[];
+  subs.forEach(function(s){
+    if(s&&s.name)addGroup(s.name, 0, true);
   });
 
+  // 3. From health proxies (alias, name, tag, group, provider)
+  var proxies=(healthD&&healthD.health&&healthD.health.proxies)||[];
+  proxies.forEach(function(p){
+    if(p.provider)addGroup(p.provider, 1, p.provider.toLowerCase().indexOf('sub:')===0);
+    var str=(p.alias||'')+' '+(p.name||'')+' '+(p.tag||'');
+    var m=str.match(/\[(.*?)\]/);
+    if(m&&m[1])addGroup(m[1], 1, false);
+    if(p.group)addGroup(p.group, 1, false);
+  });
+
+  // 4. From config proxies (raw config / saved custom nodes)
+  var cfgProxies=(healthD&&healthD.config&&healthD.config.upstream&&healthD.config.upstream.proxies)||[];
+  cfgProxies.forEach(function(p){
+    var str=(p.alias||'')+' '+(p.name||'')+' '+(p.tag||'');
+    var m=str.match(/\[(.*?)\]/);
+    if(m&&m[1])addGroup(m[1], 1, false);
+    if(p.provider)addGroup(p.provider, 1, p.provider.toLowerCase().indexOf('sub:')===0);
+  });
+
+  // 5. From localStorage history
   try{
     var hist=JSON.parse(localStorage.getItem('sp_group_history')||'[]');
     if(Array.isArray(hist)){
       hist.forEach(function(h){
-        if(h&&typeof h==='string'&&!Object.prototype.hasOwnProperty.call(map,h)){
-          map[h]=0;
-        }
+        if(h&&typeof h==='string')addGroup(h, 0, false);
       });
     }
   }catch(_){}
 
   var list=[];
-  for(var k in map){
-    if(Object.prototype.hasOwnProperty.call(map,k)){
-      list.push({name:k,count:map[k]});
+  for(var k in lowerMap){
+    if(Object.prototype.hasOwnProperty.call(lowerMap,k)){
+      list.push(lowerMap[k]);
     }
   }
   list.sort(function(a,b){
@@ -3425,7 +3473,9 @@ function getAvailableGroupList(){
 function recordGroupHistory(groupName){
   if(!groupName)return;
   var g=groupName.trim();
-  if(!g||g==='custom'||g==='lantern'||g.indexOf('sub:')===0)return;
+  if(g.toLowerCase().indexOf('sub:')===0)g=g.slice(4).trim();
+  var lower=g.toLowerCase();
+  if(!g||lower==='custom'||lower==='lantern'||lower==='all'||lower==='全部'||lower==='default')return;
   try{
     var hist=JSON.parse(localStorage.getItem('sp_group_history')||'[]');
     if(!Array.isArray(hist))hist=[];
@@ -3483,7 +3533,10 @@ function setupGroupAutocomplete(inputId, dropdownId, onSelect){
           displayName=before+'<span class="match-highlight">'+match+'</span>'+after;
         }
       }
-      var badgeText=item.count>0?(item.count+' '+(window.SP_LANG==='zh'?'个节点':'nodes')):'';
+      var badgeParts=[];
+      if(item.isSub)badgeParts.push(window.SP_LANG==='zh'?'订阅':'Subscription');
+      if(item.count>0)badgeParts.push(item.count+' '+(window.SP_LANG==='zh'?'个节点':'nodes'));
+      var badgeText=badgeParts.join(' · ');
       html+='<div class="group-autocomplete-item'+(idx===activeIndex?' active':'')+'" data-idx="'+idx+'" data-group="'+escAttr(item.name)+'">'+
         '<div class="group-item-name"><span class="group-item-icon">📁</span><span class="group-item-text">'+displayName+'</span></div>'+
         (badgeText?'<span class="group-item-badge">'+escHtml(badgeText)+'</span>':'')+
@@ -3838,6 +3891,7 @@ function renderSubscriptions(subs){
   var el=document.getElementById('subscriptions-container');
   if(!el)return;
   var list=subs||[];
+  window._lastKnownSubs=list;
   var html='<div class="card" style="margin-bottom:16px;padding:14px 16px">'+
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:10px">'+
       '<div style="font-weight:600;font-size:0.95rem;display:flex;align-items:center;gap:8px">'+
