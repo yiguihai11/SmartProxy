@@ -3336,11 +3336,29 @@ function openBatchImportDialog(){
   var ov=document.getElementById('batch-import-overlay');
   if(!ov)return;
   document.getElementById('batch-import-content').value='';
+  var grpEl=document.getElementById('batch-import-group');
+  if(grpEl)grpEl.value='';
   document.getElementById('batch-import-preview-area').style.display='none';
   document.getElementById('batch-import-preview-list').innerHTML='';
   var btn=document.getElementById('batch-import-confirm');
   btn.disabled=true;
   btn.textContent=t('Import');
+
+  var dl=document.getElementById('batch-import-existing-groups');
+  if(dl){
+    var groups=new Set();
+    var proxies=(healthD&&healthD.health&&healthD.health.proxies)||[];
+    proxies.forEach(function(p){
+      var g=getProxyGroup(p);
+      if(g&&g!=='custom'&&g!=='lantern'&&g.indexOf('sub:')===-1){
+        groups.add(g);
+      }
+    });
+    dl.innerHTML=Array.from(groups).map(function(g){
+      return '<option value="'+escAttr(g)+'">';
+    }).join('');
+  }
+
   ov.classList.add('show');
 }
 
@@ -3383,7 +3401,7 @@ function decodeBase64Safe(str){
   }
 }
 
-function parseBatchNodesFromText(text){
+function parseBatchNodesFromText(text, group){
   if(!text)return [];
   var trimmed=text.trim();
   if(trimmed.indexOf('://')===-1){
@@ -3426,6 +3444,12 @@ function parseBatchNodesFromText(text){
     if(!alias){
       alias=scheme+'-node-'+(i+1);
     }
+
+    if(group){
+      alias=alias.replace(/^\[.*?\]\s*/,'');
+      alias='['+group+'] '+alias;
+    }
+
     nodes.push({alias:alias,url:rawUrl,scheme:scheme});
   }
   return nodes;
@@ -3439,15 +3463,36 @@ function previewBatchImport(){
   var prevList=document.getElementById('batch-import-preview-list');
   var prevTitle=document.getElementById('batch-import-preview-title');
   var btn=document.getElementById('batch-import-confirm');
+  var grpInput=document.getElementById('batch-import-group');
   if(!ta||!btn)return;
 
-  var nodes=parseBatchNodesFromText(ta.value);
+  var group=grpInput?grpInput.value.trim():'';
+  var nodes=parseBatchNodesFromText(ta.value, group);
   _parsedBatchNodes=nodes;
 
   if(nodes.length===0){
     prevArea.style.display='none';
     btn.disabled=true;
     btn.textContent=t('Import');
+    return;
+  }
+
+  prevArea.style.display='block';
+  var grpText=group?(' ('+t('Group')+': '+group+')'):'';
+  prevTitle.textContent=tf('Detected {0} Proxies',[nodes.length])+grpText;
+  btn.disabled=false;
+  btn.textContent=tf('Import {0} Proxies',[nodes.length]);
+
+  var html='';
+  for(var i=0;i<nodes.length;i++){
+    var n=nodes[i];
+    html+='<div style="display:flex;align-items:center;gap:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+
+      '<span class="badge" style="font-size:0.7rem;text-transform:uppercase">'+escHtml(n.scheme)+'</span> '+
+      '<span style="font-weight:500;color:var(--text)">'+escHtml(n.alias)+'</span>'+
+    '</div>';
+  }
+  prevList.innerHTML=html;
+}
     return;
   }
 
@@ -7208,6 +7253,10 @@ document.addEventListener('visibilitychange',function(){
   <div class="dialog" style="max-width:640px" onclick="event.stopPropagation()">
     <div class="dialog-title" id="batch-import-title">Batch Import Proxies</div>
     <div class="dialog-desc" id="batch-import-desc">Paste multiple proxy links (ss://, vmess://, vless://, trojan://, hysteria2://, etc.). Line-separated, space-separated, or concatenated links are supported.</div>
+
+    <div class="dialog-label" id="batch-import-group-label">Group / Tag (Optional)</div>
+    <input class="dialog-input" id="batch-import-group" list="batch-import-existing-groups" placeholder="e.g. FreeNodes or select existing group (leave empty for default)" autocomplete="off" oninput="previewBatchImport()" style="margin-bottom:12px">
+    <datalist id="batch-import-existing-groups"></datalist>
 
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
       <div class="dialog-label" style="margin:0" id="batch-import-label">Proxy Links</div>

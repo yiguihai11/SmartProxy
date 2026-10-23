@@ -170,6 +170,8 @@ var zhStrings = map[string]string{
 	"+ Batch Import":                "+ 批量导入",
 	"Batch Import":                  "批量导入",
 	"Batch Import Proxies":          "批量导入代理节点",
+	"Group / Tag (Optional)":        "分组 / 标签（可选）",
+	"e.g. FreeNodes or select existing group (leave empty for default)": "例如：免费节点 或 选择已有分组（留空则为默认分组）",
 	"Batch import proxy links from text or clipboard": "从文本或剪贴板批量导入节点链接",
 	"Paste multiple proxy links (ss://, vmess://, vless://, trojan://, hysteria2://, etc.). Line-separated, space-separated, or concatenated links are supported.": "粘贴多个代理链接（支持 ss://, vmess://, vless://, trojan://, hysteria2:// 等）。支持换行、空格或直接连贴。",
 	"Proxy Links":                   "节点链接内容",
