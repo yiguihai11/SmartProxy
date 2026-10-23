@@ -318,6 +318,17 @@ tr:last-child td{border-bottom:none}
 .dialog-input{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);font-family:var(--font);font-size:.88rem;outline:none;margin-bottom:14px}
 .dialog-input:focus{border-color:var(--accent)}
 .dialog-input::placeholder{color:var(--text3)}
+.group-autocomplete-wrap{position:relative;width:100%}
+.group-autocomplete-dropdown{position:absolute;top:calc(100% + 4px);left:0;right:0;background:var(--surface);border:1px solid var(--border2);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.45);max-height:180px;overflow-y:auto;z-index:120;padding:4px}
+.group-autocomplete-item{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;font-size:.82rem;border-radius:6px;cursor:pointer;color:var(--text);transition:background .1s,color .1s;user-select:none}
+.group-autocomplete-item:hover,.group-autocomplete-item.active{background:var(--surface2);color:var(--accent)}
+.group-autocomplete-item .group-item-name{display:flex;align-items:center;gap:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.group-autocomplete-item .group-item-badge{font-size:.72rem;color:var(--text2);background:var(--surface2);padding:2px 6px;border-radius:10px;margin-left:8px;flex-shrink:0}
+.group-autocomplete-item:hover .group-item-badge,.group-autocomplete-item.active .group-item-badge{background:var(--accent-glow);color:var(--accent)}
+.group-autocomplete-item .match-highlight{color:var(--accent);font-weight:700;text-decoration:underline}
+.group-autocomplete-new{border-top:1px dashed var(--border);margin-top:3px;padding-top:6px;color:var(--green)}
+.group-autocomplete-new:hover,.group-autocomplete-new.active{background:var(--green-bg);color:var(--green)}
+.group-autocomplete-empty{padding:8px 10px;font-size:.8rem;color:var(--text3);text-align:center}
 .seg-group{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:14px}
 .seg-btn{flex:1 1 auto;min-width:60px;padding:8px 6px;border-radius:6px;font-size:.76rem;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--surface2);color:var(--text2);transition:all .15s;font-family:var(--font);line-height:1;white-space:nowrap}
 .seg-btn:hover{border-color:var(--border2);color:var(--text)}
@@ -2844,10 +2855,25 @@ function closeQRScanner(){
 }
 function openProxyDialog(i){
   var p=(i>=0&&healthD.health.proxies[i])||null;
+  ensureGroupAutocomplete('proxy-group', 'proxy-group-dropdown');
+  var grpInput=document.getElementById('proxy-group');
+  var grpDd=document.getElementById('proxy-group-dropdown');
+  if(grpDd){grpDd.style.display='none';grpDd.innerHTML='';}
+  if(grpInput)grpInput.value='';
   document.getElementById('proxy-title').textContent=t(p?'Edit Proxy':'Add Proxy');
   document.getElementById('proxy-dialog').dataset.alias=p?p.alias:'';
   document.getElementById('proxy-confirm').textContent=t(p?'Save':'Add');
-  document.getElementById('proxy-alias').value=p?p.alias:'';
+  if(p&&p.alias){
+    var m=p.alias.match(/^\[(.*?)\]\s*(.*)$/);
+    if(m&&m[1]){
+      if(grpInput)grpInput.value=m[1];
+      document.getElementById('proxy-alias').value=m[2];
+    }else{
+      document.getElementById('proxy-alias').value=p.alias;
+    }
+  }else{
+    document.getElementById('proxy-alias').value=p?p.alias:'';
+  }
   document.getElementById('proxy-user').value='';
   document.getElementById('proxy-pass').value='';
   document.getElementById('proxy-server').value='';
@@ -2905,6 +2931,8 @@ function openProxyDialog(i){
 }
 function closeProxyDialog(){
   document.getElementById('proxy-overlay').classList.remove('show');
+  var grpDd=document.getElementById('proxy-group-dropdown');
+  if(grpDd){grpDd.style.display='none';grpDd.innerHTML='';}
 }
 // togglePassword flips the proxy password field between masked (password) and plaintext (text).
 function togglePassword(){
@@ -2949,6 +2977,13 @@ async function putProxyConfig(mutate){
 }
 async function saveProxy(){
   var alias=document.getElementById('proxy-alias').value.trim();
+  var grpInput=document.getElementById('proxy-group');
+  var group=grpInput?grpInput.value.trim():'';
+  if(group){
+    alias=alias.replace(/^\[.*?\]\s*/,'');
+    alias='['+group+'] '+alias;
+    recordGroupHistory(group);
+  }
   var server=document.getElementById('proxy-server').value.trim();
   var scheme=getProxyScheme();
   var user=document.getElementById('proxy-user').value.trim();
@@ -3141,6 +3176,12 @@ function openRawConfigDialog(i){
   var isNew=!p;
   var isProvider=p?!!p.provider:false;
 
+  ensureGroupAutocomplete('raw-config-group', 'raw-config-group-dropdown');
+  var grpInput=document.getElementById('raw-config-group');
+  var grpDd=document.getElementById('raw-config-group-dropdown');
+  if(grpDd){grpDd.style.display='none';grpDd.innerHTML='';}
+  if(grpInput)grpInput.value='';
+
   var titleEl=document.getElementById('raw-config-title');
   var confirmBtn=document.getElementById('raw-config-confirm');
   var aliasInput=document.getElementById('raw-config-alias');
@@ -3158,15 +3199,21 @@ function openRawConfigDialog(i){
     if(wrap)wrap.style.display='none';
   }else{
     rawConfigOriginalAlias=p.alias;
+    var rawAlias=p.alias||'';
+    var m=rawAlias.match(/^\[(.*?)\]\s*(.*)$/);
+    if(m&&m[1]){
+      if(grpInput)grpInput.value=m[1];
+      rawAlias=m[2];
+    }
     if(isProvider){
       titleEl.textContent=t('Edit Raw Config')+' ('+t('Provider')+')';
       confirmBtn.textContent=t('Save as Custom');
-      var defName=(p.name||p.alias||'').replace(/^\[Lantern\]\s*/,'custom-');
+      var defName=(p.name||rawAlias).replace(/^\[Lantern\]\s*/,'custom-');
       aliasInput.value=defName;
     }else{
       titleEl.textContent=t('Edit Raw Config')+' — '+p.alias;
       confirmBtn.textContent=t('Save Changes');
-      aliasInput.value=p.alias;
+      aliasInput.value=rawAlias;
     }
 
     var text=p.url||'';
@@ -3188,6 +3235,8 @@ function openRawConfigDialog(i){
 function closeRawConfigDialog(){
   var ov=document.getElementById('raw-config-overlay');
   if(ov)ov.classList.remove('show');
+  var grpDd=document.getElementById('raw-config-group-dropdown');
+  if(grpDd){grpDd.style.display='none';grpDd.innerHTML='';}
   rawConfigTargetIndex=-1;
 }
 
@@ -3258,6 +3307,13 @@ function copyRawConfigContent(){
 
 async function saveRawConfigProxy(){
   var alias=document.getElementById('raw-config-alias').value.trim();
+  var grpInput=document.getElementById('raw-config-group');
+  var group=grpInput?grpInput.value.trim():'';
+  if(group){
+    alias=alias.replace(/^\[.*?\]\s*/,'');
+    alias='['+group+'] '+alias;
+    recordGroupHistory(group);
+  }
   var content=document.getElementById('raw-config-content').value.trim();
   var isSocks5=content.toLowerCase().startsWith('socks5://')||content.toLowerCase().startsWith('socks5h://');
   var udpWrap=document.getElementById('raw-config-udpintcp-wrap');
@@ -3332,32 +3388,235 @@ async function saveRawConfigProxy(){
   }
 }
 
+function getAvailableGroupList(){
+  var map={};
+  var proxies=(healthD&&healthD.health&&healthD.health.proxies)||[];
+  proxies.forEach(function(p){
+    var g=getProxyGroup(p);
+    if(g&&g!=='custom'&&g!=='lantern'&&g.indexOf('sub:')===-1){
+      map[g]=(map[g]||0)+1;
+    }
+  });
+
+  try{
+    var hist=JSON.parse(localStorage.getItem('sp_group_history')||'[]');
+    if(Array.isArray(hist)){
+      hist.forEach(function(h){
+        if(h&&typeof h==='string'&&!Object.prototype.hasOwnProperty.call(map,h)){
+          map[h]=0;
+        }
+      });
+    }
+  }catch(_){}
+
+  var list=[];
+  for(var k in map){
+    if(Object.prototype.hasOwnProperty.call(map,k)){
+      list.push({name:k,count:map[k]});
+    }
+  }
+  list.sort(function(a,b){
+    if(b.count!==a.count)return b.count-a.count;
+    return a.name.localeCompare(b.name);
+  });
+  return list;
+}
+
+function recordGroupHistory(groupName){
+  if(!groupName)return;
+  var g=groupName.trim();
+  if(!g||g==='custom'||g==='lantern'||g.indexOf('sub:')===0)return;
+  try{
+    var hist=JSON.parse(localStorage.getItem('sp_group_history')||'[]');
+    if(!Array.isArray(hist))hist=[];
+    var idx=hist.indexOf(g);
+    if(idx!==-1)hist.splice(idx,1);
+    hist.unshift(g);
+    if(hist.length>30)hist=hist.slice(0,30);
+    localStorage.setItem('sp_group_history',JSON.stringify(hist));
+  }catch(_){}
+}
+
+function setupGroupAutocomplete(inputId, dropdownId, onSelect){
+  var input=document.getElementById(inputId);
+  var dd=document.getElementById(dropdownId);
+  if(!input||!dd)return;
+
+  var activeIndex=-1;
+  var currentItems=[];
+
+  function closeDropdown(){
+    dd.style.display='none';
+    dd.innerHTML='';
+    activeIndex=-1;
+    currentItems=[];
+  }
+
+  function choose(val){
+    input.value=val;
+    recordGroupHistory(val);
+    closeDropdown();
+    if(typeof onSelect==='function')onSelect(val);
+  }
+
+  function render(){
+    var raw=input.value.trim();
+    var query=raw.toLowerCase();
+    var all=getAvailableGroupList();
+    var matches=all.filter(function(item){
+      if(!query)return true;
+      return item.name.toLowerCase().indexOf(query)!==-1;
+    });
+
+    currentItems=[];
+    var html='';
+
+    matches.forEach(function(item, idx){
+      currentItems.push(item.name);
+      var displayName=escHtml(item.name);
+      if(query){
+        var pos=item.name.toLowerCase().indexOf(query);
+        if(pos!==-1){
+          var before=escHtml(item.name.substring(0,pos));
+          var match=escHtml(item.name.substring(pos,pos+query.length));
+          var after=escHtml(item.name.substring(pos+query.length));
+          displayName=before+'<span class="match-highlight">'+match+'</span>'+after;
+        }
+      }
+      var badgeText=item.count>0?(item.count+' '+(window.SP_LANG==='zh'?'个节点':'nodes')):'';
+      html+='<div class="group-autocomplete-item'+(idx===activeIndex?' active':'')+'" data-idx="'+idx+'" data-group="'+escAttr(item.name)+'">'+
+        '<div class="group-item-name"><span class="group-item-icon">📁</span><span class="group-item-text">'+displayName+'</span></div>'+
+        (badgeText?'<span class="group-item-badge">'+escHtml(badgeText)+'</span>':'')+
+      '</div>';
+    });
+
+    var exactMatch=all.some(function(item){return item.name.toLowerCase()===query;});
+    if(raw&&!exactMatch){
+      var newIdx=currentItems.length;
+      currentItems.push(raw);
+      var newLabel=t('Create/use group:');
+      html+='<div class="group-autocomplete-item group-autocomplete-new'+(newIdx===activeIndex?' active':'')+'" data-idx="'+newIdx+'" data-group="'+escAttr(raw)+'">'+
+        '<div class="group-item-name"><span class="group-item-icon">✨</span><span class="group-item-text">'+escHtml(newLabel)+' <strong>'+escHtml(raw)+'</strong></span></div>'+
+      '</div>';
+    }
+
+    if(!html){
+      if(!raw){
+        html='<div class="group-autocomplete-empty">'+t('No groups yet. Type to create new')+'</div>';
+      }else{
+        html='<div class="group-autocomplete-empty">'+t('No matching groups')+'</div>';
+      }
+    }
+
+    dd.innerHTML=html;
+    dd.style.display='block';
+
+    dd.querySelectorAll('.group-autocomplete-item').forEach(function(el){
+      function onPick(e){
+        e.preventDefault();
+        e.stopPropagation();
+        var g=el.getAttribute('data-group');
+        if(g)choose(g);
+      }
+      el.addEventListener('pointerdown', onPick);
+      el.addEventListener('click', onPick);
+    });
+  }
+
+  input.addEventListener('focus', function(){
+    activeIndex=-1;
+    render();
+  });
+
+  input.addEventListener('click', function(){
+    if(dd.style.display==='none'){
+      activeIndex=-1;
+      render();
+    }
+  });
+
+  input.addEventListener('input', function(){
+    activeIndex=-1;
+    render();
+  });
+
+  input.addEventListener('keydown', function(e){
+    if(dd.style.display==='none'){
+      if(e.key==='ArrowDown'||e.key==='ArrowUp'){
+        render();
+        e.preventDefault();
+      }
+      return;
+    }
+
+    var items=dd.querySelectorAll('.group-autocomplete-item');
+    if(e.key==='ArrowDown'){
+      e.preventDefault();
+      if(items.length>0){
+        activeIndex=(activeIndex+1)%items.length;
+        updateActiveItem(items);
+      }
+    }else if(e.key==='ArrowUp'){
+      e.preventDefault();
+      if(items.length>0){
+        activeIndex=(activeIndex-1+items.length)%items.length;
+        updateActiveItem(items);
+      }
+    }else if(e.key==='Enter'||e.key==='Tab'){
+      if(items.length>0){
+        var targetIndex=activeIndex>=0?activeIndex:0;
+        if(currentItems[targetIndex]){
+          e.preventDefault();
+          choose(currentItems[targetIndex]);
+        }
+      }else{
+        closeDropdown();
+      }
+    }else if(e.key==='Escape'){
+      e.preventDefault();
+      closeDropdown();
+    }
+  });
+
+  function updateActiveItem(items){
+    items.forEach(function(el, idx){
+      el.classList.toggle('active', idx===activeIndex);
+      if(idx===activeIndex){
+        el.scrollIntoView({block:'nearest'});
+      }
+    });
+  }
+
+  document.addEventListener('pointerdown', function(e){
+    if(!input.contains(e.target)&&!dd.contains(e.target)){
+      closeDropdown();
+    }
+  });
+}
+
+function ensureGroupAutocomplete(inputId, dropdownId, onSelect){
+  var input=document.getElementById(inputId);
+  if(!input||input._acInited)return;
+  setupGroupAutocomplete(inputId, dropdownId, onSelect);
+  input._acInited=true;
+}
+
 function openBatchImportDialog(){
   var ov=document.getElementById('batch-import-overlay');
   if(!ov)return;
+  ensureGroupAutocomplete('batch-import-group', 'batch-import-group-dropdown', function(val){
+    previewBatchImport();
+  });
   document.getElementById('batch-import-content').value='';
   var grpEl=document.getElementById('batch-import-group');
   if(grpEl)grpEl.value='';
+  var ddEl=document.getElementById('batch-import-group-dropdown');
+  if(ddEl){ddEl.style.display='none';ddEl.innerHTML='';}
   document.getElementById('batch-import-preview-area').style.display='none';
   document.getElementById('batch-import-preview-list').innerHTML='';
   var btn=document.getElementById('batch-import-confirm');
   btn.disabled=true;
   btn.textContent=t('Import');
-
-  var dl=document.getElementById('batch-import-existing-groups');
-  if(dl){
-    var groups=new Set();
-    var proxies=(healthD&&healthD.health&&healthD.health.proxies)||[];
-    proxies.forEach(function(p){
-      var g=getProxyGroup(p);
-      if(g&&g!=='custom'&&g!=='lantern'&&g.indexOf('sub:')===-1){
-        groups.add(g);
-      }
-    });
-    dl.innerHTML=Array.from(groups).map(function(g){
-      return '<option value="'+escAttr(g)+'">';
-    }).join('');
-  }
 
   ov.classList.add('show');
 }
@@ -3365,6 +3624,8 @@ function openBatchImportDialog(){
 function closeBatchImportDialog(){
   var ov=document.getElementById('batch-import-overlay');
   if(ov)ov.classList.remove('show');
+  var ddEl=document.getElementById('batch-import-group-dropdown');
+  if(ddEl){ddEl.style.display='none';ddEl.innerHTML='';}
   _parsedBatchNodes=[];
 }
 
@@ -3528,6 +3789,10 @@ async function confirmBatchImport(){
     });
 
     closeBatchImportDialog();
+    var grpEl=document.getElementById('batch-import-group');
+    if(grpEl&&grpEl.value.trim()){
+      recordGroupHistory(grpEl.value.trim());
+    }
     showToast(tf('Successfully imported {0} proxies!',[_parsedBatchNodes.length]));
     loadHealth();
     if(document.querySelector('#view-config.active'))loadConfig();
@@ -7026,6 +7291,11 @@ document.addEventListener('visibilitychange',function(){
     <div class="dialog-desc" id="proxy-desc">Username and password are optional and embedded into the proxy URL.</div>
     <div class="dialog-label">Alias</div>
     <input class="dialog-input" id="proxy-alias" placeholder="my-proxy" autocomplete="off" oninput="updateProxyPreview()">
+    <div class="dialog-label" id="proxy-group-label">Group / Tag (Optional)</div>
+    <div class="group-autocomplete-wrap" style="margin-bottom:14px">
+      <input class="dialog-input" id="proxy-group" placeholder="e.g. FreeNodes or select existing group (leave empty for default)" autocomplete="off" oninput="updateProxyPreview()" style="margin-bottom:0">
+      <div id="proxy-group-dropdown" class="group-autocomplete-dropdown" style="display:none"></div>
+    </div>
     <div class="dialog-label">Type</div>
     <div class="seg-group" id="proxy-scheme-group" role="radiogroup">
       <button type="button" class="seg-btn active" data-val="socks5" onclick="setProxyScheme('socks5')">SOCKS5</button>
@@ -7205,6 +7475,11 @@ document.addEventListener('visibilitychange',function(){
 
     <div class="dialog-label">Alias</div>
     <input class="dialog-input" id="raw-config-alias" placeholder="custom-node-name" autocomplete="off">
+    <div class="dialog-label" id="raw-config-group-label">Group / Tag (Optional)</div>
+    <div class="group-autocomplete-wrap" style="margin-bottom:14px">
+      <input class="dialog-input" id="raw-config-group" placeholder="e.g. FreeNodes or select existing group (leave empty for default)" autocomplete="off" style="margin-bottom:0">
+      <div id="raw-config-group-dropdown" class="group-autocomplete-dropdown" style="display:none"></div>
+    </div>
 
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
       <div class="dialog-label" style="margin:0">Config Content (JSON / URL)</div>
@@ -7237,8 +7512,10 @@ document.addEventListener('visibilitychange',function(){
     <div class="dialog-desc" id="batch-import-desc">Paste multiple proxy links (ss://, vmess://, vless://, trojan://, hysteria2://, etc.). Line-separated, space-separated, or concatenated links are supported.</div>
 
     <div class="dialog-label" id="batch-import-group-label">Group / Tag (Optional)</div>
-    <input class="dialog-input" id="batch-import-group" list="batch-import-existing-groups" placeholder="e.g. FreeNodes or select existing group (leave empty for default)" autocomplete="off" oninput="previewBatchImport()" style="margin-bottom:12px">
-    <datalist id="batch-import-existing-groups"></datalist>
+    <div class="group-autocomplete-wrap" style="margin-bottom:12px">
+      <input class="dialog-input" id="batch-import-group" placeholder="e.g. FreeNodes or select existing group (leave empty for default)" autocomplete="off" oninput="previewBatchImport()" style="margin-bottom:0">
+      <div id="batch-import-group-dropdown" class="group-autocomplete-dropdown" style="display:none"></div>
+    </div>
 
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
       <div class="dialog-label" style="margin:0" id="batch-import-label">Proxy Links</div>
