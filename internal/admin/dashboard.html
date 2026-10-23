@@ -3428,23 +3428,27 @@ function getAvailableGroupList(){
     if(s&&s.name)addGroup(s.name, 0, true);
   });
 
-  // 3. From health proxies (alias, name, tag, group, provider)
+  // 3. From health proxies (provider for subs, ^[xxx] only for custom proxies)
   var proxies=(healthD&&healthD.health&&healthD.health.proxies)||[];
   proxies.forEach(function(p){
-    if(p.provider)addGroup(p.provider, 1, p.provider.toLowerCase().indexOf('sub:')===0);
-    var str=(p.alias||'')+' '+(p.name||'')+' '+(p.tag||'');
-    var m=str.match(/\[(.*?)\]/);
-    if(m&&m[1])addGroup(m[1], 1, false);
-    if(p.group)addGroup(p.group, 1, false);
+    if(p.provider){
+      addGroup(p.provider, 1, p.provider.toLowerCase().indexOf('sub:')===0);
+    }else{
+      var str=(p.alias||'')+' '+(p.name||'');
+      var m=str.match(/^\[(.*?)\]/);
+      if(m&&m[1])addGroup(m[1], 1, false);
+      if(p.group)addGroup(p.group, 1, false);
+    }
   });
 
   // 4. From config proxies (raw config / saved custom nodes)
   var cfgProxies=(healthD&&healthD.config&&healthD.config.upstream&&healthD.config.upstream.proxies)||[];
   cfgProxies.forEach(function(p){
-    var str=(p.alias||'')+' '+(p.name||'')+' '+(p.tag||'');
-    var m=str.match(/\[(.*?)\]/);
-    if(m&&m[1])addGroup(m[1], 1, false);
-    if(p.provider)addGroup(p.provider, 1, p.provider.toLowerCase().indexOf('sub:')===0);
+    if(!p.provider){
+      var str=(p.alias||'')+' '+(p.name||'');
+      var m=str.match(/^\[(.*?)\]/);
+      if(m&&m[1])addGroup(m[1], 1, false);
+    }
   });
 
   // 5. From localStorage history
