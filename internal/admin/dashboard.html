@@ -1128,6 +1128,53 @@ function circuitStat(snap,supports){
   if(snap.state==='closed')return {c:'up',t:'ok',m:m};
   return snap.consecutive_failures>0?{c:'down',t:'fail',m:m}:{c:'unknown',t:'unknown',m:m};
 }
+function isProxyPending(p){
+  if(!p)return false;
+  var sV4TCP=(p.v4&&p.v4.tcp)||p.health||{};
+  var sV4UDP=(p.v4&&p.v4.udp)||p.udp_health||{};
+  var sV6TCP=(p.v6&&p.v6.tcp)||null;
+  var sV6UDP=(p.v6&&p.v6.udp)||null;
+  return (!sV4TCP.last_attempt&&sV4TCP.consecutive_failures===0)&&
+         (!sV4UDP.last_attempt&&sV4UDP.consecutive_failures===0)&&
+         (!sV6TCP||(!sV6TCP.last_attempt&&sV6TCP.consecutive_failures===0));
+}
+function isProxyOnline(p, useTestState){
+  if(!p)return false;
+  var udpScheme=isUDPSupportedScheme(p);
+  var sV4TCP=(p.v4&&p.v4.tcp)||p.health||{};
+  var sV4UDP=(p.v4&&p.v4.udp)||p.udp_health||{};
+  var sV6TCP=(p.v6&&p.v6.tcp)||null;
+  var sV6UDP=(p.v6&&p.v6.udp)||null;
+
+  var stV4TCP=useTestState?(proxyTestState[p.alias+':v4_tcp']||proxyTestState[p.alias+':tcp']):null;
+  var stTCPing=useTestState?proxyTestState[p.alias+':tcping']:null;
+  var stV4UDP=useTestState?(proxyTestState[p.alias+':v4_udp']||proxyTestState[p.alias+':udp']):null;
+  var stV6TCP=useTestState?(proxyTestState[p.alias+':v6_tcp']||proxyTestState[p.alias+':ipv6']):null;
+  var stV6UDP=useTestState?proxyTestState[p.alias+':v6_udp']:null;
+
+  var v4TcpUp=false;
+  if(stV4TCP)v4TcpUp=!!stV4TCP.available;
+  else if(stTCPing)v4TcpUp=!!stTCPing.available;
+  else v4TcpUp=sV4TCP.manual?sV4TCP.available:(sV4TCP.available&&(sV4TCP.latency>0||!!sV4TCP.last_attempt));
+
+  var v4UdpUp=false;
+  if(udpScheme){
+    if(stV4UDP)v4UdpUp=!!stV4UDP.available;
+    else v4UdpUp=sV4UDP.manual?sV4UDP.available:(sV4UDP.available&&(sV4UDP.latency>0||!!sV4UDP.last_attempt));
+  }
+
+  var v6TcpUp=false;
+  if(stV6TCP)v6TcpUp=!!stV6TCP.available;
+  else if(sV6TCP)v6TcpUp=sV6TCP.manual?sV6TCP.available:(sV6TCP.available&&(sV6TCP.latency>0||!!sV6TCP.last_attempt));
+
+  var v6UdpUp=false;
+  if(udpScheme){
+    if(stV6UDP)v6UdpUp=!!stV6UDP.available;
+    else if(sV6UDP)v6UdpUp=sV6UDP.manual?sV6UDP.available:(sV6UDP.available&&(sV6UDP.latency>0||!!sV6UDP.last_attempt));
+  }
+
+  return !!(v4TcpUp||v4UdpUp||v6TcpUp||v6UdpUp);
+}
 // Click a badge to flip that circuit: up → disable (force down), down → enable (force up),
 // manually-up → release back to automatic. A manual-down pin (e.g. the udp_in_tcp TCP default)
 // force-enables: the user's "turn TCP back on" click must take effect immediately, not merely
@@ -1221,18 +1268,11 @@ async function testProxy(i,proto){
   var stTCP=proxyTestState[p.alias+':v4_tcp']||proxyTestState[p.alias+':tcp'];
   var stTCPing=proxyTestState[p.alias+':tcping'];
   var stUDP=proxyTestState[p.alias+':v4_udp']||proxyTestState[p.alias+':udp'];
-  var stV6TCP=proxyTestState[p.alias+':v6_tcp']||proxyTestState[p.alias+':ipv6'];
-  var stV6UDP=proxyTestState[p.alias+':v6_udp'];
 
-  var v4TcpUp=(stTCP&&stTCP.available)||(stTCPing&&stTCPing.available)||(p.health&&p.health.available&&(!stTCP||stTCP.available));
-  var v4UdpUp=isUDP?((stUDP&&stUDP.available)||(p.udp_health&&p.udp_health.available&&(!stUDP||stUDP.available))):false;
-  var v6TcpUp=(stV6TCP&&stV6TCP.available)||(p.v6&&p.v6.tcp&&p.v6.tcp.available&&(!stV6TCP||stV6TCP.available));
-  var v6UdpUp=isUDP?((stV6UDP&&stV6UDP.available)||(p.v6&&p.v6.udp&&p.v6.udp.available&&(!stV6UDP||stV6UDP.available))):false;
-  var anyUp=v4TcpUp||v4UdpUp||v6TcpUp||v6UdpUp;
-
+  var anyUp=isProxyOnline(p, true);
   var tcpExplicitlyTestedAndFailed = (stTCP && !stTCP.available) || (stTCPing && !stTCPing.available);
   var udpExplicitlyTestedAndFailed = isUDP ? (stUDP && !stUDP.available) : true;
-  if(!anyUp && tcpExplicitlyTestedAndFailed && udpExplicitlyTestedAndFailed){
+  if(!anyUp && !isProxyPending(p) && tcpExplicitlyTestedAndFailed && udpExplicitlyTestedAndFailed){
     setTimeout(function(){
       if(confirm(tf('Proxy "{0}" is completely down (TCP & UDP both failed). Delete and clean it up now?',[p.alias]))){
         cleanDeadProxies([p.alias]);
@@ -1478,29 +1518,10 @@ async function testGroupProxies(gid, proto, btn){
     var stV4TCP=proxyTestState[p.alias+':v4_tcp']||proxyTestState[p.alias+':tcp'];
     var stTCPing=proxyTestState[p.alias+':tcping'];
     var stV4UDP=proxyTestState[p.alias+':v4_udp']||proxyTestState[p.alias+':udp'];
-    var stV6TCP=proxyTestState[p.alias+':v6_tcp']||proxyTestState[p.alias+':ipv6'];
-    var stV6UDP=proxyTestState[p.alias+':v6_udp'];
-
-    var tcpUp=false;
-    if(stV4TCP)tcpUp=!!stV4TCP.available;
-    else if(stTCPing)tcpUp=!!stTCPing.available;
-    else tcpUp=!!((p.health&&p.health.available)||(p.v4&&p.v4.tcp&&p.v4.tcp.available));
-
-    var udpUp=false;
-    if(isUDP){
-      if(stV4UDP)udpUp=!!stV4UDP.available;
-      else udpUp=!!((p.udp_health&&p.udp_health.available)||(p.v4&&p.v4.udp&&p.v4.udp.available));
-    }
-
-    if(stV6TCP&&stV6TCP.available)tcpUp=true;
-    else if(p.v6&&p.v6.tcp&&p.v6.tcp.available&&(!stV6TCP||stV6TCP.available))tcpUp=true;
-
-    if(stV6UDP&&stV6UDP.available)udpUp=true;
-    else if(isUDP&&p.v6&&p.v6.udp&&p.v6.udp.available&&(!stV6UDP||stV6UDP.available))udpUp=true;
 
     var tcpTestedAndDown = (stV4TCP && !stV4TCP.available) || (stTCPing && !stTCPing.available);
     var udpTestedAndDown = isUDP ? (stV4UDP && !stV4UDP.available) : true;
-    if(!tcpUp && (!isUDP || !udpUp) && tcpTestedAndDown && udpTestedAndDown){
+    if(!isProxyOnline(p, true) && !isProxyPending(p) && tcpTestedAndDown && udpTestedAndDown){
       deadAliases.push(p.alias);
     }
   });
@@ -1542,10 +1563,7 @@ async function cleanDeadGroupProxies(gid){
   }
   var deadAliases=[];
   proxies.forEach(function(p){
-    var isUDP=isUDPSupportedScheme(p);
-    var tcpUp=!!((p.health&&p.health.available)||(p.v4&&p.v4.tcp&&p.v4.tcp.available)||(p.v6&&p.v6.tcp&&p.v6.tcp.available));
-    var udpUp=isUDP?!!((p.udp_health&&p.udp_health.available)||(p.v4&&p.v4.udp&&p.v4.udp.available)||(p.v6&&p.v6.udp&&p.v6.udp.available)):false;
-    if(!tcpUp&&(!isUDP||!udpUp)){
+    if(!isProxyOnline(p, true) && !isProxyPending(p)){
       deadAliases.push(p.alias);
     }
   });
@@ -1788,13 +1806,11 @@ function renderProxyCard(p,i){
   var uc6=circuitStat(sV6UDP,udpScheme);
 
   // Effective availability across all 4 pathways
-  var v4TcpUp=sV4TCP.manual?sV4TCP.available:(sV4TCP.available&&(sV4TCP.latency>0||!!sV4TCP.last_attempt));
-  var v4UdpUp=udpScheme&&sV4UDP&&(sV4UDP.manual?sV4UDP.available:(sV4UDP.available&&(sV4UDP.latency>0||!!sV4UDP.last_attempt)));
   var v6TcpUp=sV6TCP&&(sV6TCP.manual?sV6TCP.available:(sV6TCP.available&&(sV6TCP.latency>0||!!sV6TCP.last_attempt)));
   var v6UdpUp=udpScheme&&sV6UDP&&(sV6UDP.manual?sV6UDP.available:(sV6UDP.available&&(sV6UDP.latency>0||!!sV6UDP.last_attempt)));
-  var anyUp=v4TcpUp||v4UdpUp||v6TcpUp||v6UdpUp;
+  var anyUp=isProxyOnline(p, true);
   var v6Supported=!!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||isV6Host||v6TcpUp||v6UdpUp);
-  var isPending=(!sV4TCP.last_attempt&&sV4TCP.consecutive_failures===0)&&(!sV4UDP.last_attempt&&sV4UDP.consecutive_failures===0)&&(!sV6TCP||(!sV6TCP.last_attempt&&sV6TCP.consecutive_failures===0));
+  var isPending=isProxyPending(p);
 
   var dispMode=isPending?t('Pending'):t(anyUp?p.mode:'off');
   var capTxt=(anyUp&&p.udp_capability&&p.udp_capability!=='unknown')?' · '+t(p.udp_capability):'';
@@ -2098,15 +2114,11 @@ function lhealth(d){
     groups[gid].items.push({proxy:p,index:i});
     var udpScheme=isUDPSupportedScheme(p);
     var isV6Host=!!(p.host&&p.host.indexOf(':')!==-1);
-    var sV4TCP=(p.v4&&p.v4.tcp)||p.health||{};
-    var sV4UDP=(p.v4&&p.v4.udp)||p.udp_health||{};
     var sV6TCP=(p.v6&&p.v6.tcp)||null;
     var sV6UDP=(p.v6&&p.v6.udp)||null;
-    var v4TcpUp=sV4TCP.manual?sV4TCP.available:(sV4TCP.available&&(sV4TCP.latency>0||!!sV4TCP.last_attempt));
-    var v4UdpUp=udpScheme&&sV4UDP&&(sV4UDP.manual?sV4UDP.available:(sV4UDP.available&&(sV4UDP.latency>0||!!sV4UDP.last_attempt)));
     var v6TcpUp=sV6TCP&&(sV6TCP.manual?sV6TCP.available:(sV6TCP.available&&(sV6TCP.latency>0||!!sV6TCP.last_attempt)));
     var v6UdpUp=udpScheme&&sV6UDP&&(sV6UDP.manual?sV6UDP.available:(sV6UDP.available&&(sV6UDP.latency>0||!!sV6UDP.last_attempt)));
-    var anyUp=v4TcpUp||v4UdpUp||v6TcpUp||v6UdpUp;
+    var anyUp=isProxyOnline(p, false);
     var v6Supported=!!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||isV6Host||v6TcpUp||v6UdpUp);
     if(anyUp)groups[gid].onlineCount++;
     if(v6Supported)groups[gid].v6Count++;

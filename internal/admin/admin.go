@@ -1679,8 +1679,10 @@ func (s *Server) handleProxiesCleanDead(w http.ResponseWriter, r *http.Request) 
 				}
 			}
 			isUDP := p.UDPCapability != "none"
-			tcpUp := p.Health.Available
-			udpUp := isUDP && p.UDPHealth.Available
+			v6TCPUp := p.V6.Supported && p.V6.TCP.Available
+			v6UDPUp := isUDP && p.V6.Supported && p.V6.UDP.Available
+			tcpUp := p.Health.Available || v6TCPUp
+			udpUp := (isUDP && p.UDPHealth.Available) || v6UDPUp
 			if !tcpUp && (!isUDP || !udpUp) {
 				req.Aliases = append(req.Aliases, p.Alias)
 			}
