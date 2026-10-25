@@ -1806,9 +1806,34 @@ function renderProxyCard(p,i){
   var uc6=circuitStat(sV6UDP,udpScheme);
 
   // Effective availability across all 4 pathways
-  var v6TcpUp=sV6TCP&&(sV6TCP.manual?sV6TCP.available:(sV6TCP.available&&(sV6TCP.latency>0||!!sV6TCP.last_attempt)));
-  var v6UdpUp=udpScheme&&sV6UDP&&(sV6UDP.manual?sV6UDP.available:(sV6UDP.available&&(sV6UDP.latency>0||!!sV6UDP.last_attempt)));
-  var anyUp=isProxyOnline(p, true);
+  var stV4TCP=proxyTestState[p.alias+':v4_tcp']||proxyTestState[p.alias+':tcp'];
+  var stTCPing=proxyTestState[p.alias+':tcping'];
+  var stV4UDP=proxyTestState[p.alias+':v4_udp']||proxyTestState[p.alias+':udp'];
+  var stV6TCP=proxyTestState[p.alias+':v6_tcp']||proxyTestState[p.alias+':ipv6'];
+  var stV6UDP=proxyTestState[p.alias+':v6_udp'];
+
+  var v4TcpUp=false;
+  if(stV4TCP)v4TcpUp=!!stV4TCP.available;
+  else if(stTCPing)v4TcpUp=!!stTCPing.available;
+  else v4TcpUp=sV4TCP.manual?sV4TCP.available:(sV4TCP.available&&(sV4TCP.latency>0||!!sV4TCP.last_attempt));
+
+  var v4UdpUp=false;
+  if(udpScheme){
+    if(stV4UDP)v4UdpUp=!!stV4UDP.available;
+    else v4UdpUp=sV4UDP.manual?sV4UDP.available:(sV4UDP.available&&(sV4UDP.latency>0||!!sV4UDP.last_attempt));
+  }
+
+  var v6TcpUp=false;
+  if(stV6TCP)v6TcpUp=!!stV6TCP.available;
+  else if(sV6TCP)v6TcpUp=sV6TCP.manual?sV6TCP.available:(sV6TCP.available&&(sV6TCP.latency>0||!!sV6TCP.last_attempt));
+
+  var v6UdpUp=false;
+  if(udpScheme){
+    if(stV6UDP)v6UdpUp=!!stV6UDP.available;
+    else if(sV6UDP)v6UdpUp=sV6UDP.manual?sV6UDP.available:(sV6UDP.available&&(sV6UDP.latency>0||!!sV6UDP.last_attempt));
+  }
+
+  var anyUp=v4TcpUp||v4UdpUp||v6TcpUp||v6UdpUp;
   var v6Supported=!!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||isV6Host||v6TcpUp||v6UdpUp);
   var isPending=isProxyPending(p);
 
@@ -2181,6 +2206,10 @@ function lhealth(d){
     if(b==='lantern')return 1;
     return a.localeCompare(b);
   });
+
+  if(proxyGroupFilter!=='all'&&!groups[proxyGroupFilter]){
+    proxyGroupFilter='all';
+  }
 
   var filterDd=document.getElementById('proxy-group-filter-dropdown');
   var filterTr=document.getElementById('proxy-group-filter-trigger');
