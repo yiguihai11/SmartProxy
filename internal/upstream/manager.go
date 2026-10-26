@@ -1828,7 +1828,7 @@ func buildStackCapabilities(proxy *Proxy) (v4 IPStackCapability, v6 IPStackCapab
 		uSnap.State = "n/a"
 	}
 	v4 = IPStackCapability{
-		Supported: !strings.Contains(proxy.Host, ":"),
+		Supported: !strings.Contains(proxy.Host, ":") || proxy.ExitIPv4() != "" || (hSnap.Available && hSnap.Latency > 0),
 		ExitIP:    proxy.ExitIPv4(),
 		TCP:       hSnap,
 		UDP:       uSnap,

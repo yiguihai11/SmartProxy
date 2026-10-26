@@ -1111,8 +1111,13 @@ function isUDPSupportedScheme(p){
 // Per-circuit connectivity badge: up / half (recovering) / down (circuit open) /
 // unknown (never probed yet, e.g. health check disabled) / n/a (scheme without UDP).
 // m marks a manually pinned circuit (dashed border); clicking a pinned circuit releases it.
-function circuitStat(snap,supports){
+function circuitStat(snap,supports,testState){
   if(!supports)return {c:'na',t:'n/a',m:false};
+  var m=snap?!!snap.manual:false;
+  if(testState&&!testState.testing){
+    if(!testState.available)return {c:'down',t:'fail',m:m};
+    return {c:'up',t:'ok',m:m};
+  }
   if(!snap)return {c:'na',t:'unknown',m:false};
   if(snap.state==='n/a')return {c:'na',t:'n/a',m:false};
   var m=!!snap.manual;
@@ -1163,14 +1168,17 @@ function isProxyOnline(p, useTestState){
     else v4UdpUp=sV4UDP.manual?sV4UDP.available:(sV4UDP.available&&(sV4UDP.latency>0||!!sV4UDP.last_attempt));
   }
 
+  var allowV6=(typeof window!=='undefined'&&window._allowIPv6!==undefined)?window._allowIPv6:true;
   var v6TcpUp=false;
-  if(stV6TCP)v6TcpUp=!!stV6TCP.available;
-  else if(sV6TCP)v6TcpUp=sV6TCP.manual?sV6TCP.available:(sV6TCP.available&&(sV6TCP.latency>0||!!sV6TCP.last_attempt));
-
   var v6UdpUp=false;
-  if(udpScheme){
-    if(stV6UDP)v6UdpUp=!!stV6UDP.available;
-    else if(sV6UDP)v6UdpUp=sV6UDP.manual?sV6UDP.available:(sV6UDP.available&&(sV6UDP.latency>0||!!sV6UDP.last_attempt));
+  if(allowV6){
+    if(stV6TCP)v6TcpUp=!!stV6TCP.available;
+    else if(sV6TCP)v6TcpUp=sV6TCP.manual?sV6TCP.available:(sV6TCP.available&&(sV6TCP.latency>0||!!sV6TCP.last_attempt));
+
+    if(udpScheme){
+      if(stV6UDP)v6UdpUp=!!stV6UDP.available;
+      else if(sV6UDP)v6UdpUp=sV6UDP.manual?sV6UDP.available:(sV6UDP.available&&(sV6UDP.latency>0||!!sV6UDP.last_attempt));
+    }
   }
 
   return !!(v4TcpUp||v4UdpUp||v6TcpUp||v6UdpUp);
@@ -1318,10 +1326,13 @@ async function testGroupProxies(gid, proto, btn){
   if(gid&&gid!=='all'){
     proxies=allProxies.filter(function(p){return getProxyGroup(p)===gid;});
   }
-  var allowV4 = !healthD || healthD.allow_ipv4 !== false;
-  var allowV6 = !healthD || healthD.allow_ipv6 !== false;
-  var doV4 = allowV4 || proto==='tcp'||proto==='v4_tcp'||proto==='udp'||proto==='v4_udp';
-  var doV6 = allowV6 || proto==='v6_tcp'||proto==='ipv6'||proto==='v6'||proto==='v6_udp';
+  var hInfo = (healthD && healthD.health) || healthD || {};
+  var allowV4 = hInfo.allow_ipv4 !== false;
+  var allowV6 = hInfo.allow_ipv6 !== false;
+  var isSpecificV4 = proto==='tcp'||proto==='v4_tcp'||proto==='udp'||proto==='v4_udp';
+  var isSpecificV6 = proto==='v6_tcp'||proto==='ipv6'||proto==='v6'||proto==='v6_udp';
+  var doV4 = allowV4 || isSpecificV4;
+  var doV6 = allowV6 ? true : isSpecificV6;
 
   var tasks=[];
   for(var i=0;i<proxies.length;i++){
@@ -1339,7 +1350,7 @@ async function testGroupProxies(gid, proto, btn){
       }
     }
     if(doV6){
-      var hasV6=!!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||(p.host&&p.host.indexOf(':')!==-1));
+      var hasV6=allowV6 && !!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||(p.host&&p.host.indexOf(':')!==-1));
       if((proto==='all'||proto==='v6_tcp'||proto==='ipv6'||proto==='v6')&&hasV6){
         tasks.push({alias:p.alias,proto:'v6_tcp'});
       }
@@ -1800,17 +1811,18 @@ function renderProxyCard(p,i){
   var sV6TCP=(p.v6&&p.v6.tcp)||null;
   var sV6UDP=(p.v6&&p.v6.udp)||null;
 
-  var tc4=circuitStat(sV4TCP,true);
-  var uc4=circuitStat(sV4UDP,udpScheme);
-  var tc6=circuitStat(sV6TCP,true);
-  var uc6=circuitStat(sV6UDP,udpScheme);
-
+  var allowV6=(typeof window!=='undefined'&&window._allowIPv6!==undefined)?window._allowIPv6:true;
   // Effective availability across all 4 pathways
   var stV4TCP=proxyTestState[p.alias+':v4_tcp']||proxyTestState[p.alias+':tcp'];
   var stTCPing=proxyTestState[p.alias+':tcping'];
   var stV4UDP=proxyTestState[p.alias+':v4_udp']||proxyTestState[p.alias+':udp'];
   var stV6TCP=proxyTestState[p.alias+':v6_tcp']||proxyTestState[p.alias+':ipv6'];
   var stV6UDP=proxyTestState[p.alias+':v6_udp'];
+
+  var tc4=circuitStat(sV4TCP,true,stV4TCP||stTCPing);
+  var uc4=circuitStat(sV4UDP,udpScheme,stV4UDP);
+  var tc6=circuitStat(sV6TCP,true,stV6TCP);
+  var uc6=circuitStat(sV6UDP,udpScheme,stV6UDP);
 
   var v4TcpUp=false;
   if(stV4TCP)v4TcpUp=!!stV4TCP.available;
@@ -1824,17 +1836,19 @@ function renderProxyCard(p,i){
   }
 
   var v6TcpUp=false;
-  if(stV6TCP)v6TcpUp=!!stV6TCP.available;
-  else if(sV6TCP)v6TcpUp=sV6TCP.manual?sV6TCP.available:(sV6TCP.available&&(sV6TCP.latency>0||!!sV6TCP.last_attempt));
-
   var v6UdpUp=false;
-  if(udpScheme){
-    if(stV6UDP)v6UdpUp=!!stV6UDP.available;
-    else if(sV6UDP)v6UdpUp=sV6UDP.manual?sV6UDP.available:(sV6UDP.available&&(sV6UDP.latency>0||!!sV6UDP.last_attempt));
+  if(allowV6){
+    if(stV6TCP)v6TcpUp=!!stV6TCP.available;
+    else if(sV6TCP)v6TcpUp=sV6TCP.manual?sV6TCP.available:(sV6TCP.available&&(sV6TCP.latency>0||!!sV6TCP.last_attempt));
+
+    if(udpScheme){
+      if(stV6UDP)v6UdpUp=!!stV6UDP.available;
+      else if(sV6UDP)v6UdpUp=sV6UDP.manual?sV6UDP.available:(sV6UDP.available&&(sV6UDP.latency>0||!!sV6UDP.last_attempt));
+    }
   }
 
   var anyUp=v4TcpUp||v4UdpUp||v6TcpUp||v6UdpUp;
-  var v6Supported=!!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||isV6Host||v6TcpUp||v6UdpUp);
+  var v6Supported=allowV6 && !!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||v6TcpUp||v6UdpUp);
   var isPending=isProxyPending(p);
 
   var dispMode=isPending?t('Pending'):t(anyUp?p.mode:'off');
@@ -1935,9 +1949,16 @@ function renderProxyCard(p,i){
     }
 
     var lat=(snap&&snap.latency>0)?(snap.latency/1e6).toFixed(1)+'ms':'--';
+    if(st&&!st.testing){
+      if(st.available&&st.latency_ms>0)lat=st.latency_ms.toFixed(1)+'ms';
+      else if(!st.available)lat='--';
+    }
     var failCount=snap?(snap.manual?t('manual'):(snap.consecutive_failures||0)):0;
-    var isFailWarn=!snap||(!snap.manual&&snap.consecutive_failures>0);
-    var failHtml=(snap&&snap.consecutive_failures>0)?'<span class="fail '+(isFailWarn?'warn':'')+'">'+failCount+' fail</span>':'';
+    if(st&&!st.testing&&!st.available){
+      failCount=Math.max(1,failCount);
+    }
+    var isFailWarn=!snap||(!snap.manual&&(failCount>0));
+    var failHtml=(failCount>0&&stat.c==='down')?'<span class="fail '+(isFailWarn?'warn':'')+'">'+failCount+' fail</span>':'';
 
     var isManualDown = snap && snap.manual && !snap.available;
     var isManualUp = snap && snap.manual && snap.available;
@@ -2030,7 +2051,10 @@ function renderProxyCard(p,i){
   var v6Pending = (!sV6TCP || (!sV6TCP.last_attempt && sV6TCP.consecutive_failures === 0)) && (!sV6UDP || (!sV6UDP.last_attempt && sV6UDP.consecutive_failures === 0));
   var v6TagText = t('Pending');
   var v6TagClass = 'v6-none';
-  if (v6AllDisabled) {
+  if (!allowV6) {
+    v6TagText = t('Disabled');
+    v6TagClass = 'v6-none';
+  } else if (v6AllDisabled) {
     v6TagText = t('Disabled');
     v6TagClass = 'v6-none';
   } else if (v6TcpUp && v6UdpUp) {
@@ -2099,6 +2123,11 @@ function renderProxyCard(p,i){
 }
 function lhealth(d){
   healthD=d;
+  var hRoot=(d&&d.health)||d||{};
+  var globalAllowV4=hRoot.allow_ipv4!==false;
+  var globalAllowV6=hRoot.allow_ipv6!==false;
+  window._allowIPv4=globalAllowV4;
+  window._allowIPv6=globalAllowV6;
   updateHealthBanner(d);
   var proxies=(d&&d.health&&d.health.proxies)||[];
   var lanternInfo=(d&&d.health&&d.health.lantern)||null;
@@ -2144,7 +2173,7 @@ function lhealth(d){
     var v6TcpUp=sV6TCP&&(sV6TCP.manual?sV6TCP.available:(sV6TCP.available&&(sV6TCP.latency>0||!!sV6TCP.last_attempt)));
     var v6UdpUp=udpScheme&&sV6UDP&&(sV6UDP.manual?sV6UDP.available:(sV6UDP.available&&(sV6UDP.latency>0||!!sV6UDP.last_attempt)));
     var anyUp=isProxyOnline(p, false);
-    var v6Supported=!!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||isV6Host||v6TcpUp||v6UdpUp);
+    var v6Supported=globalAllowV6 && !!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||v6TcpUp||v6UdpUp);
     if(anyUp)groups[gid].onlineCount++;
     if(v6Supported)groups[gid].v6Count++;
   });
@@ -2294,7 +2323,7 @@ function lhealth(d){
       var sec=existingSections[sIdx];
       var isHidden=(proxyGroupFilter!=='all'&&proxyGroupFilter!==gid);
       var isCollapsed=_forceOpenGroups[gid]?false:(proxyGroupsCollapsed[gid]!==undefined?!!proxyGroupsCollapsed[gid]:true);
-      var v6Suffix=(g.v6Count>0)?(' · IPv6: '+g.v6Count):'';
+      var v6Suffix=(window._allowIPv6!==false && g.v6Count>0)?(' · IPv6: '+g.v6Count):'';
       var badgeText=g.disabled?t('Disabled'):(tf('{0} nodes',[g.items.length])+' · '+tf('{0} online',[g.onlineCount])+v6Suffix);
 
       sec.classList.toggle('collapsed',isCollapsed);
@@ -2337,7 +2366,7 @@ function lhealth(d){
     var isHidden=(proxyGroupFilter!=='all'&&proxyGroupFilter!==gid);
     var isCollapsed=_forceOpenGroups[gid]?false:(proxyGroupsCollapsed[gid]!==undefined?!!proxyGroupsCollapsed[gid]:true);
     var groupIcon=(gid==='lantern'?'🏮':gid==='custom'?'📌':gid.indexOf('sub:')===0?'📑':'🌐');
-    var v6Suffix=(g.v6Count>0)?(' · IPv6: '+g.v6Count):'';
+    var v6Suffix=(window._allowIPv6!==false && g.v6Count>0)?(' · IPv6: '+g.v6Count):'';
     var badgeText=g.disabled?t('Disabled'):(tf('{0} nodes',[g.items.length])+' · '+tf('{0} online',[g.onlineCount])+v6Suffix);
 
     var actionsHtml=buildGroupActionsHtml(gid, g, isCollapsed);
