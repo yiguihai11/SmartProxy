@@ -282,7 +282,6 @@ var zhStrings = map[string]string{
 	"Addresses": "地址", "Action": "动作", "Upstream": "上游",
 
 	// section meta / config hint
-	"Edits upstream.proxies in config": "修改的是 config 中的 upstream.proxies",
 	"Cache":                            "缓存", "Static Records": "静态记录",
 
 	// proxy card mode / capability / circuit-state labels (values t()'d at render)
