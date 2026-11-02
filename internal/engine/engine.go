@@ -237,7 +237,16 @@ func (e *Engine) IsClientIPBlocked(ip string) bool {
 // SetConnStatsPin 固定「正在查看」的 app 的连接不被 idle 清扫(「联网状态」页
 // 展开某应用明细时);-1 解除,解除后按 5s 宽限正常淡出。
 func (e *Engine) SetConnStatsPin(uid int32) {
-	e.TUNHandler.SetConnStatsPin(uid)
+	if e.TUNHandler != nil {
+		e.TUNHandler.SetConnStatsPin(uid)
+	}
+}
+
+// SetConnStatsPinIP 固定「正在查看」的热点下挂设备 IP 的连接不被 idle 清扫并在快照中下发明细;空串解除。
+func (e *Engine) SetConnStatsPinIP(ip string) {
+	if e.TUNHandler != nil {
+		e.TUNHandler.SetConnStatsPinIP(ip)
+	}
 }
 
 // BlockConnection 把某条连接的目标(域名/IP)加入 ACL 封锁列表并立即生效:追加

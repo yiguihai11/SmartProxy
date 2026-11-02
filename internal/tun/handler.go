@@ -162,14 +162,24 @@ func (h *TUNHandler) SetConnStatsEnabled(on bool) {
 }
 
 // ConnectionStats 返回按 app(uid)分组的连接快照 JSON(供 UI 每秒轮询)。
+// 默认采用按需轻量快照(仅当前查看的目标带 conns 明细),大幅降低 CPU 与 GC 压力。
 func (h *TUNHandler) ConnectionStats() string {
+	return h.connStats.SnapshotSummary()
+}
+
+// FullConnectionStats 返回全量连接快照(含所有连接明细)。
+func (h *TUNHandler) FullConnectionStats() string {
 	return h.connStats.Snapshot()
 }
 
-// SetConnStatsPin 固定某 app(uid)的连接不被 idle 清扫(「联网状态」页展开某应用
-// 明细时);-1 解除,解除后按 connStatsIdleRemove(5s)正常淡出。
+// SetConnStatsPin 固定某 app(uid)的连接不被 idle 清扫并在快照中下发明细;-1 解除。
 func (h *TUNHandler) SetConnStatsPin(uid int32) {
 	h.connStats.SetPin(uid)
+}
+
+// SetConnStatsPinIP 固定某下挂设备 IP 的连接不被 idle 清扫并在快照中下发明细;空串解除。
+func (h *TUNHandler) SetConnStatsPinIP(ip string) {
+	h.connStats.SetPinIP(ip)
 }
 
 // KillBlockedConnections 在 ACL 规则变更(Reload)后扫描现存连接,命中新封锁目标

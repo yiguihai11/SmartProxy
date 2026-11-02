@@ -477,3 +477,88 @@ func TestConnStatsClientTraffic_MonotonicAcrossConns(t *testing.T) {
 	assert.Equal(t, int64(2300), parsed.ClientTraffic[0].Down, "连接关闭后单 IP 累计下行不得清零")
 	assert.Equal(t, 1, parsed.ClientTraffic[0].ActiveConns)
 }
+
+func TestConnStatsSnapshotSummary_OnDemand(t *testing.T) {
+	cs := NewConnStats()
+	cs.SetEnabled(true)
+
+	// 创建 App 1 (UID 10001) 与 App 2 (UID 10002) 的连接
+	rec1 := cs.begin(10001, 6, "127.0.0.1", "1.1.1.1", 443)
+	require.NotNil(t, rec1)
+	rec2 := cs.begin(10002, 6, "127.0.0.1", "2.2.2.2", 80)
+	require.NotNil(t, rec2)
+	// 创建热点下挂设备连接 (UID -1, srcIP 192.168.43.15)
+	recTether := cs.begin(-1, 6, "192.168.43.15", "3.3.3.3", 8080)
+	require.NotNil(t, recTether)
+
+	// 1. 默认无 pin: 快照中所有应用的 Conns 均应为空/省略, 但 conn_count 正确
+	var out1 struct {
+		Apps []struct {
+			UID       int32              `json:"uid"`
+			ConnCount int                `json:"conn_count"`
+			Conns     []connStatsJSONRec `json:"conns"`
+		} `json:"apps"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(cs.SnapshotSummary()), &out1))
+	require.Len(t, out1.Apps, 3)
+	for _, a := range out1.Apps {
+		assert.Equal(t, 1, a.ConnCount, "每个 app 应有 1 条存活连接")
+		assert.Empty(t, a.Conns, "无 pin 时不应序列化连接明细以节约开销")
+	}
+
+	// 2. Pin UID 10001: 唯独 UID 10001 的 Conns 应该被填充
+	cs.SetPin(10001)
+	var out2 struct {
+		Apps []struct {
+			UID       int32              `json:"uid"`
+			ConnCount int                `json:"conn_count"`
+			Conns     []connStatsJSONRec `json:"conns"`
+		} `json:"apps"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(cs.SnapshotSummary()), &out2))
+	for _, a := range out2.Apps {
+		if a.UID == 10001 {
+			require.Len(t, a.Conns, 1, "被 pin 的 UID 10001 必须下发连接明细")
+			assert.Equal(t, "1.1.1.1", a.Conns[0].Host)
+		} else {
+			assert.Empty(t, a.Conns, "未被 pin 的 app 不得下发连接明细")
+		}
+	}
+
+	// 3. Pin 下挂设备 IP: 唯独该 IP 的连接应被填充
+	cs.SetPin(-1)
+	cs.SetPinIP("192.168.43.15")
+	var out3 struct {
+		Apps []struct {
+			UID       int32              `json:"uid"`
+			ConnCount int                `json:"conn_count"`
+			Conns     []connStatsJSONRec `json:"conns"`
+		} `json:"apps"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(cs.SnapshotSummary()), &out3))
+	totalTetherConns := 0
+	for _, a := range out3.Apps {
+		if a.UID == -1 {
+			require.Len(t, a.Conns, 1, "被 pin 的 IP 必须下发连接明细")
+			assert.Equal(t, "192.168.43.15", a.Conns[0].SrcIP)
+			assert.Equal(t, "3.3.3.3", a.Conns[0].Host)
+			totalTetherConns += len(a.Conns)
+		} else {
+			assert.Empty(t, a.Conns, "其他本机应用依然不得下发连接明细")
+		}
+	}
+	assert.Equal(t, 1, totalTetherConns)
+
+	// 4. 解除 PinIP: 恢复纯概览模式
+	cs.SetPinIP("")
+	var out4 struct {
+		Apps []struct {
+			UID   int32              `json:"uid"`
+			Conns []connStatsJSONRec `json:"conns"`
+		} `json:"apps"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(cs.SnapshotSummary()), &out4))
+	for _, a := range out4.Apps {
+		assert.Empty(t, a.Conns, "解除 pinIP 后所有应用恢复轻量概览")
+	}
+}

@@ -171,12 +171,14 @@ object TetheringDeviceParser {
 
             val clientTrafficArr = root.optJSONArray("client_traffic")
             val trafficBytesBySrcIp = HashMap<String, Pair<Long, Long>>()
+            val activeConnsBySrcIp = HashMap<String, Int>()
             if (clientTrafficArr != null) {
                 for (i in 0 until clientTrafficArr.length()) {
                     val ct = clientTrafficArr.getJSONObject(i)
                     val ip = ct.optString("ip", "").trim()
                     if (ip.isNotEmpty()) {
                         trafficBytesBySrcIp[ip] = ct.optLong("up", 0L) to ct.optLong("down", 0L)
+                        activeConnsBySrcIp[ip] = ct.optInt("active_conns", 0)
                     }
                 }
             }
@@ -283,6 +285,11 @@ object TetheringDeviceParser {
 
                 val rateKey = if (mac.isNotBlank()) mac else primaryIp
                 val stats = resolveDeviceStats(rateKey, curUp, curDown)
+                val activeConnsCount = if (deviceConns.isNotEmpty()) {
+                    deviceConns.size
+                } else {
+                    allIps.sumOf { activeConnsBySrcIp[it] ?: 0 }
+                }
 
                 list.add(
                     TetheredDeviceDetail(
@@ -298,6 +305,7 @@ object TetheringDeviceParser {
                         conns = deviceConns,
                         isBlocked = isBlocked,
                         extraIps = extraIps,
+                        activeConnsCount = activeConnsCount,
                     )
                 )
             }
@@ -315,6 +323,7 @@ object TetheringDeviceParser {
                 val curUp = trafficBytesBySrcIp[ip]?.first ?: conns.sumOf { it.up }
                 val curDown = trafficBytesBySrcIp[ip]?.second ?: conns.sumOf { it.down }
                 val stats = resolveDeviceStats(ip, curUp, curDown)
+                val activeConnsCount = if (conns.isNotEmpty()) conns.size else (activeConnsBySrcIp[ip] ?: 0)
 
                 list.add(
                     TetheredDeviceDetail(
@@ -329,6 +338,7 @@ object TetheringDeviceParser {
                         downBps = stats.downBps,
                         conns = conns,
                         isBlocked = false,
+                        activeConnsCount = activeConnsCount,
                     )
                 )
             }
@@ -345,6 +355,7 @@ object TetheringDeviceParser {
                 val curUp = trafficBytesBySrcIp[ip]?.first ?: conns.sumOf { it.up }
                 val curDown = trafficBytesBySrcIp[ip]?.second ?: conns.sumOf { it.down }
                 val stats = resolveDeviceStats(ip, curUp, curDown)
+                val activeConnsCount = if (conns.isNotEmpty()) conns.size else (activeConnsBySrcIp[ip] ?: 0)
 
                 list.add(
                     TetheredDeviceDetail(
@@ -359,6 +370,7 @@ object TetheringDeviceParser {
                         downBps = stats.downBps,
                         conns = conns,
                         isBlocked = false,
+                        activeConnsCount = activeConnsCount,
                     )
                 )
             }

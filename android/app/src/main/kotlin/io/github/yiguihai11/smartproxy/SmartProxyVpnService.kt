@@ -1,7 +1,10 @@
 package io.github.yiguihai11.smartproxy
 
+import android.content.BroadcastReceiver
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
@@ -12,6 +15,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.os.PowerManager
 import android.widget.Toast
 import androidx.core.app.ServiceCompat
 import io.github.yiguihai11.smartproxy.shizuku.IShizukuTetheringService
@@ -187,6 +191,42 @@ class SmartProxyVpnService : VpnService() {
                 mainHandler.postDelayed(this, 20_000L)
             }
         }
+    }
+
+    /** 熄屏/亮屏监听: 熄屏时暂停 20s 通知栏周期刷新, 亮屏时立即补一次刷新并恢复定时器, 避免夜间锁屏被定时唤醒。 */
+    private var vpnScreenReceiver: BroadcastReceiver? = null
+
+    private fun registerScreenReceiver() {
+        if (vpnScreenReceiver != null) return
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+        }
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent?) {
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_OFF -> {
+                        mainHandler.removeCallbacks(notificationRefreshRunnable)
+                    }
+                    Intent.ACTION_SCREEN_ON -> {
+                        if (startedEngine) {
+                            NotificationHelper.refresh(this@SmartProxyVpnService)
+                            mainHandler.removeCallbacks(notificationRefreshRunnable)
+                            mainHandler.postDelayed(notificationRefreshRunnable, 20_000L)
+                        }
+                    }
+                }
+            }
+        }
+        runCatching { registerReceiver(receiver, filter) }
+        vpnScreenReceiver = receiver
+    }
+
+    private fun unregisterScreenReceiver() {
+        vpnScreenReceiver?.let { r ->
+            runCatching { unregisterReceiver(r) }
+        }
+        vpnScreenReceiver = null
     }
 
     /** 连续断网 10s 自动被动停服的延迟任务:避免网络短暂抖动频繁重启,超时仍无物理网络则拆除 VPN 清除状态栏钥匙图标。 */
@@ -452,12 +492,17 @@ class SmartProxyVpnService : VpnService() {
             // 悬浮网速计:仅 VPN 隧道模式有按 UID 统计(TUN 数据路径),SOCKS5 模式无数据可显。
             // autoShow 内部按开关 + 悬浮窗权限自门控,未开/未授权均为 no-op。
             if (!socksOnly) SpeedMeterOverlay.autoShow(applicationContext)
+            registerScreenReceiver()
             mainHandler.removeCallbacks(notificationRefreshRunnable)
-            mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this@SmartProxyVpnService) }, 1500L)
-            mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this@SmartProxyVpnService) }, 4000L)
-            mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this@SmartProxyVpnService) }, 8000L)
-            mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this@SmartProxyVpnService) }, 15000L)
-            mainHandler.postDelayed(notificationRefreshRunnable, 20_000L)
+            val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            val isScreenOn = powerManager?.isInteractive ?: true
+            if (isScreenOn) {
+                mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this@SmartProxyVpnService) }, 1500L)
+                mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this@SmartProxyVpnService) }, 4000L)
+                mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this@SmartProxyVpnService) }, 8000L)
+                mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this@SmartProxyVpnService) }, 15000L)
+                mainHandler.postDelayed(notificationRefreshRunnable, 20_000L)
+            }
             Log.i(TAG, "[startInternal] Start SUCCESS (socks=$socksOnly)! startedEngine=true, _isRunning=true. Returning START_STICKY.")
             return START_STICKY
         }
@@ -893,6 +938,7 @@ class SmartProxyVpnService : VpnService() {
         }
         cancelNoNetworkShutdown()
         unregisterDefaultNetworkListener()
+        unregisterScreenReceiver()
         mainHandler.removeCallbacks(notificationRefreshRunnable)
         pendingNetworkChangeRunnable?.let { mainHandler.removeCallbacks(it) }
         pendingNetworkChangeRunnable = null
@@ -1052,6 +1098,7 @@ class SmartProxyVpnService : VpnService() {
         restartNeeded.set(0)
         cancelNoNetworkShutdown()
         unregisterDefaultNetworkListener()
+        unregisterScreenReceiver()
         mainHandler.removeCallbacks(notificationRefreshRunnable)
         pendingNetworkChangeRunnable?.let { mainHandler.removeCallbacks(it) }
         pendingNetworkChangeRunnable = null

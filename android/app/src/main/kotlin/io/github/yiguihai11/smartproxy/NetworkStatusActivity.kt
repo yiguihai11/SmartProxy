@@ -110,7 +110,7 @@ data class ConnStatsRec(
     val down: Long,
     val srcIp: String = "",
 )
-private data class AppStats(val uid: Int, val up: Long, val down: Long, val conns: List<ConnStatsRec>)
+private data class AppStats(val uid: Int, val up: Long, val down: Long, val conns: List<ConnStatsRec>, val connCount: Int = conns.size)
 
 @Immutable
 private data class AppItem(
@@ -121,6 +121,7 @@ private data class AppItem(
     val upBps: Long,
     val downBps: Long,
     val conns: List<ConnStatsRec>,
+    val connCount: Int = conns.size,
 )
 @Immutable
 private data class AppMeta(val label: String, val icon: ImageBitmap?, val pkg: String?)
@@ -237,7 +238,7 @@ class NetworkStatusActivity : ComponentActivity() {
                         onToggleExpand = { uid ->
                             val expanded = uid !in expandedUids
                             expandedUids = if (expanded) expandedUids + uid else expandedUids - uid
-                            // pin 跟随「正在查看」的应用:展开即 pin(明细不因无流量淡出),
+                            // pin 跟随「正在查看」的应用/设备:展开即 pin(明细不因无流量淡出,且按需下发明细),
                             // 收起且正 pin 着它才解除;收起别的应用不影响当前 pin(允许多开,保最新)。
                             val newPin = when {
                                 expanded -> uid
@@ -246,19 +247,38 @@ class NetworkStatusActivity : ComponentActivity() {
                             }
                             if (newPin != pinnedUid) {
                                 pinnedUid = newPin
-                                runCatching { smartproxy.mobile.Mobile.setConnStatsPin(newPin) }
-                                    .onFailure { Log.e(TAG, "[NetworkStatus] setConnStatsPin failed", it) }
+                                if (newPin >= 0) {
+                                    runCatching { smartproxy.mobile.Mobile.setConnStatsPin(newPin) }
+                                    runCatching { smartproxy.mobile.Mobile.setConnStatsPinIP("") }
+                                } else if (newPin < -1) {
+                                    val devIp = tetheredDevices[newPin]?.ip.orEmpty()
+                                    runCatching { smartproxy.mobile.Mobile.setConnStatsPin(-1) }
+                                    runCatching { smartproxy.mobile.Mobile.setConnStatsPinIP(devIp) }
+                                } else {
+                                    runCatching { smartproxy.mobile.Mobile.setConnStatsPin(-1) }
+                                    runCatching { smartproxy.mobile.Mobile.setConnStatsPinIP("") }
+                                }
                             }
                         },
                         onLongPress = { item ->
                             if (item.uid < 0) {
                                 selectedTetheredDevice = tetheredDevices[item.uid]
+                                selectedTetheredDevice?.let { dev ->
+                                    if (dev.ip.isNotBlank()) {
+                                        runCatching { smartproxy.mobile.Mobile.setConnStatsPinIP(dev.ip) }
+                                    }
+                                }
                             } else {
                                 openAppInfo(item.pkg)
                             }
                         },
                         onShowDeviceInfo = { item ->
                             selectedTetheredDevice = tetheredDevices[item.uid]
+                            selectedTetheredDevice?.let { dev ->
+                                if (dev.ip.isNotBlank()) {
+                                    runCatching { smartproxy.mobile.Mobile.setConnStatsPinIP(dev.ip) }
+                                }
+                            }
                         },
                         onBlockConn = { conn -> pendingBlock = conn },
                         onPoll = poll,
@@ -305,7 +325,16 @@ class NetworkStatusActivity : ComponentActivity() {
                                     Toast.makeText(this@NetworkStatusActivity, R.string.shizuku_operation_failed, Toast.LENGTH_SHORT).show()
                                 }
                             },
-                            onDismiss = { selectedTetheredDevice = null }
+                            onDismiss = {
+                                selectedTetheredDevice = null
+                                val curPin = pinnedUid
+                                if (curPin < -1) {
+                                    val devIp = tetheredDevices[curPin]?.ip.orEmpty()
+                                    runCatching { smartproxy.mobile.Mobile.setConnStatsPinIP(devIp) }
+                                } else {
+                                    runCatching { smartproxy.mobile.Mobile.setConnStatsPinIP("") }
+                                }
+                            }
                         )
                     }
                     // 封禁确认框:持久化 ACL + 掐断现有连接是破坏性操作,弹框确认再执行。
@@ -358,8 +387,14 @@ class NetworkStatusActivity : ComponentActivity() {
         bindTetheringIfNeeded()
         // 后台延迟关采集可能已把引擎 pin 复位(-1):回来按当前展开状态重新 pin,
         // 防正在查看的应用因 pin 失同步而无流量淡出(-1 时是 no-op)。
-        runCatching { smartproxy.mobile.Mobile.setConnStatsPin(pinnedUid) }
-            .onFailure { Log.e(TAG, "[NetworkStatus] setConnStatsPin failed", it) }
+        if (pinnedUid >= 0) {
+            runCatching { smartproxy.mobile.Mobile.setConnStatsPin(pinnedUid) }
+            runCatching { smartproxy.mobile.Mobile.setConnStatsPinIP("") }
+        } else if (pinnedUid < -1) {
+            val devIp = tetheredDevices[pinnedUid]?.ip.orEmpty()
+            runCatching { smartproxy.mobile.Mobile.setConnStatsPin(-1) }
+            runCatching { smartproxy.mobile.Mobile.setConnStatsPinIP(devIp) }
+        }
     }
 
     /** 离开页面(返回上个页 / 切后台 / 被覆盖):停轮询,但采集延迟 5 秒再关。
@@ -385,6 +420,8 @@ class NetworkStatusActivity : ComponentActivity() {
         statsCloseJob?.cancel() // 取消未触发的延迟任务,防销毁后仍碰 Mobile
         statsCloseJob = null
         unbindTethering()
+        runCatching { smartproxy.mobile.Mobile.setConnStatsPin(-1) }
+        runCatching { smartproxy.mobile.Mobile.setConnStatsPinIP("") }
         // 兜底(正常 onPause 已延迟释放 / 宽限内销毁):放掉自己那份采集,确保销毁后引擎零开销。
         if (gateHeld) {
             ConnStatsGate.release()
@@ -413,11 +450,13 @@ class NetworkStatusActivity : ComponentActivity() {
                     srcIp = c.optString("src_ip", "")
                 )
             }
+            val connCount = a.optInt("conn_count", conns.size)
             out += AppStats(
                 uid = a.getInt("uid"),
                 up = a.getLong("up"),
                 down = a.getLong("down"),
-                conns = conns
+                conns = conns,
+                connCount = connCount
             )
         }
         return out
@@ -440,7 +479,7 @@ class NetworkStatusActivity : ComponentActivity() {
                 val down = dev.downBytes
 
                 // 连接详情页仅展示有实际连接或流量记录的设备，无连接/无流量的设备不在实时连接列表中占位
-                if (conns.isEmpty() && up == 0L && down == 0L) continue
+                if (conns.isEmpty() && dev.activeConnsCount == 0 && up == 0L && down == 0L) continue
 
                 val uidKey = if (dev.mac.isNotBlank()) dev.mac.lowercase() else dev.ip
                 val synthUid = -1000 - (Math.abs(uidKey.hashCode()) % 10000)
@@ -464,7 +503,8 @@ class NetworkStatusActivity : ComponentActivity() {
                     uid = synthUid,
                     up = up,
                     down = down,
-                    conns = conns
+                    conns = conns,
+                    connCount = dev.activeConnsCount
                 )
             }
         }.onFailure { Log.w(TAG, "[NetworkStatus] failed to parse tethering stats", it) }
@@ -496,7 +536,8 @@ class NetworkStatusActivity : ComponentActivity() {
             }
 
             val meta = metaFor(app.uid)
-            AppItem(app.uid, meta.label, meta.icon, meta.pkg, upBps, downBps, app.conns)
+            val displayCount = if (app.conns.isNotEmpty()) app.conns.size else app.connCount
+            AppItem(app.uid, meta.label, meta.icon, meta.pkg, upBps, downBps, app.conns, displayCount)
         }
     }
 
@@ -734,7 +775,7 @@ private fun AppGroup(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        stringResource(R.string.net_conn_count, item.conns.size),
+                        stringResource(R.string.net_conn_count, item.connCount),
                         fontSize = 11.sp,
                         color = GreyText,
                         maxLines = 1,

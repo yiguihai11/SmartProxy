@@ -466,5 +466,37 @@ class TetheringDeviceParserTest {
         assertEquals("2001:db8:9877:0:c538:a56a:9a5d:f831", extraIps.getString(0))
         assertEquals("fe80::1785:5425:3d14:4b4", extraIps.getString(1))
     }
+
+    @Test
+    fun clientTrafficActiveConnsCountWithoutConnsList() {
+        val json = """
+            {
+              "clients": [
+                {
+                  "mac": "d8:a4:91:21:a3:c7",
+                  "ip": "10.152.206.152",
+                  "hostname": "JER-AN20",
+                  "type": 0,
+                  "is_random_mac": false,
+                  "assigned_ips": ["10.152.206.152"]
+                }
+              ],
+              "client_traffic": [
+                {
+                  "ip": "10.152.206.152",
+                  "up": 1000,
+                  "down": 2000,
+                  "active_conns": 18
+                }
+              ],
+              "apps": []
+            }
+        """.trimIndent()
+        val devices = TetheringDeviceParser.parse(json)
+        assertEquals(1, devices.size)
+        val dev = devices.first()
+        assertEquals(18, dev.activeConnsCount)
+        assertTrue(dev.conns.isEmpty())
+    }
 }
 

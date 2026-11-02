@@ -3,14 +3,17 @@ package io.github.yiguihai11.smartproxy
 import android.app.AppOpsManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.PixelFormat
 import android.graphics.Point
 import android.graphics.drawable.Drawable
 import android.hardware.display.DisplayManager
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.PowerManager
 import android.os.Process
 import android.os.SystemClock
 import android.provider.Settings
@@ -79,6 +82,8 @@ object SpeedMeterOverlay {
 
     /** 屏幕旋转/尺寸变化的监听(见 show()):转屏后把胶囊收回新边界内。 */
     private var displayListener: DisplayManager.DisplayListener? = null
+    /** 熄屏/亮屏广播监听: 熄屏立刻暂停 1s 轮询并释放 ConnStatsGate, 避免后台 GC 与发热。 */
+    private var screenReceiver: BroadcastReceiver? = null
     /** 上次打开设置对话框的时间(防重复打开守卫)。 */
     private var lastSettingsOpenAt = 0L
     /** 设置对话框打开期间为 true:强制胶囊保持显示(设置页作为前台被自我排除,无流量
@@ -195,11 +200,54 @@ object SpeedMeterOverlay {
             displayListener = listener
         }
         attachDrag(app, view, params, manager)
-        startPolling(app)
-        if (!gateHeld) { ConnStatsGate.acquire(); gateHeld = true }
+
+        val powerManager = app.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        val isScreenOn = powerManager?.isInteractive ?: true
+
+        if (screenReceiver == null) {
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_SCREEN_ON)
+            }
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent?) {
+                    when (intent?.action) {
+                        Intent.ACTION_SCREEN_OFF -> {
+                            Log.d(TAG, "Screen OFF -> pause SpeedMeter polling & release ConnStatsGate")
+                            stopPolling()
+                            if (gateHeld) {
+                                ConnStatsGate.release()
+                                gateHeld = false
+                            }
+                        }
+                        Intent.ACTION_SCREEN_ON -> {
+                            Log.d(TAG, "Screen ON -> resume SpeedMeter polling & acquire ConnStatsGate")
+                            if (capsule != null) {
+                                if (!gateHeld) {
+                                    ConnStatsGate.acquire()
+                                    gateHeld = true
+                                }
+                                startPolling(context.applicationContext)
+                            }
+                        }
+                    }
+                }
+            }
+            app.registerReceiver(receiver, filter)
+            screenReceiver = receiver
+        }
+
+        if (isScreenOn) {
+            startPolling(app)
+            if (!gateHeld) { ConnStatsGate.acquire(); gateHeld = true }
+        }
     }
 
     private fun hideOnMain() {
+        screenReceiver?.let { r ->
+            runCatching { appContext?.unregisterReceiver(r) }
+        }
+        screenReceiver = null
         stopPolling()
         // 取消 pending 长按,防 hide 后 runnable 到点又去 openSettings(此时胶囊已移除)。
         longPressRunnable?.let { mainHandler.removeCallbacks(it) }

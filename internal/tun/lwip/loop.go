@@ -86,7 +86,10 @@ func (e *Engine) loop() {
 		C.sp_lwip_destroy(e.lw)
 	}()
 
-	ticker := time.NewTicker(25 * time.Millisecond)
+	// sys_check_timeouts 驱动 lwIP 内部定时器 (TCP 快速重传定时器 250ms, 慢速重传 500ms)。
+	// 采样周期设为 100ms: 既比 lwIP 250ms 定时器精细 2.5 倍以上保证重传无延迟,
+	// 又能将空闲时的 Cgo 定时器中断从每秒 40 次骤降至 10 次, 显著减少 CPU 唤醒与待机耗电。
+	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {

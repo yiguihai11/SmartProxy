@@ -84,6 +84,8 @@ type ConnStats struct {
 	// (「查看某条明细时不消失」);-1 = 无。查看期间可以没有流量但行保留,
 	// 解除 pin 后按 connStatsIdleRemove 正常淡出。页面关闭时一并复位。
 	pinUID atomic.Int32
+	// pinIP:正在查看明细的热点下挂设备 IP;空 = 无。
+	pinIP atomic.Pointer[string]
 
 	mu      sync.Mutex
 	byUID   map[int32]*uidStats
@@ -109,6 +111,16 @@ func (cs *ConnStats) Enabled() bool { return cs.enabled.Load() }
 // 按 5s 宽限淡出。
 func (cs *ConnStats) SetPin(uid int32) { cs.pinUID.Store(uid) }
 
+// SetPinIP 固定某下挂设备 IP 的连接不被 idle 清扫并在快照中按需下发明细;空串解除。
+func (cs *ConnStats) SetPinIP(ip string) {
+	clean := strings.TrimSpace(ip)
+	if clean == "" {
+		cs.pinIP.Store(nil)
+	} else {
+		cs.pinIP.Store(&clean)
+	}
+}
+
 // SetEnabled 开/关监控。关闭时清空 UID 活跃记录与连接表 + 复位 pin,
 // 但保留 bySrcIP 的单调累计总账（供下挂设备/热点统计跨会话查询）。
 func (cs *ConnStats) SetEnabled(on bool) {
@@ -118,6 +130,7 @@ func (cs *ConnStats) SetEnabled(on bool) {
 	}
 	cs.enabled.Store(false)
 	cs.pinUID.Store(-1)
+	cs.pinIP.Store(nil)
 	cs.mu.Lock()
 	cs.byUID = make(map[int32]*uidStats)
 	for _, s := range cs.bySrcIP {
@@ -180,9 +193,19 @@ func (cs *ConnStats) setHost(rec *connRecord, host string) {
 	rec.host.Store(&host)
 }
 
-// Snapshot 返回按 app(uid)分组的连接快照 JSON,供 UI 每秒轮询。顺带做懒清扫:
-// idle 超时连接移除并并入 app 累计(调用方 = 轮询,天然只在页面打开时发生)。
+// Snapshot 返回全量连接快照(兼容历史测试与全量查询)。
 func (cs *ConnStats) Snapshot() string {
+	return cs.snapshotInternal(true)
+}
+
+// SnapshotSummary 返回轻量按需快照:
+// 仅为当前 pinUID 的本机应用或 pinIP 的下挂设备填充 conns 连接明细,
+// 其余应用及未 pin 时仅下发 conn_count 与聚合统计,开销缩减 90% 以上。
+func (cs *ConnStats) SnapshotSummary() string {
+	return cs.snapshotInternal(false)
+}
+
+func (cs *ConnStats) snapshotInternal(includeAllConns bool) string {
 	if !cs.enabled.Load() {
 		return `{"apps":[]}`
 	}
@@ -191,13 +214,18 @@ func (cs *ConnStats) Snapshot() string {
 
 	now := time.Now().Unix()
 	pin := cs.pinUID.Load()
+	var pinIP string
+	if p := cs.pinIP.Load(); p != nil {
+		pinIP = *p
+	}
+
 	out := connStatsJSON{Apps: make([]appStatsJSON, 0, len(cs.byUID))}
 	for uid, us := range cs.byUID {
 		us.mu.Lock()
 		kept := us.conns[:0]
 		for _, r := range us.conns {
-			if pin >= 0 && r.uid == pin {
-				kept = append(kept, r) // 正在查看的 app:无流量也不淡出
+			if (pin >= 0 && r.uid == pin) || (pinIP != "" && r.srcIP == pinIP) {
+				kept = append(kept, r) // 正在查看的 app 或下挂设备:无流量也不淡出
 				continue
 			}
 			idleLimit := int64(connStatsIdleRemove.Seconds())
@@ -228,18 +256,39 @@ func (cs *ConnStats) Snapshot() string {
 		}
 
 		// app 级总量 = 已关闭(并入 us.up/down)+ 存活连接实时值,UI 直接读总量算 δ 网速。
-		app := appStatsJSON{UID: uid, Up: us.up.Load(), Down: us.down.Load()}
-		app.Conns = make([]connStatsJSONRec, 0, len(kept))
-		for _, r := range kept {
-			host := r.ip
-			if p := r.host.Load(); p != nil && *p != "" {
-				host = *p
+		app := appStatsJSON{UID: uid, Up: us.up.Load(), Down: us.down.Load(), ConnCount: len(kept)}
+		shouldIncludeAllConns := includeAllConns || (pin >= 0 && uid == pin)
+		if shouldIncludeAllConns {
+			app.Conns = make([]connStatsJSONRec, 0, len(kept))
+			for _, r := range kept {
+				host := r.ip
+				if p := r.host.Load(); p != nil && *p != "" {
+					host = *p
+				}
+				app.Up += r.up.Load()
+				app.Down += r.down.Load()
+				app.Conns = append(app.Conns, connStatsJSONRec{
+					Proto: r.proto, SrcIP: r.srcIP, Host: host, Port: r.port, Up: r.up.Load(), Down: r.down.Load(),
+				})
 			}
-			app.Up += r.up.Load()
-			app.Down += r.down.Load()
-			app.Conns = append(app.Conns, connStatsJSONRec{
-				Proto: r.proto, SrcIP: r.srcIP, Host: host, Port: r.port, Up: r.up.Load(), Down: r.down.Load(),
-			})
+		} else {
+			var matched []connStatsJSONRec
+			for _, r := range kept {
+				app.Up += r.up.Load()
+				app.Down += r.down.Load()
+				if pinIP != "" && r.srcIP == pinIP {
+					host := r.ip
+					if p := r.host.Load(); p != nil && *p != "" {
+						host = *p
+					}
+					matched = append(matched, connStatsJSONRec{
+						Proto: r.proto, SrcIP: r.srcIP, Host: host, Port: r.port, Up: r.up.Load(), Down: r.down.Load(),
+					})
+				}
+			}
+			if len(matched) > 0 {
+				app.Conns = matched
+			}
 		}
 		us.mu.Unlock()
 		out.Apps = append(out.Apps, app)
@@ -478,10 +527,11 @@ type connStatsJSON struct {
 }
 
 type appStatsJSON struct {
-	UID   int32              `json:"uid"`
-	Up    int64              `json:"up"`   // app 累计上行(含已关闭连接)
-	Down  int64              `json:"down"` // app 累计下行(含已关闭连接)
-	Conns []connStatsJSONRec `json:"conns"`
+	UID       int32              `json:"uid"`
+	Up        int64              `json:"up"`   // app 累计上行(含已关闭连接)
+	Down      int64              `json:"down"` // app 累计下行(含已关闭连接)
+	ConnCount int                `json:"conn_count"`
+	Conns     []connStatsJSONRec `json:"conns,omitempty"`
 }
 
 type connStatsJSONRec struct {

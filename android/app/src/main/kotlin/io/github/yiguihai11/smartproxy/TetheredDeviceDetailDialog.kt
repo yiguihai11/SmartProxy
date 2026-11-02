@@ -69,6 +69,7 @@ data class TetheredDeviceDetail(
     val conns: List<ConnStatsRec> = emptyList(),
     val isBlocked: Boolean = false,
     val extraIps: List<String> = emptyList(),
+    val activeConnsCount: Int = conns.size,
 )
 
 /**
@@ -318,7 +319,7 @@ fun TetheredDeviceDetailDialog(
                         }
                         Column(horizontalAlignment = Alignment.End) {
                             Text(stringResource(R.string.device_active_conns), fontSize = 11.sp, color = greyText)
-                            Text("${device.conns.size}", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = textDark)
+                            Text("${if (device.conns.isNotEmpty()) device.conns.size else device.activeConnsCount}", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = textDark)
                         }
                     }
 

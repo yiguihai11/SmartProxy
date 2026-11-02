@@ -228,7 +228,13 @@ fun TetheringDialog(
         ConnStatsGate.acquire()
         onDispose {
             ConnStatsGate.release()
+            runCatching { smartproxy.mobile.Mobile.setConnStatsPinIP("") }
         }
+    }
+
+    LaunchedEffect(selectedDeviceDetail?.ip) {
+        val ip = selectedDeviceDetail?.ip.orEmpty()
+        runCatching { smartproxy.mobile.Mobile.setConnStatsPinIP(ip) }
     }
 
     LaunchedEffect(tetheringService, state.hotspotEnabled, state.usbEnabled, state.routingActive) {

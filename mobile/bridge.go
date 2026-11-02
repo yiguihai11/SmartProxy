@@ -358,7 +358,18 @@ func SetConnStatsPin(uid int32) {
 	globalEngine.SetConnStatsPin(uid)
 }
 
+// SetConnStatsPinIP 固定某下挂设备 IP 的连接并在快照中下发明细;空串解除。
+func SetConnStatsPinIP(ip string) {
+	engineMu.Lock()
+	defer engineMu.Unlock()
+	if globalEngine == nil {
+		return
+	}
+	globalEngine.SetConnStatsPinIP(ip)
+}
+
 // GetConnectionStats 返回按 app(uid)分组的连接快照 JSON,供「联网状态」页每秒轮询。
+// 仅为当前查看的应用或下挂设备下发明细,其余仅下发聚合统计,大幅缩减开销。
 // 引擎未运行返回 {"apps":[]}。
 func GetConnectionStats() (string, error) {
 	engineMu.Lock()
