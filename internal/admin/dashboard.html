@@ -1189,6 +1189,50 @@ function isProxyOnline(p, useTestState){
 
   return !!(v4TcpUp||v4UdpUp||v6TcpUp||v6UdpUp);
 }
+function isProxyTrulyDead(p){
+  if(!p)return false;
+  var udpScheme=isUDPSupportedScheme(p);
+  var sV4TCP=(p.v4&&p.v4.tcp)||p.health||{};
+  var sV4UDP=(p.v4&&p.v4.udp)||p.udp_health||{};
+  var sV6TCP=(p.v6&&p.v6.tcp)||null;
+  var sV6UDP=(p.v6&&p.v6.udp)||null;
+
+  var stV4TCP=proxyTestState[p.alias+':v4_tcp']||proxyTestState[p.alias+':tcp'];
+  var stTCPing=proxyTestState[p.alias+':tcping'];
+  var stV4UDP=proxyTestState[p.alias+':v4_udp']||proxyTestState[p.alias+':udp'];
+  var stV6TCP=proxyTestState[p.alias+':v6_tcp']||proxyTestState[p.alias+':ipv6'];
+  var stV6UDP=proxyTestState[p.alias+':v6_udp'];
+
+  var v4TcpUp = stV4TCP ? !!stV4TCP.available : (stTCPing ? !!stTCPing.available : (sV4TCP.manual ? sV4TCP.available : (sV4TCP.available && (sV4TCP.latency>0 || !!sV4TCP.last_attempt))));
+  var v4UdpUp = udpScheme ? (stV4UDP ? !!stV4UDP.available : (sV4UDP.manual ? sV4UDP.available : (sV4UDP.available && (sV4UDP.latency>0 || !!sV4UDP.last_attempt)))) : false;
+  var v6TcpUp = stV6TCP ? !!stV6TCP.available : (sV6TCP ? (sV6TCP.manual ? sV6TCP.available : (sV6TCP.available && (sV6TCP.latency>0 || !!sV6TCP.last_attempt))) : false);
+  var v6UdpUp = (udpScheme && sV6UDP) ? (stV6UDP ? !!stV6UDP.available : (sV6UDP.manual ? sV6UDP.available : (sV6UDP.available && (sV6UDP.latency>0 || !!sV6UDP.last_attempt)))) : false;
+
+  // If ANY circuit across IPv4 or IPv6 is online, node is NOT dead
+  if (v4TcpUp || v4UdpUp || v6TcpUp || v6UdpUp) {
+    return false;
+  }
+
+  // If pending (not yet tested on enabled protocols), node is NOT dead
+  if (isProxyPending(p)) {
+    return false;
+  }
+
+  // Must have at least one explicit failure recorded across tested circuits
+  var hasExplicitFail = (sV4TCP.consecutive_failures>0) ||
+                        (udpScheme && sV4UDP.consecutive_failures>0) ||
+                        (sV6TCP && sV6TCP.consecutive_failures>0) ||
+                        (stV4TCP && !stV4TCP.available) ||
+                        (stTCPing && !stTCPing.available) ||
+                        (stV4UDP && !stV4UDP.available) ||
+                        (stV6TCP && !stV6TCP.available) ||
+                        (stV6UDP && !stV6UDP.available);
+  if (!hasExplicitFail) {
+    return false;
+  }
+
+  return true;
+}
 // Click a badge to flip that circuit: up → disable (force down), down → enable (force up),
 // manually-up → release back to automatic. A manual-down pin (e.g. the udp_in_tcp TCP default)
 // force-enables: the user's "turn TCP back on" click must take effect immediately, not merely
@@ -1278,15 +1322,7 @@ async function testProxy(i,proto){
     if(toast)showCopyToast(toast,failMsg);
   }
   try{await loadHealth()}catch(_){lhealth(healthD)}
-  var isUDP=isUDPSupportedScheme(p);
-  var stTCP=proxyTestState[p.alias+':v4_tcp']||proxyTestState[p.alias+':tcp'];
-  var stTCPing=proxyTestState[p.alias+':tcping'];
-  var stUDP=proxyTestState[p.alias+':v4_udp']||proxyTestState[p.alias+':udp'];
-
-  var anyUp=isProxyOnline(p, true);
-  var tcpExplicitlyTestedAndFailed = (stTCP && !stTCP.available) || (stTCPing && !stTCPing.available);
-  var udpExplicitlyTestedAndFailed = isUDP ? (stUDP && !stUDP.available) : true;
-  if(!anyUp && !isProxyPending(p) && tcpExplicitlyTestedAndFailed && udpExplicitlyTestedAndFailed){
+  if(isProxyTrulyDead(p)){
     setTimeout(function(){
       if(confirm(tf('Proxy "{0}" is completely down (TCP & UDP both failed). Delete and clean it up now?',[p.alias]))){
         cleanDeadProxies([p.alias]);
@@ -1333,40 +1369,48 @@ async function testGroupProxies(gid, proto, btn){
     proxies=allProxies.filter(function(p){return getProxyGroup(p)===gid;});
   }
   var hInfo = (healthD && healthD.health) || healthD || {};
-  var allowV4 = hInfo.allow_ipv4 !== false;
-  var allowV6 = hInfo.allow_ipv6 !== false;
+  var allowV4 = (hInfo.allow_ipv4 !== undefined) ? (hInfo.allow_ipv4 !== false) : ((window._allowIPv4 !== undefined) ? window._allowIPv4 : true);
+  var allowV6 = (hInfo.allow_ipv6 !== undefined) ? (hInfo.allow_ipv6 !== false) : ((window._allowIPv6 !== undefined) ? window._allowIPv6 : true);
   var isSpecificV4 = proto==='v4_tcp'||proto==='v4_udp'||proto==='tcp4'||proto==='udp4';
   var isSpecificV6 = proto==='v6_tcp'||proto==='ipv6'||proto==='v6'||proto==='v6_udp'||proto==='tcp6'||proto==='udp6';
   var isGenericTCP = proto==='tcp';
   var isGenericUDP = proto==='udp';
+  var isTCPing = proto==='tcping'||proto==='ping';
   var isAll = proto==='all'||proto==='both';
-
-  var doV4 = isSpecificV4 || (allowV4 && (isAll || isGenericTCP || isGenericUDP));
-  var doV6 = isSpecificV6 || (allowV6 && (isAll || (!allowV4 && (isGenericTCP || isGenericUDP))));
 
   var tasks=[];
   for(var i=0;i<proxies.length;i++){
     var p=proxies[i];
     var udpScheme=isUDPSupportedScheme(p);
-    if(proto==='tcping'||proto==='ping'||(doV4 && (proto==='all'||proto==='both'))){
-      tasks.push({alias:p.alias,proto:'tcping'});
+    var isV6Literal=!!(p.host&&p.host.indexOf(':')!==-1);
+    var hasV6=allowV6 && !!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||isV6Literal||(!allowV4&&p.ipv6_capability!=='unsupported'));
+    var hasV4=allowV4 && !(isV6Literal&&!p.supports_ipv4);
+
+    // 1. TCPing:
+    if(isTCPing){
+      if(hasV4 || (allowV6 && hasV6)){
+        tasks.push({alias:p.alias,proto:'tcping'});
+      }
+    }else if(isAll){
+      if(hasV4 || hasV6){
+        tasks.push({alias:p.alias,proto:'tcping'});
+      }
     }
-    if(doV4){
-      if(proto==='tcp'||proto==='v4_tcp'||proto==='all'||proto==='both'){
-        tasks.push({alias:p.alias,proto:'v4_tcp'});
-      }
-      if((proto==='udp'||proto==='v4_udp'||proto==='all'||proto==='both')&&udpScheme){
-        tasks.push({alias:p.alias,proto:'v4_udp'});
-      }
+
+    // 2. TCP:
+    if(hasV4 && (isGenericTCP||proto==='v4_tcp'||proto==='tcp4'||isAll)){
+      tasks.push({alias:p.alias,proto:'v4_tcp'});
     }
-    if(doV6){
-      var hasV6=allowV6 && !!(p.supports_ipv6||(p.ipv6_capability&&p.ipv6_capability==='supported')||(p.host&&p.host.indexOf(':')!==-1));
-      if((proto==='all'||proto==='v6_tcp'||proto==='ipv6'||proto==='v6')&&hasV6){
-        tasks.push({alias:p.alias,proto:'v6_tcp'});
-      }
-      if((proto==='all'||proto==='v6_udp')&&hasV6&&udpScheme){
-        tasks.push({alias:p.alias,proto:'v6_udp'});
-      }
+    if(hasV6 && (isGenericTCP||proto==='v6_tcp'||proto==='ipv6'||proto==='v6'||proto==='tcp6'||isAll)){
+      tasks.push({alias:p.alias,proto:'v6_tcp'});
+    }
+
+    // 3. UDP:
+    if(hasV4 && udpScheme && (isGenericUDP||proto==='v4_udp'||proto==='udp4'||isAll)){
+      tasks.push({alias:p.alias,proto:'v4_udp'});
+    }
+    if(hasV6 && udpScheme && (isGenericUDP||proto==='v6_udp'||proto==='udp6'||isAll)){
+      tasks.push({alias:p.alias,proto:'v6_udp'});
     }
   }
   var toast=document.getElementById('copy-toast');
@@ -1535,14 +1579,7 @@ async function testGroupProxies(gid, proto, btn){
 
   var deadAliases=[];
   proxies.forEach(function(p){
-    var isUDP=isUDPSupportedScheme(p);
-    var stV4TCP=proxyTestState[p.alias+':v4_tcp']||proxyTestState[p.alias+':tcp'];
-    var stTCPing=proxyTestState[p.alias+':tcping'];
-    var stV4UDP=proxyTestState[p.alias+':v4_udp']||proxyTestState[p.alias+':udp'];
-
-    var tcpTestedAndDown = (stV4TCP && !stV4TCP.available) || (stTCPing && !stTCPing.available);
-    var udpTestedAndDown = isUDP ? (stV4UDP && !stV4UDP.available) : true;
-    if(!isProxyOnline(p, true) && !isProxyPending(p) && tcpTestedAndDown && udpTestedAndDown){
+    if(isProxyTrulyDead(p)){
       deadAliases.push(p.alias);
     }
   });
@@ -1584,7 +1621,7 @@ async function cleanDeadGroupProxies(gid){
   }
   var deadAliases=[];
   proxies.forEach(function(p){
-    if(!isProxyOnline(p, true) && !isProxyPending(p)){
+    if(isProxyTrulyDead(p)){
       deadAliases.push(p.alias);
     }
   });
@@ -1933,6 +1970,16 @@ function renderProxyCard(p,i){
 
   var pingBtnText=pingVal>0?('TCPing '+pingLat):t('Test TCPing');
   var pingBtnStyle='',pingBtnTitle=t('Test TCPing latency'),pingBtnDis='';
+  if(!allowV4 && !allowV6){
+    pingBtnDis=' disabled';
+    pingBtnTitle=t('Disabled');
+  } else if(!allowV4 && (p.ipv6_capability === 'unsupported')){
+    pingBtnDis=' disabled';
+    pingBtnTitle=t('Disabled');
+  } else if(!allowV6 && isV6Host && !p.supports_ipv4){
+    pingBtnDis=' disabled';
+    pingBtnTitle=t('Disabled');
+  }
   if(stTCPing){
     if(stTCPing.testing){
       pingBtnText=t('Testing...');
