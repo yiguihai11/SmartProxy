@@ -229,6 +229,7 @@ tr:last-child td{border-bottom:none}
 .proxy-card .circ.disabled{color:var(--text3);border-color:var(--border);background:rgba(127,127,127,.08);opacity:0.85}
 .proxy-card .circ.disabled .dot{background:var(--text3);box-shadow:none}
 .proxy-card .stack-boxes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:2px}
+.proxy-card .stack-boxes.single-stack{grid-template-columns:1fr}
 @media(max-width:540px){.proxy-card .stack-boxes{grid-template-columns:1fr}}
 .proxy-card .stack-box{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;display:flex;flex-direction:column;gap:6px}
 .proxy-card .stack-box-header{display:flex;align-items:center;justify-content:space-between;gap:6px;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:5px}
@@ -2105,17 +2106,9 @@ function renderProxyCard(p,i){
     v6TagClass = 'v6-none';
   }
 
-  var cardHash=computeCardHash(p, i);
-  return '<div class="proxy-card '+(isPending?'is-pending':(anyUp?'is-up':'is-down'))+'" data-alias="'+escAttr(p.alias)+'" data-hash="'+escAttr(cardHash)+'"><div class="top">'+
-    '<div class="node-info">'+
-    '<div class="alias-row">'+flagHtml+'<span class="alias">'+dispName+'</span>'+schemeBadge+ipBadge+regBadgeHtml+'</div>'+
-    '<div class="url">'+escHtml(dispUrl)+aliasTxt+' · '+dispMode+capTxt+'</div>'+
-    '</div>'+
-    '<div class="circs">'+
-    '<button class="btn btn-sm" id="test-tcping-'+i+'" onclick="testProxy('+i+',\'tcping\')" style="'+pingBtnStyle+'" title="'+escAttr(pingBtnTitle)+'"'+pingBtnDis+'>'+pingBtnText+'</button>'+
-    '</div></div>'+
-    '<div class="stack-boxes">'+
-      '<div class="stack-box v4-box">'+
+  var v4BoxHtml = '';
+  if (allowV4 || (!allowV4 && !allowV6)) {
+    v4BoxHtml = '<div class="stack-box v4-box">'+
         '<div class="stack-box-header">'+
           '<span class="stack-title">IPv4</span>'+
           '<div class="stack-header-right">'+
@@ -2128,8 +2121,12 @@ function renderProxyCard(p,i){
           rowV4UDP+
           v4ExitHtml+
         '</div>'+
-      '</div>'+
-      '<div class="stack-box v6-box">'+
+      '</div>';
+  }
+
+  var v6BoxHtml = '';
+  if (allowV6 || (!allowV4 && !allowV6)) {
+    v6BoxHtml = '<div class="stack-box v6-box">'+
         '<div class="stack-box-header">'+
           '<span class="stack-title">IPv6</span>'+
           '<div class="stack-header-right">'+
@@ -2142,8 +2139,25 @@ function renderProxyCard(p,i){
           rowV6UDP+
           v6ExitHtml+
         '</div>'+
-      '</div>'+
+      '</div>';
+  }
+
+  var singleStack = (!allowV4 || !allowV6);
+  var stackBoxesHtml = '<div class="stack-boxes'+(singleStack?' single-stack':'')+'">'+
+      v4BoxHtml +
+      v6BoxHtml +
+    '</div>';
+
+  var cardHash=computeCardHash(p, i);
+  return '<div class="proxy-card '+(isPending?'is-pending':(anyUp?'is-up':'is-down'))+'" data-alias="'+escAttr(p.alias)+'" data-hash="'+escAttr(cardHash)+'"><div class="top">'+
+    '<div class="node-info">'+
+    '<div class="alias-row">'+flagHtml+'<span class="alias">'+dispName+'</span>'+schemeBadge+ipBadge+regBadgeHtml+'</div>'+
+    '<div class="url">'+escHtml(dispUrl)+aliasTxt+' · '+dispMode+capTxt+'</div>'+
     '</div>'+
+    '<div class="circs">'+
+    '<button class="btn btn-sm" id="test-tcping-'+i+'" onclick="testProxy('+i+',\'tcping\')" style="'+pingBtnStyle+'" title="'+escAttr(pingBtnTitle)+'"'+pingBtnDis+'>'+pingBtnText+'</button>'+
+    '</div></div>'+
+    stackBoxesHtml+
     (exitHtml?'<div class="stats">'+exitHtml+'</div>':'')+
     '<div class="actions">'+
     '<div class="card-mgmt-bar">'+mgmtHtml+'</div>'+
