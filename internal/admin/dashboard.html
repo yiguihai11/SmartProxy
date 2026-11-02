@@ -4076,6 +4076,8 @@ function renderSubscriptions(subs){
     var expireStr=s.expire>0?ts2t(s.expire):'';
     var lastUpdateStr=s.last_update?s.last_update.replace('T',' ').substring(0,19):'-';
 
+    var allowV4=(typeof window!=='undefined'&&window._allowIPv4!==undefined)?window._allowIPv4:true;
+    var allowV6=(typeof window!=='undefined'&&window._allowIPv6!==undefined)?window._allowIPv6:true;
     var allProxies=(healthD&&healthD.health&&healthD.health.proxies)||(healthD&&healthD.proxies)||[];
     var subGid='sub:'+(s.name||'').toLowerCase();
     var subV6Count=0;
@@ -4083,18 +4085,24 @@ function renderSubscriptions(subs){
     allProxies.forEach(function(p){
       var pg=(getProxyGroup(p)||'').toLowerCase();
       if(pg===subGid || (p.provider && p.provider.toLowerCase()===subGid)){
-        if(p.supports_ipv6 || (p.ipv6_capability && p.ipv6_capability==='supported') || (p.host && p.host.indexOf(':')!==-1)){
+        if(allowV6 && (p.supports_ipv6 || (p.ipv6_capability && p.ipv6_capability==='supported') || (p.host && p.host.indexOf(':')!==-1))){
           subV6Count++;
         }
-        subV4Count++;
+        if(allowV4){
+          subV4Count++;
+        }
       }
     });
     var ipCountHtml='';
-    if(subV4Count>0 || subV6Count>0){
-      ipCountHtml=' <span style="font-size:0.74rem;opacity:0.85">(' +
-        '<span style="color:var(--text2)">v4: '+subV4Count+'</span>' +
-        (subV6Count>0?' · <span style="color:#818cf8;font-weight:600">v6: '+subV6Count+'</span>':'') +
-        ')</span>';
+    var countParts=[];
+    if(allowV4 && subV4Count>0){
+      countParts.push('<span style="color:var(--text2)">v4: '+subV4Count+'</span>');
+    }
+    if(allowV6 && subV6Count>0){
+      countParts.push('<span style="color:#818cf8;font-weight:600">v6: '+subV6Count+'</span>');
+    }
+    if(countParts.length>0){
+      ipCountHtml=' <span style="font-size:0.74rem;opacity:0.85">(' + countParts.join(' · ') + ')</span>';
     }
 
     html+='<div style="border:1px solid var(--border);border-radius:8px;padding:12px;background:var(--bg2);display:flex;flex-direction:column;gap:8px">'+
