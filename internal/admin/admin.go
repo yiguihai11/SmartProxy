@@ -2500,6 +2500,8 @@ func (s *Server) gatherLiveData() map[string]interface{} {
 			"proxies":       s.mgr.Proxies(),
 			"lantern":       s.getLanternStatus(),
 			"subscriptions": s.getSubscriptionsStatus(),
+			"allow_ipv4":    s.mgr.IsIPv4Enabled(),
+			"allow_ipv6":    s.mgr.IsIPv6Enabled(),
 		},
 	}
 }
