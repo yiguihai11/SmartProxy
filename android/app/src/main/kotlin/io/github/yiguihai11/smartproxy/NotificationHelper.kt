@@ -107,11 +107,16 @@ object NotificationHelper {
         val strategyDisplayName = getStrategyDisplayName(context, rawStrategy)
         val title = context.getString(R.string.notification_title_with_strategy, strategyDisplayName)
 
-        val v4Node = status?.optString("v4_node").orEmpty()
-        val v4Latency = status?.optLong("v4_latency_ms", 0L) ?: 0L
-        val v6Node = status?.optString("v6_node").orEmpty()
-        val v6Latency = status?.optLong("v6_latency_ms", 0L) ?: 0L
-        val isDualStackNode = status?.optBoolean("dual_stack_node", false) ?: false
+        val allowV4 = status?.optBoolean("allow_ipv4", true) ?: true
+        val allowV6 = status?.optBoolean("allow_ipv6", true) ?: true
+        val isV6Enabled = allowV6 && ConfigProvider.ipv6(context)
+        val isV4Enabled = allowV4 && ConfigProvider.ipv4(context)
+
+        val v4Node = if (isV4Enabled) status?.optString("v4_node").orEmpty() else ""
+        val v4Latency = if (isV4Enabled) (status?.optLong("v4_latency_ms", 0L) ?: 0L) else 0L
+        val v6Node = if (isV6Enabled) status?.optString("v6_node").orEmpty() else ""
+        val v6Latency = if (isV6Enabled) (status?.optLong("v6_latency_ms", 0L) ?: 0L) else 0L
+        val isDualStackNode = isV4Enabled && isV6Enabled && (status?.optBoolean("dual_stack_node", false) ?: false)
 
         val fmtLatencySuffix = { ms: Long -> if (ms > 0) " · ${ms}ms" else "" }
         val fmtLatencyParens = { ms: Long -> if (ms > 0) " (${ms}ms)" else "" }
@@ -193,7 +198,7 @@ object NotificationHelper {
     /** 原地更新前台保活通知(不重启服务)。支持变更检测过滤,避免无谓的通知栏重绘。 */
     fun refresh(context: Context, force: Boolean = false) {
         ensureChannel(context)
-        val sig = runCatching { smartproxy.mobile.Mobile.getActiveNodeStatus() }.getOrDefault("") + "|" + AppPrefs.speedMeterLocked(context)
+        val sig = runCatching { smartproxy.mobile.Mobile.getActiveNodeStatus() }.getOrDefault("") + "|" + AppPrefs.speedMeterLocked(context) + "|" + ConfigProvider.ipv4(context) + "|" + ConfigProvider.ipv6(context)
         if (!force && sig.isNotBlank() && sig == lastNotificationSignature) {
             return
         }
@@ -246,7 +251,7 @@ object NotificationHelper {
      *  subtype;运行期类型必须与 manifest 声明一致,否则 Android 14+ 抛异常。 */
     fun startForeground(service: Service) {
         ensureChannel(service)
-        lastNotificationSignature = runCatching { smartproxy.mobile.Mobile.getActiveNodeStatus() }.getOrDefault("") + "|" + AppPrefs.speedMeterLocked(service)
+        lastNotificationSignature = runCatching { smartproxy.mobile.Mobile.getActiveNodeStatus() }.getOrDefault("") + "|" + AppPrefs.speedMeterLocked(service) + "|" + ConfigProvider.ipv4(service) + "|" + ConfigProvider.ipv6(service)
         ServiceCompat.startForeground(
             service,
             NOTIFICATION_ID,

@@ -94,6 +94,11 @@ func rrStart(st *rotationState, n int) int {
 	return int((st.rr.Add(1) - 1) % uint64(n))
 }
 
+// rrPeek 仅读取当前轮转起点而不推移指针,供状态查询等只读路径使用,避免轮询状态导致节点跳变。
+func rrPeek(st *rotationState, n int) int {
+	return int(st.rr.Load() % uint64(n))
+}
+
 type Manager struct {
 	mu             sync.RWMutex
 	aliasMap       map[string]*Proxy
@@ -1176,6 +1181,15 @@ func (m *Manager) orderedProxiesV6UDP() []*Proxy {
 // orderedProxiesFor 返回按当前策略排好序的节点列表。t 决定用哪条路径的选路状态
 // (Manager.order)以及延迟读哪个电路(transport.latencyOf)。
 func (m *Manager) orderedProxiesFor(t transport) []*Proxy {
+	return m.orderedProxiesForInternal(t, false)
+}
+
+// peekOrderedProxiesFor 仅按当前次序读取首选节点列表,不推移轮转指针,供状态查询等只读接口使用。
+func (m *Manager) peekOrderedProxiesFor(t transport) []*Proxy {
+	return m.orderedProxiesForInternal(t, true)
+}
+
+func (m *Manager) orderedProxiesForInternal(t transport, peek bool) []*Proxy {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	n := len(m.defaultProxies)
@@ -1185,7 +1199,12 @@ func (m *Manager) orderedProxiesFor(t transport) []*Proxy {
 	st := &m.order[t]
 	switch m.strategy {
 	case "round_robin":
-		start := rrStart(st, n)
+		var start int
+		if peek {
+			start = rrPeek(st, n)
+		} else {
+			start = rrStart(st, n)
+		}
 		result := make([]*Proxy, n)
 		for i := 0; i < n; i++ {
 			result[i] = m.defaultProxies[(start+i)%n]
@@ -1194,10 +1213,12 @@ func (m *Manager) orderedProxiesFor(t transport) []*Proxy {
 	case "random":
 		result := make([]*Proxy, n)
 		copy(result, m.defaultProxies)
-		rand.Shuffle(n, func(i, j int) { result[i], result[j] = result[j], result[i] })
+		if !peek {
+			rand.Shuffle(n, func(i, j int) { result[i], result[j] = result[j], result[i] })
+		}
 		return result
 	case "latency":
-		return m.orderByLatency(st, t)
+		return m.orderByLatency(st, t, peek)
 	default:
 		return m.defaultProxies
 	}
@@ -1244,7 +1265,7 @@ const (
 //  3. 带缘滞回。EWMA 平滑过的延迟仍会在带线附近穿越,没有滞回的话成员每拍进出,轮转
 //     集合乱跳,出口 IP 集合比死钉单点还难预测。所以进入用进入线、退出用更宽的退出线
 //     (再让 best/4,地板 20ms):带外的要够近才能进,带内的要真烂才被踢。
-func (m *Manager) orderByLatency(st *rotationState, t transport) []*Proxy {
+func (m *Manager) orderByLatency(st *rotationState, t transport, peek bool) []*Proxy {
 	available := make([]*Proxy, 0, len(m.defaultProxies))
 	var unavailable []*Proxy
 	for _, p := range m.defaultProxies {
@@ -1286,8 +1307,13 @@ func (m *Manager) orderByLatency(st *rotationState, t transport) []*Proxy {
 	}
 
 	result := make([]*Proxy, 0, len(m.defaultProxies))
-	// 带内按延迟次序轮转起点:每条新连接换一个首位,把流量摊给带内全体成员。
-	start := rrStart(st, len(band))
+	// 带内按延迟次序轮转起点:每条新连接换一个首位,把流量摊给带内全体成员。只读查看(peek)时不推移轮转指针。
+	var start int
+	if peek {
+		start = rrPeek(st, len(band))
+	} else {
+		start = rrStart(st, len(band))
+	}
 	for i := range band {
 		result = append(result, band[(start+i)%len(band)])
 	}
@@ -2159,6 +2185,8 @@ type UpstreamActiveNodeStatus struct {
 	V6Node        string `json:"v6_node"`
 	V6LatencyMs   int64  `json:"v6_latency_ms"`
 	DualStackNode bool   `json:"dual_stack_node"`
+	AllowIPv4     bool   `json:"allow_ipv4"`
+	AllowIPv6     bool   `json:"allow_ipv6"`
 }
 
 // SetStrategy dynamically updates the upstream routing strategy.
@@ -2219,56 +2247,71 @@ func (m *Manager) ProbeAll() {
 
 // ActiveNodeStatus returns the current primary nodes for IPv4 and IPv6 traffic.
 func (m *Manager) ActiveNodeStatus() UpstreamActiveNodeStatus {
+	if m == nil {
+		return UpstreamActiveNodeStatus{
+			Strategy:  "failover",
+			AllowIPv4: true,
+			AllowIPv6: true,
+		}
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	allowV4 := m.allowIPv4.Load()
+	allowV6 := m.allowIPv6.Load()
+
 	status := UpstreamActiveNodeStatus{
-		Strategy: m.strategy,
+		Strategy:  m.strategy,
+		AllowIPv4: allowV4,
+		AllowIPv6: allowV6,
 	}
 	if status.Strategy == "" {
 		status.Strategy = "failover"
 	}
 
-	orderedV4 := m.orderedProxiesFor(transportV4TCP)
-	orderedV6 := m.orderedProxiesFor(transportV6TCP)
 	var v4Proxy *Proxy
+	if allowV4 {
+		orderedV4 := m.peekOrderedProxiesFor(transportV4TCP)
+		for _, p := range orderedV4 {
+			if p.V4TCPAvailable() {
+				v4Proxy = p
+				break
+			}
+		}
+		if v4Proxy != nil {
+			status.V4Node = v4Proxy.DisplayName()
+			status.V4LatencyMs = v4Proxy.health.Latency().Milliseconds()
+		}
+	}
+
 	var v6Proxy *Proxy
-
-	for _, p := range orderedV4 {
-		if p.V4TCPAvailable() {
-			v4Proxy = p
-			break
-		}
-	}
-
-	for _, p := range orderedV6 {
-		if p.V6TCPAvailable() {
-			v6Proxy = p
-			break
-		}
-	}
-	if v6Proxy == nil {
-		for _, p := range m.orderedProxiesFor(transportV6UDP) {
-			if p.V6UDPAvailable() {
+	if allowV6 {
+		orderedV6 := m.peekOrderedProxiesFor(transportV6TCP)
+		for _, p := range orderedV6 {
+			if p.V6TCPAvailable() {
 				v6Proxy = p
 				break
 			}
 		}
+		if v6Proxy == nil {
+			for _, p := range m.peekOrderedProxiesFor(transportV6UDP) {
+				if p.V6UDPAvailable() {
+					v6Proxy = p
+					break
+				}
+			}
+		}
+		if v6Proxy != nil {
+			status.V6Node = v6Proxy.DisplayName()
+			v6Lat := v6Proxy.v6Health.Latency()
+			if v6Lat <= 0 {
+				v6Lat = v6Proxy.v6UDPHealth.Latency()
+			}
+			status.V6LatencyMs = v6Lat.Milliseconds()
+		}
 	}
 
-	if v4Proxy != nil {
-		status.V4Node = v4Proxy.DisplayName()
-		status.V4LatencyMs = v4Proxy.health.Latency().Milliseconds()
-	}
-	if v6Proxy != nil {
-		status.V6Node = v6Proxy.DisplayName()
-		v6Lat := v6Proxy.v6Health.Latency()
-		if v6Lat <= 0 {
-			v6Lat = v6Proxy.v6UDPHealth.Latency()
-		}
-		status.V6LatencyMs = v6Lat.Milliseconds()
-	}
-	if v4Proxy != nil && v6Proxy != nil && v4Proxy == v6Proxy {
+	if allowV4 && allowV6 && v4Proxy != nil && v6Proxy != nil && v4Proxy == v6Proxy {
 		status.DualStackNode = true
 	}
 	return status

@@ -381,19 +381,19 @@ func GetConnectionStats() (string, error) {
 }
 
 // GetActiveNodeStatus returns the current primary upstream node and routing strategy as JSON:
-// {"strategy":"latency", "v4_node":"...", "v4_latency_ms":45, "v6_node":"...", "v6_latency_ms":88, "dual_stack_node":true}
+// {"strategy":"latency", "v4_node":"...", "v4_latency_ms":45, "v6_node":"...", "v6_latency_ms":88, "dual_stack_node":true, "allow_ipv4":true, "allow_ipv6":true}
 func GetActiveNodeStatus() string {
 	engineMu.Lock()
 	eng := globalEngine
 	engineMu.Unlock()
 
 	if eng == nil {
-		return `{"strategy":"failover","v4_node":"","v4_latency_ms":0,"v6_node":"","v6_latency_ms":0,"dual_stack_node":false}`
+		return `{"strategy":"failover","v4_node":"","v4_latency_ms":0,"v6_node":"","v6_latency_ms":0,"dual_stack_node":false,"allow_ipv4":true,"allow_ipv6":true}`
 	}
 	status := eng.UpstreamActiveNodeStatus()
 	data, err := json.Marshal(status)
 	if err != nil {
-		return `{"strategy":"failover","v4_node":"","v4_latency_ms":0,"v6_node":"","v6_latency_ms":0,"dual_stack_node":false}`
+		return `{"strategy":"failover","v4_node":"","v4_latency_ms":0,"v6_node":"","v6_latency_ms":0,"dual_stack_node":false,"allow_ipv4":true,"allow_ipv6":true}`
 	}
 	return string(data)
 }

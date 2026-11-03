@@ -1775,14 +1775,16 @@ private fun HomeLauncher(
                     val raw = smartproxy.mobile.Mobile.getActiveNodeStatus()
                     if (raw.isNotBlank()) {
                         val json = JSONObject(raw)
-                        val v4 = json.optString("v4_node")
-                        val v6 = json.optString("v6_node")
+                        val allowV4 = json.optBoolean("allow_ipv4", true) && ConfigProvider.ipv4(context)
+                        val allowV6 = json.optBoolean("allow_ipv6", true) && ConfigProvider.ipv6(context)
+                        val v4 = if (allowV4) json.optString("v4_node") else ""
+                        val v6 = if (allowV6) json.optString("v6_node") else ""
                         activeNodeName = when {
                             v4.isNotBlank() -> v4
                             v6.isNotBlank() -> v6
                             else -> ""
                         }
-                        activeNodeLatency = if (v4.isNotBlank()) json.optLong("v4_latency_ms", 0L) else json.optLong("v6_latency_ms", 0L)
+                        activeNodeLatency = if (v4.isNotBlank()) json.optLong("v4_latency_ms", 0L) else if (v6.isNotBlank()) json.optLong("v6_latency_ms", 0L) else 0L
                         activeStrategy = json.optString("strategy", "")
                     }
                 }

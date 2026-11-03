@@ -2205,6 +2205,72 @@ func TestManager_DualStackStrategies(t *testing.T) {
 	if statusAfterDisable.DualStackNode {
 		t.Fatalf("expected DualStackNode=false after v4 failover to node-2")
 	}
+
+	// 4. Disable IPv6 globally via SetProtocolFilter:
+	m.SetProtocolFilter(true, false)
+	statusNoV6 := m.ActiveNodeStatus()
+	if statusNoV6.AllowIPv6 {
+		t.Fatalf("expected AllowIPv6=false")
+	}
+	if statusNoV6.V6Node != "" || statusNoV6.V6LatencyMs != 0 {
+		t.Fatalf("expected empty V6Node/latency when IPv6 disabled, got %s (%dms)", statusNoV6.V6Node, statusNoV6.V6LatencyMs)
+	}
+	if statusNoV6.DualStackNode {
+		t.Fatalf("expected DualStackNode=false when IPv6 disabled")
+	}
+	if statusNoV6.V4Node != p2.DisplayName() {
+		t.Fatalf("expected V4Node to stay node-2, got %s", statusNoV6.V4Node)
+	}
+
+	// 5. Disable IPv4 globally via SetProtocolFilter:
+	m.SetProtocolFilter(false, true)
+	statusNoV4 := m.ActiveNodeStatus()
+	if statusNoV4.AllowIPv4 {
+		t.Fatalf("expected AllowIPv4=false")
+	}
+	if statusNoV4.V4Node != "" || statusNoV4.V4LatencyMs != 0 {
+		t.Fatalf("expected empty V4Node/latency when IPv4 disabled, got %s (%dms)", statusNoV4.V4Node, statusNoV4.V4LatencyMs)
+	}
+	if statusNoV4.DualStackNode {
+		t.Fatalf("expected DualStackNode=false when IPv4 disabled")
+	}
+	if statusNoV4.V6Node != p1.DisplayName() {
+		t.Fatalf("expected V6Node to stay node-1, got %s", statusNoV4.V6Node)
+	}
+}
+
+func TestManager_ActiveNodeStatus_DoesNotAdvanceRotation(t *testing.T) {
+	m, err := NewManager(UpstreamConfig{
+		Strategy: "latency",
+		Proxies: []ProxyEntry{
+			{Alias: "node-1", URL: "socks5://127.0.0.1:1080"},
+			{Alias: "node-2", URL: "socks5://127.0.0.1:1081"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Stop()
+
+	p1, _ := m.findProxyLocked("node-1")
+	p2, _ := m.findProxyLocked("node-2")
+	p1.health.mu.Lock()
+	p1.health.state = StateClosed
+	p1.health.latency = 50 * time.Millisecond
+	p1.health.mu.Unlock()
+
+	p2.health.mu.Lock()
+	p2.health.state = StateClosed
+	p2.health.latency = 50 * time.Millisecond
+	p2.health.mu.Unlock()
+
+	first := m.ActiveNodeStatus()
+	for i := 0; i < 10; i++ {
+		next := m.ActiveNodeStatus()
+		if next.V4Node != first.V4Node {
+			t.Fatalf("expected ActiveNodeStatus to be idempotent, got %s on call %d, initial was %s", next.V4Node, i, first.V4Node)
+		}
+	}
 }
 
 func TestBuildStackCapabilities_FailedCircuitNotUnknown(t *testing.T) {

@@ -1315,7 +1315,11 @@ func (e *Engine) SetReloadFn(fn func()) {
 // UpstreamActiveNodeStatus returns the current primary upstream routing status.
 func (e *Engine) UpstreamActiveNodeStatus() upstream.UpstreamActiveNodeStatus {
 	if e == nil || e.UpstreamMgr == nil {
-		return upstream.UpstreamActiveNodeStatus{}
+		return upstream.UpstreamActiveNodeStatus{
+			Strategy:  "failover",
+			AllowIPv4: true,
+			AllowIPv6: true,
+		}
 	}
 	return e.UpstreamMgr.ActiveNodeStatus()
 }
