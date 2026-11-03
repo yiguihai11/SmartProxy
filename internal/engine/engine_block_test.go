@@ -121,6 +121,7 @@ func TestEngine_ReloadConfig_InvalidACLFile_FailsFastWithoutStore(t *testing.T) 
 
 	e, err := New(origCfg, dir)
 	require.NoError(t, err)
+	defer e.Stop()
 
 	// 新配置指向不存在的 ACL 路径
 	newCfg := config.DefaultConfig()
@@ -152,6 +153,7 @@ func TestEngine_ReloadConfig_ACLParseFailure_DoesNotMutateChnrouteOrConfig(t *te
 
 	e, err := New(origCfg, dir)
 	require.NoError(t, err)
+	defer e.Stop()
 
 	// 新配置欲更新 chnroute 为 chn2，但 ACL 路径非法
 	newCfg := config.DefaultConfig()
