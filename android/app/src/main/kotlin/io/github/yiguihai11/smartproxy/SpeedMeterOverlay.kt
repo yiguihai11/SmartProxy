@@ -11,6 +11,7 @@ import android.graphics.PixelFormat
 import android.graphics.Point
 import android.graphics.drawable.Drawable
 import android.hardware.display.DisplayManager
+import android.net.Uri
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.PowerManager
@@ -694,14 +695,35 @@ object SpeedMeterOverlay {
      *  HomeLauncher 弹(Compose AlertDialog),这里只暴露判定与跳转,不再持有平台对话框。 */
     fun needsUsageAccess(context: Context): Boolean = !hasUsageAccess(context)
 
-    /** 跳系统「使用情况访问设置」页。 */
+    /** 跳系统「使用情况访问设置」页。
+     *  优先以 package: URI 直达单应用独立授权页（如 Android 10+ / OriginOS 的 AppUsageAccessSettingsActivity）；
+     *  若系统不支持单应用页，回退至列表页并附带定位/高亮参数。
+     */
     fun openUsageAccessSettings(context: Context) {
+        val pkg = context.packageName
+        val directIntent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS, Uri.parse("package:$pkg"))
+            .putExtra(":settings:fragment_args_key", pkg)
+            .putExtra("package_name", pkg)
+            .putExtra("packageName", pkg)
+            .putExtra("package", pkg)
+            .putExtra("pkgname", pkg)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+        val fallbackIntent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+            .putExtra(":settings:fragment_args_key", pkg)
+            .putExtra("package_name", pkg)
+            .putExtra("packageName", pkg)
+            .putExtra("package", pkg)
+            .putExtra("pkgname", pkg)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
         runCatching {
-            context.startActivity(
-                Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-        }.onFailure { Log.e(TAG, "open usage access settings failed", it) }
+            context.startActivity(directIntent)
+        }.recoverCatching {
+            context.startActivity(fallbackIntent)
+        }.onFailure {
+            Log.e(TAG, "open usage access settings failed", it)
+        }
     }
 
     /** uid → (应用名, 图标),懒解析 + 缓存;失败回退 "UID x"。仅 bg 线程写。 */
