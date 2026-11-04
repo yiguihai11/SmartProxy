@@ -219,6 +219,43 @@ func (ph *ProxyHealth) Snapshot() ProxyHealthSnapshot {
 	return s
 }
 
+// RestoreSnapshot restores health and circuit state from a snapshot (e.g. warm state import).
+func (ph *ProxyHealth) RestoreSnapshot(s ProxyHealthSnapshot) {
+	ph.mu.Lock()
+	defer ph.mu.Unlock()
+	ph.latency = s.Latency
+	ph.consecutiveFailures = s.ConsecutiveFailures
+	ph.consecutiveSuccesses = s.ConsecutiveSuccesses
+	if s.Manual {
+		m := s.Available
+		ph.manual = &m
+	} else {
+		ph.manual = nil
+	}
+	switch s.State {
+	case "closed":
+		ph.state = StateClosed
+	case "half_open", "half-open":
+		ph.state = StateHalfOpen
+	case "open":
+		ph.state = StateOpen
+		if s.OpenSince != "" {
+			if t, err := time.Parse(time.RFC3339, s.OpenSince); err == nil {
+				ph.openSince = t
+			} else {
+				ph.openSince = time.Now()
+			}
+		} else {
+			ph.openSince = time.Now()
+		}
+	}
+	if s.LastAttempt != "" {
+		if t, err := time.Parse(time.RFC3339, s.LastAttempt); err == nil {
+			ph.lastAttempt = t
+		}
+	}
+}
+
 type HealthChecker struct {
 	mu        sync.RWMutex
 	running   bool

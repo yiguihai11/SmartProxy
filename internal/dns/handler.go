@@ -1131,6 +1131,20 @@ func (h *Handler) CacheEntries() []CacheEntryInfo {
 	return h.cache.Entries()
 }
 
+func (h *Handler) DumpCache() []SavedDNSEntry {
+	if h == nil || h.cache == nil {
+		return nil
+	}
+	return h.cache.DumpEntries()
+}
+
+func (h *Handler) ImportCache(entries []SavedDNSEntry) {
+	if h == nil || h.cache == nil || len(entries) == 0 {
+		return
+	}
+	h.cache.ImportEntries(entries)
+}
+
 func (h *Handler) QueryUDP(ctx context.Context, queryWire []byte, host string, port int) ([]byte, error) {
 	return h.queryUDP(ctx, queryWire, host, port)
 }

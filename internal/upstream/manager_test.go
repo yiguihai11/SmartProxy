@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"smartproxy/internal/config"
 	"smartproxy/internal/rules"
 )
 
@@ -2776,6 +2777,83 @@ func TestManager_RemoveCNNode_ExitIPInChnroute(t *testing.T) {
 	defer m.mu.RUnlock()
 	if _, exists := m.aliasMap["cn-exit-node"]; exists {
 		t.Fatal("cn-exit-node should be deleted from aliasMap")
+	}
+}
+
+func TestManager_ExportAndImportNodeStates(t *testing.T) {
+	allowV4 := true
+	allowV6 := true
+	cfg := UpstreamConfig{
+		Strategy: "latency",
+		HealthCheck: config.HealthCheckConf{
+			Enabled: false,
+		},
+		AllowIPv4: &allowV4,
+		AllowIPv6: &allowV6,
+		Proxies: []ProxyEntry{
+			{Alias: "node-1", URL: "ss://YWVzLTEyOC1nY206cGFzcw@1.2.3.4:8388#Node1"},
+			{Alias: "node-2", URL: "ss://YWVzLTEyOC1nY206cGFzcw@5.6.7.8:8388#Node2"},
+		},
+	}
+
+	m1, err := NewManager(cfg)
+	if err != nil {
+		t.Fatalf("failed to create manager m1: %v", err)
+	}
+	defer m1.Stop()
+
+	p1 := m1.FindProxy("node-1")
+	if p1 == nil {
+		t.Fatal("node-1 not found in m1")
+	}
+	p1.health.UpdateLatency(42 * time.Millisecond)
+	p1.SetPingLatency(35 * time.Millisecond)
+	p1.SetGeoInfo("HK", "1.2.3.4")
+	p1.SetIPv6Capability(IPv6CapSupported)
+
+	p2 := m1.FindProxy("node-2")
+	if p2 == nil {
+		t.Fatal("node-2 not found in m1")
+	}
+	// Manually disable node-2
+	p2.health.SetManualState(false)
+
+	exported := m1.ExportNodeStates()
+	if len(exported) != 2 {
+		t.Fatalf("expected 2 exported states, got %d", len(exported))
+	}
+
+	m2, err := NewManager(cfg)
+	if err != nil {
+		t.Fatalf("failed to create manager m2: %v", err)
+	}
+	defer m2.Stop()
+
+	m2.ImportNodeStates(exported)
+
+	p1New := m2.FindProxy("node-1")
+	if p1New == nil {
+		t.Fatal("node-1 not found in m2")
+	}
+	if p1New.health.Latency() != 42*time.Millisecond {
+		t.Errorf("expected 42ms latency, got %v", p1New.health.Latency())
+	}
+	if p1New.PingLatency() != 35*time.Millisecond {
+		t.Errorf("expected 35ms ping latency, got %v", p1New.PingLatency())
+	}
+	if p1New.CountryCode() != "HK" {
+		t.Errorf("expected country code HK, got %s", p1New.CountryCode())
+	}
+	if p1New.IPv6Capability() != IPv6CapSupported {
+		t.Errorf("expected IPv6CapSupported, got %v", p1New.IPv6Capability())
+	}
+
+	p2New := m2.FindProxy("node-2")
+	if p2New == nil {
+		t.Fatal("node-2 not found in m2")
+	}
+	if !p2New.health.IsManuallyDisabled() {
+		t.Error("expected node-2 to be manually disabled in m2")
 	}
 }
 

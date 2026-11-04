@@ -209,6 +209,33 @@ func TestRouter_BlacklistSnapshot(t *testing.T) {
 	}
 }
 
+func TestRouter_ImportBlacklist(t *testing.T) {
+	r1 := newRouter()
+	r1.ipBlacklist.Add("1.2.3.4", 443, 60*time.Second, "reset")
+	r1.domainBlacklist.Add("blocked.com", 80, 60*time.Second, "timeout")
+
+	ipSnap, domainSnap := r1.BlacklistSnapshot()
+
+	r2 := newRouter()
+	r2.ImportBlacklist(ipSnap, domainSnap)
+
+	if !r2.ipBlacklist.IsBlacklisted("1.2.3.4", 443) {
+		t.Error("expected imported IP to be blacklisted")
+	}
+	if !r2.domainBlacklist.IsBlacklisted("blocked.com", 80) {
+		t.Error("expected imported domain to be blacklisted")
+	}
+
+	// Test expired entry is not imported
+	expiredEntries := []BlacklistEntry{
+		{Host: "expired.com", Port: 80, ExpiresAt: time.Now().Unix() - 10, LastReason: "old"},
+	}
+	r2.ImportBlacklist(nil, expiredEntries)
+	if r2.domainBlacklist.IsBlacklisted("expired.com", 80) {
+		t.Error("expired entry should not be blacklisted after import")
+	}
+}
+
 func TestRouter_AddToBlacklists_Domain(t *testing.T) {
 	r := newRouter()
 	r.addToBlacklists("1.2.3.4", 443, "example.com", "timeout")

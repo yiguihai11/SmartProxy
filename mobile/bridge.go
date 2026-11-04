@@ -398,6 +398,38 @@ func GetActiveNodeStatus() string {
 	return string(data)
 }
 
+// ExportWarmState returns a serialized JSON snapshot of dynamic blacklist, DNS cache,
+// and upstream node health/latency/circuit states. Returns "{}" if engine is not running.
+func ExportWarmState() string {
+	engineMu.Lock()
+	eng := globalEngine
+	engineMu.Unlock()
+	if eng == nil {
+		return "{}"
+	}
+	data, err := eng.ExportWarmStateJSON()
+	if err != nil {
+		slog.Error("[Go-Bridge] ExportWarmState failed", "error", err)
+		return "{}"
+	}
+	return string(data)
+}
+
+// ImportWarmState imports dynamic blacklist, DNS cache, and node health into running engine.
+func ImportWarmState(stateJSON string) bool {
+	engineMu.Lock()
+	eng := globalEngine
+	engineMu.Unlock()
+	if eng == nil || stateJSON == "" || stateJSON == "{}" {
+		return false
+	}
+	if err := eng.ImportWarmStateJSON([]byte(stateJSON)); err != nil {
+		slog.Error("[Go-Bridge] ImportWarmState failed", "error", err)
+		return false
+	}
+	return true
+}
+
 // SetUpstreamStrategy sets the current default upstream selection strategy.
 func SetUpstreamStrategy(strategy string) {
 	engineMu.Lock()

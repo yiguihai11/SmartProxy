@@ -502,6 +502,11 @@ func (p *Proxy) setUDPCapability(c UDPCapability) {
 	}
 }
 
+// SetUDPCapability explicitly sets the node's UDP relay capability (e.g. from warm state).
+func (p *Proxy) SetUDPCapability(c UDPCapability) {
+	p.setUDPCapability(c)
+}
+
 // rawRecheckDue reports whether a known-raw node should re-attempt the standard ASSOCIATE
 // path. Without this, the raw routing fast path would skip ASSOCIATE forever and a node that
 // later supports ASSOCIATE could never upgrade raw → standard.

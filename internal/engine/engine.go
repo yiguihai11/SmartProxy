@@ -182,6 +182,7 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 		adblockMgr:      adblockMgr,
 	}
 	eng.Config.Store(cfg)
+	eng.loadWarmStateFromDir(cfgDir)
 	return eng, nil
 }
 

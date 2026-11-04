@@ -232,3 +232,66 @@ func (c *Cache) Entries() []CacheEntryInfo {
 	}
 	return result
 }
+
+type SavedDNSEntry struct {
+	Qname   string `json:"qname"`
+	Qtype   uint16 `json:"qtype"`
+	Expires int64  `json:"expires"`
+	Wire    []byte `json:"wire"`
+}
+
+// DumpEntries returns a snapshot of all active, unexpired cache entries including their raw wire data.
+func (c *Cache) DumpEntries() []SavedDNSEntry {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	now := time.Now()
+	result := make([]SavedDNSEntry, 0)
+	for e := c.lru.Front(); e != nil; e = e.Next() {
+		v := e.Value.(*cacheEntry)
+		if v.expire.After(now) {
+			wireCp := make([]byte, len(v.wire))
+			copy(wireCp, v.wire)
+			result = append(result, SavedDNSEntry{
+				Qname:   v.key.qname,
+				Qtype:   v.key.qtype,
+				Expires: v.expire.Unix(),
+				Wire:    wireCp,
+			})
+		}
+	}
+	return result
+}
+
+// ImportEntries populates the cache with entries from a snapshot, preserving expiry.
+func (c *Cache) ImportEntries(entries []SavedDNSEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now()
+	nowUnix := now.Unix()
+	for _, e := range entries {
+		if e.Expires <= nowUnix || len(e.Wire) == 0 {
+			continue
+		}
+		key := cacheKey{qname: e.Qname, qtype: e.Qtype}
+		expire := time.Unix(e.Expires, 0)
+		if existing, ok := c.entries[key]; ok {
+			existing.wire = e.Wire
+			existing.expire = expire
+			c.lru.MoveToFront(existing.link)
+			continue
+		}
+		if len(c.entries) >= c.maxSize {
+			if back := c.lru.Back(); back != nil {
+				evict := back.Value.(*cacheEntry)
+				c.deleteEntry(evict.key, evict)
+			}
+		}
+		entry := &cacheEntry{
+			wire:   e.Wire,
+			expire: expire,
+			key:    key,
+		}
+		entry.link = c.lru.PushFront(entry)
+		c.entries[key] = entry
+	}
+}

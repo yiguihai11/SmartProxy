@@ -216,3 +216,37 @@ func (b *Blacklist) Remove(host string, port int) {
 		b.cacheDirty = 1
 	}
 }
+
+// Import restores dynamic blacklist entries (e.g. from a warm state snapshot).
+// Expired entries are discarded.
+func (b *Blacklist) Import(entries []BlacklistEntry) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := time.Now()
+	nowUnix := now.Unix()
+	imported := 0
+	for _, e := range entries {
+		if e.ExpiresAt <= nowUnix {
+			continue
+		}
+		key := blacklistKey{host: e.Host, port: e.Port}
+		if _, exists := b.entries[key]; !exists {
+			if len(b.entries) >= b.maxSize {
+				b.evictOldestLocked()
+			}
+		}
+		lastHit := time.Unix(0, e.LastHit)
+		if e.LastHit == 0 {
+			lastHit = now
+		}
+		b.entries[key] = blacklistRecord{
+			expiry:     time.Unix(e.ExpiresAt, 0),
+			lastReason: e.LastReason,
+			lastHit:    lastHit,
+		}
+		imported++
+	}
+	if imported > 0 {
+		b.cacheDirty = 1
+	}
+}

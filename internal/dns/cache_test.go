@@ -54,3 +54,42 @@ func TestCache_DoubleCloseNoPanic(t *testing.T) {
 	// Second close must not panic
 	c.Close()
 }
+
+func TestCache_DumpAndImport(t *testing.T) {
+	c1 := NewCache(10, 0)
+	defer c1.Close()
+
+	c1.Set("example.com.", dns.TypeA, []byte("wireA"), 30*time.Second)
+	c1.Set("example.com.", dns.TypeAAAA, []byte("wireAAAA"), 30*time.Second)
+
+	dumped := c1.DumpEntries()
+	if len(dumped) != 2 {
+		t.Fatalf("expected 2 dumped entries, got %d", len(dumped))
+	}
+
+	c2 := NewCache(10, 0)
+	defer c2.Close()
+
+	c2.ImportEntries(dumped)
+	if c2.Len() != 2 {
+		t.Fatalf("expected 2 imported entries, got %d", c2.Len())
+	}
+
+	gotA := c2.Get("example.com.", dns.TypeA)
+	if string(gotA) != "wireA" {
+		t.Errorf("expected wireA, got %q", gotA)
+	}
+	gotAAAA := c2.Get("example.com.", dns.TypeAAAA)
+	if string(gotAAAA) != "wireAAAA" {
+		t.Errorf("expected wireAAAA, got %q", gotAAAA)
+	}
+
+	// Expired entries should not be imported
+	expired := []SavedDNSEntry{
+		{Qname: "expired.com.", Qtype: dns.TypeA, Expires: time.Now().Unix() - 10, Wire: []byte("old")},
+	}
+	c2.ImportEntries(expired)
+	if c2.Get("expired.com.", dns.TypeA) != nil {
+		t.Error("expired entry should not exist in cache")
+	}
+}

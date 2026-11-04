@@ -1941,6 +1941,133 @@ func (m *Manager) Proxies() []ProxyInfo {
 	return infos
 }
 
+type NodeWarmState struct {
+	Alias          string              `json:"alias"`
+	URL            string              `json:"url"`
+	Host           string              `json:"host"`
+	Port           int                 `json:"port"`
+	CountryCode    string              `json:"country_code,omitempty"`
+	ExitIP         string              `json:"exit_ip,omitempty"`
+	ExitIPv4       string              `json:"exit_ipv4,omitempty"`
+	ExitIPv6       string              `json:"exit_ipv6,omitempty"`
+	IPv6Capability string              `json:"ipv6_capability,omitempty"`
+	UDPCapability  string              `json:"udp_capability,omitempty"`
+	PingLatency    time.Duration       `json:"ping_latency,omitempty"`
+	TCP            ProxyHealthSnapshot `json:"tcp"`
+	UDP            ProxyHealthSnapshot `json:"udp"`
+	V6TCP          ProxyHealthSnapshot `json:"v6_tcp"`
+	V6UDP          ProxyHealthSnapshot `json:"v6_udp"`
+}
+
+// ExportNodeStates exports warm health, latency, manual pins, and capability states for all proxies.
+func (m *Manager) ExportNodeStates() []NodeWarmState {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	reverseMap := make(map[*Proxy]string, len(m.aliasMap))
+	for alias, proxy := range m.aliasMap {
+		if proxy != nil {
+			reverseMap[proxy] = alias
+		}
+	}
+
+	result := make([]NodeWarmState, 0, len(m.defaultProxies))
+	for _, proxy := range m.defaultProxies {
+		alias := reverseMap[proxy]
+		v4Snap, v6Snap := buildStackCapabilities(proxy)
+		udpCap := string(proxy.UDPCapability())
+		if !proxy.SchemeSupportsUDP() {
+			udpCap = "none"
+		}
+		result = append(result, NodeWarmState{
+			Alias:          alias,
+			URL:            proxy.URL,
+			Host:           proxy.Host,
+			Port:           proxy.Port,
+			CountryCode:    proxy.CountryCode(),
+			ExitIP:         proxy.ExitIP(),
+			ExitIPv4:       proxy.ExitIPv4(),
+			ExitIPv6:       proxy.ExitIPv6(),
+			IPv6Capability: string(proxy.IPv6Capability()),
+			UDPCapability:  udpCap,
+			PingLatency:    proxy.PingLatency(),
+			TCP:            v4Snap.TCP,
+			UDP:            v4Snap.UDP,
+			V6TCP:          v6Snap.TCP,
+			V6UDP:          v6Snap.UDP,
+		})
+	}
+	return result
+}
+
+// ImportNodeStates restores warm node health, latencies, manual pins, and capabilities.
+func (m *Manager) ImportNodeStates(states []NodeWarmState) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for _, s := range states {
+		var p *Proxy
+		if s.Alias != "" {
+			p, _ = m.findProxyLocked(s.Alias)
+		}
+		if p == nil && s.URL != "" {
+			for _, candidate := range m.defaultProxies {
+				if candidate.URL == s.URL {
+					p = candidate
+					break
+				}
+			}
+		}
+		if p == nil && s.Host != "" && s.Port > 0 {
+			for _, candidate := range m.defaultProxies {
+				if candidate.Host == s.Host && candidate.Port == s.Port {
+					p = candidate
+					break
+				}
+			}
+		}
+		if p == nil {
+			continue
+		}
+
+		// Restore health & circuit breaker states
+		p.health.RestoreSnapshot(s.TCP)
+		p.udpHealth.RestoreSnapshot(s.UDP)
+		p.v6Health.RestoreSnapshot(s.V6TCP)
+		p.v6UDPHealth.RestoreSnapshot(s.V6UDP)
+
+		// Restore latencies & geo info
+		if s.PingLatency > 0 {
+			p.SetPingLatency(s.PingLatency)
+		}
+		if s.CountryCode != "" {
+			p.SetCountryCode(s.CountryCode)
+		}
+		if s.ExitIPv4 != "" {
+			p.SetExitIPv4(s.ExitIPv4)
+		}
+		if s.ExitIPv6 != "" {
+			p.SetExitIPv6(s.ExitIPv6)
+		}
+		if s.ExitIP != "" {
+			p.SetGeoInfo(s.CountryCode, s.ExitIP)
+		}
+
+		// Restore capabilities
+		if s.IPv6Capability != "" && s.IPv6Capability != string(IPv6CapUnknown) {
+			p.SetIPv6Capability(IPv6Capability(s.IPv6Capability))
+		}
+		if s.UDPCapability != "" && s.UDPCapability != string(UDPCapUnknown) {
+			p.SetUDPCapability(UDPCapability(s.UDPCapability))
+		}
+	}
+
+	// Invalidate rotation latency bands so new latencies take effect immediately
+	for i := range m.order {
+		m.order[i].band.Store(nil)
+	}
+}
+
 // findProxyLocked searches for a proxy by alias. If an exact match is not found,
 // it falls back to case-insensitive match, and then to matching proxy.Name
 // (e.g. for provider nodes where the displayed name omits the [Provider] prefix).

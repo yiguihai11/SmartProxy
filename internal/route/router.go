@@ -854,6 +854,16 @@ func (r *Router) BlacklistSnapshot() (ipEntries, domainEntries []BlacklistEntry)
 	return r.ipBlacklist.Entries(), r.domainBlacklist.Entries()
 }
 
+// ImportBlacklist imports dynamic IP and domain blacklist entries (e.g. from warm state).
+func (r *Router) ImportBlacklist(ipEntries, domainEntries []BlacklistEntry) {
+	if len(ipEntries) > 0 {
+		r.ipBlacklist.Import(ipEntries)
+	}
+	if len(domainEntries) > 0 {
+		r.domainBlacklist.Import(domainEntries)
+	}
+}
+
 // --- UDP smart 决策入口(QUIC 黑洞自愈用,供 TUN / SOCKS5-UDP 两条 seam 共用) ---
 
 // IsIPBlacklisted 报告目标 IP:port 是否命中动态黑名单。命中表示此前该目标直连被证

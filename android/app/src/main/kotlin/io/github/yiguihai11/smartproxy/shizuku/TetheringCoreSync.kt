@@ -305,12 +305,16 @@ internal class CoreTetheringLease : ICoreTetheringLease.Stub() {
     @Synchronized
     override fun updateAssetFile(name: String, pfd: ParcelFileDescriptor): Boolean {
         require(name.isNotBlank() && File(name).name == name) { "Invalid asset name" }
-        val allowed = setOf("config.json", "acl.txt", "chnroute.txt")
+        val allowed = setOf("config.json", "acl.txt", "chnroute.txt", "adblock_cache.txt")
         if (name !in allowed) {
             Log.w("CoreTetheringLease", "updateAssetFile rejected unapproved file: $name")
             return false
         }
-        val targetDir = if (name == "config.json") assetDirectory ?: return false else assetCacheDirectory ?: return false
+        val targetDir = when (name) {
+            "config.json" -> assetDirectory ?: return false
+            "adblock_cache.txt" -> File(assetCacheDirectory ?: return false, "adblock").apply { mkdirs() }
+            else -> assetCacheDirectory ?: return false
+        }
         val targetFile = File(targetDir, name)
         val tempFile = File(targetDir, ".$name.tmp")
         return runCatching {
@@ -337,6 +341,18 @@ internal class CoreTetheringLease : ICoreTetheringLease.Stub() {
     }
 
     private fun resolveAsset(name: String): File? {
+        if (name == "warm_state.json") {
+            val warmJson = runCatching { smartproxy.mobile.Mobile.exportWarmState() }.getOrNull()
+            if (!warmJson.isNullOrBlank() && warmJson != "{}") {
+                val warmFile = File(assetCacheDirectory ?: return null, "warm_state.json")
+                runCatching { warmFile.writeText(warmJson, Charsets.UTF_8) }
+                if (warmFile.isFile) return warmFile
+            }
+        }
+        if (name == "adblock_cache.txt") {
+            val adblockFile = File(assetCacheDirectory ?: return null, "adblock/adblock_cache.txt")
+            if (adblockFile.isFile) return adblockFile
+        }
         listOfNotNull(assetDirectory, assetCacheDirectory).forEach { dir ->
             val file = File(dir, name)
             if (file.isFile) return file
@@ -344,16 +360,35 @@ internal class CoreTetheringLease : ICoreTetheringLease.Stub() {
         return null
     }
 
-    private fun assetFiles(): List<File> =
-        listOfNotNull(assetDirectory, assetCacheDirectory)
+    private fun assetFiles(): List<File> {
+        val list = listOfNotNull(assetDirectory, assetCacheDirectory)
             .flatMap { dir ->
                 dir.listFiles()?.asSequence()
                     ?.filter { it.isFile && (it.name.endsWith(".txt") || it.name.endsWith(".json")) }
                     ?.toList()
                     .orEmpty()
             }
-            .distinctBy { it.name }
-            .sortedBy { it.name }
+            .toMutableList()
+        assetCacheDirectory?.let { cacheDir ->
+            val adblockFile = File(cacheDir, "adblock/adblock_cache.txt")
+            if (adblockFile.isFile && adblockFile.length() > 0L) {
+                list.add(adblockFile)
+            }
+            val warmFile = File(cacheDir, "warm_state.json")
+            if (warmFile.isFile && warmFile.length() > 0L) {
+                list.add(warmFile)
+            } else if (runCatching { smartproxy.mobile.Mobile.isRunning() }.getOrDefault(false)) {
+                val warmJson = runCatching { smartproxy.mobile.Mobile.exportWarmState() }.getOrNull()
+                if (!warmJson.isNullOrBlank() && warmJson != "{}") {
+                    runCatching { warmFile.writeText(warmJson, Charsets.UTF_8) }
+                    if (warmFile.isFile) {
+                        list.add(warmFile)
+                    }
+                }
+            }
+        }
+        return list.distinctBy { it.name }.sortedBy { it.name }
+    }
 
     @Synchronized
     override fun holdTestNetwork(tun: ParcelFileDescriptor) {

@@ -113,6 +113,7 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
     @Volatile private var coreLifetime: LifetimeWatch? = null
     private var stagedAssetFingerprint = ""
     private var stagedFileObserver: FileObserver? = null
+    private var stateFileObserver: FileObserver? = null
     @Volatile private var isSyncingFromMaster = false
 
     private val routingWorker = Executors.newSingleThreadExecutor { r ->
@@ -1265,7 +1266,7 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
     private fun startStagedFileObserver(stagedDir: String) {
         stopStagedFileObserver()
         val dir = File(stagedDir)
-        val monitoredFiles = setOf("config.json", "acl.txt", "chnroute.txt")
+        val monitoredFiles = setOf("config.json", "acl.txt", "chnroute.txt", "adblock_cache.txt")
         val observer = object : FileObserver(dir, CLOSE_WRITE or MOVED_TO) {
             override fun onEvent(event: Int, path: String?) {
                 if (path == null || path !in monitoredFiles || isSyncingFromMaster) return
@@ -1288,11 +1289,37 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
         }
         observer.startWatching()
         stagedFileObserver = observer
+
+        val stateDir = File(SHELL_RUNTIME_DIR, "smartproxy-tethering-state").apply { mkdirs() }
+        val stateObserver = object : FileObserver(stateDir, CLOSE_WRITE or MOVED_TO) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path != "adblock_cache.txt" || isSyncingFromMaster) return
+                val file = File(stateDir, path)
+                if (!file.isFile || file.length() == 0L) return
+                runRoutingWork {
+                    if (isSyncingFromMaster) return@runRoutingWork
+                    val lease = coreLease ?: return@runRoutingWork
+                    runCatching {
+                        ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                            val ok = lease.updateAssetFile(path, pfd)
+                            Log.i(TAG, "Synced tethering adblock_cache.txt back to master: $ok")
+                            if (ok) {
+                                stagedAssetFingerprint = lease.assetFingerprint()
+                            }
+                        }
+                    }.onFailure { Log.e(TAG, "Failed to sync tethering adblock_cache.txt to master", it) }
+                }
+            }
+        }
+        stateObserver.startWatching()
+        stateFileObserver = stateObserver
     }
 
     private fun stopStagedFileObserver() {
         stagedFileObserver?.stopWatching()
         stagedFileObserver = null
+        stateFileObserver?.stopWatching()
+        stateFileObserver = null
     }
 
     private fun startRoutingEngineLocked(config: HotspotRoutingLaunchConfig, tunPfd: ParcelFileDescriptor) {
@@ -1347,6 +1374,7 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             val names = coreLease.listAssetFiles().toList()
             val fingerprint = coreLease.assetFingerprint()
             if (fingerprint == stagedAssetFingerprint && names.all { File(directory, it).isFile }) {
+                syncStagedAdblockToState(directory)
                 return directory.absolutePath
             }
 
@@ -1365,10 +1393,25 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
                     throw it
                 }
             }
+            syncStagedAdblockToState(directory)
             stagedAssetFingerprint = fingerprint
             return directory.absolutePath
         } finally {
             isSyncingFromMaster = false
+        }
+    }
+
+    private fun syncStagedAdblockToState(directory: File) {
+        val stagedAdblock = File(directory, "adblock_cache.txt")
+        val stateDir = File(SHELL_RUNTIME_DIR, "smartproxy-tethering-state").apply { mkdirs() }
+        val stateAdblock = File(stateDir, "adblock_cache.txt")
+        if (stagedAdblock.isFile && stagedAdblock.length() > 0L) {
+            if (!stateAdblock.exists() || stagedAdblock.lastModified() > stateAdblock.lastModified() || stateAdblock.length() == 0L) {
+                runCatching {
+                    stagedAdblock.copyTo(stateAdblock, overwrite = true)
+                    Log.i(TAG, "Copied staged adblock_cache.txt to tethering state directory (${stagedAdblock.length()} bytes)")
+                }.onFailure { Log.e(TAG, "Failed to copy adblock cache to state dir", it) }
+            }
         }
     }
 
