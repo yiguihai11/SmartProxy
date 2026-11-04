@@ -174,10 +174,10 @@ object NetworkRecoveryManager {
                 ComponentName(context, NetworkRestoreJobService::class.java)
             )
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-                .setPersisted(false)
+                .setPersisted(true)
                 .build()
             js.schedule(job)
-            Log.i(TAG, "Scheduled NetworkRestoreJobService via JobScheduler (JOB_ID=$JOB_ID).")
+            Log.i(TAG, "Scheduled NetworkRestoreJobService via JobScheduler (JOB_ID=$JOB_ID, persisted=true).")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to schedule JobScheduler job", e)
         }

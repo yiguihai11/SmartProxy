@@ -21,10 +21,15 @@ class BootReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action ?: return
-        if (action != Intent.ACTION_BOOT_COMPLETED && action != Intent.ACTION_MY_PACKAGE_REPLACED) {
+        if (action != Intent.ACTION_BOOT_COMPLETED &&
+            action != Intent.ACTION_MY_PACKAGE_REPLACED &&
+            action != "android.intent.action.QUICKBOOT_POWERON" &&
+            action != "com.htc.intent.action.QUICKBOOT_POWERON"
+        ) {
             return
         }
-        if (action == Intent.ACTION_BOOT_COMPLETED && !AppPrefs.bootAutoStart(context)) {
+        val isBoot = action != Intent.ACTION_MY_PACKAGE_REPLACED
+        if (isBoot && !AppPrefs.bootAutoStart(context)) {
             android.util.Log.i("SmartProxyBoot", "BootReceiver: bootAutoStart disabled, skipping boot start.")
             return
         }
@@ -33,7 +38,20 @@ class BootReceiver : BroadcastReceiver() {
             return
         }
         val needsVpnAuth = AppPrefs.serviceMode(context) == AppPrefs.MODE_VPN
-        if (needsVpnAuth && VpnService.prepare(context) != null) return
+        if (needsVpnAuth && VpnService.prepare(context) != null) {
+            android.util.Log.w("SmartProxyBoot", "BootReceiver: VPN authorization revoked by system, skipping auto-start.")
+            return
+        }
+
+        // 开机物理网络就绪检查:手机刚开机瞬间 Wi-Fi 可能正在扫描/DHCP，蜂窝数据可能正在分配 IP。
+        // 若当前物理网络暂无可用 IP，转入 NetworkRecoveryManager 等待网络连接就绪后自动拉起，避免 VpnService 裸起失败后直接退出。
+        val netStatus = NetworkUtils.checkPhysicalNetworkAddresses(context)
+        if (!netStatus.isAnyAvailable) {
+            android.util.Log.i("SmartProxyBoot", "BootReceiver: Physical network not available yet on boot. Starting NetworkRecoveryManager...")
+            NetworkRecoveryManager.startRecovery(context.applicationContext)
+            return
+        }
+
         SmartProxyVpnService.start(context)
     }
 }

@@ -512,6 +512,13 @@ class SmartProxyVpnService : VpnService() {
         Log.e(TAG, "[startInternal] Start FAILED (socks=$socksOnly)! Stopping foreground notification and service.")
         io.github.yiguihai11.smartproxy.shizuku.TetheringCoreSync.onStartFailed(this, "Start failed")
         _isRunning.value = false
+        // 若启动失败是因为物理网络暂无可用 IP(如开机启动或网络切换瞬断)，且用户期望开启 VPN，
+        // 激活网络恢复监听等待重连，而不是彻底放弃
+        val netStatus = NetworkUtils.checkPhysicalNetworkAddresses(this)
+        if (!netStatus.isAnyAvailable && AppPrefs.vpnDesired(this)) {
+            Log.i(TAG, "[startInternal] Physical network not ready yet, activating NetworkRecoveryManager...")
+            NetworkRecoveryManager.startRecovery(applicationContext)
+        }
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
         return START_NOT_STICKY
