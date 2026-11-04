@@ -25,6 +25,7 @@ import (
 	"smartproxy/internal/fwmark"
 	"smartproxy/internal/lantern"
 	"smartproxy/internal/netutil"
+	"smartproxy/internal/portal"
 	"smartproxy/internal/relay"
 	"smartproxy/internal/route"
 	"smartproxy/internal/rules"
@@ -58,6 +59,7 @@ type Engine struct {
 	lanternProvider *lantern.Provider
 	subscriptionMgr *subscription.Manager
 	adblockMgr      *adblock.Manager
+	portalMgr       *portal.Manager
 	tetheringBridge admin.TetheringBridge
 }
 
@@ -169,13 +171,18 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 	})
 	subMgr.Start()
 
+	portalMgr := portal.NewManager(cfg)
+	tunHandler := tun.NewHandler(cfg, router, ruleEng, upstreamMgr, dnsHandler)
+	tunHandler.SetPortalManager(portalMgr)
+
 	eng := &Engine{
 		Chnroute:        cn,
 		RuleEng:         ruleEng,
 		UpstreamMgr:     upstreamMgr,
 		Router:          router,
 		DNSHandler:      dnsHandler,
-		TUNHandler:      tun.NewHandler(cfg, router, ruleEng, upstreamMgr, dnsHandler),
+		TUNHandler:      tunHandler,
+		portalMgr:       portalMgr,
 		clientSem:       make(chan struct{}, maxConcurrentClients),
 		lanternProvider: lanternProvider,
 		subscriptionMgr: subMgr,
@@ -367,6 +374,7 @@ func (e *Engine) Start(ctx context.Context) error {
 	if sockPath := lc.AdminSocket; sockPath != "" || lc.AdminPort > 0 {
 		e.adminServer = admin.New(sockPath, e.Router, e.UpstreamMgr, e.DNSHandler, e.Chnroute)
 		e.adminServer.SetAdblockManager(e.adblockMgr)
+		e.adminServer.SetPortalManager(e.portalMgr)
 		// 面板按 fd 模式裁剪菜单:下挂设备列表由 TUN 按源 IP 记账供给,只有 TUN 由
 		// 外部 fd 提供(VpnService / Shizuku 热点核)时才可能有数据,非 fd 模式隐藏。
 		e.adminServer.SetFDMode(isFdMode)
@@ -540,14 +548,12 @@ func (e *Engine) handleClient(ctx context.Context, conn net.Conn) {
 	ll.Debug("new connection", "remote", remoteAddr, "client_ip", clientIP)
 
 	auth := e.Config.Load().Listen.Auth
-	serverUser := ""
-	serverPass := ""
-	if auth != nil {
-		serverUser = auth.Username
-		serverPass = auth.Password
+	var verifier func(user, pass string) bool
+	if auth != nil && auth.HasCredentials() {
+		verifier = auth.Match
 	}
 
-	if err := socks5.Handshake(conn, serverUser, serverPass); err != nil {
+	if err := socks5.HandshakeWithVerifier(conn, verifier); err != nil {
 		ll.Warn("handshake failed", "remote", remoteAddr, "error", err)
 		return
 	}
@@ -1058,6 +1064,10 @@ func (e *Engine) Stop() {
 			e.adminServer.Stop()
 			slog.Info("[Go-Engine] adminServer stopped")
 		}
+		if e.portalMgr != nil {
+			slog.Info("[Go-Engine] Closing portal manager...")
+			e.portalMgr.Close()
+		}
 		slog.Info("[Go-Engine] Engine.Stop() completed")
 	})
 }
@@ -1180,6 +1190,9 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 
 	if e.adminServer != nil {
 		e.adminServer.SetAdminAuth(newCfg.Listen.AdminAuth)
+	}
+	if e.portalMgr != nil {
+		e.portalMgr.UpdateConfig(newCfg)
 	}
 
 	if newCfg.Lantern.Enabled {

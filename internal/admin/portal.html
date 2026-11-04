@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>{{.Title}} - 网络认证</title>
+<link rel="icon" href="/favicon.ico" type="image/x-icon">
+<style>
+:root {
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --bg-gradient: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  --card-bg: rgba(30, 41, 59, 0.85);
+  --card-border: rgba(255, 255, 255, 0.1);
+  --text: #f8fafc;
+  --text-muted: #94a3b8;
+  --input-bg: rgba(15, 23, 42, 0.6);
+  --input-border: #334155;
+  --danger: #ef4444;
+  --danger-bg: rgba(239, 68, 68, 0.15);
+  --success: #10b981;
+  --success-bg: rgba(16, 185, 129, 0.15);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg-gradient: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+    --card-bg: rgba(255, 255, 255, 0.95);
+    --card-border: rgba(0, 0, 0, 0.08);
+    --text: #0f172a;
+    --text-muted: #64748b;
+    --input-bg: #f8fafc;
+    --input-border: #cbd5e1;
+  }
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+body {
+  min-height: 100vh;
+  background: var(--bg-gradient);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  color: var(--text);
+}
+
+.portal-card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-radius: 1.25rem;
+  padding: 2.25rem 2rem;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.25), 0 8px 10px -6px rgba(0, 0, 0, 0.25);
+  animation: fadeIn 0.4s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.header .logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 1rem;
+  margin-bottom: 0.875rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.header h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  margin-bottom: 0.35rem;
+}
+
+.header p {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.dev-info {
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  margin-bottom: 1.5rem;
+  font-size: 0.8125rem;
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-muted);
+}
+
+.dev-info span {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.form-group {
+  margin-bottom: 1.25rem;
+}
+
+.form-group label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.input-wrap {
+  position: relative;
+}
+
+.form-control {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 0.75rem;
+  color: var(--text);
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.form-control:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25);
+}
+
+.btn {
+  width: 100%;
+  padding: 0.85rem;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.btn:hover {
+  background: var(--primary-hover);
+}
+
+.btn:active {
+  transform: scale(0.99);
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background: transparent;
+  border: 1px solid var(--input-border);
+  color: var(--text);
+  margin-top: 0.75rem;
+}
+
+.btn-secondary:hover {
+  background: var(--input-bg);
+}
+
+.alert {
+  padding: 0.85rem 1rem;
+  border-radius: 0.75rem;
+  font-size: 0.875rem;
+  margin-bottom: 1.25rem;
+  display: none;
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+.alert-danger {
+  background: var(--danger-bg);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+
+.alert-success {
+  background: var(--success-bg);
+  border: 1px solid var(--success);
+  color: var(--success);
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.625rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--success-bg);
+  color: var(--success);
+  margin-bottom: 1rem;
+}
+
+.status-badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.spinner {
+  width: 1.25rem;
+  height: 1.25rem;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: none;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.footer {
+  text-align: center;
+  margin-top: 1.5rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+</style>
+</head>
+<body>
+
+<div class="portal-card">
+  <div class="header">
+    <img src="/logo.png" alt="SmartProxy Logo" class="logo" onerror="this.style.display='none'">
+    <h1 id="portalTitle">{{.Title}}</h1>
+    <p id="portalSub">Wi-Fi 热点用户认证</p>
+  </div>
+
+  <div class="dev-info">
+    <div>客户端 IP: <span id="clientIP">{{.ClientIP}}</span></div>
+    <div id="macBlock" style="display:none">MAC: <span id="clientMAC"></span></div>
+  </div>
+
+  <div id="alertBox" class="alert"></div>
+
+  <!-- Unauthenticated Login View -->
+  <div id="loginView">
+    <form id="loginForm" onsubmit="handleLogin(event)">
+      <input type="hidden" id="csrfToken" value="{{.CSRFToken}}">
+      <input type="hidden" id="redirectURL" value="{{.RedirectURL}}">
+
+      <div class="form-group">
+        <label for="username">用户名</label>
+        <input type="text" id="username" class="form-control" placeholder="请输入 SOCKS5 账号" required autocomplete="username" autofocus>
+      </div>
+
+      <div class="form-group">
+        <label for="password">密码</label>
+        <input type="password" id="password" class="form-control" placeholder="请输入账号密码" required autocomplete="current-password">
+      </div>
+
+      <button type="submit" id="submitBtn" class="btn">
+        <span class="spinner" id="btnSpinner"></span>
+        <span id="btnText">立即登录认证</span>
+      </button>
+    </form>
+  </div>
+
+  <!-- Authenticated View -->
+  <div id="authView" style="display: none; text-align: center;">
+    <div class="status-badge">已认证放行</div>
+    <h2 style="font-size: 1.25rem; margin-bottom: 0.5rem;" id="authUserHeading">欢迎, <span id="authUsername"></span></h2>
+    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1.5rem;">您已成功通过身份认证，网络畅通无阻。</p>
+
+    <div style="background: var(--input-bg); border: 1px solid var(--input-border); border-radius: 0.75rem; padding: 0.85rem; margin-bottom: 1.5rem; font-size: 0.8125rem; text-align: left;">
+      <div style="display: flex; justify-content: space-between; margin-bottom: 0.4rem;">
+        <span style="color: var(--text-muted)">会话有效期至:</span>
+        <span id="authExpires" style="font-weight: 600;">--</span>
+      </div>
+      <div style="display: flex; justify-content: space-between;">
+        <span style="color: var(--text-muted)">状态:</span>
+        <span style="color: var(--success); font-weight: 600;">正常使用中</span>
+      </div>
+    </div>
+
+    <button type="button" class="btn" id="continueBtn" onclick="handleContinue()" style="display: none;">继续访问原始网页</button>
+    <button type="button" class="btn btn-secondary" onclick="handleLogout()">断开认证 (退出)</button>
+  </div>
+
+  <div class="footer">
+    Powered by SmartProxy Hotspot Core &bull; 安全认证网关
+  </div>
+</div>
+
+<script>
+const clientIP = "{{.ClientIP}}";
+const redirectURL = "{{.RedirectURL}}";
+const alertBox = document.getElementById('alertBox');
+
+function showAlert(msg, isError) {
+  alertBox.className = 'alert ' + (isError ? 'alert-danger' : 'alert-success');
+  alertBox.textContent = msg;
+  alertBox.style.display = 'block';
+}
+
+function clearAlert() {
+  alertBox.style.display = 'none';
+}
+
+async function checkStatus() {
+  try {
+    const res = await fetch('/api/portal/status?t=' + Date.now());
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.authenticated) {
+      showAuthenticated(data);
+    }
+  } catch (e) {
+    console.warn("Status check failed", e);
+  }
+}
+
+function showAuthenticated(data) {
+  document.getElementById('loginView').style.display = 'none';
+  document.getElementById('authView').style.display = 'block';
+  document.getElementById('authUsername').textContent = data.user || '已登录设备';
+  if (data.mac) {
+    document.getElementById('macBlock').style.display = 'block';
+    document.getElementById('clientMAC').textContent = data.mac;
+  }
+  if (data.expires_at) {
+    const d = new Date(data.expires_at * 1000);
+    document.getElementById('authExpires').textContent = d.toLocaleTimeString() + ' (' + d.toLocaleDateString() + ')';
+  }
+  if (redirectURL && redirectURL.startsWith('http')) {
+    const btn = document.getElementById('continueBtn');
+    btn.style.display = 'flex';
+  }
+}
+
+function handleContinue() {
+  if (redirectURL && redirectURL.startsWith('http')) {
+    window.location.href = redirectURL;
+  }
+}
+
+async function handleLogin(e) {
+  e.preventDefault();
+  clearAlert();
+
+  const user = document.getElementById('username').value.trim();
+  const pass = document.getElementById('password').value;
+  const csrf = document.getElementById('csrfToken').value;
+
+  const btn = document.getElementById('submitBtn');
+  const spinner = document.getElementById('btnSpinner');
+  const btnText = document.getElementById('btnText');
+
+  btn.disabled = true;
+  spinner.style.display = 'inline-block';
+  btnText.textContent = '验证中...';
+
+  try {
+    const res = await fetch('/api/portal/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrf
+      },
+      body: JSON.stringify({
+        username: user,
+        password: pass
+      })
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      showAlert(data.error || '登录失败，请检查账号密码', true);
+      btn.disabled = false;
+      spinner.style.display = 'none';
+      btnText.textContent = '立即登录认证';
+      return;
+    }
+
+    showAlert('认证成功，正在放行网络...', false);
+    setTimeout(() => {
+      if (redirectURL && redirectURL.startsWith('http')) {
+        window.location.href = redirectURL;
+      } else {
+        checkStatus();
+      }
+    }, 800);
+  } catch (err) {
+    showAlert('网络请求异常，请稍后重试: ' + err.message, true);
+    btn.disabled = false;
+    spinner.style.display = 'none';
+    btnText.textContent = '立即登录认证';
+  }
+}
+
+async function handleLogout() {
+  if (!confirm('确定要退出当前网络认证吗？退出后该设备将无法访问外网。')) {
+    return;
+  }
+  try {
+    await fetch('/api/portal/logout', { method: 'POST' });
+    window.location.reload();
+  } catch (e) {
+    window.location.reload();
+  }
+}
+
+// Initial check on page load
+window.addEventListener('DOMContentLoaded', () => {
+  checkStatus();
+});
+</script>
+</body>
+</html>

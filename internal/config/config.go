@@ -114,6 +114,7 @@ type ListenConfig struct {
 	Host                    string         `json:"host"`
 	Port                    int            `json:"port"`
 	Auth                    *AuthConf      `json:"auth"`
+	Portal                  *PortalConf    `json:"portal,omitempty"`
 	RelaxedUDPOriginCheck   bool           `json:"relaxed_udp_origin_check"`
 	UDPAssociateIdleTimeout int            `json:"udp_associate_idle_timeout"`
 	AdminSocket             string         `json:"admin_socket"`
@@ -144,9 +145,109 @@ type AdminAuthConf struct {
 	Password string `json:"password"`
 }
 
+// AuthUserConf defines individual user credentials and limits for multi-user authentication.
+type AuthUserConf struct {
+	Username   string `json:"username"`
+	Password   string `json:"password"`
+	MaxDevices int    `json:"max_devices,omitempty"` // 0 or omitted = default 1 device; -1 = unlimited
+}
+
+// PortalConf controls the Wi-Fi hotspot Captive Portal.
+type PortalConf struct {
+	Enabled            bool     `json:"enabled"`
+	Title              string   `json:"title,omitempty"`
+	LeaseHours         int      `json:"lease_hours,omitempty"`
+	AutoReauthByCookie bool     `json:"auto_reauth_by_cookie,omitempty"`
+	ExemptMACs         []string `json:"exempt_macs,omitempty"`
+	ExemptIPs          []string `json:"exempt_ips,omitempty"`
+}
+
+func (p *PortalConf) LeaseDuration() time.Duration {
+	if p == nil || p.LeaseHours <= 0 {
+		return 24 * time.Hour
+	}
+	return time.Duration(p.LeaseHours) * time.Hour
+}
+
+func (p *PortalConf) PortalTitle() string {
+	if p == nil || strings.TrimSpace(p.Title) == "" {
+		return "SmartProxy Hotspot"
+	}
+	return p.Title
+}
+
 type AuthConf struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username string         `json:"username,omitempty"`
+	Password string         `json:"password,omitempty"`
+	Users    []AuthUserConf `json:"users,omitempty"`
+}
+
+// HasCredentials reports whether single-user or any multi-user credentials are defined.
+func (a *AuthConf) HasCredentials() bool {
+	if a == nil {
+		return false
+	}
+	if strings.TrimSpace(a.Username) != "" && strings.TrimSpace(a.Password) != "" {
+		return true
+	}
+	for _, u := range a.Users {
+		if strings.TrimSpace(u.Username) != "" && strings.TrimSpace(u.Password) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// Match verifies the given username and password against configured single-user or multi-user credentials.
+func (a *AuthConf) Match(user, pass string) bool {
+	if a == nil {
+		return false
+	}
+	if a.Username != "" && a.Password != "" && a.Username == user && a.Password == pass {
+		return true
+	}
+	for _, u := range a.Users {
+		if u.Username != "" && u.Password != "" && u.Username == user && u.Password == pass {
+			return true
+		}
+	}
+	return false
+}
+
+// UserMaxDevices returns the maximum concurrent devices allowed for the user.
+// Defaults to 1 device if omitted or 0. Set to -1 for unlimited devices.
+func (a *AuthConf) UserMaxDevices(user string) int {
+	if a == nil {
+		return 1
+	}
+	for _, u := range a.Users {
+		if u.Username == user {
+			if u.MaxDevices < 0 {
+				return 0 // 0 represents unlimited in portal session manager
+			}
+			if u.MaxDevices == 0 {
+				return 1 // Default to 1 device per account
+			}
+			return u.MaxDevices
+		}
+	}
+	return 1
+}
+
+// UserExists checks if user exists in credentials.
+func (a *AuthConf) UserExists(user string) bool {
+	if a == nil {
+		return false
+	}
+	if a.Username != "" && a.Username == user {
+		return true
+	}
+	for _, u := range a.Users {
+		if u.Username == user {
+			return true
+		}
+	}
+	return false
 }
 
 type UpstreamConf struct {
@@ -407,7 +508,17 @@ func (c *Config) Clone() *Config {
 	// Listen
 	if c.Listen.Auth != nil {
 		auth := *c.Listen.Auth
+		if c.Listen.Auth.Users != nil {
+			auth.Users = make([]AuthUserConf, len(c.Listen.Auth.Users))
+			copy(auth.Users, c.Listen.Auth.Users)
+		}
 		cp.Listen.Auth = &auth
+	}
+	if c.Listen.Portal != nil {
+		portal := *c.Listen.Portal
+		portal.ExemptMACs = cloneStringSlice(c.Listen.Portal.ExemptMACs)
+		portal.ExemptIPs = cloneStringSlice(c.Listen.Portal.ExemptIPs)
+		cp.Listen.Portal = &portal
 	}
 	if c.Listen.AdminAuth != nil {
 		adminAuth := *c.Listen.AdminAuth
@@ -622,6 +733,42 @@ func (c *Config) Validate() error {
 	}
 	if lc := c.Listen; (lc.AdminCertFile == "") != (lc.AdminKeyFile == "") {
 		errs = append(errs, "listen.admin_cert_file and listen.admin_key_file must be both set or both empty")
+	}
+	if c.Listen.Auth != nil {
+		seenUsers := make(map[string]bool)
+		if c.Listen.Auth.Username != "" {
+			seenUsers[c.Listen.Auth.Username] = true
+		}
+		for i, u := range c.Listen.Auth.Users {
+			if strings.TrimSpace(u.Username) == "" || strings.TrimSpace(u.Password) == "" {
+				errs = append(errs, fmt.Sprintf("listen.auth.users[%d] username and password must not be empty", i))
+			}
+			if u.MaxDevices < -1 {
+				errs = append(errs, fmt.Sprintf("listen.auth.users[%d].max_devices must not be less than -1", i))
+			}
+			if seenUsers[u.Username] {
+				errs = append(errs, fmt.Sprintf("listen.auth.users[%d] duplicate username %q", i, u.Username))
+			}
+			seenUsers[u.Username] = true
+		}
+	}
+	if c.Listen.Portal != nil && c.Listen.Portal.Enabled {
+		if c.Listen.Auth == nil || !c.Listen.Auth.HasCredentials() {
+			errs = append(errs, "listen.portal requires listen.auth credentials to be configured")
+		}
+		if c.Listen.Portal.LeaseHours < 0 {
+			errs = append(errs, "listen.portal.lease_hours must not be negative")
+		}
+		for i, mac := range c.Listen.Portal.ExemptMACs {
+			if _, err := net.ParseMAC(strings.TrimSpace(mac)); err != nil {
+				errs = append(errs, fmt.Sprintf("listen.portal.exempt_macs[%d] invalid MAC %q: %v", i, mac, err))
+			}
+		}
+		for i, ip := range c.Listen.Portal.ExemptIPs {
+			if net.ParseIP(strings.TrimSpace(ip)) == nil {
+				errs = append(errs, fmt.Sprintf("listen.portal.exempt_ips[%d] invalid IP %q", i, ip))
+			}
+		}
 	}
 	for i, san := range c.Listen.AdminCertSANs {
 		if strings.TrimSpace(san) == "" {

@@ -31,6 +31,7 @@ import (
 	"smartproxy/internal/config"
 	"smartproxy/internal/dns"
 	"smartproxy/internal/logbuf"
+	"smartproxy/internal/portal"
 	"smartproxy/internal/relay"
 	"smartproxy/internal/route"
 	"smartproxy/internal/rules"
@@ -67,6 +68,7 @@ type Server struct {
 	blockClientIP         func(ip string)
 	unblockClientIP       func(ip string)
 	isClientIPBlocked     func(ip string) bool
+	portalMgr             *portal.Manager
 	tetheringBridge       TetheringBridge
 	// fdMode records whether the TUN device was handed to the engine as an
 	// external file descriptor (Android VpnService / Shizuku hotspot core)
@@ -624,6 +626,11 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/api/devices/disconnect", s.handleDevicesDisconnect)
 	mux.HandleFunc("/api/devices/block", s.handleDevicesBlock)
 	mux.HandleFunc("/api/devices/unblock", s.handleDevicesUnblock)
+	mux.HandleFunc("/portal", s.handlePortal)
+	mux.HandleFunc("/api/portal/status", s.handlePortalStatus)
+	mux.HandleFunc("/api/portal/login", s.handlePortalLogin)
+	mux.HandleFunc("/api/portal/logout", s.handlePortalLogout)
+	mux.HandleFunc("/api/portal/kick", s.handlePortalKick)
 
 	return mux
 }
@@ -665,6 +672,12 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// Similarly, /logo.png and /favicon.ico are public branding assets needed by browsers
 		// before authentication (e.g. basic auth login prompts and tab favicons).
 		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && (r.URL.Path == "/admin.crt" || r.URL.Path == "/logo.png" || r.URL.Path == "/favicon.ico") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Captive portal login page and client authentication APIs must be accessible
+		// to connecting hotspot devices without admin Basic Auth.
+		if r.URL.Path == "/portal" || r.URL.Path == "/api/portal/status" || r.URL.Path == "/api/portal/login" || r.URL.Path == "/api/portal/logout" {
 			next.ServeHTTP(w, r)
 			return
 		}

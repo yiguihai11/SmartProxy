@@ -8,7 +8,21 @@ import (
 	"net"
 )
 
+// Handshake performs standard SOCKS5 handshake for single user credentials.
+// It delegates to HandshakeWithVerifier.
 func Handshake(rw io.ReadWriter, serverUser, serverPass string) error {
+	if serverUser != "" && serverPass != "" {
+		return HandshakeWithVerifier(rw, func(user, pass string) bool {
+			return user == serverUser && pass == serverPass
+		})
+	}
+	return HandshakeWithVerifier(rw, nil)
+}
+
+// HandshakeWithVerifier performs standard SOCKS5 handshake. If verifier is nil,
+// no authentication is required (NoAuth). If verifier is non-nil, UserPass authentication
+// is required and credentials sent by the client are validated using the verifier function.
+func HandshakeWithVerifier(rw io.ReadWriter, verifier func(user, pass string) bool) error {
 	buf := make([]byte, 2)
 	if _, err := io.ReadFull(rw, buf); err != nil {
 		return fmt.Errorf("failed to read version/methods: %w", err)
@@ -26,7 +40,7 @@ func Handshake(rw io.ReadWriter, serverUser, serverPass string) error {
 		return fmt.Errorf("failed to read methods: %w", err)
 	}
 
-	hasAuth := serverUser != "" && serverPass != ""
+	hasAuth := verifier != nil
 	noAuthFound := false
 	userPassFound := false
 	for _, m := range methods {
@@ -79,7 +93,7 @@ func Handshake(rw io.ReadWriter, serverUser, serverPass string) error {
 			return fmt.Errorf("failed to read password: %w", err)
 		}
 
-		if string(username) == serverUser && string(password) == serverPass {
+		if verifier(string(username), string(password)) {
 			if _, err := rw.Write([]byte{AuthVer, AuthPassed}); err != nil {
 				return err
 			}

@@ -35,6 +35,8 @@ type TetheredDevice struct {
 	DownBps     int64        `json:"down_bps"`
 	IsBlocked   bool         `json:"is_blocked"`
 	IsCurrent   bool         `json:"is_current"` // 当前正在访问控制面板的设备
+	AuthUser    string       `json:"auth_user,omitempty"`
+	AuthExpires int64        `json:"auth_expires,omitempty"`
 	Conns       []DeviceConn `json:"conns,omitempty"`
 }
 
@@ -781,6 +783,15 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
+			var authUser string
+			var authExpires int64
+			if s.portalMgr != nil {
+				if ps := s.portalMgr.GetSession(grp.primaryIP, grp.mac); ps != nil {
+					authUser = ps.Username
+					authExpires = ps.ExpiresAt.Unix()
+				}
+			}
+
 			devices = append(devices, TetheredDevice{
 				IP:          grp.primaryIP,
 				MAC:         grp.mac,
@@ -793,6 +804,8 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 				DownBps:     downBps,
 				IsBlocked:   isBlocked,
 				IsCurrent:   isCur,
+				AuthUser:    authUser,
+				AuthExpires: authExpires,
 				Conns:       devConns,
 			})
 		}

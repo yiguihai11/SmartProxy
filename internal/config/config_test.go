@@ -1221,3 +1221,107 @@ func TestConfig_ProtocolForwarding(t *testing.T) {
 		}
 	})
 }
+
+func TestAuthConf_MultiUser(t *testing.T) {
+	auth := &AuthConf{
+		Username: "admin",
+		Password: "password123",
+		Users: []AuthUserConf{
+			{Username: "alice", Password: "alice-pass", MaxDevices: 2},
+			{Username: "bob", Password: "bob-pass", MaxDevices: 1},
+			{Username: "charlie", Password: "charlie-pass", MaxDevices: 0},  // 0 defaults to 1
+			{Username: "david", Password: "david-pass", MaxDevices: -1},     // -1 is unlimited
+		},
+	}
+
+	if !auth.HasCredentials() {
+		t.Errorf("expected HasCredentials to be true")
+	}
+
+	if !auth.Match("admin", "password123") {
+		t.Errorf("expected admin to match")
+	}
+	if !auth.Match("alice", "alice-pass") {
+		t.Errorf("expected alice to match")
+	}
+	if !auth.Match("bob", "bob-pass") {
+		t.Errorf("expected bob to match")
+	}
+	if auth.Match("alice", "wrong-pass") {
+		t.Errorf("expected alice wrong pass to fail")
+	}
+	if auth.Match("unknown", "any") {
+		t.Errorf("expected unknown to fail")
+	}
+
+	if auth.UserMaxDevices("alice") != 2 {
+		t.Errorf("expected alice max devices 2, got %d", auth.UserMaxDevices("alice"))
+	}
+	if auth.UserMaxDevices("bob") != 1 {
+		t.Errorf("expected bob max devices 1, got %d", auth.UserMaxDevices("bob"))
+	}
+	if auth.UserMaxDevices("charlie") != 1 {
+		t.Errorf("expected charlie default max devices 1, got %d", auth.UserMaxDevices("charlie"))
+	}
+	if auth.UserMaxDevices("david") != 0 {
+		t.Errorf("expected david unlimited max devices 0, got %d", auth.UserMaxDevices("david"))
+	}
+	if auth.UserMaxDevices("admin") != 1 {
+		t.Errorf("expected admin default max devices 1, got %d", auth.UserMaxDevices("admin"))
+	}
+}
+
+func TestPortalConf_ValidateAndClone(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Listen.Auth = &AuthConf{
+		Users: []AuthUserConf{
+			{Username: "user1", Password: "pw1", MaxDevices: 1},
+		},
+	}
+	cfg.Listen.Portal = &PortalConf{
+		Enabled:            true,
+		Title:              "My Test Portal",
+		LeaseHours:         12,
+		AutoReauthByCookie: true,
+		ExemptMACs:         []string{"00:11:22:33:44:55"},
+		ExemptIPs:          []string{"192.168.1.100"},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid config, got: %v", err)
+	}
+
+	cp := cfg.Clone()
+	if cp.Listen.Portal == nil || !cp.Listen.Portal.Enabled {
+		t.Fatalf("expected portal enabled in clone")
+	}
+	if cp.Listen.Portal.PortalTitle() != "My Test Portal" {
+		t.Errorf("portal title mismatch: %s", cp.Listen.Portal.PortalTitle())
+	}
+	if cp.Listen.Portal.LeaseDuration() != 12*time.Hour {
+		t.Errorf("lease duration mismatch: %v", cp.Listen.Portal.LeaseDuration())
+	}
+	if len(cp.Listen.Portal.ExemptMACs) != 1 || cp.Listen.Portal.ExemptMACs[0] != "00:11:22:33:44:55" {
+		t.Errorf("exempt MACs mismatch")
+	}
+
+	// Mutate clone slice, original should be untouched
+	cp.Listen.Portal.ExemptMACs[0] = "mutated"
+	if cfg.Listen.Portal.ExemptMACs[0] == "mutated" {
+		t.Errorf("Clone did not deep copy ExemptMACs")
+	}
+
+	// Test invalid portal config: portal enabled without auth credentials
+	badCfg := cfg.Clone()
+	badCfg.Listen.Auth = nil
+	if err := badCfg.Validate(); err == nil {
+		t.Errorf("expected error when portal enabled without auth")
+	}
+
+	// Test invalid MAC
+	badMAC := cfg.Clone()
+	badMAC.Listen.Portal.ExemptMACs = []string{"not-a-mac"}
+	if err := badMAC.Validate(); err == nil {
+		t.Errorf("expected error for invalid MAC in exempt_macs")
+	}
+}

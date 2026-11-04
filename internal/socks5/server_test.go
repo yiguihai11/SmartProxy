@@ -104,6 +104,56 @@ func TestHandshake_AuthFailure_WrongUsername(t *testing.T) {
 	}
 }
 
+func TestHandshakeWithVerifier_MultiUser(t *testing.T) {
+	validUsers := map[string]string{
+		"alice": "alice123",
+		"bob":   "bob456",
+	}
+	verifier := func(u, p string) bool {
+		pwd, ok := validUsers[u]
+		return ok && pwd == p
+	}
+
+	// 1. Alice connects with correct pass
+	{
+		clientReq := []byte{0x05, 0x01, 0x02}
+		authSub := []byte{0x01, 0x05, 'a', 'l', 'i', 'c', 'e', 0x08, 'a', 'l', 'i', 'c', 'e', '1', '2', '3'}
+		var buf bytes.Buffer
+		buf.Write(clientReq)
+		buf.Write(authSub)
+
+		if err := HandshakeWithVerifier(&buf, verifier); err != nil {
+			t.Fatalf("expected alice handshake success, got %v", err)
+		}
+	}
+
+	// 2. Bob connects with correct pass
+	{
+		clientReq := []byte{0x05, 0x01, 0x02}
+		authSub := []byte{0x01, 0x03, 'b', 'o', 'b', 0x06, 'b', 'o', 'b', '4', '5', '6'}
+		var buf bytes.Buffer
+		buf.Write(clientReq)
+		buf.Write(authSub)
+
+		if err := HandshakeWithVerifier(&buf, verifier); err != nil {
+			t.Fatalf("expected bob handshake success, got %v", err)
+		}
+	}
+
+	// 3. Charlie connects (unknown user)
+	{
+		clientReq := []byte{0x05, 0x01, 0x02}
+		authSub := []byte{0x01, 0x07, 'c', 'h', 'a', 'r', 'l', 'i', 'e', 0x04, 'p', 'a', 's', 's'}
+		var buf bytes.Buffer
+		buf.Write(clientReq)
+		buf.Write(authSub)
+
+		if err := HandshakeWithVerifier(&buf, verifier); err == nil {
+			t.Fatal("expected charlie handshake failure, got nil")
+		}
+	}
+}
+
 func TestHandshake_WrongVersion(t *testing.T) {
 	clientReq := []byte{0x04, 0x01, 0x00}
 	var buf bytes.Buffer

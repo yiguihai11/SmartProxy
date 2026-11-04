@@ -1,6 +1,7 @@
 package tun
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -9,7 +10,9 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/netip"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +29,7 @@ import (
 	"smartproxy/internal/dpi"
 	"smartproxy/internal/fwmark"
 	"smartproxy/internal/netutil"
+	"smartproxy/internal/portal"
 	"smartproxy/internal/quic"
 	"smartproxy/internal/relay"
 	"smartproxy/internal/route"
@@ -43,6 +47,7 @@ type TUNHandler struct {
 	ruleEng     *rules.Engine
 	upstreamMgr *upstream.Manager
 	dnsHandler  *dns.Handler
+	portalMgr   atomic.Pointer[portal.Manager]
 
 	// uidResolver 反向回调(Android 侧实现):按连接反查所属 app UID,命中
 	// config.TUN.BlockedUIDs 即拦截。startRouter 时注入一次,之后只读。
@@ -153,6 +158,11 @@ func (h *TUNHandler) cleanSelectiveRoutes() {
 
 func (h *TUNHandler) ReloadConfig(cfg *config.Config) {
 	h.config.Store(cfg)
+}
+
+// SetPortalManager attaches the captive portal manager.
+func (h *TUNHandler) SetPortalManager(mgr *portal.Manager) {
+	h.portalMgr.Store(mgr)
 }
 
 // SetConnStatsEnabled 开关连接监控(「联网状态」页):页面打开采集、关闭即停。
@@ -301,20 +311,47 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 	// Logged once per connection; at tens of thousands of connections/second, INFO is pure overhead, so the hot path is demoted to Debug
 	ll.Debug("TUN new connection", "src", source, "dst", destination)
 
-	if h.ruleEng == nil || h.router == nil {
-		ll.Error("TUN handler not fully initialized (ruleEng or router is nil), closing connection")
-		conn.Close()
-		if onClose != nil {
-			onClose(fmt.Errorf("handler not initialized"))
-		}
-		return
-	}
-
 	if h.IsClientIPBlocked(source.Addr.String()) {
 		ll.Info("TUN blocked connection from blocked client IP", "src", source.Addr.String())
 		netutil.SendEnhancedBlock(conn, port)
 		if onClose != nil {
 			onClose(nil)
+		}
+		return
+	}
+
+	clientIP := source.Addr.String()
+	portalMgr := h.portalMgr.Load()
+	if portalMgr != nil && portalMgr.IsEnabled() && !portalMgr.IsAuthorized(clientIP) {
+		adminPort := 9090
+		if cfg := h.config.Load(); cfg != nil && cfg.Listen.AdminPort > 0 {
+			adminPort = cfg.Listen.AdminPort
+		}
+		if port == adminPort {
+			// Permitted: allow client to reach the captive portal web service
+		} else if port == 80 {
+			// HTTP port 80: 302 redirect to captive portal login page
+			h.servePortalRedirect(conn, clientIP, host, port, adminPort)
+			if onClose != nil {
+				onClose(nil)
+			}
+			return
+		} else {
+			// All other ports: fail-fast with TCP RST to trigger captive portal detection
+			ll.Debug("TUN unauthenticated portal client TCP blocked with RST", "src", clientIP, "dst", destination)
+			netutil.SendEnhancedBlock(conn, port)
+			if onClose != nil {
+				onClose(nil)
+			}
+			return
+		}
+	}
+
+	if h.ruleEng == nil || h.router == nil {
+		ll.Error("TUN handler not fully initialized (ruleEng or router is nil), closing connection")
+		conn.Close()
+		if onClose != nil {
+			onClose(fmt.Errorf("handler not initialized"))
 		}
 		return
 	}
@@ -508,6 +545,49 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 	relay.TCPRelay(ctx, conn, remote, isProxy, prefix, relayOpts...)
 }
 
+func (h *TUNHandler) servePortalRedirect(conn net.Conn, clientIP, host string, port, adminPort int) {
+	_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+	defer conn.Close()
+
+	origURL := fmt.Sprintf("http://%s:%d/", host, port)
+	br := bufio.NewReader(conn)
+	if req, err := http.ReadRequest(br); err == nil && req != nil {
+		reqHost := req.Host
+		if reqHost == "" {
+			reqHost = host
+		}
+		origURL = "http://" + reqHost + req.URL.RequestURI()
+	}
+
+	// Reset deadline for writing response
+	_ = conn.SetDeadline(time.Now().Add(1 * time.Second))
+
+	target := fmt.Sprintf("http://smartproxy.lan:%d/portal?ip=%s&url=%s", adminPort, url.QueryEscape(clientIP), url.QueryEscape(origURL))
+	if adminPort == 80 {
+		target = fmt.Sprintf("http://smartproxy.lan/portal?ip=%s&url=%s", url.QueryEscape(clientIP), url.QueryEscape(origURL))
+	}
+	body := fmt.Sprintf(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Web Authentication Redirect</title>
+<meta http-equiv="Cache-control" content="no-cache">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="-1">
+<meta http-equiv="refresh" content="0; URL=%s">
+</head>
+<body>
+<p>Authentication Required. <a href="%s">Click here to log in</a>.</p>
+</body>
+</html>
+`, target, target)
+
+	resp := fmt.Sprintf("HTTP/1.1 302 Found\r\nLocation: %s\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\nCache-Control: no-cache, no-store, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\n\r\n%s",
+		target, len(body), body)
+
+	_, _ = conn.Write([]byte(resp))
+}
+
 func (h *TUNHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketConn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
 	// TUN UDP 入口:每条 UDP 流会话在此分配 flow id(同样只 WithValue——handleDNS /
 	// handleGenericUDP 各自在自己的 goroutine 里跑,取消语义由调用方控制,这里只贴值)。
@@ -560,6 +640,16 @@ func (h *TUNHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketCon
 				onClose(nil)
 			}
 		})
+		return
+	}
+
+	portalMgr := h.portalMgr.Load()
+	if portalMgr != nil && portalMgr.IsEnabled() && !portalMgr.IsAuthorized(source.Addr.String()) {
+		ll.Debug("TUN dropping non-DNS UDP packet from unauthenticated portal client", "src", source.Addr.String(), "dst", destination)
+		conn.Close()
+		if onClose != nil {
+			onClose(nil)
+		}
 		return
 	}
 

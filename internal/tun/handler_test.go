@@ -26,6 +26,7 @@ import (
 	"smartproxy/internal/config"
 	"smartproxy/internal/dns"
 	"smartproxy/internal/netutil"
+	"smartproxy/internal/portal"
 	"smartproxy/internal/route"
 	"smartproxy/internal/rules"
 	"smartproxy/internal/upstream"
@@ -1186,4 +1187,53 @@ func TestNativeTun_GoStack_FdMode_Close(t *testing.T) {
 	// Both the duplicated fd and original fd should be closed
 	_, closeErr := unix.FcntlInt(uintptr(fds[0]), unix.F_GETFD, 0)
 	assert.Equal(t, unix.EBADF, closeErr, "original fd must be closed after tunDev.Close to prevent fd leaks")
+}
+
+func TestTUNHandler_PortalInterception(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Listen.AdminPort = 9090
+	cfg.Listen.Auth = &config.AuthConf{
+		Users: []config.AuthUserConf{
+			{Username: "alice", Password: "password"},
+		},
+	}
+	cfg.Listen.Portal = &config.PortalConf{
+		Enabled: true,
+	}
+
+	portalMgr := portal.NewManager(cfg)
+	defer portalMgr.Close()
+
+	handler := NewHandler(cfg, nil, nil, nil, nil)
+	handler.SetPortalManager(portalMgr)
+
+	// Create pipe connection for client
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+
+	srcAddr := M.ParseSocksaddr("192.168.43.15:45678")
+	dstAddr := M.ParseSocksaddr("1.1.1.1:80")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handler.NewConnectionEx(context.Background(), serverConn, srcAddr, dstAddr, nil)
+	}()
+
+	// Send HTTP GET request
+	go func() {
+		_, _ = clientConn.Write([]byte("GET /hello HTTP/1.1\r\nHost: example.com\r\n\r\n"))
+	}()
+
+	// Read response on clientConn
+	buf := make([]byte, 1024)
+	n, err := clientConn.Read(buf)
+	assert.NoError(t, err)
+	resp := string(buf[:n])
+
+	assert.Contains(t, resp, "302 Found")
+	assert.Contains(t, resp, "Location: http://smartproxy.lan:9090/portal?ip=192.168.43.15")
+	assert.Contains(t, resp, "Web Authentication Redirect")
+
+	<-done
 }
