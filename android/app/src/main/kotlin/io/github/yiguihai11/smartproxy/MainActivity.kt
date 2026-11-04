@@ -2148,7 +2148,12 @@ private fun HomeLauncher(
                                                 bootAuto = v
                                                 AppPrefs.setBootAutoStart(context, v)
                                                 if (v && AutostartHelper.isAutostartRestricted()) {
-                                                    showAutostartDialog = true
+                                                    val status = AutostartHelper.checkAutostartPermission(context)
+                                                    if (status == true) {
+                                                        android.util.Log.i("MainActivity", "Autostart permission is already allowed.")
+                                                    } else if (status == false || !AppPrefs.autostartGuided(context)) {
+                                                        showAutostartDialog = true
+                                                    }
                                                 }
                                             },
                                             modifier = Modifier.weight(1f)
@@ -2447,11 +2452,15 @@ private fun HomeLauncher(
                 confirmButton = {
                     TextButton(onClick = {
                         showAutostartDialog = false
+                        AppPrefs.setAutostartGuided(context, true)
                         AutostartHelper.openAutostartSettings(context)
                     }) { Text(stringResource(R.string.autostart_dialog_go_settings)) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showAutostartDialog = false }) {
+                    TextButton(onClick = {
+                        showAutostartDialog = false
+                        AppPrefs.setAutostartGuided(context, true)
+                    }) {
                         Text(stringResource(R.string.autostart_dialog_dismiss))
                     }
                 }

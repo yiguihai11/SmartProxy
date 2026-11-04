@@ -50,6 +50,7 @@ object AppPrefs {
     private const val KEY_SOCKS_LISTEN = "socks_listen"
     private const val KEY_SHIZUKU_SYNC_TOKEN = "shizuku_sync_token"
     private const val KEY_SPEED_METER = "speed_meter_enabled"
+    private const val KEY_AUTOSTART_GUIDED = "autostart_guided"
     private const val KEY_SPEED_METER_X = "speed_meter_x"
     private const val KEY_SPEED_METER_Y = "speed_meter_y"
     private const val KEY_SPEED_METER_CAPSULE_SIZE = "speed_meter_capsule_size"
@@ -81,6 +82,14 @@ object AppPrefs {
 
     fun setBootAutoStart(context: Context, value: Boolean) {
         sp(context).edit().putBoolean(KEY_BOOT_AUTO_START, value).apply()
+    }
+
+    /** 是否已就国内机型自启动向用户展示过引导提示，避免每次开启重复弹窗打扰。 */
+    fun autostartGuided(context: Context): Boolean =
+        sp(context).getBoolean(KEY_AUTOSTART_GUIDED, false)
+
+    fun setAutostartGuided(context: Context, value: Boolean) {
+        sp(context).edit().putBoolean(KEY_AUTOSTART_GUIDED, value).apply()
     }
 
     /** 用户期望的 VPN 运行状态:true=开启;false=用户主动停止。
