@@ -75,6 +75,10 @@
     <string name="home_boot_autostart">开机自启</string>
     <string name="home_boot_autostart_sub_vpn">开机后自动启动 VPN(需已授权)</string>
     <string name="home_boot_autostart_sub_socks">开机后自动启动仅代理服务</string>
+    <string name="autostart_dialog_title">开启系统自启动权限</string>
+    <string name="autostart_dialog_message">检测到当前设备为 %1$s。\n\n国内定制系统默认会拦截第三方应用的开机广播。请在系统设置中找到 SmartProxy 并开启「自启动」权限，否则手机重启后将无法自动恢复连接。</string>
+    <string name="autostart_dialog_go_settings">去设置</string>
+    <string name="autostart_dialog_dismiss">我知道了</string>
     <string name="home_speed_meter">悬浮网速计</string>
     <string name="home_speed_meter_sub">胶囊:前台或最耗流量应用的实时网速</string>
     <string name="toast_speed_meter_vpn_only">仅 VPN 隧道模式可用</string>

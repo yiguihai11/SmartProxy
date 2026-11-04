@@ -427,13 +427,15 @@ class MainActivity : ComponentActivity() {
      *  (耗电管理→允许后台运行)——无公共 Intent 直达省电策略,应用详情页是最可靠入口。
      *  对话框本体是 HomeScreen 里的 M3 AlertDialog,这里只负责跳详情页。 */
     private fun openAppDetailsSettings() {
-        runCatching {
-            startActivity(Intent(
-                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.parse("package:$packageName")
-            ))
-        }.onFailure {
-            android.util.Log.w("SmartProxyVpn", "[MainActivity] App-details settings unavailable: ${it.message}")
+        if (!AutostartHelper.openAutostartSettings(this)) {
+            runCatching {
+                startActivity(Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:$packageName")
+                ))
+            }.onFailure {
+                android.util.Log.w("SmartProxyVpn", "[MainActivity] App-details settings unavailable: ${it.message}")
+            }
         }
     }
 
@@ -1730,6 +1732,7 @@ private fun HomeLauncher(
         }
     }
     var bootAuto by remember { mutableStateOf(AppPrefs.bootAutoStart(context)) }
+    var showAutostartDialog by remember { mutableStateOf(false) }
 
     var speedMeterOn by remember { mutableStateOf(AppPrefs.speedMeterEnabled(context)) }
     var showUsageAccessDialog by remember { mutableStateOf(false) }
@@ -2144,6 +2147,9 @@ private fun HomeLauncher(
                                             onCheckedChange = { v ->
                                                 bootAuto = v
                                                 AppPrefs.setBootAutoStart(context, v)
+                                                if (v && AutostartHelper.isAutostartRestricted()) {
+                                                    showAutostartDialog = true
+                                                }
                                             },
                                             modifier = Modifier.weight(1f)
                                         )
@@ -2419,6 +2425,34 @@ private fun HomeLauncher(
                 dismissButton = {
                     TextButton(onClick = { showUsageAccessDialog = false }) {
                         Text(stringResource(R.string.usage_access_dialog_cancel))
+                    }
+                }
+            )
+        }
+
+        // 「开机自启动权限引导」说明对话框 (M3)
+        if (showAutostartDialog) {
+            AlertDialog(
+                onDismissRequest = { showAutostartDialog = false },
+                title = { Text(stringResource(R.string.autostart_dialog_title), fontWeight = FontWeight.Bold) },
+                text = {
+                    Text(
+                        text = stringResource(
+                            R.string.autostart_dialog_message,
+                            AutostartHelper.getBrandName()
+                        ),
+                        lineHeight = 20.sp
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showAutostartDialog = false
+                        AutostartHelper.openAutostartSettings(context)
+                    }) { Text(stringResource(R.string.autostart_dialog_go_settings)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showAutostartDialog = false }) {
+                        Text(stringResource(R.string.autostart_dialog_dismiss))
                     }
                 }
             )

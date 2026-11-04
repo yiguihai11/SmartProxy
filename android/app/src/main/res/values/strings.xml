@@ -75,6 +75,10 @@
     <string name="home_boot_autostart">Start on boot</string>
     <string name="home_boot_autostart_sub_vpn">Auto-start VPN after boot (needs authorization)</string>
     <string name="home_boot_autostart_sub_socks">Auto-start proxy-only service after boot</string>
+    <string name="autostart_dialog_title">Allow Autostart Permission</string>
+    <string name="autostart_dialog_message">Detected device brand: %1$s.\n\nThe system blocks boot broadcasts for third-party apps by default. Please allow \"Autostart\" for SmartProxy in system settings, otherwise the service cannot auto-start after reboot.</string>
+    <string name="autostart_dialog_go_settings">Go to Settings</string>
+    <string name="autostart_dialog_dismiss">Got it</string>
     <string name="home_speed_meter">Floating speed meter</string>
     <string name="home_speed_meter_sub">Capsule: live speed of foreground / top app</string>
     <string name="toast_speed_meter_vpn_only">VPN tunnel mode only</string>
