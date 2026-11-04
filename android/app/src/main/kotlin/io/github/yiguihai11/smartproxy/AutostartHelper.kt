@@ -169,6 +169,7 @@ object AutostartHelper {
             putExtra("packageName", pkg)
             putExtra("package", pkg)
             putExtra("pkgname", pkg)
+            putExtra("packagename", pkg)
             putExtra("extra_pkgname", pkg)
             putExtra("app_package", pkg)
             putExtra("app_name", appName)
@@ -179,8 +180,19 @@ object AutostartHelper {
 
         when (currentBrand) {
             Brand.VIVO -> {
-                // vivo / iQOO: BgStartUpManagerActivity
-                // OriginOS 的 PurviewFragment 内部支持读取 :settings:fragment_args_key 并执行 scrollToPosition(pos)
+                // 1. 优先直达「单应用权限详情页」（SoftPermissionDetailActivity）：
+                //    直接显示 SmartProxy 自身的权限管理（含自启动开关），无需在百款应用的大列表中翻找
+                list.add(
+                    Intent("permission.intent.action.softPermissionDetail")
+                        .setPackage("com.vivo.permissionmanager")
+                        .attachTargetExtras()
+                )
+                list.add(
+                    Intent()
+                        .setComponent(ComponentName("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.SoftPermissionDetailActivity"))
+                        .attachTargetExtras()
+                )
+                // 2. 备选回退：i管家自启动应用总列表（通过 PurviewFragment 注入参数自动滚动高亮）
                 list.add(Intent().setComponent(ComponentName("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity")).attachTargetExtras())
                 list.add(Intent("com.iqoo.secure.BGSTARTUPMANAGER").attachTargetExtras())
                 list.add(Intent().setComponent(ComponentName("com.iqoo.secure", "com.iqoo.secure.ui.phoneoptimize.BgStartUpManager")).attachTargetExtras())
@@ -188,7 +200,14 @@ object AutostartHelper {
                 list.add(Intent().setComponent(ComponentName("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.PurviewTabActivity")).attachTargetExtras())
             }
             Brand.XIAOMI -> {
-                // 小米 / Redmi / POCO 自启动管理
+                // 小米 / Redmi / HyperOS:
+                // 1. 单应用权限详情页（包含自启动开关）
+                list.add(
+                    Intent("miui.intent.action.APP_PERM_EDITOR")
+                        .setComponent(ComponentName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity"))
+                        .attachTargetExtras()
+                )
+                // 2. 自启动管理总列表
                 list.add(Intent().setComponent(ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")).attachTargetExtras())
                 list.add(Intent("miui.intent.action.OP_AUTO_START").addCategory(Intent.CATEGORY_DEFAULT).attachTargetExtras())
             }
