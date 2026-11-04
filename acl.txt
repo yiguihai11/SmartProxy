@@ -103,6 +103,40 @@ block domain vcardsdkservice.vivo.com.cn # 拦截策略与云端风控规则下�
 block domain az.appstore.vivo.com.cn     # 应用商店防欺诈与云查杀比对
 block domain stinmmtn.vivo.com.cn        # 安装检测日志与行为上报
 
+# ── 运营商终端设备采集与注册 (SystemHelper 上报接口) ──
+block domain dm.wo.com.cn
+block domain ctdm.189.cn
+block domain cmccdm.10086.cn
+
+# ── vivo 系统错误、日志与异常回传 (OneLog / ErrorLog / BBKLOG) ──
+block domain onelog.vivo.com.cn
+block domain err-up.vivo.com.cn
+block domain ro-up.vivo.com.cn
+block domain ue.vivo.com.cn
+block domain vhs.vivo.com.cn
+block domain log.vivo.com.cn
+block domain log.vivo.com
+
+# ── vivo 设备指纹与行为埋点监控 (vcode / STSDK / 遥测) ──
+block domain vcode-api.vivo.com.cn
+block domain vcode-api-fnk.vivo.com.cn
+block domain vcode-od.vivo.com.cn
+block domain vcode-or.vivo.com.cn
+block domain monitor-stsdk.vivo.com.cn
+block domain data.vivo.com.cn
+block domain data.vivo.com
+block domain stat.vivo.com.cn
+block domain dns.vivo.com.cn
+
+# ── vivo 商业广告、SDK 推广与画报追踪 ──
+block domain ad.vivo.com
+block domain ad.vivo.com.cn
+block domain adsdk.vivo.com
+block domain adsdk.vivo.com.cn
+block domain st-ads-jssdk.vivo.com.cn
+block domain magazine.vivo.com.cn
+block domain browserstatic.vivo.com.cn
+
 
 # ─────────────────────────────────────────
 # 国内直连白名单（强制直连，不走代理）
@@ -126,16 +160,16 @@ proxy domain *.chatgpt.com default
 # ─────────────────────────────────────────
 # Antigravity 专有服务（走指定稳定出口）
 # ─────────────────────────────────────────
-proxy domain *.goog "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
-proxy domain *.google "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
+proxy domain *.goog "[Lantern] hysteria2-out-hysteria2-linode-free-v6-2-81ac933d-e0b1-44e6-ad9e-9b0e474ca1a0"
+proxy domain *.google "[Lantern] hysteria2-out-hysteria2-linode-free-v6-2-81ac933d-e0b1-44e6-ad9e-9b0e474ca1a0"
 
 # ─────────────────────────────────────────
 # Google AI、Gemini 与 OAuth 核心（改走 指定稳定出口 根治 400 地区报错）
 # ─────────────────────────────────────────
-proxy domain *.googleapis.com "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
-proxy domain *.google.com "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
-proxy domain *.googleusercontent.com "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
-proxy domain *.gstatic.com "[Lantern] shadowsocks-out-ss2022-cardiff-oci-free-vps-f955b8f0-bd7e-4fbc-af28-b373e33640d7"
+proxy domain *.googleapis.com "[Lantern] hysteria2-out-hysteria2-linode-free-v6-2-81ac933d-e0b1-44e6-ad9e-9b0e474ca1a0"
+proxy domain *.google.com "[Lantern] hysteria2-out-hysteria2-linode-free-v6-2-81ac933d-e0b1-44e6-ad9e-9b0e474ca1a0"
+proxy domain *.googleusercontent.com "[Lantern] hysteria2-out-hysteria2-linode-free-v6-2-81ac933d-e0b1-44e6-ad9e-9b0e474ca1a0"
+proxy domain *.gstatic.com "[Lantern] hysteria2-out-hysteria2-linode-free-v6-2-81ac933d-e0b1-44e6-ad9e-9b0e474ca1a0"
 
 # ─────────────────────────────────────────
 # GitHub 全站及资源 CDN（消除网页卡进度条）
@@ -163,11 +197,11 @@ proxy domain api.tripdata.app default
 # ─────────────────────────────────────────
 # X (Twitter) 专用路由（排除欧盟与澳洲年龄审查区域、排除国内）
 # ─────────────────────────────────────────
-proxy domain *.x.com default!eu,au,cn
-proxy domain *.twitter.com default!eu,au,cn
-proxy domain *.twimg.com default!eu,au,cn
-proxy domain *.twttr.com default!eu,au,cn
-proxy domain t.co default!eu,au,cn
-proxy domain *.tweetdeck.com default!eu,au,cn
-proxy domain *.pscp.tv default!eu,au,cn
-proxy domain *.periscope.tv default!eu,au,cn
+proxy domain *.x.com default@US
+proxy domain *.twitter.com default@US
+proxy domain *.twimg.com default@US
+proxy domain *.twttr.com default@US
+proxy domain t.co default@US
+proxy domain *.tweetdeck.com default@US
+proxy domain *.pscp.tv default@US
+proxy domain *.periscope.tv default@US
