@@ -1350,6 +1350,23 @@ var _forceOpenGroups={};
 var _batchTestAbortCtrl=null;
 var _healthRefreshTimer=null;
 
+function isAnyTestingRunning(){
+  if(_batchTestAbortCtrl)return true;
+  for(var k in _batchTestingGroups){
+    if(_batchTestingGroups[k])return true;
+  }
+  if(window._wasBgProbing)return true;
+  var pp=(healthD&&healthD.health&&healthD.health.probe_progress)||null;
+  if(pp&&pp.testing&&pp.total>0)return true;
+  return false;
+}
+
+function updateBatchTestButtonsDisabled(disabled){
+  document.querySelectorAll('.btn-batch-test').forEach(function(b){
+    b.disabled=!!disabled;
+  });
+}
+
 function cancelBatchTest(){
   if(_batchTestAbortCtrl){
     _batchTestAbortCtrl.abort();
@@ -1376,7 +1393,11 @@ function updateBatchTestProgress(completed, total, ok, fail, label){
 }
 
 async function testGroupProxies(gid, proto, btn){
-  if(_batchTestingGroups[gid])return;
+  if(isAnyTestingRunning()){
+    var toast=document.getElementById('copy-toast');
+    if(toast)showCopyToast(toast,t('Testing in progress, please wait...'));
+    return;
+  }
   var allProxies=(healthD&&healthD.health&&healthD.health.proxies)||[];
   var proxies=allProxies;
   if(gid&&gid!=='all'){
@@ -1433,6 +1454,7 @@ async function testGroupProxies(gid, proto, btn){
     return;
   }
   _batchTestingGroups[gid]=true;
+  updateBatchTestButtonsDisabled(true);
   // 测速时临时展开好看到结果,但不持久化:否则测过一次该组就被永远记成展开,
   // 每次打开面板都展开,把"默认折叠"给覆盖了。
   _forceOpenGroups[gid]=true;
@@ -1474,7 +1496,7 @@ async function testGroupProxies(gid, proto, btn){
   _batchTestAbortCtrl=new AbortController();
   var signal=_batchTestAbortCtrl.signal;
 
-  var concurrency=8;
+  var concurrency=5;
   var taskIdx=0;
 
   async function worker(){
@@ -1552,6 +1574,7 @@ async function testGroupProxies(gid, proto, btn){
 
   var isAborted=signal.aborted;
   _batchTestAbortCtrl=null;
+  updateBatchTestButtonsDisabled(false);
 
   if(bar){
     bar.style.width='100%';
@@ -1642,6 +1665,10 @@ async function cleanDeadProxies(aliases){
   }
 }
 async function cleanDeadGroupProxies(gid){
+  if(isAnyTestingRunning()){
+    showToast(t('Testing in progress, please wait...'));
+    return;
+  }
   var allProxies=(healthD&&healthD.health&&healthD.health.proxies)||[];
   var proxies=allProxies;
   if(gid&&gid!=='all'){
@@ -2436,12 +2463,12 @@ function lhealth(d){
     }
 
     if(g.items.length>0){
-      var isTesting=!!_batchTestingGroups[gid];
-      actionsHtml+='<button class="btn btn-sm" onclick="testGroupProxies(\''+escAttr(gid)+'\',\'tcping\',this)" title="'+escAttr(t('Test TCPing latency'))+'"'+(isTesting?' disabled':'')+'>'+t('Test All TCPing')+'</button>'+
-        '<button class="btn btn-sm" onclick="testGroupProxies(\''+escAttr(gid)+'\',\'tcp\',this)" title="'+escAttr(t('Test TCP latency and availability'))+'"'+(isTesting?' disabled':'')+'>'+t('Test All TCP')+'</button>'+
-        '<button class="btn btn-sm" onclick="testGroupProxies(\''+escAttr(gid)+'\',\'udp\',this)" title="'+escAttr(t('Test UDP latency and availability'))+'"'+(isTesting?' disabled':'')+'>'+t('Test All UDP')+'</button>'+
-        '<button class="btn btn-sm" onclick="testGroupProxies(\''+escAttr(gid)+'\',\'all\',this)" title="'+escAttr(t('Test All'))+'"'+(isTesting?' disabled':'')+'>'+t('Test All')+'</button>'+
-        '<button class="btn btn-sm" onclick="cleanDeadGroupProxies(\''+escAttr(gid)+'\')" title="'+escAttr(t('Clean up nodes where both TCP and UDP are unavailable'))+'">🧹 '+t('Clean Dead')+'</button>';
+      var isTesting=isAnyTestingRunning();
+      actionsHtml+='<button class="btn btn-sm btn-batch-test" onclick="testGroupProxies(\''+escAttr(gid)+'\',\'tcping\',this)" title="'+escAttr(t('Test TCPing latency'))+'"'+(isTesting?' disabled':'')+'>'+t('Test All TCPing')+'</button>'+
+        '<button class="btn btn-sm btn-batch-test" onclick="testGroupProxies(\''+escAttr(gid)+'\',\'tcp\',this)" title="'+escAttr(t('Test TCP latency and availability'))+'"'+(isTesting?' disabled':'')+'>'+t('Test All TCP')+'</button>'+
+        '<button class="btn btn-sm btn-batch-test" onclick="testGroupProxies(\''+escAttr(gid)+'\',\'udp\',this)" title="'+escAttr(t('Test UDP latency and availability'))+'"'+(isTesting?' disabled':'')+'>'+t('Test All UDP')+'</button>'+
+        '<button class="btn btn-sm btn-batch-test" onclick="testGroupProxies(\''+escAttr(gid)+'\',\'all\',this)" title="'+escAttr(t('Test All'))+'"'+(isTesting?' disabled':'')+'>'+t('Test All')+'</button>'+
+        '<button class="btn btn-sm btn-batch-test" onclick="cleanDeadGroupProxies(\''+escAttr(gid)+'\')" title="'+escAttr(t('Clean up nodes where both TCP and UDP are unavailable'))+'"'+(isTesting?' disabled':'')+'>🧹 '+t('Clean Dead')+'</button>';
     }
 
     actionsHtml+='<button class="btn btn-sm ghost proxy-group-collapse-btn" onclick="toggleGroupCollapse(\''+gid+'\')">'+t(isCollapsed?'Expand':'Collapse')+'</button>';
@@ -2657,6 +2684,7 @@ function handleProbeProgress(pp){
     var label=tf('Testing nodes in background ({0} concurrent)...',[5]);
     updateBatchTestProgress(pp.completed, pp.total, pp.healthy, pp.failed, label);
     window._wasBgProbing=true;
+    updateBatchTestButtonsDisabled(true);
     if(!window._bgProbePollTimer){
       window._bgProbePollTimer=setTimeout(function(){
         window._bgProbePollTimer=null;
@@ -2665,6 +2693,7 @@ function handleProbeProgress(pp){
     }
   }else if(pp&&!pp.testing&&window._wasBgProbing){
     window._wasBgProbing=false;
+    updateBatchTestButtonsDisabled(false);
     updateBatchTestProgress(pp.completed, pp.total, pp.healthy, pp.failed, t('Node connectivity test completed'));
     card.classList.add('finished');
     showToast(tf('Node test completed: {0} available, {1} failed',[pp.healthy, pp.failed]));
