@@ -1326,8 +1326,12 @@ async function testProxy(i,proto){
   try{await loadHealth()}catch(_){lhealth(healthD)}
   if(isProxyTrulyDead(p)){
     setTimeout(function(){
-      if(confirm(tf('Proxy "{0}" is completely down (TCP & UDP both failed). Delete and clean it up now?',[p.alias]))){
+      if(p.provider){
         cleanDeadProxies([p.alias]);
+      }else{
+        if(confirm(tf('Proxy "{0}" is completely down (TCP & UDP both failed). Delete and clean it up now?',[p.alias]))){
+          cleanDeadProxies([p.alias]);
+        }
       }
     },200);
   }
@@ -1579,19 +1583,33 @@ async function testGroupProxies(gid, proto, btn){
     if(grpWrap)grpWrap.style.display='none';
   },3500);
 
-  var deadAliases=[];
+  var deadSubs=[];
+  var deadCustom=[];
   proxies.forEach(function(p){
     if(isProxyTrulyDead(p)){
-      deadAliases.push(p.alias);
+      if(p.provider){
+        deadSubs.push(p.alias);
+      }else{
+        deadCustom.push(p.alias);
+      }
     }
   });
 
-  if((proto==='all'||proto==='both') && !isAborted && deadAliases.length>0){
-    setTimeout(function(){
-      if(confirm(tf('Found {0} dead nodes (both TCP and UDP unavailable). Delete and clean them up now?',[deadAliases.length]))){
-        cleanDeadProxies(deadAliases);
-      }
-    },250);
+  if((proto==='all'||proto==='both') && !isAborted){
+    if(deadSubs.length>0 && deadCustom.length===0){
+      cleanDeadProxies(deadSubs);
+    }else if(deadCustom.length>0){
+      setTimeout(function(){
+        var msg=deadSubs.length>0
+          ? tf('Found {0} dead custom nodes. Delete and clean them up now? ({1} subscription nodes cleaned automatically)',[deadCustom.length,deadSubs.length])
+          : tf('Found {0} dead custom nodes (both TCP and UDP unavailable). Delete and clean them up now?',[deadCustom.length]);
+        if(confirm(msg)){
+          cleanDeadProxies(deadSubs.concat(deadCustom));
+        }else if(deadSubs.length>0){
+          cleanDeadProxies(deadSubs);
+        }
+      },250);
+    }
   }
 }
 async function cleanDeadProxies(aliases){
@@ -1621,20 +1639,35 @@ async function cleanDeadGroupProxies(gid){
   if(gid&&gid!=='all'){
     proxies=allProxies.filter(function(p){return getProxyGroup(p)===gid;});
   }
-  var deadAliases=[];
+  var deadSubs=[];
+  var deadCustom=[];
   proxies.forEach(function(p){
     if(isProxyTrulyDead(p)){
-      deadAliases.push(p.alias);
+      if(p.provider){
+        deadSubs.push(p.alias);
+      }else{
+        deadCustom.push(p.alias);
+      }
     }
   });
-  if(deadAliases.length===0){
+  if(deadSubs.length===0 && deadCustom.length===0){
     showToast(t('No dead nodes found in this group'));
     return;
   }
-  if(!confirm(tf('Found {0} dead nodes in this group. Delete and clean them up now?',[deadAliases.length]))){
+  if(deadCustom.length===0){
+    await cleanDeadProxies(deadSubs);
     return;
   }
-  await cleanDeadProxies(deadAliases);
+  var msg=deadSubs.length>0
+    ? tf('Found {0} dead custom nodes in this group. Delete and clean them up now? ({1} subscription nodes cleaned automatically)',[deadCustom.length,deadSubs.length])
+    : tf('Found {0} dead custom nodes in this group. Delete and clean them up now?',[deadCustom.length]);
+  if(!confirm(msg)){
+    if(deadSubs.length>0){
+      await cleanDeadProxies(deadSubs);
+    }
+    return;
+  }
+  await cleanDeadProxies(deadSubs.concat(deadCustom));
 }
 function testAllProxies(proto){
   return testGroupProxies(proxyGroupFilter||'all', proto);
