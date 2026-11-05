@@ -207,8 +207,12 @@ func TestLoad_FullConfig(t *testing.T) {
     "host": "0.0.0.0",
     "port": 2080,
     "auth": {
-      "username": "admin",
-      "password": "secret"
+      "users": [
+        {
+          "username": "admin",
+          "password": "secret"
+        }
+      ]
     }
   },
   "upstream": {
@@ -276,11 +280,11 @@ func TestLoad_FullConfig(t *testing.T) {
 	if cfg.Listen.Auth == nil {
 		t.Error("Listen.Auth should not be nil")
 	} else {
-		if cfg.Listen.Auth.Username != "admin" {
-			t.Errorf("Auth.Username: got %s", cfg.Listen.Auth.Username)
+		if len(cfg.Listen.Auth.Users) != 1 || cfg.Listen.Auth.Users[0].Username != "admin" {
+			t.Errorf("Auth.Users: got %v", cfg.Listen.Auth.Users)
 		}
-		if cfg.Listen.Auth.Password != "secret" {
-			t.Errorf("Auth.Password: got %s", cfg.Listen.Auth.Password)
+		if cfg.Listen.Auth.Users[0].Password != "secret" {
+			t.Errorf("Auth.Password: got %s", cfg.Listen.Auth.Users[0].Password)
 		}
 	}
 	if cfg.Upstream.Strategy != "random" {
@@ -764,7 +768,7 @@ func TestConfig_Clone_FullDeepCopy(t *testing.T) {
 	orig := &Config{
 		LogLevel: "INFO",
 		Listen: ListenConfig{
-			Auth:          &AuthConf{Username: "user1", Password: "pwd"},
+			Auth:          &AuthConf{Users: []AuthUserConf{{Username: "user1", Password: "pwd"}}},
 			AdminAuth:     &AdminAuthConf{Enabled: true, Username: "admin", Password: "apw"},
 			AdminCertSANs: []string{"192.168.1.1", "proxy.local"},
 		},
@@ -806,7 +810,7 @@ func TestConfig_Clone_FullDeepCopy(t *testing.T) {
 	cloned := orig.Clone()
 
 	// 1. Mutate pointers in cloned
-	cloned.Listen.Auth.Username = "mutated_user"
+	cloned.Listen.Auth.Users[0].Username = "mutated_user"
 	cloned.Listen.AdminAuth.Username = "mutated_admin"
 	*cloned.Upstream.Proxies[0].Enabled = false
 	*cloned.Upstream.Proxies[0].IPv6 = true
@@ -832,8 +836,8 @@ func TestConfig_Clone_FullDeepCopy(t *testing.T) {
 	cloned.DNS.StaticRecords = append(cloned.DNS.StaticRecords, StaticRecord{Host: "new.com"})
 
 	// Verify original is COMPLETELY UNTOUCHED
-	if orig.Listen.Auth.Username != "user1" {
-		t.Errorf("original Listen.Auth mutated: %s", orig.Listen.Auth.Username)
+	if orig.Listen.Auth.Users[0].Username != "user1" {
+		t.Errorf("original Listen.Auth mutated: %s", orig.Listen.Auth.Users[0].Username)
 	}
 	if orig.Listen.AdminAuth.Username != "admin" {
 		t.Errorf("original Listen.AdminAuth mutated: %s", orig.Listen.AdminAuth.Username)
@@ -1224,8 +1228,6 @@ func TestConfig_ProtocolForwarding(t *testing.T) {
 
 func TestAuthConf_MultiUser(t *testing.T) {
 	auth := &AuthConf{
-		Username: "admin",
-		Password: "password123",
 		Users: []AuthUserConf{
 			{Username: "alice", Password: "alice-pass", MaxDevices: 2},
 			{Username: "bob", Password: "bob-pass", MaxDevices: 1},
@@ -1238,9 +1240,6 @@ func TestAuthConf_MultiUser(t *testing.T) {
 		t.Errorf("expected HasCredentials to be true")
 	}
 
-	if !auth.Match("admin", "password123") {
-		t.Errorf("expected admin to match")
-	}
 	if !auth.Match("alice", "alice-pass") {
 		t.Errorf("expected alice to match")
 	}
@@ -1265,9 +1264,6 @@ func TestAuthConf_MultiUser(t *testing.T) {
 	}
 	if auth.UserMaxDevices("david") != 0 {
 		t.Errorf("expected david unlimited max devices 0, got %d", auth.UserMaxDevices("david"))
-	}
-	if auth.UserMaxDevices("admin") != 1 {
-		t.Errorf("expected admin default max devices 1, got %d", auth.UserMaxDevices("admin"))
 	}
 }
 
@@ -1312,11 +1308,11 @@ func TestPortalConf_ValidateAndClone(t *testing.T) {
 		t.Errorf("Clone did not deep copy ExemptMACs")
 	}
 
-	// Test invalid portal config: portal enabled without auth credentials or auth disabled
+	// Test invalid portal config: portal enabled without auth credentials
 	badCfg := cfg.Clone()
-	badCfg.Listen.Auth.Enabled = false
+	badCfg.Listen.Auth.Users = nil
 	if err := badCfg.Validate(); err == nil {
-		t.Errorf("expected error when portal enabled with auth disabled")
+		t.Errorf("expected error when portal enabled without users")
 	}
 
 	badCfg2 := cfg.Clone()
@@ -1335,10 +1331,6 @@ func TestPortalConf_ValidateAndClone(t *testing.T) {
 
 func TestAuthUser_TrafficLimit(t *testing.T) {
 	auth := &AuthConf{
-		Username:          "admin",
-		Password:          "secret",
-		TrafficLimitMB:    500,
-		ResetCycle:        "daily",
 		Users: []AuthUserConf{
 			{
 				Username:       "alice",
@@ -1378,12 +1370,6 @@ func TestAuthUser_TrafficLimit(t *testing.T) {
 	if auth.UserResetCycle("charlie") != "none" {
 		t.Errorf("expected charlie reset cycle 'none', got %q", auth.UserResetCycle("charlie"))
 	}
-	if auth.UserTrafficLimit("admin") != 500*1024*1024 {
-		t.Errorf("expected admin limit 500MB, got %d", auth.UserTrafficLimit("admin"))
-	}
-	if auth.UserResetCycle("admin") != "daily" {
-		t.Errorf("expected admin reset cycle 'daily', got %q", auth.UserResetCycle("admin"))
-	}
 
 	// Validation tests
 	cfg := DefaultConfig()
@@ -1408,51 +1394,38 @@ func TestAuthUser_TrafficLimit(t *testing.T) {
 }
 
 func TestAuthConf_Socks5Enabled(t *testing.T) {
-	// 1. Default (when enabled: false and socks5_enabled: false) -> IsSocks5AuthEnabled() is false
+	// 1. Default (when enabled: false) -> IsSocks5AuthEnabled() is false
 	auth1 := &AuthConf{
-		Username: "admin",
-		Password: "password",
+		Users: []AuthUserConf{{Username: "admin", Password: "password"}},
 	}
 	if auth1.IsSocks5AuthEnabled() {
 		t.Errorf("expected IsSocks5AuthEnabled to be false by default")
 	}
 
-	// 2. Enabled: true, but socks5_enabled: false (default) -> IsSocks5AuthEnabled() is false
+	// 2. Enabled: true -> IsSocks5AuthEnabled() is true
 	auth2 := &AuthConf{
-		Enabled:  true,
-		Username: "admin",
-		Password: "password",
+		Enabled: true,
+		Users:   []AuthUserConf{{Username: "admin", Password: "password"}},
 	}
-	if auth2.IsSocks5AuthEnabled() {
-		t.Errorf("expected IsSocks5AuthEnabled to be false when socks5_enabled is false")
-	}
-
-	// 3. Enabled: true AND socks5_enabled: true -> IsSocks5AuthEnabled() is true
-	auth3 := &AuthConf{
-		Enabled:       true,
-		Socks5Enabled: true,
-		Username:      "admin",
-		Password:      "password",
-	}
-	if !auth3.IsSocks5AuthEnabled() {
-		t.Errorf("expected IsSocks5AuthEnabled to be true when both enabled and socks5_enabled are true")
+	if !auth2.IsSocks5AuthEnabled() {
+		t.Errorf("expected IsSocks5AuthEnabled to be true when enabled is true")
 	}
 
-	// 4. No credentials -> IsSocks5AuthEnabled() is false
-	auth4 := &AuthConf{Enabled: true, Socks5Enabled: true}
-	if auth4.IsSocks5AuthEnabled() {
+	// 3. No credentials -> IsSocks5AuthEnabled() is false
+	auth3 := &AuthConf{Enabled: true}
+	if auth3.IsSocks5AuthEnabled() {
 		t.Errorf("expected IsSocks5AuthEnabled to be false with no credentials")
 	}
 
-	// 5. Test Clone
+	// 4. Test Clone
 	cfg := DefaultConfig()
-	cfg.Listen.Auth = auth3
+	cfg.Listen.Auth = auth2
 	cp := cfg.Clone()
-	if !cp.Listen.Auth.Enabled || !cp.Listen.Auth.Socks5Enabled {
-		t.Errorf("expected cloned Enabled and Socks5Enabled to be true")
+	if !cp.Listen.Auth.Enabled {
+		t.Errorf("expected cloned Enabled to be true")
 	}
-	cp.Listen.Auth.Socks5Enabled = false
-	if !cfg.Listen.Auth.Socks5Enabled {
+	cp.Listen.Auth.Enabled = false
+	if !cfg.Listen.Auth.Enabled {
 		t.Errorf("Clone did not isolate AuthConf")
 	}
 }

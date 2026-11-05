@@ -80,6 +80,7 @@ type Manager struct {
 	csrfSecret      []byte
 	macResolver     func(ip string) string
 	stopCh          chan struct{}
+	cleanerDone     chan struct{}
 	stopOnce        sync.Once
 }
 
@@ -100,6 +101,7 @@ func NewManager(cfg *config.Config) *Manager {
 		userTraffic:     make(map[string]*UserTraffic),
 		csrfSecret:      secret,
 		stopCh:          make(chan struct{}),
+		cleanerDone:     make(chan struct{}),
 	}
 	m.config.Store(cfg)
 
@@ -109,6 +111,7 @@ func NewManager(cfg *config.Config) *Manager {
 
 func (m *Manager) startCleaner() {
 	safego.Go("portal.cleaner", func() {
+		defer close(m.cleanerDone)
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
@@ -117,7 +120,6 @@ func (m *Manager) startCleaner() {
 				m.purgeExpired()
 				m.saveTrafficIfDirty()
 			case <-m.stopCh:
-				m.saveTrafficIfDirty()
 				return
 			}
 		}
@@ -128,6 +130,7 @@ func (m *Manager) startCleaner() {
 func (m *Manager) Close() {
 	m.stopOnce.Do(func() {
 		close(m.stopCh)
+		<-m.cleanerDone
 		m.saveTrafficIfDirty()
 	})
 }
@@ -261,8 +264,8 @@ func (m *Manager) Authenticate(clientIP, mac, username, password, userAgent stri
 	}
 
 	auth := m.getAuthConf()
-	if auth == nil || !auth.Enabled || !auth.HasCredentials() {
-		return nil, "", errors.New("authentication is disabled or no users configured on server")
+	if auth == nil || !auth.HasCredentials() {
+		return nil, "", errors.New("no authentication users configured on server")
 	}
 
 	if !auth.Match(username, password) {
@@ -1003,10 +1006,6 @@ func (m *Manager) AllUsersTraffic() []*UserTrafficInfo {
 		for _, u := range auth.Users {
 			seen[u.Username] = true
 			result = append(result, m.getUserTrafficInfoLocked(u.Username, now))
-		}
-		if auth.Username != "" && !seen[auth.Username] {
-			seen[auth.Username] = true
-			result = append(result, m.getUserTrafficInfoLocked(auth.Username, now))
 		}
 	}
 

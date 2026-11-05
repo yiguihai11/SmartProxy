@@ -191,39 +191,17 @@ func (p *PortalConf) PortalTitle() string {
 }
 
 type AuthConf struct {
-	Enabled           bool           `json:"enabled"`                   // Master authentication switch (default false)
-	Socks5Enabled     bool           `json:"socks5_enabled"`            // Controls whether SOCKS5 listener enforces auth (default false)
-	Username          string         `json:"username,omitempty"`
-	Password          string         `json:"password,omitempty"`
-	MaxDevices        int            `json:"max_devices,omitempty"`
-	TrafficLimitBytes int64          `json:"traffic_limit_bytes,omitempty"`
-	TrafficLimitMB    int64          `json:"traffic_limit_mb,omitempty"`
-	ResetCycle        string         `json:"reset_cycle,omitempty"`
-	Users             []AuthUserConf `json:"users,omitempty"`
+	Enabled bool           `json:"enabled"` // SOCKS5 authentication switch (default false)
+	Users   []AuthUserConf `json:"users,omitempty"`
 }
 
 // IsSocks5AuthEnabled reports whether SOCKS5 listener should require authentication.
-// Defaults to false. Requires both auth.enabled and auth.socks5_enabled to be true,
-// plus valid credentials configured.
+// Defaults to false. Requires auth.enabled to be true plus valid credentials configured.
 func (a *AuthConf) IsSocks5AuthEnabled() bool {
-	if a == nil || !a.Enabled || !a.Socks5Enabled || !a.HasCredentials() {
+	if a == nil || !a.Enabled || !a.HasCredentials() {
 		return false
 	}
 	return true
-}
-
-// EffectiveTrafficLimit returns the effective traffic quota in bytes for the single-user auth.
-func (a *AuthConf) EffectiveTrafficLimit() int64 {
-	if a == nil {
-		return 0
-	}
-	if a.TrafficLimitBytes > 0 {
-		return a.TrafficLimitBytes
-	}
-	if a.TrafficLimitMB > 0 {
-		return a.TrafficLimitMB * 1024 * 1024
-	}
-	return 0
 }
 
 // UserTrafficLimit returns the effective traffic quota in bytes for the specified user.
@@ -235,9 +213,6 @@ func (a *AuthConf) UserTrafficLimit(user string) int64 {
 		if u.Username == user {
 			return u.EffectiveTrafficLimit()
 		}
-	}
-	if a.Username != "" && a.Username == user {
-		return a.EffectiveTrafficLimit()
 	}
 	return 0
 }
@@ -257,23 +232,13 @@ func (a *AuthConf) UserResetCycle(user string) string {
 			return c
 		}
 	}
-	if a.Username != "" && a.Username == user {
-		c := strings.ToLower(strings.TrimSpace(a.ResetCycle))
-		if c == "" {
-			return "none"
-		}
-		return c
-	}
 	return "none"
 }
 
-// HasCredentials reports whether single-user or any multi-user credentials are defined.
+// HasCredentials reports whether any multi-user credentials are defined.
 func (a *AuthConf) HasCredentials() bool {
 	if a == nil {
 		return false
-	}
-	if strings.TrimSpace(a.Username) != "" && strings.TrimSpace(a.Password) != "" {
-		return true
 	}
 	for _, u := range a.Users {
 		if strings.TrimSpace(u.Username) != "" && strings.TrimSpace(u.Password) != "" {
@@ -283,13 +248,10 @@ func (a *AuthConf) HasCredentials() bool {
 	return false
 }
 
-// Match verifies the given username and password against configured single-user or multi-user credentials.
+// Match verifies the given username and password against configured multi-user credentials.
 func (a *AuthConf) Match(user, pass string) bool {
 	if a == nil {
 		return false
-	}
-	if a.Username != "" && a.Password != "" && a.Username == user && a.Password == pass {
-		return true
 	}
 	for _, u := range a.Users {
 		if u.Username != "" && u.Password != "" && u.Username == user && u.Password == pass {
@@ -316,15 +278,6 @@ func (a *AuthConf) UserMaxDevices(user string) int {
 			return u.MaxDevices
 		}
 	}
-	if a.Username != "" && a.Username == user {
-		if a.MaxDevices < 0 {
-			return 0
-		}
-		if a.MaxDevices == 0 {
-			return 1
-		}
-		return a.MaxDevices
-	}
 	return 1
 }
 
@@ -332,9 +285,6 @@ func (a *AuthConf) UserMaxDevices(user string) int {
 func (a *AuthConf) UserExists(user string) bool {
 	if a == nil {
 		return false
-	}
-	if a.Username != "" && a.Username == user {
-		return true
 	}
 	for _, u := range a.Users {
 		if u.Username == user {
@@ -829,20 +779,7 @@ func (c *Config) Validate() error {
 		errs = append(errs, "listen.admin_cert_file and listen.admin_key_file must be both set or both empty")
 	}
 	if c.Listen.Auth != nil {
-		if c.Listen.Auth.TrafficLimitBytes < 0 {
-			errs = append(errs, "listen.auth.traffic_limit_bytes must not be negative")
-		}
-		if c.Listen.Auth.TrafficLimitMB < 0 {
-			errs = append(errs, "listen.auth.traffic_limit_mb must not be negative")
-		}
-		authCycle := strings.ToLower(strings.TrimSpace(c.Listen.Auth.ResetCycle))
-		if authCycle != "" && authCycle != "none" && authCycle != "daily" && authCycle != "monthly" {
-			errs = append(errs, "listen.auth.reset_cycle must be one of: daily, monthly, none, or empty")
-		}
 		seenUsers := make(map[string]bool)
-		if c.Listen.Auth.Username != "" {
-			seenUsers[c.Listen.Auth.Username] = true
-		}
 		for i, u := range c.Listen.Auth.Users {
 			if strings.TrimSpace(u.Username) == "" || strings.TrimSpace(u.Password) == "" {
 				errs = append(errs, fmt.Sprintf("listen.auth.users[%d] username and password must not be empty", i))
@@ -867,8 +804,8 @@ func (c *Config) Validate() error {
 		}
 	}
 	if c.Listen.Portal != nil && c.Listen.Portal.Enabled {
-		if c.Listen.Auth == nil || !c.Listen.Auth.Enabled || !c.Listen.Auth.HasCredentials() {
-			errs = append(errs, "listen.portal requires listen.auth to be enabled and configured with credentials")
+		if c.Listen.Auth == nil || !c.Listen.Auth.HasCredentials() {
+			errs = append(errs, "listen.portal requires listen.auth credentials to be configured")
 		}
 		if c.Listen.Portal.LeaseHours < 0 {
 			errs = append(errs, "listen.portal.lease_hours must not be negative")

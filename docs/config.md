@@ -37,19 +37,12 @@
 
 ### `listen.auth`（身份认证与流量配额）
 
-`auth` 对象控制系统内账号凭据、SOCKS5 认证与流量配额。支持单用户简写与多用户矩阵配置。
+`auth` 对象控制 SOCKS5 服务端认证开关及多用户账号凭据。多用户配置通过 `users` 数组统一管理，并与 Web 门户（Captive Portal）共享账号池与流量限额。
 
 | Go 字段 | JSON 键 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `Enabled` | `enabled` | `false` | 主认证总开关。为 `false` 时，Captive Portal 与 SOCKS5 均不启用认证 |
-| `Socks5Enabled` | `socks5_enabled` | `false` | SOCKS5 监听器独立认证开关。仅当 `enabled=true` 且 `socks5_enabled=true` 时，SOCKS5 端口才强制进行用户名/密码认证；若设为 `false`，SOCKS5 端口保持免密（NoAuth），仅 Web Portal 门户需要认证登录 |
-| `Username` | `username` | `""` | 单用户默认用户名（与 `users` 并存） |
-| `Password` | `password` | `""` | 单用户默认密码 |
-| `MaxDevices` | `max_devices` | `0` | 全局每账号最大并发设备数（0 表示无限制，Portal 场景使用） |
-| `TrafficLimitMB` | `traffic_limit_mb` | `0` | 全局每账号流量配额上限（MB，0 表示无限制） |
-| `TrafficLimitBytes` | `traffic_limit_bytes` | `0` | 全局每账号流量配额上限（字节数，优先于 `traffic_limit_mb`，0 表示无限制） |
-| `ResetCycle` | `reset_cycle` | `"none"` | 流量自动重置周期：`"none"` 或 `""`（不重置，默认）、`"daily"`（每日零点自动清零重置）、`"monthly"`（每月1日零点自动清零重置） |
-| `Users` | `users` | `[]` | 多用户账号配置列表（每个条目结构见下表） |
+| `Enabled` | `enabled` | `false` | SOCKS5 端口认证开关。设为 `true` 时，SOCKS5 客户端建连必须通过 `users` 中的账号密码验证；设为 `false` 时 SOCKS5 允许免密匿名连接（NoAuth）。注：Web 门户认证由独立的 `listen.portal.enabled` 开关控制 |
+| `Users` | `users` | `[]` | 认证账号矩阵列表（每个条目结构见下表） |
 
 #### `users[]` 数组条目字段
 
@@ -57,10 +50,10 @@
 | --- | --- | --- | --- |
 | `username` | string | 必填 | 用户名 |
 | `password` | string | 必填 | 密码 |
-| `max_devices` | int | 继承全局 | 该账号允许的最大并发在线设备数（0 为无限制；超过时剔除最早登录的设备） |
-| `traffic_limit_mb` | int64 | 继承全局 | 该账号的总流量配额（MB，0 为无限制） |
-| `traffic_limit_bytes` | int64 | 继承全局 | 该账号的总流量配额（字节，0 为无限制） |
-| `reset_cycle` | string | 继承全局 | 账号专属重置周期：`"none"`、`"daily"`、`"monthly"` |
+| `max_devices` | int | `1` | 该账号允许的最大并发在线设备数（0 或未设默认为 1；-1 为无限制；超过时剔除最早登录的设备） |
+| `traffic_limit_mb` | int64 | `0` | 该账号的总流量配额（MB，0 为无限制） |
+| `traffic_limit_bytes` | int64 | `0` | 该账号的总流量配额（字节，0 为无限制，优先于 `traffic_limit_mb`） |
+| `reset_cycle` | string | `"none"` | 账号专属重置周期：`"none"`（不自动重置，默认）、`"daily"`（每日零点重置）、`"monthly"`（每月1日零点重置） |
 
 > 💡 **SOCKS5 与 Captive Portal 统一流量池**：
 > 同一账号在 SOCKS5 代理中传输的流量（下行+上行）与在 Wi-Fi 热点 Portal 认证后消耗的 TUN 流量合并统计。当累计用量达到流量上限时：

@@ -5,13 +5,17 @@
     "port": 1080,
     "auth": {
       "enabled": false,
-      "socks5_enabled": false,
-      "traffic_limit_mb": 0,
-      "reset_cycle": "none",
-      "users": []
+      "users": [
+        {
+          "username": "admin",
+          "password": "test",
+          "traffic_limit_mb": 0,
+          "reset_cycle": "none"
+        }
+      ]
     },
     "portal": {
-      "enabled": false,
+      "enabled": true,
       "title": "SmartProxy Hotspot",
       "lease_hours": 24,
       "auto_reauth_by_cookie": true,
