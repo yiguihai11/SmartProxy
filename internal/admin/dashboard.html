@@ -966,6 +966,7 @@ function navTo(n){
     var vt=vi.querySelector('.view-title');
     if(vt)mt.textContent=vt.textContent;
   }
+  try{sessionStorage.setItem('sp_active_view',n)}catch(_){}
   var ld={dashboard:loadDashboard,traffic:loadTraffic,health:loadHealth,devices:loadDevices,blacklist:loadBlacklist,cache:loadDNS,adblock:loadAdblock,logs:loadLogs,config:loadConfig};
   if(ld[n])ld[n]();
 }
@@ -989,7 +990,7 @@ function ldash(d){
         '<div class="card"><div class="card-label">CPU</div><div style="display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0"><div class="card-value" id="dash-v-cpu">'+((s.cpu_percent||0).toFixed(1))+'%</div><canvas id="cpu-mini" width="36" height="36" style="flex-shrink:0"></canvas></div></div>'+
         '<div class="card"><div class="card-label">TCP</div><div class="card-value accent" id="dash-v-tcp">'+(s.tcp_conns||0)+'</div></div>'+
         '<div class="card"><div class="card-label">UDP</div><div class="card-value accent" id="dash-v-udp">'+(s.udp_sessions||0)+'</div></div>'+
-        '<div class="card card-link" onclick="navTo(\'health\')"><div class="card-label">Proxies</div><div class="card-value" id="dash-v-proxies">'+pxCount+'</div></div>'+
+        '<div class="card card-link" onclick="navTo(\'health\')"><div class="card-label">Proxies</div><div class="card-value" id="dash-v-proxies">'+pxCount+(d.probe_progress&&d.probe_progress.testing&&d.probe_progress.total>0?' <span style="font-size:0.75rem;color:var(--accent);font-weight:500;animation:batchPulse 1.2s infinite ease-in-out">⚡ '+d.probe_progress.completed+'/'+d.probe_progress.total+'</span>':'')+'</div></div>'+
         '<div class="card card-link" onclick="navTo(\'blacklist\')"><div class="card-label">Blacklist</div><div class="card-value" id="dash-v-bl">'+blCount+'</div></div>'+
         '<div class="card card-link" onclick="navTo(\'cache\')"><div class="card-label">DNS Cache</div><div class="card-value accent" id="cache-ov">'+ca+'</div></div>'+
         '<div class="card"><div class="card-label">GC</div><div class="card-sub" id="dash-v-gc"><span><span style="color:var(--text2)">Pause</span> '+gcPause+'</span><span><span style="color:var(--text2)">Count</span> '+gcCount+'</span></div></div>'+
@@ -1002,7 +1003,14 @@ function ldash(d){
       var elCpu=document.getElementById('dash-v-cpu');if(elCpu)elCpu.textContent=((s.cpu_percent||0).toFixed(1))+'%';
       var elTcp=document.getElementById('dash-v-tcp');if(elTcp)elTcp.textContent=s.tcp_conns||0;
       var elUdp=document.getElementById('dash-v-udp');if(elUdp)elUdp.textContent=s.udp_sessions||0;
-      var elPx=document.getElementById('dash-v-proxies');if(elPx)elPx.textContent=pxCount;
+      var elPx=document.getElementById('dash-v-proxies');
+      if(elPx){
+        if(d.probe_progress&&d.probe_progress.testing&&d.probe_progress.total>0){
+          elPx.innerHTML=pxCount+' <span style="font-size:0.75rem;color:var(--accent);font-weight:500;animation:batchPulse 1.2s infinite ease-in-out">⚡ '+d.probe_progress.completed+'/'+d.probe_progress.total+'</span>';
+        }else{
+          elPx.textContent=pxCount;
+        }
+      }
       var elBl=document.getElementById('dash-v-bl');if(elBl)elBl.textContent=blCount;
       var elCa=document.getElementById('cache-ov');if(elCa)elCa.textContent=ca;
       var elGc=document.getElementById('dash-v-gc');
@@ -2576,7 +2584,7 @@ async function resetAutoCircuits(){
 async function loadDashboard(){
   try{
     var s=await jf('/stats'),r=await jf('/route');
-    var h=healthD||await jf('/health').catch(function(){return null});
+    var h=await jf('/health').catch(function(){return healthD||null});
     var blTotal=(typeof window._lastBLTotal==='number'&&window._lastBLTotal>=0)?window._lastBLTotal:(Array.isArray(blD)?blD.length:0);
     var ca=0;
     try{var c=await jf('/cache');ca=c.entries;}catch(_){}
@@ -2603,7 +2611,8 @@ async function loadDashboard(){
       route:r,
       cache:{entries:ca},
       health:{proxies:proxies},
-      bl_total:blTotal
+      bl_total:blTotal,
+      probe_progress:(h&&h.probe_progress)||(h&&h.health&&h.health.probe_progress)
     });
   }catch(e){
     document.getElementById('dash-time').textContent='Error: '+e.message;
@@ -6687,14 +6696,7 @@ if(window.SP_FD_MODE===false){
 }
 document.querySelectorAll('.nav-item:not(.section)').forEach(function(item){
   item.addEventListener('click',function(){
-    closeDrawer();
-    document.querySelectorAll('.nav-item').forEach(function(n){n.classList.remove('active')});
-    document.querySelectorAll('.view').forEach(function(v){v.classList.remove('active')});
-    item.classList.add('active');
-    var vi=document.getElementById('view-'+item.dataset.view);
-    if(vi)vi.classList.add('active');
-    var ld={dashboard:loadDashboard,traffic:loadTraffic,health:loadHealth,devices:loadDevices,blacklist:loadBlacklist,cache:loadDNS,adblock:loadAdblock,logs:loadLogs,config:loadConfig};
-    if(ld[item.dataset.view])ld[item.dataset.view]();
+    navTo(item.dataset.view);
   });
 });
 var _curProtoInfo = { key: 'unknown', text: 'HTTP', full: 'HTTP' };
@@ -7463,7 +7465,16 @@ async function unblockDevice(ip, mac) {
   }
 }
 
-loadDashboard();
+var _initView='dashboard';
+try{
+  var _savedView=sessionStorage.getItem('sp_active_view');
+  if(_savedView&&document.getElementById('view-'+_savedView))_initView=_savedView;
+}catch(_){}
+if(_initView!=='dashboard'){
+  navTo(_initView);
+}else{
+  loadDashboard();
+}
 loadVersion();
 updateProtoBadges();
 updateCertLinks();
