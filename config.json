@@ -15,7 +15,7 @@
       ]
     },
     "portal": {
-      "enabled": true,
+      "enabled": false,
       "title": "SmartProxy Hotspot",
       "lease_hours": 24,
       "auto_reauth_by_cookie": true,

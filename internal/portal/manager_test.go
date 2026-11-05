@@ -37,6 +37,14 @@ func TestPortal_Exemptions(t *testing.T) {
 		t.Errorf("expected exempt IP 192.168.43.99 to be authorized")
 	}
 
+	// Loopback addresses are always authorized (local machine is never a hotspot guest)
+	if !mgr.IsAuthorized("127.0.0.1") {
+		t.Errorf("expected loopback 127.0.0.1 to be authorized")
+	}
+	if !mgr.IsAuthorized("::1") {
+		t.Errorf("expected IPv6 loopback ::1 to be authorized")
+	}
+
 	// Non-exempt IP without session
 	if mgr.IsAuthorized("192.168.43.10") {
 		t.Errorf("expected unauthenticated IP 192.168.43.10 to NOT be authorized")
