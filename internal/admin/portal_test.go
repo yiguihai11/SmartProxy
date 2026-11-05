@@ -332,3 +332,71 @@ func TestPortal_TrafficAPIs(t *testing.T) {
 		}
 	}
 }
+
+func TestPortal_TetheringBridgeClient_NATResolution(t *testing.T) {
+	srv, pm := setupTestPortalAdmin(t)
+
+	bridgeJSON := `[{"ip":"10.140.12.152","mac":"d8:a4:91:21:a3:c7","hostname":"JER-AN20"}]`
+	bridge := &mockTetheringBridge{clients: bridgeJSON}
+	srv.SetTetheringBridge(bridge)
+
+	// 1. Initial state: virtual TUN IP 192.0.2.2 must NOT be authorized or exempt by default
+	if pm.IsAuthorized("192.0.2.2") {
+		t.Fatalf("expected unauthenticated tethering client (192.0.2.2) to NOT be authorized initially")
+	}
+
+	// 2. Perform portal login from client NAT IP 192.0.2.2
+	csrf := pm.GenerateCSRFToken("192.0.2.2")
+	loginBody := `{"username":"alice","password":"password123","csrf_token":"` + csrf + `"}`
+	reqLogin := httptest.NewRequest(http.MethodPost, "/api/portal/login", strings.NewReader(loginBody))
+	reqLogin.Header.Set("Content-Type", "application/json")
+	reqLogin.RemoteAddr = "192.0.2.2:54321"
+	recLogin := httptest.NewRecorder()
+	srv.handlePortalLogin(recLogin, reqLogin)
+
+	if recLogin.Code != http.StatusOK {
+		t.Fatalf("expected login success 200, got %d: %s", recLogin.Code, recLogin.Body.String())
+	}
+
+	// 3. 192.0.2.2 is now authorized
+	if !pm.IsAuthorized("192.0.2.2") {
+		t.Fatalf("expected 192.0.2.2 to be authorized after login")
+	}
+
+	// 4. Session should be associated with the physical client's MAC
+	sess := pm.GetSession("10.140.12.152", "d8:a4:91:21:a3:c7")
+	if sess == nil || sess.Username != "alice" {
+		t.Fatalf("expected active session for alice on physical MAC d8:a4:91:21:a3:c7, got %+v", sess)
+	}
+
+	// 5. Query /api/devices and verify AuthUser
+	reqDevs := httptest.NewRequest(http.MethodGet, "/api/devices", nil)
+	recDevs := httptest.NewRecorder()
+	srv.handleDevices(recDevs, reqDevs)
+	if recDevs.Code != http.StatusOK {
+		t.Fatalf("expected 200 from /api/devices, got %d", recDevs.Code)
+	}
+
+	var devResp struct {
+		Devices []TetheredDevice `json:"devices"`
+	}
+	if err := json.Unmarshal(recDevs.Body.Bytes(), &devResp); err != nil {
+		t.Fatalf("failed to decode /api/devices response: %v", err)
+	}
+	if len(devResp.Devices) != 1 {
+		t.Fatalf("expected 1 connected device, got %d", len(devResp.Devices))
+	}
+	d := devResp.Devices[0]
+	if d.IP != "10.140.12.152" || d.MAC != "d8:a4:91:21:a3:c7" || d.AuthUser != "alice" {
+		t.Fatalf("expected device authenticated with alice, got: %+v", d)
+	}
+
+	// 6. MAC Exemption: if the physical client's MAC is in ExemptMACs,
+	// IsAuthorized("192.0.2.2") should be true even without an active session
+	cfg := srv.configSrc()
+	cfg.Listen.Portal.ExemptMACs = []string{"d8:a4:91:21:a3:c7"}
+	pm.RevokeSession("192.0.2.2")
+	if !pm.IsAuthorized("192.0.2.2") {
+		t.Fatalf("expected 192.0.2.2 to be authorized via MAC exemption")
+	}
+}

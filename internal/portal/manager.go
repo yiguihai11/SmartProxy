@@ -79,9 +79,6 @@ type Manager struct {
 	trafficDirty    atomic.Bool
 	csrfSecret      []byte
 	macResolver     func(ip string) string
-	hostIPsMu       sync.RWMutex
-	hostIPsLast     time.Time
-	hostIPs         map[string]bool
 	stopCh          chan struct{}
 	cleanerDone     chan struct{}
 	stopOnce        sync.Once
@@ -172,49 +169,16 @@ func (m *Manager) IsEnabled() bool {
 	return p != nil && p.Enabled
 }
 
-// isHostOrLoopback checks if the normalized IP belongs to the local host machine,
-// such as loopback (127.0.0.1, ::1) or local network/TUN interfaces.
+// isHostOrLoopback checks if the normalized IP belongs to the local machine loopback (127.0.0.1, ::1).
+// Note: We deliberately do NOT exempt local network interfaces or TUN IPs, because
+// tethering processes NAT client traffic to the TUN IP (e.g. 192.0.2.2). Only true
+// loopback traffic (127.0.0.1, ::1) is exempt from captive portal.
 func (m *Manager) isHostOrLoopback(normIP string) bool {
 	ip := net.ParseIP(normIP)
 	if ip == nil {
 		return false
 	}
-	if ip.IsLoopback() || ip.IsUnspecified() {
-		return true
-	}
-
-	m.hostIPsMu.RLock()
-	if time.Since(m.hostIPsLast) < 10*time.Second && m.hostIPs != nil {
-		ok := m.hostIPs[normIP]
-		m.hostIPsMu.RUnlock()
-		return ok
-	}
-	m.hostIPsMu.RUnlock()
-
-	m.hostIPsMu.Lock()
-	defer m.hostIPsMu.Unlock()
-	if time.Since(m.hostIPsLast) < 10*time.Second && m.hostIPs != nil {
-		return m.hostIPs[normIP]
-	}
-
-	newMap := make(map[string]bool)
-	if addrs, err := net.InterfaceAddrs(); err == nil {
-		for _, a := range addrs {
-			if ipNet, ok := a.(*net.IPNet); ok && ipNet != nil {
-				newMap[normalizeIP(ipNet.IP.String())] = true
-			}
-		}
-	}
-	if cfg := m.config.Load(); cfg != nil {
-		for _, addr := range cfg.TUN.Address {
-			if ip, _, err := net.ParseCIDR(addr); err == nil {
-				newMap[normalizeIP(ip.String())] = true
-			}
-		}
-	}
-	m.hostIPs = newMap
-	m.hostIPsLast = time.Now()
-	return newMap[normIP]
+	return ip.IsLoopback() || ip.IsUnspecified()
 }
 
 // IsAuthorized checks whether the client IP has an active authenticated session or is exempt.

@@ -82,6 +82,13 @@ func (s *Server) SetPortalManager(mgr *portal.Manager) {
 								}
 							}
 						}
+						// If exactly 1 physical client is connected to the tethering hotspot,
+						// map the virtual TUN NAT IP addresses to that client's physical MAC.
+						if len(clients) == 1 && clients[0].MAC != "" {
+							singleMAC := strings.ToLower(clients[0].MAC)
+							newTable["192.0.2.2"] = singleMAC
+							newTable["2001:db8:9877::2"] = singleMAC
+						}
 					}
 				}
 			}
