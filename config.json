@@ -4,8 +4,19 @@
     "host": "::",
     "port": 1080,
     "auth": {
-      "username": "",
-      "password": ""
+      "enabled": false,
+      "socks5_enabled": false,
+      "traffic_limit_mb": 0,
+      "reset_cycle": "none",
+      "users": []
+    },
+    "portal": {
+      "enabled": false,
+      "title": "SmartProxy Hotspot",
+      "lease_hours": 24,
+      "auto_reauth_by_cookie": true,
+      "exempt_macs": [],
+      "exempt_ips": []
     },
     "relaxed_udp_origin_check": true,
     "udp_associate_idle_timeout": 60,

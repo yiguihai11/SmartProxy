@@ -261,8 +261,8 @@ func (m *Manager) Authenticate(clientIP, mac, username, password, userAgent stri
 	}
 
 	auth := m.getAuthConf()
-	if auth == nil || !auth.HasCredentials() {
-		return nil, "", errors.New("no authentication users configured on server")
+	if auth == nil || !auth.Enabled || !auth.HasCredentials() {
+		return nil, "", errors.New("authentication is disabled or no users configured on server")
 	}
 
 	if !auth.Match(username, password) {

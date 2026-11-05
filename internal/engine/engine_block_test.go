@@ -353,10 +353,10 @@ func TestEngine_SOCKS5_UnroutableDestination(t *testing.T) {
 
 func TestEngine_SOCKS5_AuthAndTrafficQuota(t *testing.T) {
 	// 1. socks5_enabled: false -> NoAuth succeeds even when credentials exist
-	disabled := false
 	eng1 := startEngine(t, engineSpec{
 		auth: &config.AuthConf{
-			Socks5Enabled: &disabled,
+			Enabled:       true,
+			Socks5Enabled: false,
 			Users: []config.AuthUserConf{
 				{Username: "alice", Password: "secret", TrafficLimitBytes: 100},
 			},
@@ -377,9 +377,11 @@ func TestEngine_SOCKS5_AuthAndTrafficQuota(t *testing.T) {
 	assert.Equal(t, byte(0x05), resp[0])
 	assert.Equal(t, byte(0x00), resp[1]) // NoAuth accepted!
 
-	// 2. socks5_enabled: default (true) -> requires auth & enforces traffic quota
+	// 2. enabled: true AND socks5_enabled: true -> requires auth & enforces traffic quota
 	eng2 := startEngine(t, engineSpec{
 		auth: &config.AuthConf{
+			Enabled:       true,
+			Socks5Enabled: true,
 			Users: []config.AuthUserConf{
 				{Username: "bob", Password: "bobpass", TrafficLimitBytes: 100},
 			},

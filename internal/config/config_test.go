@@ -1274,6 +1274,7 @@ func TestAuthConf_MultiUser(t *testing.T) {
 func TestPortalConf_ValidateAndClone(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Listen.Auth = &AuthConf{
+		Enabled: true,
 		Users: []AuthUserConf{
 			{Username: "user1", Password: "pw1", MaxDevices: 1},
 		},
@@ -1311,10 +1312,16 @@ func TestPortalConf_ValidateAndClone(t *testing.T) {
 		t.Errorf("Clone did not deep copy ExemptMACs")
 	}
 
-	// Test invalid portal config: portal enabled without auth credentials
+	// Test invalid portal config: portal enabled without auth credentials or auth disabled
 	badCfg := cfg.Clone()
-	badCfg.Listen.Auth = nil
+	badCfg.Listen.Auth.Enabled = false
 	if err := badCfg.Validate(); err == nil {
+		t.Errorf("expected error when portal enabled with auth disabled")
+	}
+
+	badCfg2 := cfg.Clone()
+	badCfg2.Listen.Auth = nil
+	if err := badCfg2.Validate(); err == nil {
 		t.Errorf("expected error when portal enabled without auth")
 	}
 
@@ -1401,53 +1408,51 @@ func TestAuthUser_TrafficLimit(t *testing.T) {
 }
 
 func TestAuthConf_Socks5Enabled(t *testing.T) {
-	// 1. Default when credentials present -> IsSocks5AuthEnabled() is true
+	// 1. Default (when enabled: false and socks5_enabled: false) -> IsSocks5AuthEnabled() is false
 	auth1 := &AuthConf{
 		Username: "admin",
 		Password: "password",
 	}
-	if !auth1.IsSocks5AuthEnabled() {
-		t.Errorf("expected IsSocks5AuthEnabled to be true by default")
+	if auth1.IsSocks5AuthEnabled() {
+		t.Errorf("expected IsSocks5AuthEnabled to be false by default")
 	}
 
-	// 2. Explicitly false -> IsSocks5AuthEnabled() is false
-	f := false
+	// 2. Enabled: true, but socks5_enabled: false (default) -> IsSocks5AuthEnabled() is false
 	auth2 := &AuthConf{
-		Socks5Enabled: &f,
-		Username:      "admin",
-		Password:      "password",
+		Enabled:  true,
+		Username: "admin",
+		Password: "password",
 	}
 	if auth2.IsSocks5AuthEnabled() {
-		t.Errorf("expected IsSocks5AuthEnabled to be false when explicitly false")
+		t.Errorf("expected IsSocks5AuthEnabled to be false when socks5_enabled is false")
 	}
 
-	// 3. Explicitly true -> IsSocks5AuthEnabled() is true
-	tr := true
+	// 3. Enabled: true AND socks5_enabled: true -> IsSocks5AuthEnabled() is true
 	auth3 := &AuthConf{
-		Socks5Enabled: &tr,
+		Enabled:       true,
+		Socks5Enabled: true,
 		Username:      "admin",
 		Password:      "password",
 	}
 	if !auth3.IsSocks5AuthEnabled() {
-		t.Errorf("expected IsSocks5AuthEnabled to be true when explicitly true")
+		t.Errorf("expected IsSocks5AuthEnabled to be true when both enabled and socks5_enabled are true")
 	}
 
 	// 4. No credentials -> IsSocks5AuthEnabled() is false
-	auth4 := &AuthConf{}
+	auth4 := &AuthConf{Enabled: true, Socks5Enabled: true}
 	if auth4.IsSocks5AuthEnabled() {
 		t.Errorf("expected IsSocks5AuthEnabled to be false with no credentials")
 	}
 
 	// 5. Test Clone
 	cfg := DefaultConfig()
-	cfg.Listen.Auth = auth2
+	cfg.Listen.Auth = auth3
 	cp := cfg.Clone()
-	if cp.Listen.Auth.Socks5Enabled == nil || *cp.Listen.Auth.Socks5Enabled != false {
-		t.Errorf("expected cloned Socks5Enabled to be false")
+	if !cp.Listen.Auth.Enabled || !cp.Listen.Auth.Socks5Enabled {
+		t.Errorf("expected cloned Enabled and Socks5Enabled to be true")
 	}
-	// Mutate clone
-	*cp.Listen.Auth.Socks5Enabled = true
-	if *cfg.Listen.Auth.Socks5Enabled != false {
-		t.Errorf("Clone did not deep copy Socks5Enabled pointer")
+	cp.Listen.Auth.Socks5Enabled = false
+	if !cfg.Listen.Auth.Socks5Enabled {
+		t.Errorf("Clone did not isolate AuthConf")
 	}
 }

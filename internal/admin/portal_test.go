@@ -14,6 +14,7 @@ import (
 func setupTestPortalAdmin(t *testing.T) (*Server, *portal.Manager) {
 	cfg := config.DefaultConfig()
 	cfg.Listen.Auth = &config.AuthConf{
+		Enabled: true,
 		Users: []config.AuthUserConf{
 			{Username: "alice", Password: "password123", MaxDevices: 2},
 		},

@@ -18,7 +18,8 @@
 | --- | --- | --- | --- |
 | `Host` | `host` | `"::"` | SOCKS5 监听地址（IPv6 通配） |
 | `Port` | `port` | `1080` | SOCKS5 监听端口 |
-| `Auth` | `auth` | 无 | 可选认证 `{username, password}` |
+| `Auth` | `auth` | 无 | SOCKS5 与 Web 门户身份认证及流量配额配置（见下） |
+| `Portal` | `portal` | 无 | Wi-Fi 热点 Captive Portal 强制认证门户配置（见下） |
 | `RelaxedUDPOriginCheck` | `relaxed_udp_origin_check` | `true` | 放行非预期来源 IP 的 UDP 包 |
 | `UDPAssociateIdleTimeout` | `udp_associate_idle_timeout` | `60` | UDP 会话空闲超时（秒） |
 | `AdminSocket` | `admin_socket` | `""` | Admin 面板 unix socket 路径（可选） |
@@ -33,6 +34,63 @@
 **Admin HTTPS 自签证书**：`admin_https=true` 且未配 `admin_cert_file`/`admin_key_file` 时，启动自动生成一张 ECDSA P-256 自签证书（CN=`smartproxy`，SAN=localhost/127.0.0.1/::1 **+ `admin_cert_sans` 中列出的主机名/IP**，397 天有效期），best-effort 写入**配置文件同目录**的 `admin.crt` + `admin.key`，重启复用同一证书（浏览器只需告警/信任一次）。**若已存在的证书缺少当前请求的 SAN（比如改过 `admin_cert_sans`），会自动重新生成**。写盘失败则仅内存持有。unix socket（`admin_socket`）仍为纯 HTTP，仅供本机访问。**注意：Admin TLS 配置在启动时生效，改动需重启；`admin_auth` 仍可热重载。**
 
 > 局域网 IP 场景：默认自签证书只覆盖 localhost/127.0.0.1/::1，直接用 `https://192.168.1.1:9090` 访问会报"证书对该地址无效"。在 `admin_cert_sans` 里写上该 IP 即可让自动生成的证书覆盖它，消除主机名不匹配告警；"不受信任"告警则需把 `admin.crt` 装进访问设备的受信任根证书库（Android 7.0+ 装 CA 证书、Chrome 即信任；装证书要求先设锁屏 PIN）。**面板 System → TLS Cert 页可直接下载当前证书（`GET /admin.crt`，只含公钥证书、不含私钥）**，省去登服务器复制文件的步骤。
+
+### `listen.auth`（身份认证与流量配额）
+
+`auth` 对象控制系统内账号凭据、SOCKS5 认证与流量配额。支持单用户简写与多用户矩阵配置。
+
+| Go 字段 | JSON 键 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `Enabled` | `enabled` | `false` | 主认证总开关。为 `false` 时，Captive Portal 与 SOCKS5 均不启用认证 |
+| `Socks5Enabled` | `socks5_enabled` | `false` | SOCKS5 监听器独立认证开关。仅当 `enabled=true` 且 `socks5_enabled=true` 时，SOCKS5 端口才强制进行用户名/密码认证；若设为 `false`，SOCKS5 端口保持免密（NoAuth），仅 Web Portal 门户需要认证登录 |
+| `Username` | `username` | `""` | 单用户默认用户名（与 `users` 并存） |
+| `Password` | `password` | `""` | 单用户默认密码 |
+| `MaxDevices` | `max_devices` | `0` | 全局每账号最大并发设备数（0 表示无限制，Portal 场景使用） |
+| `TrafficLimitMB` | `traffic_limit_mb` | `0` | 全局每账号流量配额上限（MB，0 表示无限制） |
+| `TrafficLimitBytes` | `traffic_limit_bytes` | `0` | 全局每账号流量配额上限（字节数，优先于 `traffic_limit_mb`，0 表示无限制） |
+| `ResetCycle` | `reset_cycle` | `"none"` | 流量自动重置周期：`"none"` 或 `""`（不重置，默认）、`"daily"`（每日零点自动清零重置）、`"monthly"`（每月1日零点自动清零重置） |
+| `Users` | `users` | `[]` | 多用户账号配置列表（每个条目结构见下表） |
+
+#### `users[]` 数组条目字段
+
+| 字段 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `username` | string | 必填 | 用户名 |
+| `password` | string | 必填 | 密码 |
+| `max_devices` | int | 继承全局 | 该账号允许的最大并发在线设备数（0 为无限制；超过时剔除最早登录的设备） |
+| `traffic_limit_mb` | int64 | 继承全局 | 该账号的总流量配额（MB，0 为无限制） |
+| `traffic_limit_bytes` | int64 | 继承全局 | 该账号的总流量配额（字节，0 为无限制） |
+| `reset_cycle` | string | 继承全局 | 账号专属重置周期：`"none"`、`"daily"`、`"monthly"` |
+
+> 💡 **SOCKS5 与 Captive Portal 统一流量池**：
+> 同一账号在 SOCKS5 代理中传输的流量（下行+上行）与在 Wi-Fi 热点 Portal 认证后消耗的 TUN 流量合并统计。当累计用量达到流量上限时：
+> 1. SOCKS5 监听器后续建连将被直接拒绝；正在传输的连接将在检测到超限时立即断开连接。
+> 2. 热点 Portal 用户的所有外网 TCP 连接均被 TUN 拦截并重置，同时 HTTP 流量重定向至 Portal 流量耗尽告警页面。
+> 3. 流量统计数据实时持久化至工作目录下的 `portal_traffic.json`，服务重启后用量无缝延续。管理员可通过 Admin API `GET /api/portal/traffic` 查询各账号流量及重置时间，通过 `POST /api/portal/traffic/reset` 重置用量。
+
+---
+
+### `listen.portal`（Wi-Fi 热点 Captive Portal 强制认证门户）
+
+当 SmartProxy 作为软路由、随身 Wi-Fi、Android 本机热点或局域网透明网关运行时，可启用 Captive Portal 拦截未经认证设备的上网请求，强制跳转到美观自适应的 Web 登录页面。启用本功能前必须配置 `listen.auth` 并设置 `auth.enabled: true`。
+
+| Go 字段 | JSON 键 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `Enabled` | `enabled` | `false` | 是否开启 Captive Portal 强制门户认证 |
+| `Title` | `title` | `"SmartProxy Hotspot"` | Web 认证页面显示的标题与热点名称 |
+| `LeaseHours` | `lease_hours` | `24` | 认证成功后的设备授权租期（小时，0 为无限制） |
+| `AutoReauthByCookie` | `auto_reauth_by_cookie` | `true` | 是否启用 Cookie 免登录自动重登（应对移动设备随机 MAC / IP 变化） |
+| `ExemptMACs` | `exempt_macs` | `[]` | MAC 地址免认证白名单列表（如 `["00:11:22:33:44:55"]`），格式不区分大小写 |
+| `ExemptIPs` | `exempt_ips` | `[]` | IP 地址免认证白名单列表（如 `["192.168.43.100"]`） |
+
+**工作机制**：
+- **自动探针响应与拦截**：自动拦截 Apple（`captive.apple.com`）、Android/Pixel（`connectivitycheck.gstatic.com`）、Windows（`msftconnecttest.com`）等系统的 Captive Portal 探针请求，并针对未认证客户端的所有 HTTP 80 端口流量返回 302 重定向至 `http://smartproxy.lan:9090/portal?ip=<client-ip>`。
+- **免认证放行**：局域网 DNS 解析（UDP 53）、管理面板端口（默认 9090）以及 `exempt_ips` / `exempt_macs` 白名单设备直接放行；其余外网 TCP 流量全部阻断直到用户登录。
+- **设备防护与漫游**：
+  - 自动绑定 IP 与 ARP/NDP MAC 地址，防止未认证设备篡改静态 IP 盗用他人已认证会话。
+  - 内置防暴力破解（IP 连续失败 5 次封禁 5 分钟）与 CSRF 防御。
+  - 响应式 UI 适配手机竖屏与桌面端浏览器，实时展示已用流量、剩余配额、租期及在线状态。
+
 
 ### `tun`
 

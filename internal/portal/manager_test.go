@@ -11,6 +11,7 @@ import (
 func makeTestConfig(maxDevices int) *config.Config {
 	cfg := config.DefaultConfig()
 	cfg.Listen.Auth = &config.AuthConf{
+		Enabled: true,
 		Users: []config.AuthUserConf{
 			{Username: "alice", Password: "secret123", MaxDevices: maxDevices},
 		},

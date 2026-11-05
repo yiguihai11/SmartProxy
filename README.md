@@ -44,6 +44,11 @@ SmartProxy 是一个用 Go 语言编写的高性能透明代理与智能路由�
   - 启动即随附轻量管理面板（默认 9090 端口，HTTPS + 可选身份认证），支持在线编辑配置、规则调整与日志实时流过滤。
 - **跨平台与 Android 客户端**：
   - 支持 Linux、macOS、Windows；通过 Android Jetpack Compose 客户端提供无缝的移动端体验（VPN 隧道与仅代理双模式）。
+- **多用户认证、流量配额与 Wi-Fi 强制门户 (Captive Portal)**：
+  - **SOCKS5 多用户认证与流量限制**：支持基于用户名/密码的认证（独立开关 `socks5_enabled`，默认可免密访问），按账号统计 SOCKS5 转发字节并执行实时超限熔断。
+  - **热点强制认证门户 (Captive Portal)**：软路由、随身 Wi-Fi 或热点共享场景下，自动拦截未经认证设备的外网 HTTP 请求并 302 重定向至登录门户；完美适配 Apple、Android、Windows 等系统的连网认证探针；支持 MAC/IP 白名单免认证放行。
+  - **设备防盗与会话漫游**：自动绑定 IP 与 ARP/NDP MAC 防止静态 IP 冒用；Cookie 免密漫游支持手机随机 MAC 场景；支持账号并发设备数限制（`max_devices`）与设备踢下线。
+  - **统一流量池与自动周期重置**：SOCKS5 与 Wi-Fi 热点共享统一账号流量池；支持每日（`daily`）与每月1日（`monthly`）零点自动重置配额；流量用量磁盘持久化（`portal_traffic.json`）；提供 Admin REST API 支持在线查看与配额重置。
 
 ---
 

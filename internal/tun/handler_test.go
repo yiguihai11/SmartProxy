@@ -1193,6 +1193,7 @@ func TestTUNHandler_PortalInterception(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Listen.AdminPort = 9090
 	cfg.Listen.Auth = &config.AuthConf{
+		Enabled: true,
 		Users: []config.AuthUserConf{
 			{Username: "alice", Password: "password"},
 		},
@@ -1241,6 +1242,7 @@ func TestTUNHandler_PortalInterception(t *testing.T) {
 func TestTUNHandler_PortalTrafficQuota(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Listen.Auth = &config.AuthConf{
+		Enabled: true,
 		Users: []config.AuthUserConf{
 			{
 				Username:          "alice",

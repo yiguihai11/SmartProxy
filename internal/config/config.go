@@ -191,7 +191,8 @@ func (p *PortalConf) PortalTitle() string {
 }
 
 type AuthConf struct {
-	Socks5Enabled     *bool          `json:"socks5_enabled,omitempty"` // Controls whether SOCKS5 listener enforces auth (default true when credentials present)
+	Enabled           bool           `json:"enabled"`                   // Master authentication switch (default false)
+	Socks5Enabled     bool           `json:"socks5_enabled"`            // Controls whether SOCKS5 listener enforces auth (default false)
 	Username          string         `json:"username,omitempty"`
 	Password          string         `json:"password,omitempty"`
 	MaxDevices        int            `json:"max_devices,omitempty"`
@@ -202,13 +203,11 @@ type AuthConf struct {
 }
 
 // IsSocks5AuthEnabled reports whether SOCKS5 listener should require authentication.
-// Defaults to true if auth credentials are configured and socks5_enabled is not explicitly false.
+// Defaults to false. Requires both auth.enabled and auth.socks5_enabled to be true,
+// plus valid credentials configured.
 func (a *AuthConf) IsSocks5AuthEnabled() bool {
-	if a == nil || !a.HasCredentials() {
+	if a == nil || !a.Enabled || !a.Socks5Enabled || !a.HasCredentials() {
 		return false
-	}
-	if a.Socks5Enabled != nil {
-		return *a.Socks5Enabled
 	}
 	return true
 }
@@ -603,7 +602,6 @@ func (c *Config) Clone() *Config {
 	// Listen
 	if c.Listen.Auth != nil {
 		auth := *c.Listen.Auth
-		auth.Socks5Enabled = cloneBoolPtr(c.Listen.Auth.Socks5Enabled)
 		if c.Listen.Auth.Users != nil {
 			auth.Users = make([]AuthUserConf, len(c.Listen.Auth.Users))
 			copy(auth.Users, c.Listen.Auth.Users)
@@ -869,8 +867,8 @@ func (c *Config) Validate() error {
 		}
 	}
 	if c.Listen.Portal != nil && c.Listen.Portal.Enabled {
-		if c.Listen.Auth == nil || !c.Listen.Auth.HasCredentials() {
-			errs = append(errs, "listen.portal requires listen.auth credentials to be configured")
+		if c.Listen.Auth == nil || !c.Listen.Auth.Enabled || !c.Listen.Auth.HasCredentials() {
+			errs = append(errs, "listen.portal requires listen.auth to be enabled and configured with credentials")
 		}
 		if c.Listen.Portal.LeaseHours < 0 {
 			errs = append(errs, "listen.portal.lease_hours must not be negative")
