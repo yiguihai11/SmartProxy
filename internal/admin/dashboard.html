@@ -2595,10 +2595,42 @@ async function loadHealth(){
     var h=await jf('/health');
     lhealth({health:h});
     st('health-time');
+    handleProbeProgress(h.probe_progress);
   }catch(e){
     if(!healthD||!healthD.health){
       document.getElementById('health-time').textContent='Error: '+e.message;
     }
+  }
+}
+function handleProbeProgress(pp){
+  if(window._batchTestAbortCtrl)return;
+  var card=document.getElementById('batch-test-progress-card');
+  if(!card)return;
+  if(pp&&pp.testing&&pp.total>0){
+    card.style.display='flex';
+    card.style.opacity='1';
+    card.classList.remove('finished');
+    var cancelBtn=document.getElementById('batch-test-cancel-btn');
+    if(cancelBtn)cancelBtn.style.display='none';
+    var label=tf('Testing nodes in background ({0} concurrent)...',[5]);
+    updateBatchTestProgress(pp.completed, pp.total, pp.healthy, pp.failed, label);
+    window._wasBgProbing=true;
+    if(!window._bgProbePollTimer){
+      window._bgProbePollTimer=setTimeout(function(){
+        window._bgProbePollTimer=null;
+        loadHealth();
+      },600);
+    }
+  }else if(pp&&!pp.testing&&window._wasBgProbing){
+    window._wasBgProbing=false;
+    updateBatchTestProgress(pp.completed, pp.total, pp.healthy, pp.failed, t('Node connectivity test completed'));
+    card.classList.add('finished');
+    showToast(tf('Node test completed: {0} available, {1} failed',[pp.healthy, pp.failed]));
+    setTimeout(function(){
+      if(!window._batchTestAbortCtrl&&(!pp||!pp.testing)){
+        card.style.display='none';
+      }
+    },2000);
   }
 }
 async function tp(i){
@@ -4346,7 +4378,7 @@ async function refreshSub(name, btn){
       throw new Error(msg||('HTTP '+r.status));
     }
     var res=await r.json();
-    showToast(tf('Successfully refreshed {0} subscription nodes',[res.count||0]));
+    showToast(tf('Refreshed {0} nodes, testing connectivity in background...',[res.count||0]));
     await loadHealth();
   }catch(e){
     alert(tf('Refresh failed: {0}',[e.message]));

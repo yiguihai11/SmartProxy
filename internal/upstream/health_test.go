@@ -928,4 +928,72 @@ func TestHealthChecker_ProtocolFilter(t *testing.T) {
 	}
 }
 
+func TestHealthChecker_TimeoutsAndProgress(t *testing.T) {
+	// 1. Verify default timeouts: 1.5s for TCP, 1.0s for UDP
+	hcDefault := NewHealthChecker(config.HealthCheckConf{}, nil)
+	if lat := hcDefault.tcpTimeout(); lat != 1500*time.Millisecond {
+		t.Errorf("expected default tcpTimeout 1500ms, got %v", lat)
+	}
+	if lat := hcDefault.udpTimeout(); lat != 1000*time.Millisecond {
+		t.Errorf("expected default udpTimeout 1000ms, got %v", lat)
+	}
+
+	// 2. Custom ms timeouts
+	hcCustom := NewHealthChecker(config.HealthCheckConf{
+		TCPTimeoutMs: 1200,
+		UDPTimeoutMs: 800,
+	}, nil)
+	if lat := hcCustom.tcpTimeout(); lat != 1200*time.Millisecond {
+		t.Errorf("expected tcpTimeout 1200ms, got %v", lat)
+	}
+	if lat := hcCustom.udpTimeout(); lat != 800*time.Millisecond {
+		t.Errorf("expected udpTimeout 800ms, got %v", lat)
+	}
+
+	// 3. Concurrency limit is 5
+	if cap(hcDefault.probeSem) != 5 {
+		t.Errorf("expected probeSem cap 5, got %d", cap(hcDefault.probeSem))
+	}
+
+	// 4. Progress tracking
+	hc := NewHealthChecker(config.HealthCheckConf{Enabled: true}, nil)
+	hc.initProgress(10)
+	p0 := hc.Progress()
+	if !p0.Testing || p0.Total != 10 || p0.Completed != 0 {
+		t.Errorf("unexpected initial progress: %+v", p0)
+	}
+
+	proxy1, err := NewProxy("socks5://127.0.0.1:1080")
+	if err != nil {
+		t.Fatalf("failed to create proxy: %v", err)
+	}
+	proxy1.health.state = StateClosed // available
+
+	proxy2, err := NewProxy("socks5://127.0.0.1:1081")
+	if err != nil {
+		t.Fatalf("failed to create proxy: %v", err)
+	}
+	proxy2.health.state = StateOpen // broken
+	proxy2.udpHealth.state = StateOpen
+
+	hc.recordProgressNodeDone(proxy1)
+	p1 := hc.Progress()
+	if p1.Completed != 1 || p1.Healthy != 1 || p1.Failed != 0 {
+		t.Errorf("unexpected progress after proxy1: %+v", p1)
+	}
+
+	hc.recordProgressNodeDone(proxy2)
+	p2 := hc.Progress()
+	if p2.Completed != 2 || p2.Healthy != 1 || p2.Failed != 1 {
+		t.Errorf("unexpected progress after proxy2: %+v", p2)
+	}
+
+	hc.completeProgress()
+	pDone := hc.Progress()
+	if pDone.Testing {
+		t.Errorf("expected testing=false after completeProgress: %+v", pDone)
+	}
+}
+
+
 

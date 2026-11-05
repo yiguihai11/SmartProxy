@@ -1024,6 +1024,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if s.mgr != nil {
 		resp["allow_ipv4"] = s.mgr.IsIPv4Enabled()
 		resp["allow_ipv6"] = s.mgr.IsIPv6Enabled()
+		if hc := s.mgr.HealthChecker(); hc != nil {
+			resp["probe_progress"] = hc.Progress()
+		}
 	}
 	json.NewEncoder(w).Encode(resp)
 }

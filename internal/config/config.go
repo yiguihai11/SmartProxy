@@ -340,6 +340,8 @@ type HealthCheckConf struct {
 	URL                string `json:"url"`
 	Interval           int    `json:"interval"`
 	Timeout            int    `json:"timeout"`
+	TCPTimeoutMs       int    `json:"tcp_timeout_ms,omitempty"`
+	UDPTimeoutMs       int    `json:"udp_timeout_ms,omitempty"`
 	FailuresThreshold  int    `json:"failures"`
 	SuccessesThreshold int    `json:"successes"`
 	OpenCoolDown       int    `json:"open_cool_down"`
@@ -1090,7 +1092,9 @@ func DefaultConfig() *Config {
 				Enabled:            false,
 				URL:                "http://cp.cloudflare.com/generate_204",
 				Interval:           60,
-				Timeout:            5,
+				Timeout:            2,
+				TCPTimeoutMs:       1500,
+				UDPTimeoutMs:       1000,
 				FailuresThreshold:  2,
 				SuccessesThreshold: 1,
 				OpenCoolDown:       30,

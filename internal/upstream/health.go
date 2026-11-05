@@ -256,6 +256,17 @@ func (ph *ProxyHealth) RestoreSnapshot(s ProxyHealthSnapshot) {
 	}
 }
 
+const defaultProbeConcurrency = 5
+
+// HealthCheckProgress reports real-time batch probing progress.
+type HealthCheckProgress struct {
+	Testing   bool `json:"testing"`
+	Total     int  `json:"total"`
+	Completed int  `json:"completed"`
+	Healthy   int  `json:"healthy"`
+	Failed    int  `json:"failed"`
+}
+
 type HealthChecker struct {
 	mu        sync.RWMutex
 	running   bool
@@ -281,6 +292,8 @@ type HealthChecker struct {
 	firstUDPProbeDone chan struct{}
 	firstUDPProbeOnce sync.Once
 	onNodeProbed      atomic.Pointer[func(p *Proxy)]
+	progressMu        sync.RWMutex
+	progress          HealthCheckProgress
 }
 
 func NewHealthChecker(cfg config.HealthCheckConf, proxies []*Proxy) *HealthChecker {
@@ -290,7 +303,7 @@ func NewHealthChecker(cfg config.HealthCheckConf, proxies []*Proxy) *HealthCheck
 		stopCh:            make(chan struct{}),
 		ctx:               ctx,
 		cancel:            cancel,
-		probeSem:          make(chan struct{}, 16),
+		probeSem:          make(chan struct{}, defaultProbeConcurrency),
 		firstProbeDone:    make(chan struct{}),
 		firstTCPProbeDone: make(chan struct{}),
 		firstUDPProbeDone: make(chan struct{}),
@@ -390,7 +403,7 @@ func (hc *HealthChecker) startLocked() {
 		hc.stopCh = make(chan struct{})
 	}
 	if hc.probeSem == nil {
-		hc.probeSem = make(chan struct{}, 16)
+		hc.probeSem = make(chan struct{}, defaultProbeConcurrency)
 	}
 	if hc.firstProbeDone == nil {
 		hc.firstProbeOnce = sync.Once{}
@@ -412,6 +425,8 @@ func (hc *HealthChecker) startLocked() {
 	stopCh := hc.stopCh
 	proxies := hc.proxies
 
+	hc.initProgressLocked(len(proxies))
+
 	var initialWg sync.WaitGroup
 	initialWg.Add(len(proxies))
 	safego.Go("upstream.health.initialProbeWatcher", func() {
@@ -419,6 +434,7 @@ func (hc *HealthChecker) startLocked() {
 		// 所有节点的初始探测(TCP+UDP)都跑完了,三条闸门不管成败全部放行,
 		// 避免某种协议全军覆没时对应入口永远卡在 800ms 超时上。
 		hc.notifyAllFirstProbesDone()
+		hc.completeProgress()
 	})
 
 	for i, p := range proxies {
@@ -458,6 +474,7 @@ func (hc *HealthChecker) stopAsync() *sync.WaitGroup {
 
 	if !hc.running {
 		hc.notifyAllFirstProbesDoneLocked()
+		hc.completeProgressLocked()
 		return nil
 	}
 	hc.running = false
@@ -475,6 +492,7 @@ func (hc *HealthChecker) stopAsync() *sync.WaitGroup {
 		hc.stopCh = nil
 	}
 	hc.notifyAllFirstProbesDoneLocked()
+	hc.completeProgressLocked()
 
 	wg := hc.wg
 	hc.wg = nil
@@ -494,7 +512,7 @@ func (hc *HealthChecker) Reload(cfg config.HealthCheckConf, proxies []*Proxy) {
 	hc.proxies = proxies
 	hc.ctx, hc.cancel = context.WithCancel(context.Background())
 	hc.stopCh = make(chan struct{})
-	hc.probeSem = make(chan struct{}, 16)
+	hc.probeSem = make(chan struct{}, defaultProbeConcurrency)
 	hc.firstProbeOnce = sync.Once{}
 	hc.firstProbeDone = make(chan struct{})
 	hc.firstTCPProbeOnce = sync.Once{}
@@ -666,6 +684,98 @@ func (hc *HealthChecker) notifyCircuitProbeDone(circuit string) {
 	}
 }
 
+func (hc *HealthChecker) initProgress(total int) {
+	hc.progressMu.Lock()
+	defer hc.progressMu.Unlock()
+	hc.progress = HealthCheckProgress{
+		Testing:   total > 0,
+		Total:     total,
+		Completed: 0,
+		Healthy:   0,
+		Failed:    0,
+	}
+}
+
+func (hc *HealthChecker) initProgressLocked(total int) {
+	hc.initProgress(total)
+}
+
+func (hc *HealthChecker) recordProgressNodeDone(p *Proxy) {
+	if p == nil {
+		return
+	}
+	isHealthy := p.V4TCPAvailable() || p.V4UDPAvailable() || p.V6TCPAvailable() || p.V6UDPAvailable()
+
+	hc.progressMu.Lock()
+	defer hc.progressMu.Unlock()
+	if !hc.progress.Testing {
+		return
+	}
+	hc.progress.Completed++
+	if isHealthy {
+		hc.progress.Healthy++
+	} else {
+		hc.progress.Failed++
+	}
+	if hc.progress.Completed >= hc.progress.Total {
+		hc.progress.Testing = false
+	}
+}
+
+func (hc *HealthChecker) completeProgress() {
+	hc.progressMu.Lock()
+	defer hc.progressMu.Unlock()
+	hc.progress.Testing = false
+}
+
+func (hc *HealthChecker) completeProgressLocked() {
+	hc.completeProgress()
+}
+
+// Progress returns a snapshot of the current health check probing progress.
+func (hc *HealthChecker) Progress() HealthCheckProgress {
+	if hc == nil {
+		return HealthCheckProgress{}
+	}
+	hc.progressMu.RLock()
+	defer hc.progressMu.RUnlock()
+	return hc.progress
+}
+
+func (hc *HealthChecker) tcpTimeout() time.Duration {
+	if hc == nil {
+		return 1500 * time.Millisecond
+	}
+	cfg := hc.cfg.Load()
+	if cfg == nil {
+		return 1500 * time.Millisecond
+	}
+	if cfg.TCPTimeoutMs > 0 {
+		return time.Duration(cfg.TCPTimeoutMs) * time.Millisecond
+	}
+	if cfg.Timeout > 0 && cfg.Timeout != 5 {
+		return time.Duration(cfg.Timeout) * time.Second
+	}
+	return 1500 * time.Millisecond
+}
+
+func (hc *HealthChecker) udpTimeout() time.Duration {
+	if hc == nil {
+		return 1000 * time.Millisecond
+	}
+	cfg := hc.cfg.Load()
+	if cfg == nil {
+		return 1000 * time.Millisecond
+	}
+	if cfg.UDPTimeoutMs > 0 {
+		return time.Duration(cfg.UDPTimeoutMs) * time.Millisecond
+	}
+	if cfg.Timeout > 0 && cfg.Timeout != 5 {
+		return time.Duration(cfg.Timeout) * time.Second
+	}
+	return 1000 * time.Millisecond
+}
+
 // HasAnyTCPAvailable reports whether at least one proxy is verified available for TCP (IPv4 or IPv6).
 func (hc *HealthChecker) HasAnyTCPAvailable() bool {
 	if hc == nil {
@@ -704,11 +814,6 @@ func (hc *HealthChecker) ProbeAll() {
 	if hc == nil {
 		return
 	}
-	cfg := hc.cfg.Load()
-	timeoutSec := 5
-	if cfg != nil && cfg.Timeout > 0 {
-		timeoutSec = cfg.Timeout
-	}
 
 	hc.mu.RLock()
 	proxies := hc.proxies
@@ -716,51 +821,28 @@ func (hc *HealthChecker) ProbeAll() {
 	stopCh := hc.stopCh
 	hc.mu.RUnlock()
 
-	if parentCtx == nil || stopCh == nil {
+	if parentCtx == nil || stopCh == nil || len(proxies) == 0 {
 		return
 	}
 
-	timeout := time.Duration(timeoutSec) * time.Second
-	allowV4 := hc.allowIPv4.Load()
-	allowV6 := hc.allowIPv6.Load()
+	hc.initProgress(len(proxies))
+
+	var allWg sync.WaitGroup
+	allWg.Add(len(proxies))
+
 	for _, p := range proxies {
 		proxy := p
 		safego.Go("upstream.health.probeOnNetworkChange", func() {
-			ctx, cancel := context.WithTimeout(parentCtx, timeout)
-			defer cancel()
-
-			if allowV4 {
-				if proxy.SchemeSupportsUDP() && !proxy.udpHealth.IsManuallyDisabled() {
-					if err := hc.acquireProbeSem(ctx, stopCh); err == nil {
-						latency, err := hc.ProbeUDP(ctx, proxy)
-						hc.releaseProbeSem()
-						if err == nil {
-							hc.RecordUDPSuccess(proxy, latency)
-						} else {
-							hc.RecordUDPFailure(proxy, err)
-						}
-					}
-				}
-				if !proxy.health.IsManuallyDisabled() {
-					if err := hc.acquireProbeSem(ctx, stopCh); err == nil {
-						latency, err := hc.ProbeTCP(ctx, proxy)
-						if err == nil {
-							hc.RecordSuccess(proxy, latency)
-						} else {
-							hc.RecordFailure(proxy, err)
-						}
-						hc.releaseProbeSem()
-						hc.notifyNodeProbed(proxy)
-					}
-				}
-			}
-			if allowV6 {
-				if pin := proxy.IPv6Pin(); pin == nil || *pin {
-					hc.checkProxyIPv6WithContext(parentCtx, stopCh, proxy)
-				}
-			}
+			defer allWg.Done()
+			hc.checkProxyWithContext(parentCtx, stopCh, proxy)
+			hc.recordProgressNodeDone(proxy)
 		})
 	}
+
+	safego.Go("upstream.health.probeAllWatcher", func() {
+		allWg.Wait()
+		hc.completeProgress()
+	})
 }
 
 func (hc *HealthChecker) checkLoop(ctx context.Context, stopCh <-chan struct{}, p *Proxy, idx int, initialWg *sync.WaitGroup, wg *sync.WaitGroup) {
@@ -768,15 +850,11 @@ func (hc *HealthChecker) checkLoop(ctx context.Context, stopCh <-chan struct{}, 
 		defer wg.Done()
 	}
 
-	// Stagger initial delays: Proxy 0 starts at 0ms delay, 1-15 with 10ms-150ms delay,
-	// subsequent nodes staggered to bound initial load on system sockets.
+	// Stagger initial delays: Proxy 0 starts at 0ms delay, 1-4 with 15ms delay per node.
+	// Nodes >= defaultProbeConcurrency wait naturally on the concurrency semaphore.
 	var initialDelay time.Duration
-	if idx == 0 {
-		initialDelay = 0
-	} else if idx < 16 {
-		initialDelay = time.Duration(idx*10) * time.Millisecond
-	} else {
-		initialDelay = time.Duration(160+(idx%20)*50) * time.Millisecond
+	if idx > 0 && idx < defaultProbeConcurrency {
+		initialDelay = time.Duration(idx*15) * time.Millisecond
 	}
 
 	if initialDelay > 0 {
@@ -798,6 +876,7 @@ func (hc *HealthChecker) checkLoop(ctx context.Context, stopCh <-chan struct{}, 
 	}
 
 	hc.checkProxyWithContext(ctx, stopCh, p)
+	hc.recordProgressNodeDone(p)
 	if initialWg != nil {
 		initialWg.Done()
 	}
@@ -841,6 +920,9 @@ func (hc *HealthChecker) checkProxy(p *Proxy) {
 }
 
 func (hc *HealthChecker) checkProxyWithContext(ctx context.Context, stopCh <-chan struct{}, p *Proxy) {
+	if p == nil {
+		return
+	}
 	select {
 	case <-stopCh:
 		return
@@ -849,18 +931,43 @@ func (hc *HealthChecker) checkProxyWithContext(ctx context.Context, stopCh <-cha
 	default:
 	}
 
+	if err := hc.acquireProbeSem(ctx, stopCh); err != nil {
+		return
+	}
+	defer hc.releaseProbeSem()
+
 	allowV4 := hc.allowIPv4.Load()
 	allowV6 := hc.allowIPv6.Load()
 
+	var wg sync.WaitGroup
+
 	if allowV4 {
-		if p.SchemeSupportsUDP() {
-			hc.checkProxyUDPWithContext(ctx, stopCh, p)
+		if p.SchemeSupportsUDP() && !p.udpHealth.IsManuallyDisabled() {
+			wg.Add(1)
+			safego.Go("upstream.health.probeUDP", func() {
+				defer wg.Done()
+				hc.checkProxyUDPWithContext(ctx, stopCh, p)
+			})
 		}
-		hc.checkProxyTCPWithContext(ctx, stopCh, p)
+		if !p.health.IsManuallyDisabled() {
+			wg.Add(1)
+			safego.Go("upstream.health.probeTCP", func() {
+				defer wg.Done()
+				hc.checkProxyTCPWithContext(ctx, stopCh, p)
+			})
+		}
 	}
 	if allowV6 {
-		hc.checkProxyIPv6WithContext(ctx, stopCh, p)
+		if pin := p.IPv6Pin(); pin == nil || *pin {
+			wg.Add(1)
+			safego.Go("upstream.health.probeIPv6", func() {
+				defer wg.Done()
+				hc.checkProxyIPv6WithContext(ctx, stopCh, p)
+			})
+		}
 	}
+
+	wg.Wait()
 }
 
 // IPv6ProbeDefaultTarget is the default Anycast IPv6 probe target (Cloudflare public DNS IPv6).
@@ -1013,10 +1120,8 @@ func (hc *HealthChecker) checkProxyIPv6WithContext(parentCtx context.Context, st
 		return
 	}
 	cfg := hc.cfg.Load()
-	timeout := time.Duration(cfg.Timeout) * time.Second
-	if timeout <= 0 {
-		timeout = 5 * time.Second
-	}
+
+	var innerWg sync.WaitGroup
 
 	if !p.v6Health.IsManuallyDisabled() {
 		p.v6Health.mu.RLock()
@@ -1025,23 +1130,24 @@ func (hc *HealthChecker) checkProxyIPv6WithContext(parentCtx context.Context, st
 		p.v6Health.mu.RUnlock()
 
 		shouldProbeTCP := true
-		if tcpState == StateOpen {
+		if tcpState == StateOpen && cfg != nil {
 			if time.Since(tcpOpenSince) < time.Duration(cfg.OpenCoolDown)*time.Second {
 				shouldProbeTCP = false
 			}
 		}
 		if shouldProbeTCP {
-			ctx, cancel := context.WithTimeout(parentCtx, timeout)
-			if err := hc.acquireProbeSem(ctx, stopCh); err == nil {
+			innerWg.Add(1)
+			safego.Go("upstream.health.probeV6TCP", func() {
+				defer innerWg.Done()
+				ctx, cancel := context.WithTimeout(parentCtx, hc.tcpTimeout())
+				defer cancel()
 				lat, err := probeIPv6(ctx, p)
-				hc.releaseProbeSem()
 				if err == nil {
 					hc.RecordV6Success(p, lat)
 				} else {
 					hc.RecordV6Failure(p, err)
 				}
-			}
-			cancel()
+			})
 		}
 	}
 
@@ -1052,25 +1158,28 @@ func (hc *HealthChecker) checkProxyIPv6WithContext(parentCtx context.Context, st
 		p.v6UDPHealth.mu.RUnlock()
 
 		shouldProbeUDP := true
-		if udpState == StateOpen {
+		if udpState == StateOpen && cfg != nil {
 			if time.Since(udpOpenSince) < time.Duration(cfg.OpenCoolDown)*time.Second {
 				shouldProbeUDP = false
 			}
 		}
 		if shouldProbeUDP {
-			ctx, cancel := context.WithTimeout(parentCtx, timeout)
-			if err := hc.acquireProbeSem(ctx, stopCh); err == nil {
+			innerWg.Add(1)
+			safego.Go("upstream.health.probeV6UDP", func() {
+				defer innerWg.Done()
+				ctx, cancel := context.WithTimeout(parentCtx, hc.udpTimeout())
+				defer cancel()
 				uLat, uErr := probeIPv6UDP(ctx, p)
-				hc.releaseProbeSem()
 				if uErr == nil {
 					hc.RecordV6UDPSuccess(p, uLat)
 				} else {
 					hc.RecordV6UDPFailure(p, uErr)
 				}
-			}
-			cancel()
+			})
 		}
 	}
+
+	innerWg.Wait()
 }
 
 // ProbeIPv6 actively tests whether a proxy can route IPv6 traffic.
@@ -1393,7 +1502,7 @@ func (hc *HealthChecker) checkProxyTCPWithContext(parentCtx context.Context, sto
 	// the udp_in_tcp node default) pinned it down, so probing is wasted and, for udp_in_tcp
 	// nodes, would exercise the plaintext framed carrier that the pin is protecting against.
 	// Releasing the circuit (action=auto) or forcing it up (action=enable) resumes TCP probing.
-	if p.health.IsManuallyDisabled() {
+	if p == nil || p.health.IsManuallyDisabled() {
 		return
 	}
 
@@ -1404,23 +1513,15 @@ func (hc *HealthChecker) checkProxyTCPWithContext(parentCtx context.Context, sto
 	openSince := p.health.openSince
 	p.health.mu.RUnlock()
 
-	if state == StateOpen {
+	if state == StateOpen && cfg != nil {
 		if time.Since(openSince) < time.Duration(cfg.OpenCoolDown)*time.Second {
 			return
 		}
 	}
 
-	timeout := time.Duration(cfg.Timeout) * time.Second
-	if timeout <= 0 {
-		timeout = 5 * time.Second
-	}
+	timeout := hc.tcpTimeout()
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
-
-	if err := hc.acquireProbeSem(ctx, stopCh); err != nil {
-		return
-	}
-	defer hc.releaseProbeSem()
 
 	latency, err := hc.ProbeTCP(ctx, p)
 	if err == nil {
@@ -1452,7 +1553,7 @@ func (hc *HealthChecker) checkProxyUDPWithContext(parentCtx context.Context, sto
 	// pinned it down, so probing is wasted and, for plugin nodes, would defeat the "UDP
 	// down until the user releases it" intent. Releasing the circuit (action=auto) or
 	// forcing it up (action=enable) resumes UDP probing.
-	if p.udpHealth.IsManuallyDisabled() {
+	if p == nil || p.udpHealth.IsManuallyDisabled() {
 		return
 	}
 
@@ -1463,23 +1564,15 @@ func (hc *HealthChecker) checkProxyUDPWithContext(parentCtx context.Context, sto
 	openSince := p.udpHealth.openSince
 	p.udpHealth.mu.RUnlock()
 
-	if state == StateOpen {
+	if state == StateOpen && cfg != nil {
 		if time.Since(openSince) < time.Duration(cfg.OpenCoolDown)*time.Second {
 			return
 		}
 	}
 
-	timeout := time.Duration(cfg.Timeout) * time.Second
-	if timeout <= 0 {
-		timeout = 5 * time.Second
-	}
+	timeout := hc.udpTimeout()
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	defer cancel()
-
-	if err := hc.acquireProbeSem(ctx, stopCh); err != nil {
-		return
-	}
-	defer hc.releaseProbeSem()
 
 	latency, err := hc.ProbeUDP(ctx, p)
 	if err != nil {
