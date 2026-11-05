@@ -191,6 +191,7 @@ func (p *PortalConf) PortalTitle() string {
 }
 
 type AuthConf struct {
+	Socks5Enabled     *bool          `json:"socks5_enabled,omitempty"` // Controls whether SOCKS5 listener enforces auth (default true when credentials present)
 	Username          string         `json:"username,omitempty"`
 	Password          string         `json:"password,omitempty"`
 	MaxDevices        int            `json:"max_devices,omitempty"`
@@ -198,6 +199,18 @@ type AuthConf struct {
 	TrafficLimitMB    int64          `json:"traffic_limit_mb,omitempty"`
 	ResetCycle        string         `json:"reset_cycle,omitempty"`
 	Users             []AuthUserConf `json:"users,omitempty"`
+}
+
+// IsSocks5AuthEnabled reports whether SOCKS5 listener should require authentication.
+// Defaults to true if auth credentials are configured and socks5_enabled is not explicitly false.
+func (a *AuthConf) IsSocks5AuthEnabled() bool {
+	if a == nil || !a.HasCredentials() {
+		return false
+	}
+	if a.Socks5Enabled != nil {
+		return *a.Socks5Enabled
+	}
+	return true
 }
 
 // EffectiveTrafficLimit returns the effective traffic quota in bytes for the single-user auth.
@@ -231,19 +244,28 @@ func (a *AuthConf) UserTrafficLimit(user string) int64 {
 }
 
 // UserResetCycle returns the configured reset cycle ("daily", "monthly", "none", or "") for the specified user.
+// Defaults to "none" when empty or unset.
 func (a *AuthConf) UserResetCycle(user string) string {
 	if a == nil {
-		return ""
+		return "none"
 	}
 	for _, u := range a.Users {
 		if u.Username == user {
-			return strings.ToLower(strings.TrimSpace(u.ResetCycle))
+			c := strings.ToLower(strings.TrimSpace(u.ResetCycle))
+			if c == "" {
+				return "none"
+			}
+			return c
 		}
 	}
 	if a.Username != "" && a.Username == user {
-		return strings.ToLower(strings.TrimSpace(a.ResetCycle))
+		c := strings.ToLower(strings.TrimSpace(a.ResetCycle))
+		if c == "" {
+			return "none"
+		}
+		return c
 	}
-	return ""
+	return "none"
 }
 
 // HasCredentials reports whether single-user or any multi-user credentials are defined.
@@ -581,6 +603,7 @@ func (c *Config) Clone() *Config {
 	// Listen
 	if c.Listen.Auth != nil {
 		auth := *c.Listen.Auth
+		auth.Socks5Enabled = cloneBoolPtr(c.Listen.Auth.Socks5Enabled)
 		if c.Listen.Auth.Users != nil {
 			auth.Users = make([]AuthUserConf, len(c.Listen.Auth.Users))
 			copy(auth.Users, c.Listen.Auth.Users)

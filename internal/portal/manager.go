@@ -901,35 +901,18 @@ func (m *Manager) IsQuotaExceeded(username string) bool {
 	return m.isUserQuotaExceededLocked(username, time.Now())
 }
 
-// AddTraffic records consumed bytes for the authenticated user associated with clientIP.
+// AddTrafficForUser records consumed bytes directly for an authenticated user (e.g. SOCKS5).
 // Returns true if the user's traffic quota is now exceeded.
-func (m *Manager) AddTraffic(clientIP string, bytes int64) bool {
-	if bytes <= 0 {
-		return false
-	}
-	normIP := normalizeIP(clientIP)
-	if normIP == "" {
+func (m *Manager) AddTrafficForUser(username string, bytes int64) bool {
+	if bytes <= 0 || username == "" {
 		return false
 	}
 
-	m.mu.RLock()
-	sess, ok := m.sessionsByIP[normIP]
-	if !ok && m.macResolver != nil {
-		mac := strings.ToLower(m.macResolver(normIP))
-		if mac != "" {
-			sess = m.sessionsByMAC[mac]
-		}
-	}
-	if sess == nil {
-		m.mu.RUnlock()
-		return false
-	}
-
-	username := sess.Username
 	auth := m.getAuthConf()
 	limit := auth.UserTrafficLimit(username)
 	cycle := auth.UserResetCycle(username)
 
+	m.mu.RLock()
 	ut := m.userTraffic[username]
 	now := time.Now()
 	nowUnix := now.Unix()
@@ -959,6 +942,35 @@ func (m *Manager) AddTraffic(clientIP string, bytes int64) bool {
 	m.trafficDirty.Store(true)
 
 	return limit > 0 && ut.UsedBytes >= limit
+}
+
+// AddTraffic records consumed bytes for the authenticated user associated with clientIP.
+// Returns true if the user's traffic quota is now exceeded.
+func (m *Manager) AddTraffic(clientIP string, bytes int64) bool {
+	if bytes <= 0 {
+		return false
+	}
+	normIP := normalizeIP(clientIP)
+	if normIP == "" {
+		return false
+	}
+
+	m.mu.RLock()
+	sess, ok := m.sessionsByIP[normIP]
+	if !ok && m.macResolver != nil {
+		mac := strings.ToLower(m.macResolver(normIP))
+		if mac != "" {
+			sess = m.sessionsByMAC[mac]
+		}
+	}
+	if sess == nil {
+		m.mu.RUnlock()
+		return false
+	}
+	username := sess.Username
+	m.mu.RUnlock()
+
+	return m.AddTrafficForUser(username, bytes)
 }
 
 // ResetUserTraffic clears accumulated bandwidth usage for a user.

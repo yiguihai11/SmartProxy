@@ -552,16 +552,26 @@ func (e *Engine) handleClient(ctx context.Context, conn net.Conn) {
 
 	auth := e.Config.Load().Listen.Auth
 	var verifier func(user, pass string) bool
-	if auth != nil && auth.HasCredentials() {
+	if auth != nil && auth.IsSocks5AuthEnabled() {
 		verifier = auth.Match
 	}
 
-	if err := socks5.HandshakeWithVerifier(conn, verifier); err != nil {
+	authUser, err := socks5.HandshakeWithUser(conn, verifier)
+	if err != nil {
 		ll.Warn("handshake failed", "remote", remoteAddr, "error", err)
 		return
 	}
 	// Clear the handshake deadline; it does not affect the subsequent long-lived relay connection
 	conn.SetDeadline(time.Time{})
+
+	if authUser != "" && e.portalMgr != nil {
+		if e.portalMgr.IsQuotaExceeded(authUser) {
+			ll.Warn("socks5 connection rejected: user traffic quota exceeded", "user", authUser, "remote", remoteAddr)
+			conn.Close()
+			return
+		}
+		conn = e.wrapUserConn(conn, authUser)
+	}
 
 	req, err := socks5.ReceiveRequest(conn)
 	if err != nil {
@@ -1405,4 +1415,66 @@ func replyForConnError(err error) socks5.Reply {
 		}
 	}
 	return socks5.ReplyGeneralFailure
+}
+
+type userCountingConn struct {
+	net.Conn
+	username  string
+	portalMgr *portal.Manager
+}
+
+func (c *userCountingConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 && c.portalMgr != nil && c.username != "" {
+		if c.portalMgr.AddTrafficForUser(c.username, int64(n)) {
+			c.Conn.Close()
+		}
+	}
+	return n, err
+}
+
+func (c *userCountingConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	if n > 0 && c.portalMgr != nil && c.username != "" {
+		if c.portalMgr.AddTrafficForUser(c.username, int64(n)) {
+			c.Conn.Close()
+		}
+	}
+	return n, err
+}
+
+func (c *userCountingConn) SetLinger(sec int) error {
+	if sl, ok := c.Conn.(interface{ SetLinger(int) error }); ok {
+		return sl.SetLinger(sec)
+	}
+	return nil
+}
+
+func (c *userCountingConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
+func (c *userCountingConn) CloseRead() error {
+	if cr, ok := c.Conn.(interface{ CloseRead() error }); ok {
+		return cr.CloseRead()
+	}
+	return nil
+}
+
+func (c *userCountingConn) SetNoDelay(noDelay bool) error {
+	if nd, ok := c.Conn.(interface{ SetNoDelay(bool) error }); ok {
+		return nd.SetNoDelay(noDelay)
+	}
+	return nil
+}
+
+func (e *Engine) wrapUserConn(conn net.Conn, username string) net.Conn {
+	return &userCountingConn{
+		Conn:      conn,
+		username:  username,
+		portalMgr: e.portalMgr,
+	}
 }

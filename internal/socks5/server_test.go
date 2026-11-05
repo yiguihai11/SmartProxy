@@ -152,6 +152,38 @@ func TestHandshakeWithVerifier_MultiUser(t *testing.T) {
 			t.Fatal("expected charlie handshake failure, got nil")
 		}
 	}
+
+	// 4. Test HandshakeWithUser returns username
+	{
+		clientReq := []byte{0x05, 0x01, 0x02}
+		authSub := []byte{0x01, 0x05, 'a', 'l', 'i', 'c', 'e', 0x08, 'a', 'l', 'i', 'c', 'e', '1', '2', '3'}
+		var buf bytes.Buffer
+		buf.Write(clientReq)
+		buf.Write(authSub)
+
+		user, err := HandshakeWithUser(&buf, verifier)
+		if err != nil {
+			t.Fatalf("expected alice handshake success, got %v", err)
+		}
+		if user != "alice" {
+			t.Errorf("expected user 'alice', got %q", user)
+		}
+	}
+
+	// 5. Test HandshakeWithUser with nil verifier (NoAuth) returns empty string
+	{
+		clientReq := []byte{0x05, 0x01, 0x00}
+		var buf bytes.Buffer
+		buf.Write(clientReq)
+
+		user, err := HandshakeWithUser(&buf, nil)
+		if err != nil {
+			t.Fatalf("expected NoAuth success, got %v", err)
+		}
+		if user != "" {
+			t.Errorf("expected empty user for NoAuth, got %q", user)
+		}
+	}
 }
 
 func TestHandshake_WrongVersion(t *testing.T) {

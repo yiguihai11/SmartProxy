@@ -19,25 +19,26 @@ func Handshake(rw io.ReadWriter, serverUser, serverPass string) error {
 	return HandshakeWithVerifier(rw, nil)
 }
 
-// HandshakeWithVerifier performs standard SOCKS5 handshake. If verifier is nil,
-// no authentication is required (NoAuth). If verifier is non-nil, UserPass authentication
-// is required and credentials sent by the client are validated using the verifier function.
-func HandshakeWithVerifier(rw io.ReadWriter, verifier func(user, pass string) bool) error {
+// HandshakeWithUser performs standard SOCKS5 handshake. If verifier is nil,
+// no authentication is required (NoAuth) and an empty username is returned.
+// If verifier is non-nil, UserPass authentication is required, and on success
+// the authenticated username is returned.
+func HandshakeWithUser(rw io.ReadWriter, verifier func(user, pass string) bool) (string, error) {
 	buf := make([]byte, 2)
 	if _, err := io.ReadFull(rw, buf); err != nil {
-		return fmt.Errorf("failed to read version/methods: %w", err)
+		return "", fmt.Errorf("failed to read version/methods: %w", err)
 	}
 	ver, nmethods := buf[0], buf[1]
 	if ver != Version5 {
-		return errors.New("invalid SOCKS version")
+		return "", errors.New("invalid SOCKS version")
 	}
 	if nmethods == 0 {
-		return errors.New("no authentication methods offered")
+		return "", errors.New("no authentication methods offered")
 	}
 
 	methods := make([]byte, nmethods)
 	if _, err := io.ReadFull(rw, methods); err != nil {
-		return fmt.Errorf("failed to read methods: %w", err)
+		return "", fmt.Errorf("failed to read methods: %w", err)
 	}
 
 	hasAuth := verifier != nil
@@ -55,60 +56,69 @@ func HandshakeWithVerifier(rw io.ReadWriter, verifier func(user, pass string) bo
 	if hasAuth {
 		if !userPassFound {
 			if _, err := rw.Write([]byte{Version5, NoAccept}); err != nil {
-				return err
+				return "", err
 			}
-			return errors.New("authentication required, client did not offer UserPass method")
+			return "", errors.New("authentication required, client did not offer UserPass method")
 		}
 	} else if noAuthFound {
 		if _, err := rw.Write([]byte{Version5, NoAuth}); err != nil {
-			return err
+			return "", err
 		}
-		return nil
+		return "", nil
 	}
 
 	if userPassFound && hasAuth {
 		if _, err := rw.Write([]byte{Version5, UserPass}); err != nil {
-			return err
+			return "", err
 		}
 
 		authBuf := make([]byte, 2)
 		if _, err := io.ReadFull(rw, authBuf); err != nil {
-			return fmt.Errorf("failed to read auth version/ulen: %w", err)
+			return "", fmt.Errorf("failed to read auth version/ulen: %w", err)
 		}
 		if authBuf[0] != AuthVer {
-			return errors.New("invalid auth version")
+			return "", errors.New("invalid auth version")
 		}
 		ulen := int(authBuf[1])
 		username := make([]byte, ulen)
 		if _, err := io.ReadFull(rw, username); err != nil {
-			return fmt.Errorf("failed to read username: %w", err)
+			return "", fmt.Errorf("failed to read username: %w", err)
 		}
 		plenByte := make([]byte, 1)
 		if _, err := io.ReadFull(rw, plenByte); err != nil {
-			return fmt.Errorf("failed to read password length: %w", err)
+			return "", fmt.Errorf("failed to read password length: %w", err)
 		}
 		plen := int(plenByte[0])
 		password := make([]byte, plen)
 		if _, err := io.ReadFull(rw, password); err != nil {
-			return fmt.Errorf("failed to read password: %w", err)
+			return "", fmt.Errorf("failed to read password: %w", err)
 		}
 
-		if verifier(string(username), string(password)) {
+		userStr := string(username)
+		if verifier(userStr, string(password)) {
 			if _, err := rw.Write([]byte{AuthVer, AuthPassed}); err != nil {
-				return err
+				return "", err
 			}
-			return nil
+			return userStr, nil
 		}
 		if _, err := rw.Write([]byte{AuthVer, AuthFailed}); err != nil {
-			return err
+			return "", err
 		}
-		return errors.New("authentication failed")
+		return "", errors.New("authentication failed")
 	}
 
 	if _, err := rw.Write([]byte{Version5, NoAccept}); err != nil {
-		return err
+		return "", err
 	}
-	return errors.New("no acceptable authentication method")
+	return "", errors.New("no acceptable authentication method")
+}
+
+// HandshakeWithVerifier performs standard SOCKS5 handshake. If verifier is nil,
+// no authentication is required (NoAuth). If verifier is non-nil, UserPass authentication
+// is required and credentials sent by the client are validated using the verifier function.
+func HandshakeWithVerifier(rw io.ReadWriter, verifier func(user, pass string) bool) error {
+	_, err := HandshakeWithUser(rw, verifier)
+	return err
 }
 
 type ProtocolError struct {

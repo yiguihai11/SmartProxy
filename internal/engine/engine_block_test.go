@@ -351,4 +351,104 @@ func TestEngine_SOCKS5_UnroutableDestination(t *testing.T) {
 	assert.Equal(t, byte(socks5.ReplyHostUnreachable), replyBuf3[1])
 }
 
+func TestEngine_SOCKS5_AuthAndTrafficQuota(t *testing.T) {
+	// 1. socks5_enabled: false -> NoAuth succeeds even when credentials exist
+	disabled := false
+	eng1 := startEngine(t, engineSpec{
+		auth: &config.AuthConf{
+			Socks5Enabled: &disabled,
+			Users: []config.AuthUserConf{
+				{Username: "alice", Password: "secret", TrafficLimitBytes: 100},
+			},
+		},
+	})
+	defer eng1.Stop()
+
+	c1, err := net.Dial("tcp", eng1.listener.Addr().String())
+	require.NoError(t, err)
+	defer c1.Close()
+
+	// Client offers NoAuth (0x00)
+	_, err = c1.Write([]byte{0x05, 0x01, 0x00})
+	require.NoError(t, err)
+	resp := make([]byte, 2)
+	_, err = io.ReadFull(c1, resp)
+	require.NoError(t, err)
+	assert.Equal(t, byte(0x05), resp[0])
+	assert.Equal(t, byte(0x00), resp[1]) // NoAuth accepted!
+
+	// 2. socks5_enabled: default (true) -> requires auth & enforces traffic quota
+	eng2 := startEngine(t, engineSpec{
+		auth: &config.AuthConf{
+			Users: []config.AuthUserConf{
+				{Username: "bob", Password: "bobpass", TrafficLimitBytes: 100},
+			},
+		},
+	})
+	defer eng2.Stop()
+
+	// Connect offering only NoAuth -> should be rejected with 0xFF
+	c2, err := net.Dial("tcp", eng2.listener.Addr().String())
+	require.NoError(t, err)
+	defer c2.Close()
+	_, err = c2.Write([]byte{0x05, 0x01, 0x00})
+	require.NoError(t, err)
+	resp2 := make([]byte, 2)
+	_, err = io.ReadFull(c2, resp2)
+	require.NoError(t, err)
+	assert.Equal(t, byte(0x05), resp2[0])
+	assert.Equal(t, byte(0xFF), resp2[1]) // NoAccept
+
+	// Connect offering UserPass auth -> succeeds
+	c3, err := net.Dial("tcp", eng2.listener.Addr().String())
+	require.NoError(t, err)
+	defer c3.Close()
+	_, err = c3.Write([]byte{0x05, 0x01, 0x02})
+	require.NoError(t, err)
+	resp3 := make([]byte, 2)
+	_, err = io.ReadFull(c3, resp3)
+	require.NoError(t, err)
+	assert.Equal(t, byte(0x05), resp3[0])
+	assert.Equal(t, byte(0x02), resp3[1]) // UserPass selected
+
+	// Send bob credentials
+	authPayload := []byte{0x01, 0x03, 'b', 'o', 'b', 0x07, 'b', 'o', 'b', 'p', 'a', 's', 's'}
+	_, err = c3.Write(authPayload)
+	require.NoError(t, err)
+	authResp := make([]byte, 2)
+	_, err = io.ReadFull(c3, authResp)
+	require.NoError(t, err)
+	assert.Equal(t, byte(0x01), authResp[0])
+	assert.Equal(t, byte(0x00), authResp[1]) // AuthPassed
+
+	// Now consume 150 bytes on bob -> quota exceeded!
+	eng2.portalMgr.AddTrafficForUser("bob", 150)
+	assert.True(t, eng2.portalMgr.IsQuotaExceeded("bob"))
+
+	// Subsequent SOCKS5 connection for bob should fail / be rejected
+	c4, err := net.Dial("tcp", eng2.listener.Addr().String())
+	require.NoError(t, err)
+	defer c4.Close()
+	_, err = c4.Write([]byte{0x05, 0x01, 0x02})
+	require.NoError(t, err)
+	resp4 := make([]byte, 2)
+	_, err = io.ReadFull(c4, resp4)
+	require.NoError(t, err)
+	assert.Equal(t, byte(0x05), resp4[0])
+	assert.Equal(t, byte(0x02), resp4[1])
+
+	_, err = c4.Write(authPayload)
+	require.NoError(t, err)
+	authResp4 := make([]byte, 2)
+	_, err = io.ReadFull(c4, authResp4)
+	// Server closed connection or rejected request because quota is exceeded
+	if err == nil {
+		// If read succeeds, any subsequent request command will be dropped/closed
+		reqBuf := append([]byte{0x05, 0x01, 0x00}, socks5Addr("1.1.1.1", 80)...)
+		_, _ = c4.Write(reqBuf)
+		_, err = c4.Read(make([]byte, 10))
+		assert.Error(t, err) // connection closed
+	}
+}
+
 

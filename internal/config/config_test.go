@@ -1399,3 +1399,55 @@ func TestAuthUser_TrafficLimit(t *testing.T) {
 		t.Errorf("expected error for negative traffic limit mb")
 	}
 }
+
+func TestAuthConf_Socks5Enabled(t *testing.T) {
+	// 1. Default when credentials present -> IsSocks5AuthEnabled() is true
+	auth1 := &AuthConf{
+		Username: "admin",
+		Password: "password",
+	}
+	if !auth1.IsSocks5AuthEnabled() {
+		t.Errorf("expected IsSocks5AuthEnabled to be true by default")
+	}
+
+	// 2. Explicitly false -> IsSocks5AuthEnabled() is false
+	f := false
+	auth2 := &AuthConf{
+		Socks5Enabled: &f,
+		Username:      "admin",
+		Password:      "password",
+	}
+	if auth2.IsSocks5AuthEnabled() {
+		t.Errorf("expected IsSocks5AuthEnabled to be false when explicitly false")
+	}
+
+	// 3. Explicitly true -> IsSocks5AuthEnabled() is true
+	tr := true
+	auth3 := &AuthConf{
+		Socks5Enabled: &tr,
+		Username:      "admin",
+		Password:      "password",
+	}
+	if !auth3.IsSocks5AuthEnabled() {
+		t.Errorf("expected IsSocks5AuthEnabled to be true when explicitly true")
+	}
+
+	// 4. No credentials -> IsSocks5AuthEnabled() is false
+	auth4 := &AuthConf{}
+	if auth4.IsSocks5AuthEnabled() {
+		t.Errorf("expected IsSocks5AuthEnabled to be false with no credentials")
+	}
+
+	// 5. Test Clone
+	cfg := DefaultConfig()
+	cfg.Listen.Auth = auth2
+	cp := cfg.Clone()
+	if cp.Listen.Auth.Socks5Enabled == nil || *cp.Listen.Auth.Socks5Enabled != false {
+		t.Errorf("expected cloned Socks5Enabled to be false")
+	}
+	// Mutate clone
+	*cp.Listen.Auth.Socks5Enabled = true
+	if *cfg.Listen.Auth.Socks5Enabled != false {
+		t.Errorf("Clone did not deep copy Socks5Enabled pointer")
+	}
+}

@@ -331,6 +331,30 @@ func TestPortal_TrafficLimitAndQuota(t *testing.T) {
 	}
 }
 
+func TestPortal_AddTrafficForUser(t *testing.T) {
+	cfg := makeTestConfig(2)
+	cfg.Listen.Auth.Users[0].TrafficLimitBytes = 500
+	mgr := NewManager(cfg)
+	defer mgr.Close()
+
+	// Direct user traffic accumulation (e.g. from SOCKS5)
+	exceeded := mgr.AddTrafficForUser("alice", 300)
+	if exceeded {
+		t.Errorf("expected 300 bytes not to exceed 500")
+	}
+	if mgr.IsQuotaExceeded("alice") {
+		t.Errorf("expected quota not exceeded at 300 bytes")
+	}
+
+	exceeded = mgr.AddTrafficForUser("alice", 250)
+	if !exceeded {
+		t.Errorf("expected 550 bytes to exceed 500 limit")
+	}
+	if !mgr.IsQuotaExceeded("alice") {
+		t.Errorf("expected quota exceeded at 550 bytes")
+	}
+}
+
 func TestPortal_ResetCycle_DailyAndMonthly(t *testing.T) {
 	cfg := makeTestConfig(1)
 	mgr := NewManager(cfg)
