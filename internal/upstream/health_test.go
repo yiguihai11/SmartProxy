@@ -995,5 +995,32 @@ func TestHealthChecker_TimeoutsAndProgress(t *testing.T) {
 	}
 }
 
+func TestHealthChecker_SyncProxiesIncremental(t *testing.T) {
+	pCustom1, _ := NewProxy("socks5://127.0.0.1:1080")
+	pCustom2, _ := NewProxy("socks5://127.0.0.1:1081")
+	pSub1, _ := NewProxy("socks5://127.0.0.1:1082")
+	pSub2, _ := NewProxy("socks5://127.0.0.1:1083")
+
+	allProxies := []*Proxy{pCustom1, pCustom2, pSub1, pSub2}
+	hc := NewHealthChecker(config.HealthCheckConf{Enabled: true}, allProxies)
+	hc.Start()
+	defer hc.Stop()
+
+	// Initial start tracks all 4 proxies
+	if hc.Progress().Total != 4 {
+		t.Errorf("expected initial total 4, got %d", hc.Progress().Total)
+	}
+
+	// Now simulate refreshing only the subscription nodes (pSub1, pSub2)
+	subTargets := []*Proxy{pSub1, pSub2}
+	hc.SyncProxies(config.HealthCheckConf{Enabled: true}, allProxies, subTargets)
+
+	// Progress must ONLY track the 2 subscription targets, NOT all 4!
+	if hc.Progress().Total != 2 {
+		t.Errorf("expected incremental progress total 2 for subTargets, got %d", hc.Progress().Total)
+	}
+}
+
+
 
 

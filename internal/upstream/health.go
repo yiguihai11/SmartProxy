@@ -292,6 +292,7 @@ type HealthChecker struct {
 	firstUDPProbeDone chan struct{}
 	firstUDPProbeOnce sync.Once
 	onNodeProbed      atomic.Pointer[func(p *Proxy)]
+	loops             map[*Proxy]chan struct{}
 	progressMu        sync.RWMutex
 	progress          HealthCheckProgress
 }
@@ -422,7 +423,6 @@ func (hc *HealthChecker) startLocked() {
 	hc.wg = wg
 
 	ctx := hc.ctx
-	stopCh := hc.stopCh
 	proxies := hc.proxies
 
 	hc.initProgressLocked(len(proxies))
@@ -437,12 +437,15 @@ func (hc *HealthChecker) startLocked() {
 		hc.completeProgress()
 	})
 
+	hc.loops = make(map[*Proxy]chan struct{}, len(proxies))
 	for i, p := range proxies {
 		idx := i
 		proxy := p
+		loopStop := make(chan struct{})
+		hc.loops[proxy] = loopStop
 		wg.Add(1)
 		safego.Go("upstream.health.checkLoop", func() {
-			hc.checkLoop(ctx, stopCh, proxy, idx, &initialWg, wg)
+			hc.checkLoop(ctx, loopStop, proxy, idx, &initialWg, wg)
 		})
 	}
 }
@@ -491,6 +494,15 @@ func (hc *HealthChecker) stopAsync() *sync.WaitGroup {
 		}
 		hc.stopCh = nil
 	}
+	for _, loopStop := range hc.loops {
+		select {
+		case <-loopStop:
+		default:
+			close(loopStop)
+		}
+	}
+	hc.loops = nil
+
 	hc.notifyAllFirstProbesDoneLocked()
 	hc.completeProgressLocked()
 
@@ -520,6 +532,91 @@ func (hc *HealthChecker) Reload(cfg config.HealthCheckConf, proxies []*Proxy) {
 	hc.firstUDPProbeOnce = sync.Once{}
 	hc.firstUDPProbeDone = make(chan struct{})
 	hc.startLocked()
+}
+
+// SyncProxies incrementally updates the proxies list and only initiates background testing
+// for the given target proxies (e.g., from a refreshed subscription).
+func (hc *HealthChecker) SyncProxies(cfg config.HealthCheckConf, newAllProxies []*Proxy, targets []*Proxy) {
+	if hc == nil {
+		return
+	}
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+
+	hc.cfg.Store(&cfg)
+	hc.proxies = newAllProxies
+
+	if !hc.running {
+		return
+	}
+
+	newSet := make(map[*Proxy]bool, len(newAllProxies))
+	for _, p := range newAllProxies {
+		if p != nil {
+			newSet[p] = true
+		}
+	}
+
+	// 1. Terminate loops for proxies that were removed
+	if hc.loops == nil {
+		hc.loops = make(map[*Proxy]chan struct{})
+	}
+	for p, loopStop := range hc.loops {
+		if !newSet[p] {
+			select {
+			case <-loopStop:
+			default:
+				close(loopStop)
+			}
+			delete(hc.loops, p)
+		}
+	}
+
+	// 2. Filter targets: only keep non-nil targets that are in newAllProxies
+	var validTargets []*Proxy
+	for _, p := range targets {
+		if p != nil && newSet[p] {
+			validTargets = append(validTargets, p)
+		}
+	}
+
+	if len(validTargets) == 0 {
+		return
+	}
+
+	ctx := hc.ctx
+	wg := hc.wg
+	if ctx == nil || wg == nil {
+		return
+	}
+
+	hc.initProgressLocked(len(validTargets))
+
+	var targetWg sync.WaitGroup
+	targetWg.Add(len(validTargets))
+	safego.Go("upstream.health.syncProbeWatcher", func() {
+		targetWg.Wait()
+		hc.completeProgress()
+	})
+
+	for i, p := range validTargets {
+		idx := i
+		proxy := p
+		// If proxy already has a running loop, stop its old interval so we can restart it fresh
+		if oldStop, exists := hc.loops[proxy]; exists {
+			select {
+			case <-oldStop:
+			default:
+				close(oldStop)
+			}
+		}
+		loopStop := make(chan struct{})
+		hc.loops[proxy] = loopStop
+		wg.Add(1)
+		safego.Go("upstream.health.checkLoop", func() {
+			hc.checkLoop(ctx, loopStop, proxy, idx, &targetWg, wg)
+		})
+	}
 }
 
 func (hc *HealthChecker) acquireProbeSem(ctx context.Context, stopCh <-chan struct{}) error {

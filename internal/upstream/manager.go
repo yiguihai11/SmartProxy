@@ -638,10 +638,20 @@ func (m *Manager) SetProviderProxies(provider string, entries []ProxyEntry) {
 	}
 	m.restoreManualPins(pins)
 
-	if m.healthChecker != nil {
-		m.healthChecker.Reload(healthCfg, newProxies)
+	// Collect only the nodes belonging to this provider to probe
+	var providerNodes []*Proxy
+	for _, p := range newProxies {
+		if p != nil && p.Provider == provider {
+			providerNodes = append(providerNodes, p)
+		}
 	}
-	m.probeInitialGeo()
+
+	if m.healthChecker != nil {
+		m.healthChecker.SyncProxies(healthCfg, newProxies, providerNodes)
+	}
+	if len(providerNodes) > 0 {
+		m.probeInitialGeoFor(providerNodes)
+	}
 	slog.Info("provider proxies updated", "provider", provider, "count", len(entries), "totalProxies", len(newProxies))
 }
 
@@ -795,12 +805,11 @@ func (m *Manager) RemoveNodes(aliases []string) int {
 		}
 		m.restoreManualPins(pins)
 		if m.healthChecker != nil {
-			m.healthChecker.Reload(healthCfg, newProxies)
+			m.healthChecker.SyncProxies(healthCfg, newProxies, nil)
 		}
 		if onRemoved != nil {
 			onRemoved(aliases)
 		}
-		m.probeInitialGeo()
 		slog.Info("nodes removed", "removed", totalRemoved, "remaining", len(newProxies))
 		return totalRemoved
 	}
@@ -2605,6 +2614,16 @@ func (m *Manager) probeInitialGeo() {
 	}
 	proxies := make([]*Proxy, len(m.defaultProxies))
 	copy(proxies, m.defaultProxies)
+	m.mu.RUnlock()
+	m.probeInitialGeoFor(proxies)
+}
+
+func (m *Manager) probeInitialGeoFor(proxies []*Proxy) {
+	m.mu.RLock()
+	if m.stopped {
+		m.mu.RUnlock()
+		return
+	}
 	ctx := m.ctx
 	m.mu.RUnlock()
 
@@ -2616,7 +2635,7 @@ func (m *Manager) probeInitialGeo() {
 	allowV6 := m.allowIPv6.Load()
 
 	safego.Go("upstream.initialGeo", func() {
-		sem := make(chan struct{}, 16)
+		sem := make(chan struct{}, 5)
 		var wg sync.WaitGroup
 		for _, p := range proxies {
 			if p == nil {
@@ -2640,7 +2659,7 @@ func (m *Manager) probeInitialGeo() {
 					<-sem
 					wg.Done()
 				}()
-				probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+				probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 				defer cancel()
 				var innerWg sync.WaitGroup
 				if needsGeo {
