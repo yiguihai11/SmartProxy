@@ -239,3 +239,95 @@ func TestPortal_DevicesAuthUserIntegration(t *testing.T) {
 		t.Fatalf("expected 200 from /api/devices, got %d", rec.Code)
 	}
 }
+
+func TestPortal_TrafficAPIs(t *testing.T) {
+	srv, pm := setupTestPortalAdmin(t)
+
+	// Set alice quota to 2000 bytes
+	cfg := srv.configSrc()
+	cfg.Listen.Auth.Users[0].TrafficLimitBytes = 2000
+	cfg.Listen.Auth.Users[0].ResetCycle = "daily"
+	pm.UpdateConfig(cfg)
+
+	devIP := "192.168.43.101"
+	_, _, err := pm.Authenticate(devIP, "", "alice", "password123", "Phone")
+	if err != nil {
+		t.Fatalf("auth failed: %v", err)
+	}
+
+	// Add 500 bytes traffic
+	pm.AddTraffic(devIP, 500)
+
+	// 1. GET /api/portal/status should include quota info
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/portal/status", nil)
+		req.RemoteAddr = devIP + ":12345"
+		rec := httptest.NewRecorder()
+		srv.handlePortalStatus(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status failed: %d", rec.Code)
+		}
+		var st struct {
+			Authenticated   bool   `json:"authenticated"`
+			TrafficUsed     int64  `json:"traffic_used_bytes"`
+			TrafficLimit    int64  `json:"traffic_limit_bytes"`
+			ResetCycle      string `json:"traffic_reset_cycle"`
+			QuotaExceeded   bool   `json:"quota_exceeded"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+			t.Fatalf("decode status failed: %v", err)
+		}
+		if !st.Authenticated || st.TrafficUsed != 500 || st.TrafficLimit != 2000 || st.ResetCycle != "daily" || st.QuotaExceeded {
+			t.Errorf("status traffic info mismatch: %+v", st)
+		}
+	}
+
+	// 2. GET /api/portal/traffic
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/portal/traffic", nil)
+		rec := httptest.NewRecorder()
+		srv.handlePortalTraffic(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("traffic list failed: %d", rec.Code)
+		}
+		var res struct {
+			Ok    bool `json:"ok"`
+			Users []struct {
+				Username  string `json:"username"`
+				UsedBytes int64  `json:"used_bytes"`
+			} `json:"users"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+			t.Fatalf("decode traffic list failed: %v", err)
+		}
+		if !res.Ok || len(res.Users) == 0 {
+			t.Fatalf("expected non-empty users list")
+		}
+		foundAlice := false
+		for _, u := range res.Users {
+			if u.Username == "alice" && u.UsedBytes == 500 {
+				foundAlice = true
+				break
+			}
+		}
+		if !foundAlice {
+			t.Errorf("alice traffic record not found in list: %+v", res.Users)
+		}
+	}
+
+	// 3. POST /api/portal/traffic/reset
+	{
+		body := `{"username":"alice"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/portal/traffic/reset", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		srv.handlePortalTrafficReset(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("reset failed: %d", rec.Code)
+		}
+
+		info := pm.GetUserTrafficInfo("alice")
+		if info.UsedBytes != 0 {
+			t.Errorf("expected UsedBytes reset to 0, got %d", info.UsedBytes)
+		}
+	}
+}

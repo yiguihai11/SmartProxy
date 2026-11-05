@@ -5,9 +5,12 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +32,34 @@ type Session struct {
 	Token     string    `json:"token,omitempty"`
 }
 
+// UserTraffic tracks bandwidth consumption and reset cycle for a user account.
+type UserTraffic struct {
+	Username      string    `json:"username"`
+	UsedBytes     int64     `json:"used_bytes"`
+	CycleStart    time.Time `json:"cycle_start"`
+	LastUpdated   time.Time `json:"last_updated"`
+	nextResetUnix int64     `json:"-"`
+}
+
+// UserTrafficInfo represents user traffic quota and usage statistics for export/APIs.
+type UserTrafficInfo struct {
+	Username         string    `json:"username"`
+	UsedBytes        int64     `json:"used_bytes"`
+	LimitBytes       int64     `json:"limit_bytes"`
+	ResetCycle       string    `json:"reset_cycle"`
+	CycleStart       time.Time `json:"cycle_start"`
+	NextReset        time.Time `json:"next_reset"`
+	IsExceeded       bool      `json:"is_exceeded"`
+	ResetDescription string    `json:"reset_description"`
+}
+
+// TrafficStorageFile is the JSON schema persisted to portal_traffic.json.
+type TrafficStorageFile struct {
+	Version   int                     `json:"version"`
+	UpdatedAt int64                   `json:"updated_at"`
+	Users     map[string]*UserTraffic `json:"users"`
+}
+
 type failRecord struct {
 	count      int
 	lastFail   time.Time
@@ -43,6 +74,9 @@ type Manager struct {
 	sessionsByMAC   map[string]*Session
 	sessionsByToken map[string]*Session
 	failedAttempts  map[string]*failRecord
+	userTraffic     map[string]*UserTraffic
+	trafficFilePath string
+	trafficDirty    atomic.Bool
 	csrfSecret      []byte
 	macResolver     func(ip string) string
 	stopCh          chan struct{}
@@ -63,6 +97,7 @@ func NewManager(cfg *config.Config) *Manager {
 		sessionsByMAC:   make(map[string]*Session),
 		sessionsByToken: make(map[string]*Session),
 		failedAttempts:  make(map[string]*failRecord),
+		userTraffic:     make(map[string]*UserTraffic),
 		csrfSecret:      secret,
 		stopCh:          make(chan struct{}),
 	}
@@ -80,17 +115,20 @@ func (m *Manager) startCleaner() {
 			select {
 			case <-ticker.C:
 				m.purgeExpired()
+				m.saveTrafficIfDirty()
 			case <-m.stopCh:
+				m.saveTrafficIfDirty()
 				return
 			}
 		}
 	})
 }
 
-// Close stops the periodic cleanup goroutine.
+// Close stops the periodic cleanup goroutine and flushes persistent state.
 func (m *Manager) Close() {
 	m.stopOnce.Do(func() {
 		close(m.stopCh)
+		m.saveTrafficIfDirty()
 	})
 }
 
@@ -184,6 +222,9 @@ func (m *Manager) IsAuthorized(clientIP string) bool {
 				m.mu.RLock()
 				return false
 			}
+			if m.isUserQuotaExceededLocked(sess.Username, now) {
+				return false
+			}
 			return true
 		}
 	}
@@ -192,6 +233,9 @@ func (m *Manager) IsAuthorized(clientIP string) bool {
 	if currentMAC != "" {
 		if sess, ok := m.sessionsByMAC[currentMAC]; ok {
 			if now.Before(sess.ExpiresAt) {
+				if m.isUserQuotaExceededLocked(sess.Username, now) {
+					return false
+				}
 				return true
 			}
 		}
@@ -245,8 +289,16 @@ func (m *Manager) Authenticate(clientIP, mac, username, password, userAgent stri
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	maxDevices := auth.UserMaxDevices(username)
 	now := time.Now()
+
+	// Check if user traffic quota is exceeded
+	if m.isUserQuotaExceededLocked(username, now) {
+		info := m.getUserTrafficInfoLocked(username, now)
+		return nil, "", fmt.Errorf("流量配额已用尽（已使用 %s / 限额 %s）%s",
+			formatBytes(info.UsedBytes), formatBytes(info.LimitBytes), info.ResetDescription)
+	}
+
+	maxDevices := auth.UserMaxDevices(username)
 
 	// Strategy B: Reject new login when active device count reaches max_devices.
 	if maxDevices > 0 {
@@ -354,6 +406,10 @@ func (m *Manager) AuthenticateByToken(clientIP, mac, token, userAgent string) (*
 			delete(m.sessionsByToken, token)
 		}
 		return nil, errors.New("session expired or token invalid")
+	}
+
+	if m.isUserQuotaExceededLocked(sess.Username, time.Now()) {
+		return nil, errors.New("traffic quota exceeded")
 	}
 
 	// If resolved MAC is empty, try resolver
@@ -631,4 +687,357 @@ func generateSecureToken() string {
 		return fmt.Sprintf("fallback-token-%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)
+}
+
+// SetStoragePath sets the JSON file path for persistent user traffic quotas.
+func (m *Manager) SetStoragePath(path string) {
+	m.mu.Lock()
+	m.trafficFilePath = path
+	m.mu.Unlock()
+
+	if path != "" {
+		_ = m.LoadTrafficFile(path)
+	}
+}
+
+// LoadTrafficFile loads persisted user traffic states from disk.
+func (m *Manager) LoadTrafficFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	var sf TrafficStorageFile
+	if err := json.Unmarshal(data, &sf); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now()
+	auth := m.getAuthConf()
+
+	if sf.Users != nil {
+		for k, v := range sf.Users {
+			if v != nil {
+				cycle := auth.UserResetCycle(k)
+				m.checkResetCycleLocked(v, cycle, now)
+				m.userTraffic[k] = v
+			}
+		}
+	}
+	return nil
+}
+
+// SaveTrafficFile saves all user traffic usage records to disk atomically.
+func (m *Manager) SaveTrafficFile(path string) error {
+	m.mu.RLock()
+	sf := TrafficStorageFile{
+		Version:   1,
+		UpdatedAt: time.Now().Unix(),
+		Users:     make(map[string]*UserTraffic, len(m.userTraffic)),
+	}
+	for k, v := range m.userTraffic {
+		cp := *v
+		sf.Users[k] = &cp
+	}
+	m.mu.RUnlock()
+
+	data, err := json.MarshalIndent(sf, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+
+	m.trafficDirty.Store(false)
+	return nil
+}
+
+func (m *Manager) saveTrafficIfDirty() {
+	if !m.trafficDirty.Load() {
+		return
+	}
+	m.mu.RLock()
+	path := m.trafficFilePath
+	m.mu.RUnlock()
+
+	if path != "" {
+		_ = m.SaveTrafficFile(path)
+	}
+}
+
+// checkResetCycleLocked checks if the traffic cycle for this user has rolled over,
+// and resets UsedBytes if due. Must be called with m.mu locked.
+func (m *Manager) checkResetCycleLocked(ut *UserTraffic, resetCycle string, now time.Time) bool {
+	if ut == nil {
+		return false
+	}
+	cycle := strings.ToLower(strings.TrimSpace(resetCycle))
+	switch cycle {
+	case "daily":
+		startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		if ut.CycleStart.IsZero() {
+			ut.CycleStart = startOfToday
+			ut.nextResetUnix = time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location()).Unix()
+			return false
+		}
+		if ut.CycleStart.Before(startOfToday) {
+			ut.UsedBytes = 0
+			ut.CycleStart = startOfToday
+			ut.LastUpdated = now
+			ut.nextResetUnix = time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location()).Unix()
+			m.trafficDirty.Store(true)
+			return true
+		}
+		if ut.nextResetUnix == 0 {
+			ut.nextResetUnix = time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location()).Unix()
+		}
+	case "monthly":
+		startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		if ut.CycleStart.IsZero() {
+			ut.CycleStart = startOfMonth
+			ut.nextResetUnix = time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location()).Unix()
+			return false
+		}
+		if ut.CycleStart.Before(startOfMonth) {
+			ut.UsedBytes = 0
+			ut.CycleStart = startOfMonth
+			ut.LastUpdated = now
+			ut.nextResetUnix = time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location()).Unix()
+			m.trafficDirty.Store(true)
+			return true
+		}
+		if ut.nextResetUnix == 0 {
+			ut.nextResetUnix = time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location()).Unix()
+		}
+	default:
+		if ut.CycleStart.IsZero() {
+			ut.CycleStart = now
+		}
+	}
+	return false
+}
+
+// isUserQuotaExceededLocked checks if a user's traffic quota is exceeded.
+func (m *Manager) isUserQuotaExceededLocked(username string, now time.Time) bool {
+	auth := m.getAuthConf()
+	if auth == nil {
+		return false
+	}
+	limit := auth.UserTrafficLimit(username)
+	if limit <= 0 {
+		return false
+	}
+
+	ut, ok := m.userTraffic[username]
+	if !ok {
+		return false
+	}
+
+	cycle := auth.UserResetCycle(username)
+	m.checkResetCycleLocked(ut, cycle, now)
+
+	return ut.UsedBytes >= limit
+}
+
+func (m *Manager) getUserTrafficInfoLocked(username string, now time.Time) *UserTrafficInfo {
+	auth := m.getAuthConf()
+	limit := auth.UserTrafficLimit(username)
+	cycle := auth.UserResetCycle(username)
+
+	ut, ok := m.userTraffic[username]
+	if !ok {
+		ut = &UserTraffic{
+			Username:    username,
+			CycleStart:  now,
+			LastUpdated: now,
+		}
+		m.userTraffic[username] = ut
+	}
+	m.checkResetCycleLocked(ut, cycle, now)
+
+	nextReset := computeNextReset(cycle, now)
+	isExceeded := limit > 0 && ut.UsedBytes >= limit
+
+	return &UserTrafficInfo{
+		Username:         username,
+		UsedBytes:        ut.UsedBytes,
+		LimitBytes:       limit,
+		ResetCycle:       cycle,
+		CycleStart:       ut.CycleStart,
+		NextReset:        nextReset,
+		IsExceeded:       isExceeded,
+		ResetDescription: formatResetDescription(cycle, nextReset),
+	}
+}
+
+// GetUserTrafficInfo returns the quota, usage, and reset status for a given user.
+func (m *Manager) GetUserTrafficInfo(username string) *UserTrafficInfo {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.getUserTrafficInfoLocked(username, time.Now())
+}
+
+// IsQuotaExceeded checks if a user has exceeded their configured traffic quota.
+func (m *Manager) IsQuotaExceeded(username string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.isUserQuotaExceededLocked(username, time.Now())
+}
+
+// AddTraffic records consumed bytes for the authenticated user associated with clientIP.
+// Returns true if the user's traffic quota is now exceeded.
+func (m *Manager) AddTraffic(clientIP string, bytes int64) bool {
+	if bytes <= 0 {
+		return false
+	}
+	normIP := normalizeIP(clientIP)
+	if normIP == "" {
+		return false
+	}
+
+	m.mu.RLock()
+	sess, ok := m.sessionsByIP[normIP]
+	if !ok && m.macResolver != nil {
+		mac := strings.ToLower(m.macResolver(normIP))
+		if mac != "" {
+			sess = m.sessionsByMAC[mac]
+		}
+	}
+	if sess == nil {
+		m.mu.RUnlock()
+		return false
+	}
+
+	username := sess.Username
+	auth := m.getAuthConf()
+	limit := auth.UserTrafficLimit(username)
+	cycle := auth.UserResetCycle(username)
+
+	ut := m.userTraffic[username]
+	now := time.Now()
+	nowUnix := now.Unix()
+
+	needsWriteLock := ut == nil || (ut.nextResetUnix > 0 && nowUnix >= ut.nextResetUnix)
+	m.mu.RUnlock()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ut = m.userTraffic[username]
+	if ut == nil {
+		ut = &UserTraffic{
+			Username:    username,
+			CycleStart:  now,
+			LastUpdated: now,
+		}
+		m.userTraffic[username] = ut
+	}
+
+	if needsWriteLock {
+		m.checkResetCycleLocked(ut, cycle, now)
+	}
+
+	ut.UsedBytes += bytes
+	ut.LastUpdated = now
+	m.trafficDirty.Store(true)
+
+	return limit > 0 && ut.UsedBytes >= limit
+}
+
+// ResetUserTraffic clears accumulated bandwidth usage for a user.
+func (m *Manager) ResetUserTraffic(username string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ut, ok := m.userTraffic[username]
+	if !ok {
+		return false
+	}
+	ut.UsedBytes = 0
+	ut.CycleStart = time.Now()
+	ut.LastUpdated = time.Now()
+	m.trafficDirty.Store(true)
+	return true
+}
+
+// AllUsersTraffic returns traffic records for all configured and tracked users.
+func (m *Manager) AllUsersTraffic() []*UserTrafficInfo {
+	auth := m.getAuthConf()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now()
+	var result []*UserTrafficInfo
+	seen := make(map[string]bool)
+
+	if auth != nil {
+		for _, u := range auth.Users {
+			seen[u.Username] = true
+			result = append(result, m.getUserTrafficInfoLocked(u.Username, now))
+		}
+		if auth.Username != "" && !seen[auth.Username] {
+			seen[auth.Username] = true
+			result = append(result, m.getUserTrafficInfoLocked(auth.Username, now))
+		}
+	}
+
+	for username := range m.userTraffic {
+		if !seen[username] {
+			result = append(result, m.getUserTrafficInfoLocked(username, now))
+		}
+	}
+
+	return result
+}
+
+func computeNextReset(cycle string, now time.Time) time.Time {
+	switch strings.ToLower(strings.TrimSpace(cycle)) {
+	case "daily":
+		return time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
+	case "monthly":
+		return time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location())
+	default:
+		return time.Time{}
+	}
+}
+
+func formatResetDescription(cycle string, nextReset time.Time) string {
+	switch strings.ToLower(strings.TrimSpace(cycle)) {
+	case "daily":
+		return fmt.Sprintf("（将于每日 00:00 重置，下次重置: %s）", nextReset.Format("2006-01-02 15:04:05"))
+	case "monthly":
+		return fmt.Sprintf("（将于每月1日 00:00 重置，下次重置: %s）", nextReset.Format("2006-01-02 15:04:05"))
+	default:
+		return "（不自动重置）"
+	}
+}
+
+func formatBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }

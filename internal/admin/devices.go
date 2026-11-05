@@ -35,9 +35,12 @@ type TetheredDevice struct {
 	DownBps     int64        `json:"down_bps"`
 	IsBlocked   bool         `json:"is_blocked"`
 	IsCurrent   bool         `json:"is_current"` // 当前正在访问控制面板的设备
-	AuthUser    string       `json:"auth_user,omitempty"`
-	AuthExpires int64        `json:"auth_expires,omitempty"`
-	Conns       []DeviceConn `json:"conns,omitempty"`
+	AuthUser          string       `json:"auth_user,omitempty"`
+	AuthExpires       int64        `json:"auth_expires,omitempty"`
+	TrafficUsedBytes  int64        `json:"traffic_used_bytes,omitempty"`
+	TrafficLimitBytes int64        `json:"traffic_limit_bytes,omitempty"`
+	TrafficExceeded   bool         `json:"traffic_exceeded,omitempty"`
+	Conns             []DeviceConn `json:"conns,omitempty"`
 }
 
 // BlockedRecord 记录被拉黑设备信息。
@@ -663,19 +666,40 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 						continue
 					}
 
+					var authUser string
+					var authExpires int64
+					var trafficUsed, trafficLimit int64
+					var trafficExceeded bool
+					if s.portalMgr != nil {
+						if ps := s.portalMgr.GetSession(primaryIP, cleanMAC); ps != nil {
+							authUser = ps.Username
+							authExpires = ps.ExpiresAt.Unix()
+							if t := s.portalMgr.GetUserTrafficInfo(ps.Username); t != nil {
+								trafficUsed = t.UsedBytes
+								trafficLimit = t.LimitBytes
+								trafficExceeded = t.IsExceeded
+							}
+						}
+					}
+
 					devices = append(devices, TetheredDevice{
-						IP:          primaryIP,
-						MAC:         cleanMAC,
-						Hostname:    bc.Hostname,
-						ExtraIPs:    extraIPs,
-						UpBytes:     up,
-						DownBytes:   down,
-						ActiveConns: conns,
-						UpBps:       upBps,
-						DownBps:     downBps,
-						IsBlocked:   isBlocked,
-						IsCurrent:   isCur,
-						Conns:       devConns,
+						IP:                primaryIP,
+						MAC:               cleanMAC,
+						Hostname:          bc.Hostname,
+						ExtraIPs:          extraIPs,
+						UpBytes:           up,
+						DownBytes:         down,
+						ActiveConns:       conns,
+						UpBps:             upBps,
+						DownBps:           downBps,
+						IsBlocked:         isBlocked,
+						IsCurrent:         isCur,
+						AuthUser:          authUser,
+						AuthExpires:       authExpires,
+						TrafficUsedBytes:  trafficUsed,
+						TrafficLimitBytes: trafficLimit,
+						TrafficExceeded:   trafficExceeded,
+						Conns:             devConns,
 					})
 				}
 			}
@@ -785,28 +809,38 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 
 			var authUser string
 			var authExpires int64
+			var trafficUsed, trafficLimit int64
+			var trafficExceeded bool
 			if s.portalMgr != nil {
 				if ps := s.portalMgr.GetSession(grp.primaryIP, grp.mac); ps != nil {
 					authUser = ps.Username
 					authExpires = ps.ExpiresAt.Unix()
+					if t := s.portalMgr.GetUserTrafficInfo(ps.Username); t != nil {
+						trafficUsed = t.UsedBytes
+						trafficLimit = t.LimitBytes
+						trafficExceeded = t.IsExceeded
+					}
 				}
 			}
 
 			devices = append(devices, TetheredDevice{
-				IP:          grp.primaryIP,
-				MAC:         grp.mac,
-				Hostname:    grp.hostname,
-				ExtraIPs:    extraIPs,
-				UpBytes:     up,
-				DownBytes:   down,
-				ActiveConns: conns,
-				UpBps:       upBps,
-				DownBps:     downBps,
-				IsBlocked:   isBlocked,
-				IsCurrent:   isCur,
-				AuthUser:    authUser,
-				AuthExpires: authExpires,
-				Conns:       devConns,
+				IP:                grp.primaryIP,
+				MAC:               grp.mac,
+				Hostname:          grp.hostname,
+				ExtraIPs:          extraIPs,
+				UpBytes:           up,
+				DownBytes:         down,
+				ActiveConns:       conns,
+				UpBps:             upBps,
+				DownBps:           downBps,
+				IsBlocked:         isBlocked,
+				IsCurrent:         isCur,
+				AuthUser:          authUser,
+				AuthExpires:       authExpires,
+				TrafficUsedBytes:  trafficUsed,
+				TrafficLimitBytes: trafficLimit,
+				TrafficExceeded:   trafficExceeded,
+				Conns:             devConns,
 			})
 		}
 	}

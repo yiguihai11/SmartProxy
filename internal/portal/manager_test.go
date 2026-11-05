@@ -3,6 +3,7 @@ package portal
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"smartproxy/internal/config"
 )
@@ -266,6 +267,149 @@ func TestPortal_AdminRevoke(t *testing.T) {
 
 	if mgr.IsAuthorized(clientIP) {
 		t.Errorf("should not be authorized after revoke")
+	}
+}
+
+func TestPortal_TrafficLimitAndQuota(t *testing.T) {
+	cfg := makeTestConfig(2)
+	cfg.Listen.Auth.Users[0].TrafficLimitBytes = 1000 // 1000 bytes
+	cfg.Listen.Auth.Users[0].ResetCycle = "daily"
+
+	mgr := NewManager(cfg)
+	defer mgr.Close()
+
+	clientIP := "192.168.43.10"
+	_, _, err := mgr.Authenticate(clientIP, "", "alice", "secret123", "UA")
+	if err != nil {
+		t.Fatalf("auth failed: %v", err)
+	}
+
+	if !mgr.IsAuthorized(clientIP) {
+		t.Fatalf("expected authorized initially")
+	}
+
+	// Add 600 bytes
+	exceeded := mgr.AddTraffic(clientIP, 600)
+	if exceeded {
+		t.Errorf("expected 600 bytes not to exceed 1000 limit")
+	}
+	if !mgr.IsAuthorized(clientIP) {
+		t.Errorf("expected still authorized after 600 bytes")
+	}
+
+	info := mgr.GetUserTrafficInfo("alice")
+	if info.UsedBytes != 600 {
+		t.Errorf("expected 600 bytes used, got %d", info.UsedBytes)
+	}
+	if info.IsExceeded {
+		t.Errorf("expected not exceeded")
+	}
+
+	// Add 450 bytes -> total 1050 bytes (exceeded!)
+	exceeded = mgr.AddTraffic(clientIP, 450)
+	if !exceeded {
+		t.Errorf("expected 1050 bytes to exceed 1000 limit")
+	}
+	if mgr.IsAuthorized(clientIP) {
+		t.Errorf("expected NOT authorized after quota exceeded")
+	}
+
+	// Re-login should be rejected due to exhausted quota
+	_, _, err = mgr.Authenticate("192.168.43.11", "", "alice", "secret123", "UA2")
+	if err == nil || !strings.Contains(err.Error(), "流量配额已用尽") {
+		t.Errorf("expected quota exceeded error on re-login, got: %v", err)
+	}
+
+	// Admin resets traffic
+	if !mgr.ResetUserTraffic("alice") {
+		t.Fatalf("expected ResetUserTraffic to succeed")
+	}
+
+	// Now authorized again
+	if !mgr.IsAuthorized(clientIP) {
+		t.Errorf("expected authorized after traffic reset")
+	}
+}
+
+func TestPortal_ResetCycle_DailyAndMonthly(t *testing.T) {
+	cfg := makeTestConfig(1)
+	mgr := NewManager(cfg)
+	defer mgr.Close()
+
+	now := time.Now()
+
+	// 1. Daily cycle
+	yesterday := now.AddDate(0, 0, -1)
+	utDaily := &UserTraffic{
+		Username:   "bob",
+		UsedBytes:  5000,
+		CycleStart: yesterday,
+	}
+	if !mgr.checkResetCycleLocked(utDaily, "daily", now) {
+		t.Errorf("expected daily reset when cycle start was yesterday")
+	}
+	if utDaily.UsedBytes != 0 {
+		t.Errorf("expected UsedBytes reset to 0, got %d", utDaily.UsedBytes)
+	}
+
+	// Check same day doesn't reset again
+	if mgr.checkResetCycleLocked(utDaily, "daily", now) {
+		t.Errorf("expected no second reset on the same day")
+	}
+
+	// 2. Monthly cycle
+	lastMonth := now.AddDate(0, -1, 0)
+	utMonthly := &UserTraffic{
+		Username:   "bob",
+		UsedBytes:  10000,
+		CycleStart: lastMonth,
+	}
+	if !mgr.checkResetCycleLocked(utMonthly, "monthly", now) {
+		t.Errorf("expected monthly reset when cycle start was last month")
+	}
+	if utMonthly.UsedBytes != 0 {
+		t.Errorf("expected UsedBytes reset to 0, got %d", utMonthly.UsedBytes)
+	}
+
+	// 3. None cycle
+	utNone := &UserTraffic{
+		Username:   "bob",
+		UsedBytes:  10000,
+		CycleStart: lastMonth,
+	}
+	if mgr.checkResetCycleLocked(utNone, "none", now) {
+		t.Errorf("expected no reset for 'none' cycle")
+	}
+	if utNone.UsedBytes != 10000 {
+		t.Errorf("expected UsedBytes unchanged")
+	}
+}
+
+func TestPortal_TrafficPersistence(t *testing.T) {
+	dir := t.TempDir()
+	filePath := dir + "/portal_traffic.json"
+
+	cfg := makeTestConfig(2)
+	mgr := NewManager(cfg)
+	mgr.SetStoragePath(filePath)
+
+	clientIP := "192.168.43.10"
+	_, _, err := mgr.Authenticate(clientIP, "", "alice", "secret123", "UA")
+	if err != nil {
+		t.Fatalf("auth failed: %v", err)
+	}
+
+	mgr.AddTraffic(clientIP, 123456)
+	mgr.Close()
+
+	// New manager loads from disk
+	mgr2 := NewManager(cfg)
+	defer mgr2.Close()
+	mgr2.SetStoragePath(filePath)
+
+	info := mgr2.GetUserTrafficInfo("alice")
+	if info.UsedBytes != 123456 {
+		t.Errorf("expected loaded used bytes 123456, got %d", info.UsedBytes)
 	}
 }
 

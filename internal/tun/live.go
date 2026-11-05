@@ -16,9 +16,10 @@ import (
 // kill 由 watcher goroutine(ACL reloader)读,二者并发 → 用 atomic 同步(与
 // connRecord.host 同风格);app / rec / stats 在 add 入表前固定,发布即安全。
 type tcpHandle struct {
-	host atomic.Pointer[string] // smart 路径的域名(仅该路径回填,可空)
-	ip   string                 // 目标 IP(恒非空)
-	port int
+	clientIP string                 // 客户端源 IP(热点外接设备识别与限流掐断)
+	host     atomic.Pointer[string] // smart 路径的域名(仅该路径回填,可空)
+	ip       string                 // 目标 IP(恒非空)
+	port     int
 
 	app    net.Conn                 // 应用侧(gVisor 栈)连接
 	remote atomic.Pointer[net.Conn] // outbound 连接(直连或代理);未建立前 nil
@@ -103,4 +104,27 @@ func (lt *liveTCP) snapshot() []*tcpHandle {
 	}
 	lt.mu.Unlock()
 	return out
+}
+
+// killByClientIP 掐断指定客户端源 IP 的所有活跃连接(如 Captive Portal 流量超额)。
+func (lt *liveTCP) killByClientIP(clientIP string) int {
+	if clientIP == "" {
+		return 0
+	}
+	lt.mu.Lock()
+	var targets []*tcpHandle
+	for hd := range lt.m {
+		if hd.clientIP == clientIP {
+			targets = append(targets, hd)
+		}
+	}
+	lt.mu.Unlock()
+
+	killed := 0
+	for _, hd := range targets {
+		hd.kill()
+		lt.remove(hd)
+		killed++
+	}
+	return killed
 }

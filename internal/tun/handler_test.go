@@ -1237,3 +1237,62 @@ func TestTUNHandler_PortalInterception(t *testing.T) {
 
 	<-done
 }
+
+func TestTUNHandler_PortalTrafficQuota(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Listen.Auth = &config.AuthConf{
+		Users: []config.AuthUserConf{
+			{
+				Username:          "alice",
+				Password:          "secret123",
+				TrafficLimitBytes: 100, // 100 bytes limit
+			},
+		},
+	}
+	cfg.Listen.Portal = &config.PortalConf{
+		Enabled: true,
+	}
+
+	portalMgr := portal.NewManager(cfg)
+	defer portalMgr.Close()
+
+	handler := NewHandler(cfg, nil, nil, nil, nil)
+	handler.SetPortalManager(portalMgr)
+
+	clientIP := "192.168.43.50"
+	_, _, err := portalMgr.Authenticate(clientIP, "", "alice", "secret123", "UA")
+	assert.NoError(t, err)
+
+	assert.True(t, portalMgr.IsAuthorized(clientIP))
+
+	// Consume 150 bytes -> quota exceeded!
+	exceeded := portalMgr.AddTraffic(clientIP, 150)
+	assert.True(t, exceeded)
+	assert.False(t, portalMgr.IsAuthorized(clientIP))
+
+	// Next HTTP connection from this client must be intercepted & redirected to portal
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+
+	srcAddr := M.ParseSocksaddr("192.168.43.50:54321")
+	dstAddr := M.ParseSocksaddr("1.1.1.1:80")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handler.NewConnectionEx(context.Background(), serverConn, srcAddr, dstAddr, nil)
+	}()
+
+	go func() {
+		_, _ = clientConn.Write([]byte("GET /page HTTP/1.1\r\nHost: example.com\r\n\r\n"))
+	}()
+
+	buf := make([]byte, 1024)
+	n, err := clientConn.Read(buf)
+	assert.NoError(t, err)
+	resp := string(buf[:n])
+
+	assert.Contains(t, resp, "302 Found")
+	assert.Contains(t, resp, "Location: http://smartproxy.lan:9090/portal?ip=192.168.43.50")
+	<-done
+}

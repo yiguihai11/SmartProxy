@@ -300,6 +300,18 @@ func (s *Server) handlePortalStatus(w http.ResponseWriter, r *http.Request) {
 		resp["mac"] = sess.MAC
 		resp["login_at"] = sess.LoginAt.Unix()
 		resp["expires_at"] = sess.ExpiresAt.Unix()
+
+		traffic := s.portalMgr.GetUserTrafficInfo(sess.Username)
+		if traffic != nil {
+			resp["traffic_limit_bytes"] = traffic.LimitBytes
+			resp["traffic_used_bytes"] = traffic.UsedBytes
+			resp["traffic_reset_cycle"] = traffic.ResetCycle
+			if !traffic.NextReset.IsZero() {
+				resp["traffic_next_reset"] = traffic.NextReset.Unix()
+			}
+			resp["quota_exceeded"] = traffic.IsExceeded
+			resp["traffic_reset_desc"] = traffic.ResetDescription
+		}
 	} else if s.portalMgr.IsAuthorized(clientIP) {
 		resp["authenticated"] = true
 		resp["exempt"] = true
@@ -307,6 +319,54 @@ func (s *Server) handlePortalStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handlePortalTraffic returns traffic consumption and quota stats for all users.
+func (s *Server) handlePortalTraffic(w http.ResponseWriter, r *http.Request) {
+	if s.portalMgr == nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"users": []interface{}{}})
+		return
+	}
+
+	records := s.portalMgr.AllUsersTraffic()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":    true,
+		"users": records,
+	})
+}
+
+// handlePortalTrafficReset clears traffic quota counters for a user.
+func (s *Server) handlePortalTrafficReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.portalMgr == nil {
+		http.Error(w, "portal not initialized", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		req.Username = r.FormValue("username")
+	}
+	req.Username = strings.TrimSpace(req.Username)
+	if req.Username == "" {
+		http.Error(w, "username required", http.StatusBadRequest)
+		return
+	}
+
+	reset := s.portalMgr.ResetUserTraffic(req.Username)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":       true,
+		"reset":    reset,
+		"username": req.Username,
+	})
 }
 
 // handlePortalKick allows administrators to forcibly terminate a device's portal session.

@@ -1325,3 +1325,77 @@ func TestPortalConf_ValidateAndClone(t *testing.T) {
 		t.Errorf("expected error for invalid MAC in exempt_macs")
 	}
 }
+
+func TestAuthUser_TrafficLimit(t *testing.T) {
+	auth := &AuthConf{
+		Username:          "admin",
+		Password:          "secret",
+		TrafficLimitMB:    500,
+		ResetCycle:        "daily",
+		Users: []AuthUserConf{
+			{
+				Username:       "alice",
+				Password:       "pwalice",
+				TrafficLimitMB: 1024, // 1024 MB
+				ResetCycle:     "monthly",
+			},
+			{
+				Username:          "bob",
+				Password:          "pwbob",
+				TrafficLimitBytes: 2048, // 2048 bytes
+				ResetCycle:        "daily",
+			},
+			{
+				Username:   "charlie",
+				Password:   "pwcharlie",
+				ResetCycle: "none",
+			},
+		},
+	}
+
+	if auth.UserTrafficLimit("alice") != 1024*1024*1024 {
+		t.Errorf("expected alice limit 1073741824 bytes, got %d", auth.UserTrafficLimit("alice"))
+	}
+	if auth.UserResetCycle("alice") != "monthly" {
+		t.Errorf("expected alice reset cycle 'monthly', got %q", auth.UserResetCycle("alice"))
+	}
+	if auth.UserTrafficLimit("bob") != 2048 {
+		t.Errorf("expected bob limit 2048 bytes, got %d", auth.UserTrafficLimit("bob"))
+	}
+	if auth.UserResetCycle("bob") != "daily" {
+		t.Errorf("expected bob reset cycle 'daily', got %q", auth.UserResetCycle("bob"))
+	}
+	if auth.UserTrafficLimit("charlie") != 0 {
+		t.Errorf("expected charlie limit 0 (unlimited), got %d", auth.UserTrafficLimit("charlie"))
+	}
+	if auth.UserResetCycle("charlie") != "none" {
+		t.Errorf("expected charlie reset cycle 'none', got %q", auth.UserResetCycle("charlie"))
+	}
+	if auth.UserTrafficLimit("admin") != 500*1024*1024 {
+		t.Errorf("expected admin limit 500MB, got %d", auth.UserTrafficLimit("admin"))
+	}
+	if auth.UserResetCycle("admin") != "daily" {
+		t.Errorf("expected admin reset cycle 'daily', got %q", auth.UserResetCycle("admin"))
+	}
+
+	// Validation tests
+	cfg := DefaultConfig()
+	cfg.Listen.Auth = auth
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid config, got: %v", err)
+	}
+
+	// Invalid reset cycle
+	badCycleCfg := cfg.Clone()
+	badCycleCfg.Listen.Auth.Users[0].ResetCycle = "invalid_cycle"
+	if err := badCycleCfg.Validate(); err == nil {
+		t.Errorf("expected error for invalid reset cycle")
+	}
+
+	// Negative limit
+	badLimitCfg := cfg.Clone()
+	badLimitCfg.Listen.Auth.Users[0].TrafficLimitMB = -10
+	if err := badLimitCfg.Validate(); err == nil {
+		t.Errorf("expected error for negative traffic limit mb")
+	}
+}

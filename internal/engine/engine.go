@@ -172,6 +172,9 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 	subMgr.Start()
 
 	portalMgr := portal.NewManager(cfg)
+	if cfgDir != "" {
+		portalMgr.SetStoragePath(filepath.Join(cfgDir, "portal_traffic.json"))
+	}
 	tunHandler := tun.NewHandler(cfg, router, ruleEng, upstreamMgr, dnsHandler)
 	tunHandler.SetPortalManager(portalMgr)
 

@@ -291,9 +291,9 @@ body {
 
   <!-- Authenticated View -->
   <div id="authView" style="display: none; text-align: center;">
-    <div class="status-badge">已认证放行</div>
+    <div id="statusBadge" class="status-badge">已认证放行</div>
     <h2 style="font-size: 1.25rem; margin-bottom: 0.5rem;" id="authUserHeading">欢迎, <span id="authUsername"></span></h2>
-    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1.5rem;">您已成功通过身份认证，网络畅通无阻。</p>
+    <p style="color: var(--text-muted); font-size: 0.875rem; margin-bottom: 1.5rem;" id="authDesc">您已成功通过身份认证，网络畅通无阻。</p>
 
     <div style="background: var(--input-bg); border: 1px solid var(--input-border); border-radius: 0.75rem; padding: 0.85rem; margin-bottom: 1.5rem; font-size: 0.8125rem; text-align: left;">
       <div style="display: flex; justify-content: space-between; margin-bottom: 0.4rem;">
@@ -302,7 +302,22 @@ body {
       </div>
       <div style="display: flex; justify-content: space-between;">
         <span style="color: var(--text-muted)">状态:</span>
-        <span style="color: var(--success); font-weight: 600;">正常使用中</span>
+        <span id="authStatusText" style="color: var(--success); font-weight: 600;">正常使用中</span>
+      </div>
+
+      <!-- Traffic Quota Block -->
+      <div id="trafficBlock" style="display: none; border-top: 1px solid var(--card-border); padding-top: 0.6rem; margin-top: 0.6rem;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 0.35rem;">
+          <span style="color: var(--text-muted)">账号流量配额:</span>
+          <span id="trafficUsageText" style="font-weight: 600;">-- / --</span>
+        </div>
+        <div style="width: 100%; height: 7px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden; margin-bottom: 0.45rem;">
+          <div id="trafficProgressBar" style="width: 0%; height: 100%; background: var(--primary); transition: width 0.3s ease;"></div>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted);">
+          <span>重置周期: <b id="trafficCycleText" style="color: var(--text)">--</b></span>
+          <span id="trafficResetAtText">--</span>
+        </div>
       </div>
     </div>
 
@@ -343,6 +358,13 @@ async function checkStatus() {
   }
 }
 
+function formatBytes(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
 function showAuthenticated(data) {
   document.getElementById('loginView').style.display = 'none';
   document.getElementById('authView').style.display = 'block';
@@ -355,7 +377,48 @@ function showAuthenticated(data) {
     const d = new Date(data.expires_at * 1000);
     document.getElementById('authExpires').textContent = d.toLocaleTimeString() + ' (' + d.toLocaleDateString() + ')';
   }
-  if (redirectURL && redirectURL.startsWith('http')) {
+
+  // Handle Quota and Traffic stats
+  if (data.traffic_limit_bytes > 0) {
+    document.getElementById('trafficBlock').style.display = 'block';
+    const used = data.traffic_used_bytes || 0;
+    const limit = data.traffic_limit_bytes;
+    const pct = Math.min(100, Math.round((used / limit) * 100));
+    document.getElementById('trafficUsageText').textContent = formatBytes(used) + ' / ' + formatBytes(limit) + ' (' + pct + '%)';
+    const bar = document.getElementById('trafficProgressBar');
+    bar.style.width = pct + '%';
+
+    let cycleName = '不自动重置';
+    if (data.traffic_reset_cycle === 'daily') cycleName = '每日 00:00 重置';
+    else if (data.traffic_reset_cycle === 'monthly') cycleName = '每月1日 00:00 重置';
+    document.getElementById('trafficCycleText').textContent = cycleName;
+
+    if (data.traffic_next_reset) {
+      const nr = new Date(data.traffic_next_reset * 1000);
+      document.getElementById('trafficResetAtText').textContent = '下次重置: ' + nr.toLocaleDateString();
+    }
+
+    if (data.quota_exceeded) {
+      bar.style.background = 'var(--danger)';
+      const badge = document.getElementById('statusBadge');
+      badge.textContent = '流量配额已用尽';
+      badge.style.background = 'var(--danger-bg)';
+      badge.style.color = 'var(--danger)';
+      const st = document.getElementById('authStatusText');
+      st.textContent = '已暂停联网 (配额用尽)';
+      st.style.color = 'var(--danger)';
+      document.getElementById('authDesc').textContent = '您的账号流量配额已耗尽，请等待重置或联系管理员扩容。';
+      showAlert('当前账号流量已用尽，外网连接已暂停放行。' + (data.traffic_reset_desc || ''), true);
+    } else {
+      if (pct > 85) {
+        bar.style.background = '#f59e0b';
+      } else {
+        bar.style.background = 'var(--primary)';
+      }
+    }
+  }
+
+  if (!data.quota_exceeded && redirectURL && redirectURL.startsWith('http')) {
     const btn = document.getElementById('continueBtn');
     btn.style.display = 'flex';
   }

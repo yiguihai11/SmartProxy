@@ -147,9 +147,23 @@ type AdminAuthConf struct {
 
 // AuthUserConf defines individual user credentials and limits for multi-user authentication.
 type AuthUserConf struct {
-	Username   string `json:"username"`
-	Password   string `json:"password"`
-	MaxDevices int    `json:"max_devices,omitempty"` // 0 or omitted = default 1 device; -1 = unlimited
+	Username          string `json:"username"`
+	Password          string `json:"password"`
+	MaxDevices        int    `json:"max_devices,omitempty"`         // 0 or omitted = default 1 device; -1 = unlimited
+	TrafficLimitBytes int64  `json:"traffic_limit_bytes,omitempty"` // Quota in bytes. 0 = unlimited. e.g. 1073741824 = 1GB
+	TrafficLimitMB    int64  `json:"traffic_limit_mb,omitempty"`    // Convenience field in JSON: Quota in Megabytes (1024 * 1024 bytes)
+	ResetCycle        string `json:"reset_cycle,omitempty"`        // "daily" (resets daily at 00:00:00), "monthly" (resets on 1st of month at 00:00:00), "none"/"" (never automatically resets)
+}
+
+// EffectiveTrafficLimit returns the effective traffic quota in bytes.
+func (u *AuthUserConf) EffectiveTrafficLimit() int64 {
+	if u.TrafficLimitBytes > 0 {
+		return u.TrafficLimitBytes
+	}
+	if u.TrafficLimitMB > 0 {
+		return u.TrafficLimitMB * 1024 * 1024
+	}
+	return 0
 }
 
 // PortalConf controls the Wi-Fi hotspot Captive Portal.
@@ -177,9 +191,59 @@ func (p *PortalConf) PortalTitle() string {
 }
 
 type AuthConf struct {
-	Username string         `json:"username,omitempty"`
-	Password string         `json:"password,omitempty"`
-	Users    []AuthUserConf `json:"users,omitempty"`
+	Username          string         `json:"username,omitempty"`
+	Password          string         `json:"password,omitempty"`
+	MaxDevices        int            `json:"max_devices,omitempty"`
+	TrafficLimitBytes int64          `json:"traffic_limit_bytes,omitempty"`
+	TrafficLimitMB    int64          `json:"traffic_limit_mb,omitempty"`
+	ResetCycle        string         `json:"reset_cycle,omitempty"`
+	Users             []AuthUserConf `json:"users,omitempty"`
+}
+
+// EffectiveTrafficLimit returns the effective traffic quota in bytes for the single-user auth.
+func (a *AuthConf) EffectiveTrafficLimit() int64 {
+	if a == nil {
+		return 0
+	}
+	if a.TrafficLimitBytes > 0 {
+		return a.TrafficLimitBytes
+	}
+	if a.TrafficLimitMB > 0 {
+		return a.TrafficLimitMB * 1024 * 1024
+	}
+	return 0
+}
+
+// UserTrafficLimit returns the effective traffic quota in bytes for the specified user.
+func (a *AuthConf) UserTrafficLimit(user string) int64 {
+	if a == nil {
+		return 0
+	}
+	for _, u := range a.Users {
+		if u.Username == user {
+			return u.EffectiveTrafficLimit()
+		}
+	}
+	if a.Username != "" && a.Username == user {
+		return a.EffectiveTrafficLimit()
+	}
+	return 0
+}
+
+// UserResetCycle returns the configured reset cycle ("daily", "monthly", "none", or "") for the specified user.
+func (a *AuthConf) UserResetCycle(user string) string {
+	if a == nil {
+		return ""
+	}
+	for _, u := range a.Users {
+		if u.Username == user {
+			return strings.ToLower(strings.TrimSpace(u.ResetCycle))
+		}
+	}
+	if a.Username != "" && a.Username == user {
+		return strings.ToLower(strings.TrimSpace(a.ResetCycle))
+	}
+	return ""
 }
 
 // HasCredentials reports whether single-user or any multi-user credentials are defined.
@@ -230,6 +294,15 @@ func (a *AuthConf) UserMaxDevices(user string) int {
 			}
 			return u.MaxDevices
 		}
+	}
+	if a.Username != "" && a.Username == user {
+		if a.MaxDevices < 0 {
+			return 0
+		}
+		if a.MaxDevices == 0 {
+			return 1
+		}
+		return a.MaxDevices
 	}
 	return 1
 }
@@ -735,6 +808,16 @@ func (c *Config) Validate() error {
 		errs = append(errs, "listen.admin_cert_file and listen.admin_key_file must be both set or both empty")
 	}
 	if c.Listen.Auth != nil {
+		if c.Listen.Auth.TrafficLimitBytes < 0 {
+			errs = append(errs, "listen.auth.traffic_limit_bytes must not be negative")
+		}
+		if c.Listen.Auth.TrafficLimitMB < 0 {
+			errs = append(errs, "listen.auth.traffic_limit_mb must not be negative")
+		}
+		authCycle := strings.ToLower(strings.TrimSpace(c.Listen.Auth.ResetCycle))
+		if authCycle != "" && authCycle != "none" && authCycle != "daily" && authCycle != "monthly" {
+			errs = append(errs, "listen.auth.reset_cycle must be one of: daily, monthly, none, or empty")
+		}
 		seenUsers := make(map[string]bool)
 		if c.Listen.Auth.Username != "" {
 			seenUsers[c.Listen.Auth.Username] = true
@@ -745,6 +828,16 @@ func (c *Config) Validate() error {
 			}
 			if u.MaxDevices < -1 {
 				errs = append(errs, fmt.Sprintf("listen.auth.users[%d].max_devices must not be less than -1", i))
+			}
+			if u.TrafficLimitBytes < 0 {
+				errs = append(errs, fmt.Sprintf("listen.auth.users[%d].traffic_limit_bytes must not be negative", i))
+			}
+			if u.TrafficLimitMB < 0 {
+				errs = append(errs, fmt.Sprintf("listen.auth.users[%d].traffic_limit_mb must not be negative", i))
+			}
+			cycle := strings.ToLower(strings.TrimSpace(u.ResetCycle))
+			if cycle != "" && cycle != "none" && cycle != "daily" && cycle != "monthly" {
+				errs = append(errs, fmt.Sprintf("listen.auth.users[%d].reset_cycle must be one of: daily, monthly, none, or empty", i))
 			}
 			if seenUsers[u.Username] {
 				errs = append(errs, fmt.Sprintf("listen.auth.users[%d] duplicate username %q", i, u.Username))

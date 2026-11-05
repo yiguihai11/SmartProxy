@@ -631,6 +631,8 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/api/portal/login", s.handlePortalLogin)
 	mux.HandleFunc("/api/portal/logout", s.handlePortalLogout)
 	mux.HandleFunc("/api/portal/kick", s.handlePortalKick)
+	mux.HandleFunc("/api/portal/traffic", s.handlePortalTraffic)
+	mux.HandleFunc("/api/portal/traffic/reset", s.handlePortalTrafficReset)
 
 	return mux
 }

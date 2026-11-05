@@ -322,28 +322,32 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 
 	clientIP := source.Addr.String()
 	portalMgr := h.portalMgr.Load()
-	if portalMgr != nil && portalMgr.IsEnabled() && !portalMgr.IsAuthorized(clientIP) {
-		adminPort := 9090
-		if cfg := h.config.Load(); cfg != nil && cfg.Listen.AdminPort > 0 {
-			adminPort = cfg.Listen.AdminPort
-		}
-		if port == adminPort {
-			// Permitted: allow client to reach the captive portal web service
-		} else if port == 80 {
-			// HTTP port 80: 302 redirect to captive portal login page
-			h.servePortalRedirect(conn, clientIP, host, port, adminPort)
-			if onClose != nil {
-				onClose(nil)
+	if portalMgr != nil && portalMgr.IsEnabled() {
+		if !portalMgr.IsAuthorized(clientIP) {
+			adminPort := 9090
+			if cfg := h.config.Load(); cfg != nil && cfg.Listen.AdminPort > 0 {
+				adminPort = cfg.Listen.AdminPort
 			}
-			return
+			if port == adminPort {
+				// Permitted: allow client to reach the captive portal web service
+			} else if port == 80 {
+				// HTTP port 80: 302 redirect to captive portal login page
+				h.servePortalRedirect(conn, clientIP, host, port, adminPort)
+				if onClose != nil {
+					onClose(nil)
+				}
+				return
+			} else {
+				// All other ports: fail-fast with TCP RST to trigger captive portal detection
+				ll.Debug("TUN unauthenticated portal client TCP blocked with RST", "src", clientIP, "dst", destination)
+				netutil.SendEnhancedBlock(conn, port)
+				if onClose != nil {
+					onClose(nil)
+				}
+				return
+			}
 		} else {
-			// All other ports: fail-fast with TCP RST to trigger captive portal detection
-			ll.Debug("TUN unauthenticated portal client TCP blocked with RST", "src", clientIP, "dst", destination)
-			netutil.SendEnhancedBlock(conn, port)
-			if onClose != nil {
-				onClose(nil)
-			}
-			return
+			conn = h.wrapPortalTCP(clientIP, conn, portalMgr)
 		}
 	}
 
@@ -414,6 +418,7 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 	// 活跃连接登记(「联网状态」页封禁时按 ACL 扫描掐断):必须在 wrap 之后,
 	// 句柄持有的 app conn 与下游 relay 用的是同一个对象。rec 可空(页面未开)。
 	hd := h.liveTCP.add(conn, host, port, rec)
+	hd.clientIP = clientIP
 
 	smartEnabled := h.config.Load().SmartProxy.Enabled && netutil.ContainsInt(h.config.Load().SmartProxy.Ports, port)
 
@@ -644,13 +649,16 @@ func (h *TUNHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketCon
 	}
 
 	portalMgr := h.portalMgr.Load()
-	if portalMgr != nil && portalMgr.IsEnabled() && !portalMgr.IsAuthorized(source.Addr.String()) {
-		ll.Debug("TUN dropping non-DNS UDP packet from unauthenticated portal client", "src", source.Addr.String(), "dst", destination)
-		conn.Close()
-		if onClose != nil {
-			onClose(nil)
+	if portalMgr != nil && portalMgr.IsEnabled() {
+		if !portalMgr.IsAuthorized(source.Addr.String()) {
+			ll.Debug("TUN dropping non-DNS UDP packet from unauthenticated portal client", "src", source.Addr.String(), "dst", destination)
+			conn.Close()
+			if onClose != nil {
+				onClose(nil)
+			}
+			return
 		}
-		return
+		conn = h.wrapPortalUDP(source.Addr.String(), conn, portalMgr)
 	}
 
 	if h.IsClientIPBlocked(source.Addr.String()) {
@@ -1711,5 +1719,111 @@ func isClientAbort(err error) bool {
 		strings.Contains(s, "use of closed network connection") ||
 		strings.Contains(s, "connection reset by peer") ||
 		strings.Contains(s, "broken pipe")
+}
+
+type portalCountingConn struct {
+	net.Conn
+	clientIP  string
+	portalMgr *portal.Manager
+	h         *TUNHandler
+}
+
+func (c *portalCountingConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 && c.portalMgr != nil {
+		if c.portalMgr.AddTraffic(c.clientIP, int64(n)) {
+			c.Conn.Close()
+			if c.h != nil && c.h.liveTCP != nil {
+				c.h.liveTCP.killByClientIP(c.clientIP)
+			}
+		}
+	}
+	return n, err
+}
+
+func (c *portalCountingConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	if n > 0 && c.portalMgr != nil {
+		if c.portalMgr.AddTraffic(c.clientIP, int64(n)) {
+			c.Conn.Close()
+			if c.h != nil && c.h.liveTCP != nil {
+				c.h.liveTCP.killByClientIP(c.clientIP)
+			}
+		}
+	}
+	return n, err
+}
+
+func (c *portalCountingConn) SetLinger(sec int) error {
+	if sl, ok := c.Conn.(interface{ SetLinger(int) error }); ok {
+		return sl.SetLinger(sec)
+	}
+	return nil
+}
+
+func (c *portalCountingConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
+func (c *portalCountingConn) CloseRead() error {
+	if cr, ok := c.Conn.(interface{ CloseRead() error }); ok {
+		return cr.CloseRead()
+	}
+	return nil
+}
+
+func (c *portalCountingConn) SetNoDelay(noDelay bool) error {
+	if nd, ok := c.Conn.(interface{ SetNoDelay(bool) error }); ok {
+		return nd.SetNoDelay(noDelay)
+	}
+	return nil
+}
+
+type portalCountingPacketConn struct {
+	N.PacketConn
+	clientIP  string
+	portalMgr *portal.Manager
+	h         *TUNHandler
+}
+
+func (c *portalCountingPacketConn) ReadPacket(buffer *buf.Buffer) (M.Socksaddr, error) {
+	addr, err := c.PacketConn.ReadPacket(buffer)
+	if n := buffer.Len(); n > 0 && c.portalMgr != nil {
+		if c.portalMgr.AddTraffic(c.clientIP, int64(n)) {
+			c.PacketConn.Close()
+		}
+	}
+	return addr, err
+}
+
+func (c *portalCountingPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
+	err := c.PacketConn.WritePacket(buffer, destination)
+	if n := buffer.Len(); n > 0 && c.portalMgr != nil {
+		if c.portalMgr.AddTraffic(c.clientIP, int64(n)) {
+			c.PacketConn.Close()
+		}
+	}
+	return err
+}
+
+func (h *TUNHandler) wrapPortalTCP(clientIP string, conn net.Conn, mgr *portal.Manager) net.Conn {
+	return &portalCountingConn{
+		Conn:      conn,
+		clientIP:  clientIP,
+		portalMgr: mgr,
+		h:         h,
+	}
+}
+
+func (h *TUNHandler) wrapPortalUDP(clientIP string, conn N.PacketConn, mgr *portal.Manager) N.PacketConn {
+	return &portalCountingPacketConn{
+		PacketConn: conn,
+		clientIP:   clientIP,
+		portalMgr:  mgr,
+		h:          h,
+	}
 }
 
