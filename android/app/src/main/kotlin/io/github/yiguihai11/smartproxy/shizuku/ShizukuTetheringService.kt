@@ -1378,7 +1378,12 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
                 return directory.absolutePath
             }
 
-            directory.listFiles()?.filter { it.isFile && it.name !in names && it.name != "config.json" && !it.name.startsWith("admin.") && !it.name.startsWith("admin_ca.") }?.forEach { it.delete() }
+            directory.listFiles()?.filter {
+                it.isFile && it.name !in names && it.name != "config.json" &&
+                    !it.name.startsWith("admin.") && !it.name.startsWith("admin_ca.") &&
+                    !it.name.startsWith("portal_") && !it.name.startsWith("warm_state") &&
+                    !it.name.startsWith("blocked_devices")
+            }?.forEach { it.delete() }
             names.forEach { name ->
                 val target = File(directory, name)
                 val temporary = File(directory, ".$name.tmp")

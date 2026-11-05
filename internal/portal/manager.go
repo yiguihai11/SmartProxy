@@ -60,6 +60,13 @@ type TrafficStorageFile struct {
 	Users     map[string]*UserTraffic `json:"users"`
 }
 
+// SessionStorageFile is the JSON schema persisted to portal_sessions.json.
+type SessionStorageFile struct {
+	Version   int        `json:"version"`
+	UpdatedAt int64      `json:"updated_at"`
+	Sessions  []*Session `json:"sessions"`
+}
+
 type failRecord struct {
 	count      int
 	lastFail   time.Time
@@ -77,6 +84,8 @@ type Manager struct {
 	userTraffic     map[string]*UserTraffic
 	trafficFilePath string
 	trafficDirty    atomic.Bool
+	sessionFilePath string
+	sessionDirty    atomic.Bool
 	csrfSecret      []byte
 	macResolver     func(ip string) string
 	stopCh          chan struct{}
@@ -119,6 +128,7 @@ func (m *Manager) startCleaner() {
 			case <-ticker.C:
 				m.purgeExpired()
 				m.saveTrafficIfDirty()
+				m.saveSessionsIfDirty()
 			case <-m.stopCh:
 				return
 			}
@@ -132,6 +142,7 @@ func (m *Manager) Close() {
 		close(m.stopCh)
 		<-m.cleanerDone
 		m.saveTrafficIfDirty()
+		m.saveSessionsIfDirty()
 	})
 }
 
@@ -400,6 +411,8 @@ func (m *Manager) Authenticate(clientIP, mac, username, password, userAgent stri
 		m.sessionsByMAC[normMAC] = sess
 	}
 	m.sessionsByToken[token] = sess
+	m.sessionDirty.Store(true)
+	safego.Go("portal.saveSessions", func() { m.saveSessionsIfDirty() })
 
 	return sess, token, nil
 }
@@ -454,6 +467,8 @@ func (m *Manager) AuthenticateByToken(clientIP, mac, token, userAgent string) (*
 	if userAgent != "" {
 		sess.UserAgent = userAgent
 	}
+	m.sessionDirty.Store(true)
+	safego.Go("portal.saveSessions", func() { m.saveSessionsIfDirty() })
 
 	return sess, nil
 }
@@ -467,6 +482,7 @@ func (m *Manager) Logout(clientIP, mac, token string) {
 	defer m.mu.Unlock()
 
 	m.removeSessionLocked(normIP, normMAC, token)
+	safego.Go("portal.saveSessions", func() { m.saveSessionsIfDirty() })
 }
 
 // RevokeSession revokes any session matching the given IP or MAC address (Admin Kick).
@@ -490,6 +506,9 @@ func (m *Manager) RevokeSession(ipOrMAC string) bool {
 	if sess, ok := m.sessionsByMAC[normMAC]; ok {
 		m.removeSessionLocked(sess.IP, sess.MAC, sess.Token)
 		found = true
+	}
+	if found {
+		safego.Go("portal.saveSessions", func() { m.saveSessionsIfDirty() })
 	}
 	return found
 }
@@ -521,6 +540,7 @@ func (m *Manager) removeSessionLocked(ip, mac, token string) {
 					delete(m.sessionsByMAC, s.MAC)
 				}
 				delete(m.sessionsByToken, t)
+				m.sessionDirty.Store(true)
 			}
 		}
 	}
@@ -616,6 +636,7 @@ func (m *Manager) purgeExpired() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	dirty := false
 	for token, s := range m.sessionsByToken {
 		if now.After(s.ExpiresAt) {
 			delete(m.sessionsByToken, token)
@@ -627,7 +648,12 @@ func (m *Manager) purgeExpired() {
 					delete(m.sessionsByMAC, s.MAC)
 				}
 			}
+			dirty = true
 		}
+	}
+	if dirty {
+		m.sessionDirty.Store(true)
+		safego.Go("portal.saveSessions", func() { m.saveSessionsIfDirty() })
 	}
 
 	for ip, rec := range m.failedAttempts {
@@ -710,14 +736,33 @@ func generateSecureToken() string {
 	return hex.EncodeToString(b)
 }
 
-// SetStoragePath sets the JSON file path for persistent user traffic quotas.
+// SetStoragePath sets the JSON file path for persistent user traffic quotas and sessions.
 func (m *Manager) SetStoragePath(path string) {
 	m.mu.Lock()
 	m.trafficFilePath = path
+	sessionPath := ""
+	if path != "" {
+		sessionPath = filepath.Join(filepath.Dir(path), "portal_sessions.json")
+		m.sessionFilePath = sessionPath
+	}
 	m.mu.Unlock()
 
 	if path != "" {
 		_ = m.LoadTrafficFile(path)
+		if sessionPath != "" {
+			_ = m.LoadSessionsFile(sessionPath)
+		}
+	}
+}
+
+// SetSessionStoragePath explicitly sets the JSON file path for active sessions.
+func (m *Manager) SetSessionStoragePath(path string) {
+	m.mu.Lock()
+	m.sessionFilePath = path
+	m.mu.Unlock()
+
+	if path != "" {
+		_ = m.LoadSessionsFile(path)
 	}
 }
 
@@ -800,6 +845,105 @@ func (m *Manager) saveTrafficIfDirty() {
 
 	if path != "" {
 		_ = m.SaveTrafficFile(path)
+	}
+}
+
+// LoadSessionsFile restores valid active sessions from disk.
+func (m *Manager) LoadSessionsFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	var sf SessionStorageFile
+	if err := json.Unmarshal(data, &sf); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now()
+	for _, s := range sf.Sessions {
+		if s == nil || s.Token == "" {
+			continue
+		}
+		if now.After(s.ExpiresAt) {
+			continue
+		}
+		if m.isUserQuotaExceededLocked(s.Username, now) {
+			continue
+		}
+		normIP := normalizeIP(s.IP)
+		normMAC := strings.ToLower(strings.TrimSpace(s.MAC))
+		s.IP = normIP
+		s.MAC = normMAC
+
+		m.sessionsByToken[s.Token] = s
+		if normIP != "" {
+			m.sessionsByIP[normIP] = s
+		}
+		if normMAC != "" {
+			m.sessionsByMAC[normMAC] = s
+		}
+	}
+	return nil
+}
+
+// SaveSessionsFile persists all active, unexpired sessions to disk atomically.
+func (m *Manager) SaveSessionsFile(path string) error {
+	now := time.Now()
+	m.mu.RLock()
+	sf := SessionStorageFile{
+		Version:   1,
+		UpdatedAt: now.Unix(),
+		Sessions:  make([]*Session, 0, len(m.sessionsByToken)),
+	}
+	seen := make(map[string]bool)
+	for _, s := range m.sessionsByToken {
+		if s != nil && s.Token != "" && now.Before(s.ExpiresAt) && !seen[s.Token] {
+			seen[s.Token] = true
+			cp := *s
+			sf.Sessions = append(sf.Sessions, &cp)
+		}
+	}
+	m.mu.RUnlock()
+
+	data, err := json.MarshalIndent(sf, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+
+	m.sessionDirty.Store(false)
+	return nil
+}
+
+func (m *Manager) saveSessionsIfDirty() {
+	if !m.sessionDirty.Load() {
+		return
+	}
+	m.mu.RLock()
+	path := m.sessionFilePath
+	m.mu.RUnlock()
+
+	if path != "" {
+		_ = m.SaveSessionsFile(path)
 	}
 }
 

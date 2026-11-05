@@ -446,6 +446,65 @@ func TestPortal_TrafficPersistence(t *testing.T) {
 	}
 }
 
+func TestPortal_SessionPersistence(t *testing.T) {
+	dir := t.TempDir()
+	trafficPath := dir + "/portal_traffic.json"
+
+	cfg := makeTestConfig(2)
+	mgr := NewManager(cfg)
+	mgr.SetStoragePath(trafficPath)
+
+	clientIP := "192.168.43.10"
+	clientMAC := "00:11:22:33:44:aa"
+	sess, token, err := mgr.Authenticate(clientIP, clientMAC, "alice", "secret123", "UA-Test")
+	if err != nil {
+		t.Fatalf("auth failed: %v", err)
+	}
+	if sess == nil || token == "" {
+		t.Fatalf("expected session and token")
+	}
+
+	// Close should flush both traffic and sessions to disk
+	mgr.Close()
+
+	// New manager starts up (simulating VPN restart)
+	mgr2 := NewManager(cfg)
+	defer mgr2.Close()
+	mgr2.SetStoragePath(trafficPath)
+
+	// Verify that client is authorized immediately without needing to log in again!
+	if !mgr2.IsAuthorized(clientIP) {
+		t.Fatalf("expected client IP %s to be authorized after VPN restart from persisted session", clientIP)
+	}
+
+	// Verify that session lookup by IP and MAC returns the persisted session
+	s := mgr2.GetSession(clientIP, clientMAC)
+	if s == nil || s.Username != "alice" || s.Token != token {
+		t.Fatalf("expected restored session for alice with matching token, got %+v", s)
+	}
+
+	// Verify that AuthenticateByToken works with the restored session token
+	sToken, err := mgr2.AuthenticateByToken(clientIP, clientMAC, token, "UA-New")
+	if err != nil || sToken.Username != "alice" {
+		t.Fatalf("expected AuthenticateByToken to succeed with restored token: %v", err)
+	}
+
+	// Test revocation persistence
+	mgr2.RevokeSession(clientIP)
+	if mgr2.IsAuthorized(clientIP) {
+		t.Fatalf("expected revoked session to not be authorized")
+	}
+	mgr2.Close()
+
+	// Re-load in mgr3 to verify revocation was persisted
+	mgr3 := NewManager(cfg)
+	defer mgr3.Close()
+	mgr3.SetStoragePath(trafficPath)
+	if mgr3.IsAuthorized(clientIP) {
+		t.Fatalf("expected revoked session to remain revoked after reload")
+	}
+}
+
 func BenchmarkIsAuthorized(b *testing.B) {
 	cfg := makeTestConfig(10)
 	mgr := NewManager(cfg)
