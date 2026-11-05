@@ -384,16 +384,25 @@ func (s *Server) handlePortalKick(w http.ResponseWriter, r *http.Request) {
 	}
 
 	target := r.URL.Query().Get("target")
+	ip := r.URL.Query().Get("ip")
 	if target == "" {
 		var body struct {
 			Target string `json:"target"`
+			IP     string `json:"ip"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
 			target = body.Target
+			if ip == "" {
+				ip = body.IP
+			}
 		}
 	}
 
 	target = strings.TrimSpace(target)
+	ip = strings.TrimSpace(ip)
+	if target == "" && ip != "" {
+		target = ip
+	}
 	if target == "" {
 		http.Error(w, "target IP or MAC required", http.StatusBadRequest)
 		return
@@ -402,11 +411,20 @@ func (s *Server) handlePortalKick(w http.ResponseWriter, r *http.Request) {
 	revoked := false
 	if s.portalMgr != nil {
 		revoked = s.portalMgr.RevokeSession(target)
+		if ip != "" && ip != target {
+			if s.portalMgr.RevokeSession(ip) {
+				revoked = true
+			}
+		}
 	}
 
-	// Kill existing TCP connections if target looks like an IP
+	// Kill existing TCP connections for target, ip, and tethering NAT address
 	if s.killClientConnections != nil {
 		_ = s.killClientConnections(target)
+		if ip != "" {
+			_ = s.killClientConnections(ip)
+		}
+		_ = s.killClientConnections("192.0.2.2")
 	}
 
 	w.Header().Set("Content-Type", "application/json")

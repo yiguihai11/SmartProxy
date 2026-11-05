@@ -391,11 +391,21 @@ func TestPortal_TetheringBridgeClient_NATResolution(t *testing.T) {
 		t.Fatalf("expected device authenticated with alice, got: %+v", d)
 	}
 
-	// 6. MAC Exemption: if the physical client's MAC is in ExemptMACs,
+	// 6. Test handlePortalKick: kicking device by MAC/IP deauthorizes it immediately
+	kickReq := httptest.NewRequest(http.MethodPost, "/api/portal/kick?target=d8:a4:91:21:a3:c7&ip=10.140.12.152", nil)
+	kickRec := httptest.NewRecorder()
+	srv.handlePortalKick(kickRec, kickReq)
+	if kickRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 from kick, got %d", kickRec.Code)
+	}
+	if pm.IsAuthorized("192.0.2.2") {
+		t.Fatalf("expected 192.0.2.2 to be deauthorized after kick")
+	}
+
+	// 7. MAC Exemption: if the physical client's MAC is in ExemptMACs,
 	// IsAuthorized("192.0.2.2") should be true even without an active session
 	cfg := srv.configSrc()
 	cfg.Listen.Portal.ExemptMACs = []string{"d8:a4:91:21:a3:c7"}
-	pm.RevokeSession("192.0.2.2")
 	if !pm.IsAuthorized("192.0.2.2") {
 		t.Fatalf("expected 192.0.2.2 to be authorized via MAC exemption")
 	}

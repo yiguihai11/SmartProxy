@@ -7289,13 +7289,26 @@ function renderDevices() {
       } else {
         badge = '<span class="tag green">' + t('Live') + '</span>';
       }
+      if (d.auth_user) {
+        badge += '<span class="tag blue" style="margin-left:4px">👤 ' + escHtml(d.auth_user) + '</span>';
+      } else if (devicesData && devicesData.portal_enabled && !isCur && !isVirtual) {
+        badge += '<span class="tag orange" style="margin-left:4px">' + t('Unauthenticated') + '</span>';
+      }
 
       var isVirtual = (ip === '192.0.2.2' || ip === '192.0.2.1' || ip === '2001:db8:9877::1' || ip === '2001:db8:9877::2' || d.hostname === '热点共享流量池' || d.hostname === '热点共享设备');
       var actions = '';
       if (isCur || isVirtual) {
         actions = '<div style="font-size:.78rem;color:var(--text3);font-style:italic">' + t(isCur ? 'Current Device (Protected)' : 'System Internal Pool (Protected)') + '</div>';
       } else {
-        actions = '<button class="btn btn-sm" onclick="disconnectDevice(\'' + escAttr(ip) + '\')">' + t('Disconnect') + '</button>' +
+        var portalActions = '';
+        if (d.auth_user) {
+          if (d.traffic_limit_bytes > 0 || d.traffic_used_bytes > 0) {
+            portalActions += '<button class="btn btn-sm" onclick="resetDeviceTraffic(\'' + escAttr(d.auth_user) + '\')">' + t('Reset Traffic') + '</button>';
+          }
+          portalActions += '<button class="btn btn-sm warning" onclick="kickPortalDevice(\'' + escAttr(ip) + '\',\'' + escAttr(mac) + '\',\'' + escAttr(d.auth_user) + '\')">' + t('Kick Offline') + '</button>';
+        }
+        actions = portalActions +
+                  '<button class="btn btn-sm" onclick="disconnectDevice(\'' + escAttr(ip) + '\')">' + t('Disconnect') + '</button>' +
                   '<button class="btn btn-sm danger" onclick="blockDevice(\'' + escAttr(ip) + '\',\'' + escAttr(mac) + '\',\'' + escAttr(d.hostname || '') + '\')">' + t('Block') + '</button>';
       }
 
@@ -7376,6 +7389,50 @@ function renderDevices() {
         '<span>' + (isExpanded ? '▲ ' + t('Hide active connections') : '▼ ' + t('Show active connections')) + '</span>' +
       '</button>';
 
+      var portalInfoHtml = '';
+      if (d.auth_user) {
+        var leaseStr = '';
+        if (d.auth_expires) {
+          var secLeft = d.auth_expires - Math.floor(Date.now() / 1000);
+          if (secLeft > 0) {
+            var h = Math.floor(secLeft / 3600);
+            var m = Math.floor((secLeft % 3600) / 60);
+            leaseStr = h + t('h') + ' ' + m + t('m');
+          } else {
+            leaseStr = t('Expired');
+          }
+        }
+
+        if (d.traffic_limit_bytes > 0) {
+          var used = d.traffic_used_bytes || 0;
+          var limit = d.traffic_limit_bytes;
+          var rem = Math.max(0, limit - used);
+          var pct = Math.min(100, Math.round((used / limit) * 100));
+          var barColor = pct >= 90 ? 'var(--red)' : (pct >= 75 ? 'var(--yellow)' : 'var(--accent)');
+          var cycleDesc = d.traffic_reset_desc ? escHtml(d.traffic_reset_desc) : (t('Cycle') + ': ' + escHtml(d.traffic_reset_cycle || 'none'));
+          portalInfoHtml =
+            '<div style="grid-column:1/-1;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin-top:4px">' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-size:.78rem">' +
+                '<span style="font-weight:600;color:var(--text)">' + t('Quota Remaining') + ': <span style="font-family:var(--mono);color:var(--green)">' + fmtNum(rem) + '</span> / ' + fmtNum(limit) + '</span>' +
+                '<span style="font-family:var(--mono);font-size:.74rem;color:' + barColor + '">' + pct + '%</span>' +
+              '</div>' +
+              '<div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:6px">' +
+                '<div style="height:100%;width:' + pct + '%;background:' + barColor + ';border-radius:3px;transition:width .3s"></div>' +
+              '</div>' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;font-size:.74rem;color:var(--text3)">' +
+                '<span>' + cycleDesc + '</span>' +
+                (leaseStr ? ('<span>' + t('Lease Left') + ': ' + escHtml(leaseStr) + '</span>') : '') +
+              '</div>' +
+            '</div>';
+        } else {
+          portalInfoHtml =
+            '<div style="grid-column:1/-1;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;margin-top:4px;display:flex;justify-content:space-between;align-items:center;font-size:.76rem">' +
+              '<span><strong style="color:var(--text)">' + t('Quota') + ':</strong> ' + t('Unlimited') + ' (' + t('Used') + ' ' + fmtNum(d.traffic_used_bytes || 0) + ')</span>' +
+              (leaseStr ? ('<span style="color:var(--text3)">' + t('Lease Left') + ': ' + escHtml(leaseStr) + '</span>') : '') +
+            '</div>';
+        }
+      }
+
       html += '<div class="proxy-card' + (isCur ? ' is-up' : '') + '">' +
         '<div class="top">' +
           '<div class="node-info">' +
@@ -7397,6 +7454,7 @@ function renderDevices() {
             '<span>' + conns + '</span>' +
             toggleConnsBtn +
           '</div>' +
+          portalInfoHtml +
         '</div>' +
         connsBoxHtml +
         '<div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:8px;border-top:1px solid var(--border);padding-top:10px">' +
@@ -7488,6 +7546,49 @@ async function unblockDevice(ip, mac) {
       alert(t('Error') + ': ' + txt);
       return;
     }
+    await loadDevices();
+  } catch(e) {
+    alert(t('Error') + ': ' + e.message);
+  }
+}
+
+async function kickPortalDevice(ip, mac, username) {
+  var target = mac || ip;
+  if (!target) return;
+  var name = username ? (username + ' (' + (ip || mac) + ')') : (ip || mac);
+  if (!confirm(t('Are you sure you want to kick this device offline?') + '\n' + name + '\n' + t('The device will be forced to re-authenticate on next access.'))) return;
+  try {
+    var url = '/api/portal/kick?target=' + encodeURIComponent(target) + '&ip=' + encodeURIComponent(ip || '');
+    var res = await fetch(url, { method: 'POST' });
+    if (!res.ok) {
+      var txt = await res.text();
+      alert(t('Error') + ': ' + txt);
+      return;
+    }
+    var toast = document.getElementById('copy-toast');
+    if (toast) showCopyToast(toast, t('Device kicked offline. It must re-authenticate to access network.'));
+    await loadDevices();
+  } catch(e) {
+    alert(t('Error') + ': ' + e.message);
+  }
+}
+
+async function resetDeviceTraffic(username) {
+  if (!username) return;
+  if (!confirm(t('Reset traffic quota for user') + ' "' + username + '"?')) return;
+  try {
+    var res = await fetch('/api/portal/traffic/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: username })
+    });
+    if (!res.ok) {
+      var txt = await res.text();
+      alert(t('Error') + ': ' + txt);
+      return;
+    }
+    var toast = document.getElementById('copy-toast');
+    if (toast) showCopyToast(toast, t('Traffic quota reset successfully for') + ' ' + username);
     await loadDevices();
   } catch(e) {
     alert(t('Error') + ': ' + e.message);

@@ -40,6 +40,9 @@ type TetheredDevice struct {
 	TrafficUsedBytes  int64        `json:"traffic_used_bytes,omitempty"`
 	TrafficLimitBytes int64        `json:"traffic_limit_bytes,omitempty"`
 	TrafficExceeded   bool         `json:"traffic_exceeded,omitempty"`
+	TrafficResetCycle string       `json:"traffic_reset_cycle,omitempty"`
+	TrafficNextReset  int64        `json:"traffic_next_reset,omitempty"`
+	TrafficResetDesc  string       `json:"traffic_reset_desc,omitempty"`
 	Conns             []DeviceConn `json:"conns,omitempty"`
 }
 
@@ -670,6 +673,9 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 					var authExpires int64
 					var trafficUsed, trafficLimit int64
 					var trafficExceeded bool
+					var trafficResetCycle string
+					var trafficNextReset int64
+					var trafficResetDesc string
 					if s.portalMgr != nil {
 						if ps := s.portalMgr.GetSession(primaryIP, cleanMAC); ps != nil {
 							authUser = ps.Username
@@ -678,6 +684,11 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 								trafficUsed = t.UsedBytes
 								trafficLimit = t.LimitBytes
 								trafficExceeded = t.IsExceeded
+								trafficResetCycle = t.ResetCycle
+								if !t.NextReset.IsZero() {
+									trafficNextReset = t.NextReset.Unix()
+								}
+								trafficResetDesc = t.ResetDescription
 							}
 						}
 					}
@@ -699,6 +710,9 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 						TrafficUsedBytes:  trafficUsed,
 						TrafficLimitBytes: trafficLimit,
 						TrafficExceeded:   trafficExceeded,
+						TrafficResetCycle: trafficResetCycle,
+						TrafficNextReset:  trafficNextReset,
+						TrafficResetDesc:  trafficResetDesc,
 						Conns:             devConns,
 					})
 				}
@@ -811,6 +825,9 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 			var authExpires int64
 			var trafficUsed, trafficLimit int64
 			var trafficExceeded bool
+			var trafficResetCycle string
+			var trafficNextReset int64
+			var trafficResetDesc string
 			if s.portalMgr != nil {
 				if ps := s.portalMgr.GetSession(grp.primaryIP, grp.mac); ps != nil {
 					authUser = ps.Username
@@ -819,6 +836,11 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 						trafficUsed = t.UsedBytes
 						trafficLimit = t.LimitBytes
 						trafficExceeded = t.IsExceeded
+						trafficResetCycle = t.ResetCycle
+						if !t.NextReset.IsZero() {
+							trafficNextReset = t.NextReset.Unix()
+						}
+						trafficResetDesc = t.ResetDescription
 					}
 				}
 			}
@@ -840,6 +862,9 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 				TrafficUsedBytes:  trafficUsed,
 				TrafficLimitBytes: trafficLimit,
 				TrafficExceeded:   trafficExceeded,
+				TrafficResetCycle: trafficResetCycle,
+				TrafficNextReset:  trafficNextReset,
+				TrafficResetDesc:  trafficResetDesc,
 				Conns:             devConns,
 			})
 		}
@@ -849,10 +874,16 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 		devices = []TetheredDevice{}
 	}
 
+	portalEnabled := false
+	if s.portalMgr != nil && s.portalMgr.IsEnabled() {
+		portalEnabled = true
+	}
+
 	resp := map[string]interface{}{
 		"devices":         devices,
 		"blocked_devices": dm.getBlockedList(),
 		"current_ip":      clientIP,
+		"portal_enabled":  portalEnabled,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
