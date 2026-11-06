@@ -223,6 +223,14 @@ func (e *Engine) ConnectionStats() string {
 	return e.TUNHandler.ConnectionStats()
 }
 
+// FullConnectionStats 返回全量连接快照(含所有连接明细)。
+func (e *Engine) FullConnectionStats() string {
+	if e.TUNHandler == nil {
+		return ""
+	}
+	return e.TUNHandler.FullConnectionStats()
+}
+
 // KillClientConnections terminates all active connections for a client IP.
 func (e *Engine) KillClientConnections(ip string) int {
 	if e.TUNHandler == nil {

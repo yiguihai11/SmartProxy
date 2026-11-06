@@ -390,6 +390,9 @@ func GetConnectionStats() (string, error) {
 	if globalEngine == nil {
 		return `{"apps":[]}`, nil
 	}
+	if isTethering {
+		return globalEngine.FullConnectionStats(), nil
+	}
 	return globalEngine.ConnectionStats(), nil
 }
 
