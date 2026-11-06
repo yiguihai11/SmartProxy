@@ -7281,6 +7281,7 @@ function renderDevices() {
       var downTotal = fmtNum(d.down_bytes || 0);
       var conns = d.active_conns || 0;
 
+      var isVirtual = (ip === '192.0.2.2' || ip === '192.0.2.1' || ip === '2001:db8:9877::1' || ip === '2001:db8:9877::2' || d.hostname === '热点共享流量池' || d.hostname === '热点共享设备');
       var badge = '';
       if (isCur) {
         badge = '<span class="tag green" style="font-weight:600">' + t('Current Device (Protected)') + '</span>';
@@ -7295,17 +7296,20 @@ function renderDevices() {
         badge += '<span class="tag orange" style="margin-left:4px">' + t('Unauthenticated') + '</span>';
       }
 
-      var isVirtual = (ip === '192.0.2.2' || ip === '192.0.2.1' || ip === '2001:db8:9877::1' || ip === '2001:db8:9877::2' || d.hostname === '热点共享流量池' || d.hostname === '热点共享设备');
       var actions = '';
       if (isCur || isVirtual) {
         actions = '<div style="font-size:.78rem;color:var(--text3);font-style:italic">' + t(isCur ? 'Current Device (Protected)' : 'System Internal Pool (Protected)') + '</div>';
       } else {
         var portalActions = '';
-        if (d.auth_user) {
-          if (d.traffic_limit_bytes > 0 || d.traffic_used_bytes > 0) {
-            portalActions += '<button class="btn btn-sm" onclick="resetDeviceTraffic(\'' + escAttr(d.auth_user) + '\')">' + t('Reset Traffic') + '</button>';
+        if (devicesData && devicesData.portal_enabled) {
+          if (d.auth_user) {
+            if (d.traffic_limit_bytes > 0 || d.traffic_used_bytes > 0) {
+              portalActions += '<button class="btn btn-sm" onclick="resetDeviceTraffic(\'' + escAttr(d.auth_user) + '\')">' + t('Reset Traffic') + '</button>';
+            }
+            portalActions += '<button class="btn btn-sm warning" onclick="kickPortalDevice(\'' + escAttr(ip) + '\',\'' + escAttr(mac) + '\',\'' + escAttr(d.auth_user) + '\')">' + t('Kick Offline') + '</button>';
+          } else {
+            portalActions += '<button class="btn btn-sm warning" onclick="kickPortalDevice(\'' + escAttr(ip) + '\',\'' + escAttr(mac) + '\',\'\')">' + t('Kick Offline') + '</button>';
           }
-          portalActions += '<button class="btn btn-sm warning" onclick="kickPortalDevice(\'' + escAttr(ip) + '\',\'' + escAttr(mac) + '\',\'' + escAttr(d.auth_user) + '\')">' + t('Kick Offline') + '</button>';
         }
         actions = portalActions +
                   '<button class="btn btn-sm" onclick="disconnectDevice(\'' + escAttr(ip) + '\')">' + t('Disconnect') + '</button>' +

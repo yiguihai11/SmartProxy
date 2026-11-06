@@ -1333,7 +1333,7 @@ func TestPortalRedirectHost(t *testing.T) {
 	// IPv4 client gets 192.0.2.2 directly
 	assert.Equal(t, "192.0.2.2", portalRedirectHost(cfg, "10.140.12.152"))
 	// IPv6 client gets [2001:db8:9877::1]
-	assert.Equal(t, "[2001:db8:9877::1]", portalRedirectHost(cfg, "240e:3b2:3cb9:9620:1234::1"))
+	assert.Equal(t, "[2001:db8:9877::1]", portalRedirectHost(cfg, "2001:db8:1234::1"))
 }
 
 func TestTUNHandler_PortalRedirectHotspotDirectIP(t *testing.T) {

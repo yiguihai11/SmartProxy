@@ -321,6 +321,16 @@ body {
       </div>
     </div>
 
+    <div id="redirectNotice" style="display: none; background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.25); border-radius: 0.75rem; padding: 0.75rem; margin-bottom: 1.25rem;">
+      <div style="font-size: 0.8125rem; margin-bottom: 0.5rem; color: var(--text);">
+        认证成功！外网已畅通。将在 <b id="redirectCountdown" style="color: var(--primary); font-size: 0.95rem;">5</b> 秒后自动跳转至目标页面
+      </div>
+      <div style="display: flex; gap: 8px; justify-content: center;">
+        <button type="button" class="btn btn-sm" onclick="handleContinue()" style="padding: 6px 14px; font-size: 0.8rem; height: auto;">立即前往</button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="cancelRedirect()" style="padding: 6px 14px; font-size: 0.8rem; height: auto;">留在此页查看配额</button>
+      </div>
+    </div>
+
     <button type="button" class="btn" id="continueBtn" onclick="handleContinue()" style="display: none;">继续访问原始网页</button>
     <button type="button" class="btn btn-secondary" onclick="handleLogout()">断开认证 (退出)</button>
   </div>
@@ -436,7 +446,49 @@ function showAuthenticated(data) {
   }
 }
 
+let redirectTimer = null;
+let redirectCount = 5;
+
+function startRedirectCountdown(url) {
+  const notice = document.getElementById('redirectNotice');
+  const countEl = document.getElementById('redirectCountdown');
+  if (!notice || !countEl) return;
+
+  redirectCount = 5;
+  countEl.textContent = redirectCount;
+  notice.style.display = 'block';
+
+  if (redirectTimer) clearInterval(redirectTimer);
+  redirectTimer = setInterval(() => {
+    redirectCount--;
+    if (redirectCount <= 0) {
+      clearInterval(redirectTimer);
+      redirectTimer = null;
+      window.location.href = url;
+    } else {
+      countEl.textContent = redirectCount;
+    }
+  }, 1000);
+}
+
+function cancelRedirect() {
+  if (redirectTimer) {
+    clearInterval(redirectTimer);
+    redirectTimer = null;
+  }
+  const notice = document.getElementById('redirectNotice');
+  if (notice) notice.style.display = 'none';
+  const continueBtn = document.getElementById('continueBtn');
+  if (continueBtn && redirectURL && redirectURL.startsWith('http')) {
+    continueBtn.style.display = 'flex';
+  }
+}
+
 function handleContinue() {
+  if (redirectTimer) {
+    clearInterval(redirectTimer);
+    redirectTimer = null;
+  }
   if (redirectURL && redirectURL.startsWith('http')) {
     window.location.href = redirectURL;
   }
@@ -480,14 +532,12 @@ async function handleLogin(e) {
       return;
     }
 
-    showAlert('认证成功，正在放行网络...', false);
-    setTimeout(() => {
-      if (redirectURL && redirectURL.startsWith('http')) {
-        window.location.href = redirectURL;
-      } else {
-        checkStatus();
-      }
-    }, 800);
+    clearAlert();
+    showAuthenticated(data);
+
+    if (redirectURL && redirectURL.startsWith('http') && !data.quota_exceeded) {
+      startRedirectCountdown(redirectURL);
+    }
   } catch (err) {
     showAlert('网络请求异常，请稍后重试: ' + err.message, true);
     btn.disabled = false;

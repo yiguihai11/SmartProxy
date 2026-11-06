@@ -75,24 +75,29 @@ type failRecord struct {
 
 // Manager manages captive portal authentication, active sessions, and security limits.
 type Manager struct {
-	mu              sync.RWMutex
-	config          atomic.Pointer[config.Config]
-	sessionsByIP    map[string]*Session
-	sessionsByMAC   map[string]*Session
-	sessionsByToken map[string]*Session
-	failedAttempts  map[string]*failRecord
-	userTraffic     map[string]*UserTraffic
-	trafficFilePath string
-	trafficDirty    atomic.Bool
-	sessionFilePath string
-	sessionDirty    atomic.Bool
-	csrfSecret      []byte
-	macResolver     func(ip string) string
-	forcedDisabled  atomic.Bool
-	stopCh          chan struct{}
-	cleanerDone     chan struct{}
-	stopOnce        sync.Once
+	mu                  sync.RWMutex
+	config              atomic.Pointer[config.Config]
+	sessionsByIP        map[string]*Session
+	sessionsByMAC       map[string]*Session
+	sessionsByToken     map[string]*Session
+	failedAttempts      map[string]*failRecord
+	userTraffic         map[string]*UserTraffic
+	trafficFilePath     string
+	trafficDirty        atomic.Bool
+	trafficFileModTimes map[string]time.Time
+	sessionFilePath     string
+	sessionDirty        atomic.Bool
+	sessionFileModTimes map[string]time.Time
+	csrfSecret          []byte
+	macResolver         func(ip string) string
+	forcedDisabled      atomic.Bool
+	stopCh              chan struct{}
+	cleanerDone         chan struct{}
+	stopOnce            sync.Once
 }
+
+// Android tethering runtime directory where Shizuku tethering core stores persistent assets.
+const androidTetheringAssetsDir = "/data/local/tmp/smartproxy-tethering-assets"
 
 // NewManager creates a new portal Manager.
 func NewManager(cfg *config.Config) *Manager {
@@ -104,14 +109,16 @@ func NewManager(cfg *config.Config) *Manager {
 	}
 
 	m := &Manager{
-		sessionsByIP:    make(map[string]*Session),
-		sessionsByMAC:   make(map[string]*Session),
-		sessionsByToken: make(map[string]*Session),
-		failedAttempts:  make(map[string]*failRecord),
-		userTraffic:     make(map[string]*UserTraffic),
-		csrfSecret:      secret,
-		stopCh:          make(chan struct{}),
-		cleanerDone:     make(chan struct{}),
+		sessionsByIP:        make(map[string]*Session),
+		sessionsByMAC:       make(map[string]*Session),
+		sessionsByToken:     make(map[string]*Session),
+		failedAttempts:      make(map[string]*failRecord),
+		userTraffic:         make(map[string]*UserTraffic),
+		trafficFileModTimes: make(map[string]time.Time),
+		sessionFileModTimes: make(map[string]time.Time),
+		csrfSecret:          secret,
+		stopCh:              make(chan struct{}),
+		cleanerDone:         make(chan struct{}),
 	}
 	m.config.Store(cfg)
 
@@ -615,6 +622,108 @@ func (m *Manager) removeSessionLocked(ip, mac, token string) {
 	}
 }
 
+func (m *Manager) lookupSessionLocked(normIP, normMAC string, now time.Time) *Session {
+	if normIP != "" {
+		if s, ok := m.sessionsByIP[normIP]; ok && now.Before(s.ExpiresAt) {
+			return s
+		}
+	}
+	if normMAC != "" {
+		if s, ok := m.sessionsByMAC[normMAC]; ok && now.Before(s.ExpiresAt) {
+			return s
+		}
+	}
+	return nil
+}
+
+func (m *Manager) effectiveSessionFilePaths() []string {
+	m.mu.RLock()
+	primary := m.sessionFilePath
+	m.mu.RUnlock()
+
+	var paths []string
+	if primary != "" {
+		paths = append(paths, primary)
+	}
+	tetheringSessions := filepath.Join(androidTetheringAssetsDir, "portal_sessions.json")
+	if tetheringSessions != primary {
+		paths = append(paths, tetheringSessions)
+	}
+	return paths
+}
+
+func (m *Manager) effectiveTrafficFilePaths() []string {
+	m.mu.RLock()
+	primary := m.trafficFilePath
+	m.mu.RUnlock()
+
+	var paths []string
+	if primary != "" {
+		paths = append(paths, primary)
+	}
+	tetheringTraffic := filepath.Join(androidTetheringAssetsDir, "portal_traffic.json")
+	if tetheringTraffic != primary {
+		paths = append(paths, tetheringTraffic)
+	}
+	return paths
+}
+
+func (m *Manager) reloadSessionsIfUpdated() bool {
+	paths := m.effectiveSessionFilePaths()
+	updated := false
+	for _, p := range paths {
+		fi, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		mod := fi.ModTime()
+		m.mu.RLock()
+		lastMod := m.sessionFileModTimes[p]
+		m.mu.RUnlock()
+
+		if mod.After(lastMod) {
+			if err := m.LoadSessionsFile(p); err == nil {
+				m.mu.Lock()
+				if m.sessionFileModTimes == nil {
+					m.sessionFileModTimes = make(map[string]time.Time)
+				}
+				m.sessionFileModTimes[p] = mod
+				m.mu.Unlock()
+				updated = true
+			}
+		}
+	}
+	return updated
+}
+
+func (m *Manager) reloadTrafficIfUpdated() bool {
+	paths := m.effectiveTrafficFilePaths()
+	updated := false
+	for _, p := range paths {
+		fi, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		mod := fi.ModTime()
+		m.mu.RLock()
+		lastMod := m.trafficFileModTimes[p]
+		m.mu.RUnlock()
+
+		if mod.After(lastMod) {
+			if err := m.LoadTrafficFile(p); err == nil {
+				m.mu.Lock()
+				if m.trafficFileModTimes == nil {
+					m.trafficFileModTimes = make(map[string]time.Time)
+				}
+				m.trafficFileModTimes[p] = mod
+				m.mu.Unlock()
+				updated = true
+			}
+		}
+	}
+	return updated
+}
+
 // GetSession returns the active session for an IP or MAC, if any.
 func (m *Manager) GetSession(clientIP, mac string) *Session {
 	normIP := normalizeIP(clientIP)
@@ -622,16 +731,19 @@ func (m *Manager) GetSession(clientIP, mac string) *Session {
 
 	now := time.Now()
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	s := m.lookupSessionLocked(normIP, normMAC, now)
+	m.mu.RUnlock()
 
-	if normIP != "" {
-		if s, ok := m.sessionsByIP[normIP]; ok && now.Before(s.ExpiresAt) {
-			cp := *s
-			return &cp
-		}
+	if s != nil {
+		cp := *s
+		return &cp
 	}
-	if normMAC != "" {
-		if s, ok := m.sessionsByMAC[normMAC]; ok && now.Before(s.ExpiresAt) {
+
+	if m.reloadSessionsIfUpdated() {
+		m.mu.RLock()
+		s = m.lookupSessionLocked(normIP, normMAC, now)
+		m.mu.RUnlock()
+		if s != nil {
 			cp := *s
 			return &cp
 		}
@@ -641,6 +753,7 @@ func (m *Manager) GetSession(clientIP, mac string) *Session {
 
 // ActiveSessions returns a list of all currently active sessions.
 func (m *Manager) ActiveSessions() []*Session {
+	_ = m.reloadSessionsIfUpdated()
 	now := time.Now()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -822,6 +935,10 @@ func (m *Manager) SetStoragePath(path string) {
 			_ = m.LoadSessionsFile(sessionPath)
 		}
 	}
+
+	// Also load from secondary paths if present (e.g. Android tethering assets directory)
+	_ = m.reloadTrafficIfUpdated()
+	_ = m.reloadSessionsIfUpdated()
 }
 
 // SetSessionStoragePath explicitly sets the JSON file path for active sessions.
@@ -833,6 +950,7 @@ func (m *Manager) SetSessionStoragePath(path string) {
 	if path != "" {
 		_ = m.LoadSessionsFile(path)
 	}
+	_ = m.reloadSessionsIfUpdated()
 }
 
 // LoadTrafficFile loads persisted user traffic states from disk.
@@ -852,6 +970,13 @@ func (m *Manager) LoadTrafficFile(path string) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if fi, err := os.Stat(path); err == nil {
+		if m.trafficFileModTimes == nil {
+			m.trafficFileModTimes = make(map[string]time.Time)
+		}
+		m.trafficFileModTimes[path] = fi.ModTime()
+	}
 
 	now := time.Now()
 	auth := m.getAuthConf()
@@ -934,6 +1059,13 @@ func (m *Manager) LoadSessionsFile(path string) error {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if fi, err := os.Stat(path); err == nil {
+		if m.sessionFileModTimes == nil {
+			m.sessionFileModTimes = make(map[string]time.Time)
+		}
+		m.sessionFileModTimes[path] = fi.ModTime()
+	}
 
 	now := time.Now()
 	for _, s := range sf.Sessions {
@@ -1123,6 +1255,7 @@ func (m *Manager) getUserTrafficInfoLocked(username string, now time.Time) *User
 
 // GetUserTrafficInfo returns the quota, usage, and reset status for a given user.
 func (m *Manager) GetUserTrafficInfo(username string) *UserTrafficInfo {
+	_ = m.reloadTrafficIfUpdated()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.getUserTrafficInfoLocked(username, time.Now())
@@ -1225,6 +1358,7 @@ func (m *Manager) ResetUserTraffic(username string) bool {
 
 // AllUsersTraffic returns traffic records for all configured and tracked users.
 func (m *Manager) AllUsersTraffic() []*UserTrafficInfo {
+	_ = m.reloadTrafficIfUpdated()
 	auth := m.getAuthConf()
 	m.mu.Lock()
 	defer m.mu.Unlock()

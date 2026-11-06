@@ -233,12 +233,27 @@ func (s *Server) handlePortalLogin(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   maxAge,
 	})
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+	resp := map[string]interface{}{
 		"ok":         true,
 		"user":       sess.Username,
+		"mac":        sess.MAC,
+		"login_at":   sess.LoginAt.Unix(),
 		"expires_at": sess.ExpiresAt.Unix(),
-	})
+	}
+	traffic := s.portalMgr.GetUserTrafficInfo(sess.Username)
+	if traffic != nil {
+		resp["traffic_limit_bytes"] = traffic.LimitBytes
+		resp["traffic_used_bytes"] = traffic.UsedBytes
+		resp["traffic_reset_cycle"] = traffic.ResetCycle
+		if !traffic.NextReset.IsZero() {
+			resp["traffic_next_reset"] = traffic.NextReset.Unix()
+		}
+		resp["quota_exceeded"] = traffic.IsExceeded
+		resp["traffic_reset_desc"] = traffic.ResetDescription
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // handlePortalLogout ends the client's authenticated portal session.
@@ -415,6 +430,12 @@ func (s *Server) handlePortalKick(w http.ResponseWriter, r *http.Request) {
 			if s.portalMgr.RevokeSession(ip) {
 				revoked = true
 			}
+		}
+	}
+
+	if s.tetheringBridge != nil {
+		if s.tetheringBridge.KickClient(target, ip) {
+			revoked = true
 		}
 	}
 

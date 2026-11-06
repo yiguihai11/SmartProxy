@@ -231,6 +231,27 @@ func (e *Engine) KillClientConnections(ip string) int {
 	return e.TUNHandler.KillBySrcIP(ip)
 }
 
+// KickPortalClient revokes portal sessions and kills active connections for a target client IP or MAC.
+func (e *Engine) KickPortalClient(target, ip string) bool {
+	revoked := false
+	if e.portalMgr != nil {
+		if target != "" && e.portalMgr.RevokeSession(target) {
+			revoked = true
+		}
+		if ip != "" && ip != target && e.portalMgr.RevokeSession(ip) {
+			revoked = true
+		}
+	}
+	if target != "" {
+		e.KillClientConnections(target)
+	}
+	if ip != "" && ip != target {
+		e.KillClientConnections(ip)
+	}
+	e.KillClientConnections("192.0.2.2")
+	return revoked
+}
+
 // BlockClientIP blocks all traffic from client IP and kills its existing connections.
 func (e *Engine) BlockClientIP(ip string) {
 	if e.TUNHandler != nil {

@@ -18,5 +18,6 @@ interface IShizukuTetheringService {
     String[] getBlockedClientList() = 18;
     boolean blockClient(String mac) = 19;
     boolean unblockClient(String mac) = 20;
+    boolean kickClient(String target, String ip) = 21;
     void destroy() = 16777114;
 }

@@ -60,6 +60,7 @@ type TetheringBridge interface {
 	BlockClient(mac string) bool
 	UnblockClient(mac string) bool
 	GetBlockedClients() string
+	KickClient(target, ip string) bool
 }
 
 type clientTrafficSample struct {
@@ -677,7 +678,15 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 					var trafficNextReset int64
 					var trafficResetDesc string
 					if s.portalMgr != nil {
-						if ps := s.portalMgr.GetSession(primaryIP, cleanMAC); ps != nil {
+						ps := s.portalMgr.GetSession(primaryIP, cleanMAC)
+						if ps == nil {
+							for _, aip := range allDeviceIPs {
+								if ps = s.portalMgr.GetSession(aip, cleanMAC); ps != nil {
+									break
+								}
+							}
+						}
+						if ps != nil {
 							authUser = ps.Username
 							authExpires = ps.ExpiresAt.Unix()
 							if t := s.portalMgr.GetUserTrafficInfo(ps.Username); t != nil {
@@ -829,7 +838,15 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 			var trafficNextReset int64
 			var trafficResetDesc string
 			if s.portalMgr != nil {
-				if ps := s.portalMgr.GetSession(grp.primaryIP, grp.mac); ps != nil {
+				ps := s.portalMgr.GetSession(grp.primaryIP, grp.mac)
+				if ps == nil {
+					for _, aip := range grp.allIPs {
+						if ps = s.portalMgr.GetSession(aip, grp.mac); ps != nil {
+							break
+						}
+					}
+				}
+				if ps != nil {
 					authUser = ps.Username
 					authExpires = ps.ExpiresAt.Unix()
 					if t := s.portalMgr.GetUserTrafficInfo(ps.Username); t != nil {

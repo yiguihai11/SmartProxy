@@ -52,6 +52,7 @@ type TetheringBridge interface {
 	BlockClient(mac string) bool
 	UnblockClient(mac string) bool
 	GetBlockedClients() string
+	KickClient(target, ip string) bool
 }
 
 // SetTetheringBridge 注册热点下挂设备管理 Bridge。
@@ -177,21 +178,11 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 		cfg.Listen.Port = 1080
 	}
 
-	engineMu.Lock()
-	tethering := isTethering
-	engineMu.Unlock()
-
 	cfgDir := filepath.Dir(configPath)
 	eng, err := engine.New(cfg, cfgDir)
 	if err != nil {
 		slog.Error("[Go-Bridge] StartRouter failed to create engine", "error", err)
 		return closeFdOnErr(err)
-	}
-
-	// 架构隔离：本机 VPN 隧道内存中忽略门户登录拦截(即使 config.json 中 portal.enabled=true，也决不修改配置对象与文件)。
-	// 门户认证功能专属于 Shizuku 特权热点共享引擎，用于对下挂访客设备鉴权。
-	if !tethering {
-		eng.SetPortalForcedDisabled(true)
 	}
 
 	// 注入 UID 反查回调(per-app「禁止联网」):Kotlin 侧 establish 前 setUIDResolver 注册,
@@ -223,16 +214,10 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 			slog.Error("failed to reload config", "path", configPath, "error", err)
 			return
 		}
-		engineMu.Lock()
-		tethering := isTethering
-		engineMu.Unlock()
 		oldCfg := eng.Config.Load()
 		if err := eng.ReloadConfig(newCfg, cfgDir); err != nil {
 			slog.Error("failed to apply config reload", "error", err)
 			return
-		}
-		if !tethering {
-			eng.SetPortalForcedDisabled(true)
 		}
 		applyLogLevel(newCfg.LogLevel)
 		if oldCfg != nil {
@@ -499,6 +484,17 @@ func BlockConnection(host string) error {
 		return fmt.Errorf("engine not running")
 	}
 	return globalEngine.BlockConnection(host)
+}
+
+// KickPortalClient revokes an active captive portal session for a target IP or MAC.
+func KickPortalClient(target, ip string) bool {
+	engineMu.Lock()
+	eng := globalEngine
+	engineMu.Unlock()
+	if eng == nil {
+		return false
+	}
+	return eng.KickPortalClient(target, ip)
 }
 
 // GetGoLogs 返回 Go 引擎环形日志缓冲(logbuf.Default)快照的 JSON,形如

@@ -316,6 +316,11 @@ class SmartProxyVpnService : VpnService() {
             val svc = tetheringService ?: return false
             return runCatching { svc.unblockClient(mac) }.getOrDefault(false)
         }
+        override fun kickClient(target: String, ip: String): Boolean {
+            bindTetheringServiceIfNeeded()
+            val svc = tetheringService ?: return false
+            return runCatching { svc.kickClient(target, ip) }.getOrDefault(false)
+        }
         override fun getBlockedClients(): String {
             bindTetheringServiceIfNeeded()
             val svc = tetheringService ?: return "[]"

@@ -852,6 +852,13 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
         }.onFailure { Log.e(TAG, "unblockClient failed for $mac", it) }.getOrDefault(false)
     }
 
+    override fun kickClient(target: String, ip: String): Boolean {
+        Log.i(TAG, "kickClient called for target=$target, ip=$ip")
+        return runCatching {
+            smartproxy.mobile.Mobile.kickPortalClient(target, ip)
+        }.onFailure { Log.e(TAG, "kickClient failed", it) }.getOrDefault(false)
+    }
+
     /**
      * 确保 SoftApConfiguration 中的 ClientControlByUser 保持为 false。
      * 某些系统API/版本曾误配置 setClientControlByUserEnabled(true)，导致系统进入“用户控制模式(白名单模式)”，
@@ -1351,6 +1358,8 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
                 }
                 override fun blockClient(mac: String): Boolean = this@ShizukuTetheringService.blockClient(mac)
                 override fun unblockClient(mac: String): Boolean = this@ShizukuTetheringService.unblockClient(mac)
+                override fun kickClient(target: String, ip: String): Boolean =
+                    this@ShizukuTetheringService.kickClient(target, ip)
                 override fun getBlockedClients(): String {
                     val list = this@ShizukuTetheringService.getBlockedClientList()
                     val arr = JSONArray()

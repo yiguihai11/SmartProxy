@@ -256,6 +256,9 @@ func (m *mockTetheringBridge) UnblockClient(mac string) bool {
 func (m *mockTetheringBridge) GetBlockedClients() string {
 	return m.blockedClients
 }
+func (m *mockTetheringBridge) KickClient(target, ip string) bool {
+	return true
+}
 
 func TestAdmin_TetheringBridgeIntegration(t *testing.T) {
 	s := newTestServer(t)
