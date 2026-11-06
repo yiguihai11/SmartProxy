@@ -1185,9 +1185,9 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             interfaceName = handle.interfaceName
             setLinkAddresses(addresses)
             runCatching {
-                addRoute(RouteInfo(IpPrefix("0.0.0.0/0"), null, handle.interfaceName))
+                createDefaultRoute(v4 = true, handle.interfaceName)?.let { addRoute(it) }
                 if (ipv6Enabled) {
-                    addRoute(RouteInfo(IpPrefix("::/0"), null, handle.interfaceName))
+                    createDefaultRoute(v4 = false, handle.interfaceName)?.let { addRoute(it) }
                 }
             }
             // 通告 DNS 跟随 IPv6 开关:主 VPN 没开 v6 时,testtun 没有 v6 链路,若仍把
@@ -1536,6 +1536,35 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             isAccessible = true
             newInstance(cidr)
         }
+    }
+
+    private fun createDefaultRoute(v4: Boolean, iface: String?): RouteInfo? {
+        return runCatching {
+            val addr = InetAddress.getByName(if (v4) "0.0.0.0" else "::")
+            val prefix = IpPrefix(addr, 0)
+            val ctor = runCatching {
+                RouteInfo::class.java.getDeclaredConstructor(
+                    IpPrefix::class.java,
+                    InetAddress::class.java,
+                    String::class.java
+                )
+            }.getOrNull()
+            if (ctor != null) {
+                ctor.isAccessible = true
+                return@runCatching ctor.newInstance(prefix, null, iface) as? RouteInfo
+            }
+            val ctor2 = runCatching {
+                RouteInfo::class.java.getDeclaredConstructor(
+                    IpPrefix::class.java,
+                    InetAddress::class.java
+                )
+            }.getOrNull()
+            if (ctor2 != null) {
+                ctor2.isAccessible = true
+                return@runCatching ctor2.newInstance(prefix, null) as? RouteInfo
+            }
+            null
+        }.getOrNull()
     }
 
     private fun rootCauseMessage(error: Throwable): String {
