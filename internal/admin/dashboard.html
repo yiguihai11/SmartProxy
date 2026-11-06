@@ -7291,7 +7291,13 @@ function renderDevices() {
         badge = '<span class="tag green">' + t('Live') + '</span>';
       }
       if (d.auth_user) {
-        badge += '<span class="tag blue" style="margin-left:4px">👤 ' + escHtml(d.auth_user) + '</span>';
+        var devLimitStr = '';
+        if (d.auth_max_devices === -1) {
+          devLimitStr = ' (' + (d.auth_active_devices || 1) + ' ' + t('Devices') + '/' + t('Unlimited') + ')';
+        } else if (d.auth_max_devices > 0) {
+          devLimitStr = ' (' + (d.auth_active_devices || 1) + '/' + d.auth_max_devices + ' ' + t('Devices') + ')';
+        }
+        badge += '<span class="tag blue" style="margin-left:4px" title="' + escAttr(t('Authenticated User') + devLimitStr) + '">👤 ' + escHtml(d.auth_user) + escHtml(devLimitStr) + '</span>';
       } else if (devicesData && devicesData.portal_enabled && !isCur && !isVirtual) {
         badge += '<span class="tag orange" style="margin-left:4px">' + t('Unauthenticated') + '</span>';
       }
@@ -7407,6 +7413,13 @@ function renderDevices() {
           }
         }
 
+        var devLimitSpan = '';
+        if (d.auth_max_devices === -1) {
+          devLimitSpan = '<span>' + t('Active Devices') + ': <strong style="color:var(--text)">' + (d.auth_active_devices || 1) + '</strong> (' + t('Unlimited') + ')</span>';
+        } else if (d.auth_max_devices > 0) {
+          devLimitSpan = '<span>' + t('Active Devices') + ': <strong style="color:var(--text)">' + (d.auth_active_devices || 1) + '</strong> / ' + d.auth_max_devices + '</span>';
+        }
+
         if (d.traffic_limit_bytes > 0) {
           var used = d.traffic_used_bytes || 0;
           var limit = d.traffic_limit_bytes;
@@ -7423,16 +7436,22 @@ function renderDevices() {
               '<div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:6px">' +
                 '<div style="height:100%;width:' + pct + '%;background:' + barColor + ';border-radius:3px;transition:width .3s"></div>' +
               '</div>' +
-              '<div style="display:flex;justify-content:space-between;align-items:center;font-size:.74rem;color:var(--text3)">' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;font-size:.74rem;color:var(--text3);flex-wrap:wrap;gap:4px">' +
                 '<span>' + cycleDesc + '</span>' +
-                (leaseStr ? ('<span>' + t('Lease Left') + ': ' + escHtml(leaseStr) + '</span>') : '') +
+                '<div style="display:flex;align-items:center;gap:8px">' +
+                  devLimitSpan +
+                  (leaseStr ? ('<span>' + t('Lease Left') + ': ' + escHtml(leaseStr) + '</span>') : '') +
+                '</div>' +
               '</div>' +
             '</div>';
         } else {
           portalInfoHtml =
-            '<div style="grid-column:1/-1;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;margin-top:4px;display:flex;justify-content:space-between;align-items:center;font-size:.76rem">' +
+            '<div style="grid-column:1/-1;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:6px 10px;margin-top:4px;display:flex;justify-content:space-between;align-items:center;font-size:.76rem;flex-wrap:wrap;gap:4px">' +
               '<span><strong style="color:var(--text)">' + t('Quota') + ':</strong> ' + t('Unlimited') + ' (' + t('Used') + ' ' + fmtNum(d.traffic_used_bytes || 0) + ')</span>' +
-              (leaseStr ? ('<span style="color:var(--text3)">' + t('Lease Left') + ': ' + escHtml(leaseStr) + '</span>') : '') +
+              '<div style="display:flex;align-items:center;gap:8px">' +
+                devLimitSpan +
+                (leaseStr ? ('<span style="color:var(--text3)">' + t('Lease Left') + ': ' + escHtml(leaseStr) + '</span>') : '') +
+              '</div>' +
             '</div>';
         }
       }

@@ -771,6 +771,39 @@ func (m *Manager) ActiveSessions() []*Session {
 	return result
 }
 
+// UserSessionStats returns the number of active devices currently online for the given username,
+// and the configured max_devices limit (-1 = unlimited, >0 = limit, 0 = default 1).
+func (m *Manager) UserSessionStats(username string) (activeCount int, maxDevices int) {
+	if username == "" {
+		return 0, 1
+	}
+	_ = m.reloadSessionsIfUpdated()
+	now := time.Now()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	auth := m.getAuthConf()
+	maxDevs := 1
+	if auth != nil {
+		maxDevs = auth.UserMaxDevices(username)
+	}
+
+	seen := make(map[string]bool)
+	for _, s := range m.sessionsByToken {
+		if s.Username == username && now.Before(s.ExpiresAt) {
+			key := strings.ToLower(s.MAC)
+			if key == "" {
+				key = s.IP
+			}
+			if key != "" && !seen[key] {
+				seen[key] = true
+				activeCount++
+			}
+		}
+	}
+	return activeCount, maxDevs
+}
+
 // Rate limiting: 5 failed attempts within 5 minutes = 5 minute jail
 func (m *Manager) checkRateLimit(ip string) error {
 	m.mu.RLock()

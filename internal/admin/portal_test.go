@@ -336,7 +336,7 @@ func TestPortal_TrafficAPIs(t *testing.T) {
 func TestPortal_TetheringBridgeClient_NATResolution(t *testing.T) {
 	srv, pm := setupTestPortalAdmin(t)
 
-	bridgeJSON := `[{"ip":"10.140.12.152","mac":"d8:a4:91:21:a3:c7","hostname":"JER-AN20"}]`
+	bridgeJSON := `[{"ip":"10.140.12.152","mac":"12:34:56:78:9a:bc","hostname":"JER-AN20"}]`
 	bridge := &mockTetheringBridge{clients: bridgeJSON}
 	srv.SetTetheringBridge(bridge)
 
@@ -364,9 +364,9 @@ func TestPortal_TetheringBridgeClient_NATResolution(t *testing.T) {
 	}
 
 	// 4. Session should be associated with the physical client's MAC
-	sess := pm.GetSession("10.140.12.152", "d8:a4:91:21:a3:c7")
+	sess := pm.GetSession("10.140.12.152", "12:34:56:78:9a:bc")
 	if sess == nil || sess.Username != "alice" {
-		t.Fatalf("expected active session for alice on physical MAC d8:a4:91:21:a3:c7, got %+v", sess)
+		t.Fatalf("expected active session for alice on physical MAC 12:34:56:78:9a:bc, got %+v", sess)
 	}
 
 	// 5. Query /api/devices and verify AuthUser
@@ -387,12 +387,12 @@ func TestPortal_TetheringBridgeClient_NATResolution(t *testing.T) {
 		t.Fatalf("expected 1 connected device, got %d", len(devResp.Devices))
 	}
 	d := devResp.Devices[0]
-	if d.IP != "10.140.12.152" || d.MAC != "d8:a4:91:21:a3:c7" || d.AuthUser != "alice" {
+	if d.IP != "10.140.12.152" || d.MAC != "12:34:56:78:9a:bc" || d.AuthUser != "alice" || d.AuthMaxDevices != 2 || d.AuthActiveDevices != 1 {
 		t.Fatalf("expected device authenticated with alice, got: %+v", d)
 	}
 
 	// 6. Test handlePortalKick: kicking device by MAC/IP deauthorizes it immediately
-	kickReq := httptest.NewRequest(http.MethodPost, "/api/portal/kick?target=d8:a4:91:21:a3:c7&ip=10.140.12.152", nil)
+	kickReq := httptest.NewRequest(http.MethodPost, "/api/portal/kick?target=12:34:56:78:9a:bc&ip=10.140.12.152", nil)
 	kickRec := httptest.NewRecorder()
 	srv.handlePortalKick(kickRec, kickReq)
 	if kickRec.Code != http.StatusOK {
@@ -405,7 +405,7 @@ func TestPortal_TetheringBridgeClient_NATResolution(t *testing.T) {
 	// 7. MAC Exemption: if the physical client's MAC is in ExemptMACs,
 	// IsAuthorized("192.0.2.2") should be true even without an active session
 	cfg := srv.configSrc()
-	cfg.Listen.Portal.ExemptMACs = []string{"d8:a4:91:21:a3:c7"}
+	cfg.Listen.Portal.ExemptMACs = []string{"12:34:56:78:9a:bc"}
 	if !pm.IsAuthorized("192.0.2.2") {
 		t.Fatalf("expected 192.0.2.2 to be authorized via MAC exemption")
 	}

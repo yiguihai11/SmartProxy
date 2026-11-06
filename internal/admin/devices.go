@@ -37,6 +37,8 @@ type TetheredDevice struct {
 	IsCurrent   bool         `json:"is_current"` // 当前正在访问控制面板的设备
 	AuthUser          string       `json:"auth_user,omitempty"`
 	AuthExpires       int64        `json:"auth_expires,omitempty"`
+	AuthMaxDevices    int          `json:"auth_max_devices,omitempty"`
+	AuthActiveDevices int          `json:"auth_active_devices,omitempty"`
 	TrafficUsedBytes  int64        `json:"traffic_used_bytes,omitempty"`
 	TrafficLimitBytes int64        `json:"traffic_limit_bytes,omitempty"`
 	TrafficExceeded   bool         `json:"traffic_exceeded,omitempty"`
@@ -677,6 +679,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 					var trafficResetCycle string
 					var trafficNextReset int64
 					var trafficResetDesc string
+					var authMaxDevs, authActiveDevs int
 					if s.portalMgr != nil {
 						ps := s.portalMgr.GetSession(primaryIP, cleanMAC)
 						if ps == nil {
@@ -689,6 +692,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 						if ps != nil {
 							authUser = ps.Username
 							authExpires = ps.ExpiresAt.Unix()
+							authActiveDevs, authMaxDevs = s.portalMgr.UserSessionStats(ps.Username)
 							if t := s.portalMgr.GetUserTrafficInfo(ps.Username); t != nil {
 								trafficUsed = t.UsedBytes
 								trafficLimit = t.LimitBytes
@@ -716,6 +720,8 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 						IsCurrent:         isCur,
 						AuthUser:          authUser,
 						AuthExpires:       authExpires,
+						AuthMaxDevices:    authMaxDevs,
+						AuthActiveDevices: authActiveDevs,
 						TrafficUsedBytes:  trafficUsed,
 						TrafficLimitBytes: trafficLimit,
 						TrafficExceeded:   trafficExceeded,
@@ -837,6 +843,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 			var trafficResetCycle string
 			var trafficNextReset int64
 			var trafficResetDesc string
+			var authMaxDevs, authActiveDevs int
 			if s.portalMgr != nil {
 				ps := s.portalMgr.GetSession(grp.primaryIP, grp.mac)
 				if ps == nil {
@@ -849,6 +856,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 				if ps != nil {
 					authUser = ps.Username
 					authExpires = ps.ExpiresAt.Unix()
+					authActiveDevs, authMaxDevs = s.portalMgr.UserSessionStats(ps.Username)
 					if t := s.portalMgr.GetUserTrafficInfo(ps.Username); t != nil {
 						trafficUsed = t.UsedBytes
 						trafficLimit = t.LimitBytes
@@ -876,6 +884,8 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 				IsCurrent:         isCur,
 				AuthUser:          authUser,
 				AuthExpires:       authExpires,
+				AuthMaxDevices:    authMaxDevs,
+				AuthActiveDevices: authActiveDevs,
 				TrafficUsedBytes:  trafficUsed,
 				TrafficLimitBytes: trafficLimit,
 				TrafficExceeded:   trafficExceeded,

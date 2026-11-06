@@ -251,6 +251,9 @@ func (s *Server) handlePortalLogin(w http.ResponseWriter, r *http.Request) {
 		resp["quota_exceeded"] = traffic.IsExceeded
 		resp["traffic_reset_desc"] = traffic.ResetDescription
 	}
+	activeDevs, maxDevs := s.portalMgr.UserSessionStats(sess.Username)
+	resp["active_devices"] = activeDevs
+	resp["max_devices"] = maxDevs
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
@@ -334,6 +337,9 @@ func (s *Server) handlePortalStatus(w http.ResponseWriter, r *http.Request) {
 			resp["quota_exceeded"] = traffic.IsExceeded
 			resp["traffic_reset_desc"] = traffic.ResetDescription
 		}
+		activeDevs, maxDevs := s.portalMgr.UserSessionStats(sess.Username)
+		resp["active_devices"] = activeDevs
+		resp["max_devices"] = maxDevs
 	} else if s.portalMgr.IsAuthorized(clientIP) {
 		resp["authenticated"] = true
 		resp["exempt"] = true

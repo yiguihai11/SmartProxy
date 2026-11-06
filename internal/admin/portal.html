@@ -307,6 +307,10 @@ body {
         <span style="color: var(--text-muted)">会话有效期至:</span>
         <span id="authExpires" style="font-weight: 600;">--</span>
       </div>
+      <div id="deviceLimitRow" style="display: none; justify-content: space-between; margin-bottom: 0.4rem;">
+        <span style="color: var(--text-muted)">在线设备数:</span>
+        <span id="deviceLimitText" style="font-weight: 600;">--</span>
+      </div>
       <div style="display: flex; justify-content: space-between;">
         <span style="color: var(--text-muted)">状态:</span>
         <span id="authStatusText" style="color: var(--success); font-weight: 600;">正常使用中</span>
@@ -403,6 +407,16 @@ function showAuthenticated(data) {
   if (data.expires_at) {
     const d = new Date(data.expires_at * 1000);
     document.getElementById('authExpires').textContent = d.toLocaleTimeString() + ' (' + d.toLocaleDateString() + ')';
+  }
+
+  if (data.max_devices) {
+    const limitRow = document.getElementById('deviceLimitRow');
+    if (limitRow) {
+      limitRow.style.display = 'flex';
+      const act = data.active_devices || 1;
+      const max = data.max_devices;
+      document.getElementById('deviceLimitText').textContent = max === -1 ? (act + ' 台 (不限设备数)') : (act + ' / ' + max + ' 台');
+    }
   }
 
   // Handle Quota and Traffic stats
