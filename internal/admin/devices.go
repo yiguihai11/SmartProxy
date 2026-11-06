@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"smartproxy/internal/config"
 	"strings"
 	"sync"
 	"time"
@@ -1038,4 +1039,98 @@ func (s *Server) handleDevicesUnblock(w http.ResponseWriter, r *http.Request) {
 	slog.Info("admin: unblocked client device", "ip", targetIP, "mac", targetMAC)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// DeviceUserUpdateRequest contains fields for modifying a user account policy visually from dashboard.
+type DeviceUserUpdateRequest struct {
+	Username       string `json:"username"`
+	TrafficLimitMB int64  `json:"traffic_limit_mb"`
+	ResetCycle     string `json:"reset_cycle"`
+	ResetDay       int    `json:"reset_day"`
+	MaxDevices     int    `json:"max_devices"`
+}
+
+// handleDevicesUserUpdate updates user policy (traffic limit, reset cycle, reset day, max devices) and saves config.
+func (s *Server) handleDevicesUserUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost && r.Method != http.MethodPut {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.configSrc == nil || s.configPath == "" || s.reloadConfig == nil {
+		http.Error(w, "config modification not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req DeviceUserUpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.Username = strings.TrimSpace(req.Username)
+	if req.Username == "" {
+		http.Error(w, "username required", http.StatusBadRequest)
+		return
+	}
+
+	cfg := s.configSrc()
+	if cfg == nil || cfg.Listen.Auth == nil {
+		http.Error(w, "listen.auth is not configured", http.StatusBadRequest)
+		return
+	}
+
+	newCfg := cfg.Clone()
+	if newCfg.Listen.Auth == nil {
+		http.Error(w, "listen.auth is not configured", http.StatusBadRequest)
+		return
+	}
+
+	found := false
+	for i := range newCfg.Listen.Auth.Users {
+		u := &newCfg.Listen.Auth.Users[i]
+		if strings.EqualFold(u.Username, req.Username) {
+			found = true
+			if req.TrafficLimitMB >= 0 {
+				u.TrafficLimitMB = req.TrafficLimitMB
+				u.TrafficLimitBytes = 0
+			}
+			if req.MaxDevices >= -1 {
+				u.MaxDevices = req.MaxDevices
+			}
+			cycleKind, day := config.ParseResetCycle(req.ResetCycle, req.ResetDay)
+			if cycleKind != "" {
+				u.ResetCycle = cycleKind
+				u.ResetDay = day
+			}
+			break
+		}
+	}
+	if !found {
+		http.Error(w, "user not found: "+req.Username, http.StatusNotFound)
+		return
+	}
+
+	if err := newCfg.Validate(); err != nil {
+		http.Error(w, "validation failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	indented, err := json.MarshalIndent(newCfg, "", "  ")
+	if err != nil {
+		http.Error(w, "format error", http.StatusInternalServerError)
+		return
+	}
+	if err := atomicWriteFile(s.configPath, indented, 0o600); err != nil {
+		http.Error(w, "write failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	slog.Info("admin: updated user policy from devices dashboard", "user", req.Username, "limit_mb", req.TrafficLimitMB, "cycle", req.ResetCycle, "day", req.ResetDay, "max_devs", req.MaxDevices)
+	if s.reloadConfig != nil {
+		s.reloadConfig()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "ok",
+		"user":   req.Username,
+	})
 }

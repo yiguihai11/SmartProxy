@@ -7269,11 +7269,13 @@ function renderDevices() {
     var html = '';
     filtered.forEach(function(d) {
       var isCur = !!d.is_current;
-      var name = d.hostname || (isCur ? t('Current Device') : (d.ip || t('Device')));
       var mac = d.mac || '-';
       if (mac && mac !== '-') mac = mac.toUpperCase();
       var ip = d.ip || '-';
       var devKey = d.mac || d.ip || '';
+      var customAlias = getDeviceAlias(mac) || getDeviceAlias(ip);
+      var name = customAlias ? customAlias : (d.hostname || (isCur ? t('Current Device') : (d.ip || t('Device'))));
+      var subName = customAlias ? (' <span style="font-size:0.75rem;color:var(--text3);font-weight:normal">(' + escHtml(d.hostname || d.ip || '') + ')</span>') : '';
       var isExpanded = !!expandedDeviceConns[devKey];
       var upRate = fmtNum(d.up_bps || 0) + '/s';
       var downRate = fmtNum(d.down_bps || 0) + '/s';
@@ -7307,6 +7309,8 @@ function renderDevices() {
         actions = '<div style="font-size:.78rem;color:var(--text3);font-style:italic">' + t(isCur ? 'Current Device (Protected)' : 'System Internal Pool (Protected)') + '</div>';
       } else {
         var portalActions = '';
+        var quotaMb = d.traffic_limit_bytes ? Math.round(d.traffic_limit_bytes / (1024 * 1024)) : 0;
+        var editBtn = '<button class="btn btn-sm" onclick="openDeviceEditModal(\'' + escAttr(ip) + '\',\'' + escAttr(mac) + '\',\'' + escAttr(d.hostname || '') + '\',\'' + escAttr(d.auth_user || '') + '\',' + quotaMb + ',\'' + escAttr(d.traffic_reset_cycle || 'none') + '\',' + (d.auth_max_devices != null ? d.auth_max_devices : 1) + ')">' + t('Edit') + '</button>';
         if (devicesData && devicesData.portal_enabled) {
           if (d.auth_user) {
             if (d.traffic_limit_bytes > 0 || d.traffic_used_bytes > 0) {
@@ -7317,7 +7321,7 @@ function renderDevices() {
             portalActions += '<button class="btn btn-sm warning" onclick="kickPortalDevice(\'' + escAttr(ip) + '\',\'' + escAttr(mac) + '\',\'\')">' + t('Kick Offline') + '</button>';
           }
         }
-        actions = portalActions +
+        actions = editBtn + portalActions +
                   '<button class="btn btn-sm" onclick="disconnectDevice(\'' + escAttr(ip) + '\')">' + t('Disconnect') + '</button>' +
                   '<button class="btn btn-sm danger" onclick="blockDevice(\'' + escAttr(ip) + '\',\'' + escAttr(mac) + '\',\'' + escAttr(d.hostname || '') + '\')">' + t('Block') + '</button>';
       }
@@ -7460,7 +7464,7 @@ function renderDevices() {
         '<div class="top">' +
           '<div class="node-info">' +
             '<div class="alias-row">' +
-              '<span class="alias">' + escHtml(name) + '</span>' +
+              '<span class="alias">' + escHtml(name) + subName + '</span>' +
             '</div>' +
           '</div>' +
           '<div>' + badge + '</div>' +
@@ -7618,6 +7622,168 @@ async function resetDeviceTraffic(username) {
   }
 }
 
+function getDeviceAlias(key) {
+  if (!key || key === '-') return '';
+  try {
+    var map = JSON.parse(localStorage.getItem('sp_dev_aliases') || '{}');
+    return map[key.toLowerCase()] || map[key] || '';
+  } catch(e) { return ''; }
+}
+
+function setDeviceAlias(key, alias) {
+  if (!key || key === '-') return;
+  try {
+    var map = JSON.parse(localStorage.getItem('sp_dev_aliases') || '{}');
+    if (alias && alias.trim()) {
+      map[key.toLowerCase()] = alias.trim();
+    } else {
+      delete map[key.toLowerCase()];
+      delete map[key];
+    }
+    localStorage.setItem('sp_dev_aliases', JSON.stringify(map));
+  } catch(e) {}
+}
+
+var _currEditingDev = null;
+function openDeviceEditModal(ip, mac, hostname, username, quotaMb, resetCycleStr, maxDevices) {
+  _currEditingDev = {
+    ip: ip || '',
+    mac: mac || '',
+    hostname: hostname || '',
+    username: username || ''
+  };
+  var existingAlias = getDeviceAlias(mac) || getDeviceAlias(ip) || '';
+
+  var descText = (ip && ip !== '-' ? ('IP: ' + ip) : '') + (mac && mac !== '-' ? (' · MAC: ' + mac) : '');
+  document.getElementById('dev-edit-desc').textContent = descText;
+  document.getElementById('dev-edit-alias').value = existingAlias;
+
+  var userSec = document.getElementById('dev-edit-user-section');
+  if (username) {
+    userSec.style.display = 'block';
+    document.getElementById('dev-edit-username-label').textContent = username;
+    var qInput = document.getElementById('dev-edit-quota');
+    var qUnl = document.getElementById('dev-edit-quota-unlimited');
+    if (quotaMb <= 0) {
+      qUnl.checked = true;
+      qInput.value = '';
+      qInput.disabled = true;
+    } else {
+      qUnl.checked = false;
+      qInput.value = quotaMb;
+      qInput.disabled = false;
+    }
+
+    var cycleSel = document.getElementById('dev-edit-cycle');
+    var dayVal = document.getElementById('dev-edit-day-val');
+    var weekdayVal = document.getElementById('dev-edit-weekday-val');
+
+    var c = (resetCycleStr || 'none').toLowerCase();
+    if (c === 'daily') {
+      cycleSel.value = 'daily';
+    } else if (c.startsWith('weekly')) {
+      cycleSel.value = 'weekly';
+      var w = c.includes(':') ? parseInt(c.split(':')[1], 10) : 1;
+      weekdayVal.value = (w >= 1 && w <= 7) ? String(w) : '1';
+    } else if (c.startsWith('monthly')) {
+      cycleSel.value = 'monthly';
+      var d = c.includes(':') ? parseInt(c.split(':')[1], 10) : 1;
+      dayVal.value = (d >= 1 && d <= 31) ? d : 1;
+    } else if (!isNaN(parseInt(c, 10))) {
+      cycleSel.value = 'monthly';
+      dayVal.value = parseInt(c, 10);
+    } else {
+      cycleSel.value = 'none';
+    }
+    onDevCycleChange();
+
+    document.getElementById('dev-edit-max-devices').value = (maxDevices != null ? maxDevices : 1);
+  } else {
+    userSec.style.display = 'none';
+  }
+
+  var overlay = document.getElementById('device-edit-overlay');
+  if (overlay) overlay.style.display = 'flex';
+}
+
+function closeDeviceEditModal() {
+  var overlay = document.getElementById('device-edit-overlay');
+  if (overlay) overlay.style.display = 'none';
+  _currEditingDev = null;
+}
+
+function onDevQuotaUnlimitedChange() {
+  var unl = document.getElementById('dev-edit-quota-unlimited').checked;
+  var qInput = document.getElementById('dev-edit-quota');
+  qInput.disabled = unl;
+  if (unl) qInput.value = '';
+}
+
+function onDevCycleChange() {
+  var val = document.getElementById('dev-edit-cycle').value;
+  document.getElementById('dev-edit-day-group').style.display = (val === 'monthly') ? 'block' : 'none';
+  document.getElementById('dev-edit-weekday-group').style.display = (val === 'weekly') ? 'block' : 'none';
+}
+
+async function saveDeviceEditModal() {
+  if (!_currEditingDev) return;
+  var alias = document.getElementById('dev-edit-alias').value;
+  var devKey = (_currEditingDev.mac && _currEditingDev.mac !== '-') ? _currEditingDev.mac : _currEditingDev.ip;
+  if (devKey) {
+    setDeviceAlias(devKey, alias);
+    if (_currEditingDev.mac && _currEditingDev.ip) {
+      setDeviceAlias(_currEditingDev.ip, alias);
+    }
+  }
+
+  var username = _currEditingDev.username;
+  if (username) {
+    var saveBtn = document.getElementById('dev-edit-save-btn');
+    saveBtn.disabled = true;
+    try {
+      var isUnl = document.getElementById('dev-edit-quota-unlimited').checked;
+      var quotaMb = isUnl ? 0 : (parseInt(document.getElementById('dev-edit-quota').value, 10) || 0);
+      var cycle = document.getElementById('dev-edit-cycle').value;
+      var day = 1;
+      if (cycle === 'monthly') {
+        day = parseInt(document.getElementById('dev-edit-day-val').value, 10) || 1;
+      } else if (cycle === 'weekly') {
+        day = parseInt(document.getElementById('dev-edit-weekday-val').value, 10) || 1;
+      }
+      var maxDev = parseInt(document.getElementById('dev-edit-max-devices').value, 10);
+      if (isNaN(maxDev)) maxDev = 1;
+
+      var res = await fetch('/api/devices/user/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: username,
+          traffic_limit_mb: quotaMb,
+          reset_cycle: cycle,
+          reset_day: day,
+          max_devices: maxDev
+        })
+      });
+      if (!res.ok) {
+        var errTxt = await res.text();
+        alert(t('Error') + ': ' + errTxt);
+        saveBtn.disabled = false;
+        return;
+      }
+    } catch(e) {
+      alert(t('Error') + ': ' + e.message);
+      saveBtn.disabled = false;
+      return;
+    }
+    saveBtn.disabled = false;
+  }
+
+  closeDeviceEditModal();
+  var toast = document.getElementById('copy-toast');
+  if (toast) showCopyToast(toast, t('User policy updated successfully'));
+  await loadDevices();
+}
+
 var _initView='dashboard';
 try{
   var _savedView=sessionStorage.getItem('sp_active_view');
@@ -7747,6 +7913,63 @@ document.addEventListener('visibilitychange',function(){
     </div>
     <div class="dialog-actions">
       <button class="btn btn-sm" onclick="closeConnActionDialog()">Close</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="device-edit-overlay" onclick="if(event.target===this)closeDeviceEditModal()">
+  <div class="dialog" style="max-width:440px" onclick="event.stopPropagation()">
+    <div class="dialog-title" id="dev-edit-title">Edit Device &amp; Policy</div>
+    <div class="dialog-desc" id="dev-edit-desc" style="font-family:var(--mono);font-size:0.8rem;color:var(--accent);margin-bottom:12px"></div>
+
+    <div class="dialog-label">Device Remark / Alias</div>
+    <input type="text" class="dialog-input" id="dev-edit-alias" placeholder="e.g. My Phone, Living Room TV" />
+
+    <div id="dev-edit-user-section" style="display:none;border-top:1px solid var(--border);padding-top:12px;margin-top:6px">
+      <div style="font-size:0.82rem;font-weight:600;color:var(--text);margin-bottom:8px">
+        <span>👤 </span><span>Account Policy</span><span> (</span><span id="dev-edit-username-label" style="color:var(--accent)"></span><span>)</span>
+      </div>
+
+      <div class="dialog-label">Traffic Quota (MB, 0 for unlimited)</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px">
+        <input type="number" class="dialog-input" id="dev-edit-quota" placeholder="0 for unlimited quota" style="margin-bottom:0;flex:1" min="0" />
+        <label style="font-size:0.78rem;color:var(--text2);display:flex;align-items:center;gap:4px;cursor:pointer;white-space:nowrap">
+          <input type="checkbox" id="dev-edit-quota-unlimited" onchange="onDevQuotaUnlimitedChange()" /> Unlimited
+        </label>
+      </div>
+
+      <div class="dialog-label">Reset Cycle</div>
+      <select class="dialog-select" id="dev-edit-cycle" onchange="onDevCycleChange()">
+        <option value="none">Never reset</option>
+        <option value="daily">Daily reset at 00:00</option>
+        <option value="monthly">Monthly on specific day</option>
+        <option value="weekly">Weekly on specific weekday</option>
+      </select>
+
+      <div id="dev-edit-day-group" style="display:none">
+        <div class="dialog-label" id="dev-edit-day-label">Reset Day (1-31)</div>
+        <input type="number" class="dialog-input" id="dev-edit-day-val" min="1" max="31" value="1" />
+      </div>
+
+      <div id="dev-edit-weekday-group" style="display:none">
+        <div class="dialog-label">Reset Weekday</div>
+        <select class="dialog-select" id="dev-edit-weekday-val">
+          <option value="1">Every Monday</option>
+          <option value="2">Every Tuesday</option>
+          <option value="3">Every Wednesday</option>
+          <option value="4">Every Thursday</option>
+          <option value="5">Every Friday</option>
+          <option value="6">Every Saturday</option>
+          <option value="7">Every Sunday</option>
+        </select>
+      </div>
+
+      <div class="dialog-label">Max Devices (-1 for unlimited)</div>
+      <input type="number" class="dialog-input" id="dev-edit-max-devices" placeholder="1 for single device, -1 for unlimited" min="-1" />
+    </div>
+
+    <div class="dialog-actions">
+      <button class="btn btn-sm" onclick="closeDeviceEditModal()">Cancel</button>
+      <button class="btn btn-sm primary" id="dev-edit-save-btn" onclick="saveDeviceEditModal()">Save Changes</button>
     </div>
   </div>
 </div>

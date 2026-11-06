@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -603,5 +604,55 @@ func TestDeviceManager_LifetimeTrafficBounded(t *testing.T) {
 	dm.mu.Unlock()
 	if count > 512 {
 		t.Fatalf("expected lifetimeTraffic map to be bounded <= 512, got %d", count)
+	}
+}
+
+func TestDevices_UserUpdate(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	cfg := config.DefaultConfig()
+	cfg.Listen.Auth = &config.AuthConf{
+		Enabled: true,
+		Users: []config.AuthUserConf{
+			{
+				Username:       "bob",
+				Password:       "secret123",
+				TrafficLimitMB: 100,
+				ResetCycle:     "daily",
+				MaxDevices:     1,
+			},
+		},
+	}
+	data, _ := json.Marshal(cfg)
+	os.WriteFile(cfgPath, data, 0600)
+
+	reloaded := false
+	s := &Server{
+		configPath: cfgPath,
+		configSrc:  func() *config.Config { return cfg },
+		reloadConfig: func() {
+			reloaded = true
+		},
+	}
+
+	body := `{"username":"bob","traffic_limit_mb":500,"reset_cycle":"monthly","reset_day":15,"max_devices":3}`
+	req := httptest.NewRequest(http.MethodPost, "/api/devices/user/update", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleDevicesUserUpdate(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !reloaded {
+		t.Fatalf("expected reloadConfig to be called")
+	}
+
+	// Verify file on disk
+	savedData, _ := os.ReadFile(cfgPath)
+	var savedCfg config.Config
+	json.Unmarshal(savedData, &savedCfg)
+	u := savedCfg.Listen.Auth.Users[0]
+	if u.TrafficLimitMB != 500 || u.ResetCycle != "monthly" || u.ResetDay != 15 || u.MaxDevices != 3 {
+		t.Fatalf("unexpected user policy on disk: %+v", u)
 	}
 }

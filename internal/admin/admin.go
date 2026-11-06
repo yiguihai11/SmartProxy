@@ -633,6 +633,7 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/api/devices/disconnect", s.handleDevicesDisconnect)
 	mux.HandleFunc("/api/devices/block", s.handleDevicesBlock)
 	mux.HandleFunc("/api/devices/unblock", s.handleDevicesUnblock)
+	mux.HandleFunc("/api/devices/user/update", s.handleDevicesUserUpdate)
 	mux.HandleFunc("/portal", s.handlePortal)
 	mux.HandleFunc("/api/portal/status", s.handlePortalStatus)
 	mux.HandleFunc("/api/portal/login", s.handlePortalLogin)
