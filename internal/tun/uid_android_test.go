@@ -55,4 +55,13 @@ func TestIsUIDBlocked(t *testing.T) {
 		h.SetUIDResolver(nil)
 		assert.False(t, h.isUIDBlocked(6, src, dst))
 	})
+
+	t.Run("per-app blocking works independently of portal", func(t *testing.T) {
+		h := newHandler([]int32{10050})
+		h.SetUIDResolver(func(proto int32, _ string, _ int32, _ string, _ int32) int32 {
+			return 10050
+		})
+		assert.True(t, h.isUIDBlocked(6, src, dst), "UID in BlockedUIDs must be blocked")
+		assert.True(t, h.isUIDBlocked(17, src, dst), "UDP UID in BlockedUIDs must be blocked")
+	})
 }
