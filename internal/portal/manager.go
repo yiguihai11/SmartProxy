@@ -180,16 +180,10 @@ func (m *Manager) IsEnabled() bool {
 	return p != nil && p.Enabled
 }
 
-func isVirtualTetheringIP(normIP string) bool {
-	clean := strings.TrimSpace(normIP)
-	return clean == "192.0.2.2" || clean == "192.0.2.1" || clean == "2001:db8:9877::1" || clean == "2001:db8:9877::2"
-}
-
-// isHostOrLoopback checks if the normalized IP belongs to the local machine loopback (127.0.0.1, ::1)
-// or the local Android device's own VPN TUN interface address (e.g. 172.19.0.1).
-// Virtual NAT IPs used by tethering (192.0.2.2 / 2001:db8:9877::2) belong to guest devices
-// and must NEVER be treated as host machine.
-func (m *Manager) isHostOrLoopback(normIP string) bool {
+// isGatewayIP checks if the normalized IP belongs to the local machine loopback (127.0.0.1, ::1),
+// any local network interface on this device, or the configured TUN interface address.
+// The gateway machine itself is always exempt from captive portal interception.
+func (m *Manager) isGatewayIP(normIP string) bool {
 	ip := net.ParseIP(normIP)
 	if ip == nil {
 		return false
@@ -197,12 +191,25 @@ func (m *Manager) isHostOrLoopback(normIP string) bool {
 	if ip.IsLoopback() || ip.IsUnspecified() {
 		return true
 	}
-	if isVirtualTetheringIP(normIP) {
-		return false
+
+	// 1. Check all local network interface IPs on this device
+	if ifaces, err := net.Interfaces(); err == nil {
+		for _, iface := range ifaces {
+			addrs, err := iface.Addrs()
+			if err != nil {
+				continue
+			}
+			for _, a := range addrs {
+				if ipNet, ok := a.(*net.IPNet); ok {
+					if normalizeIP(ipNet.IP.String()) == normIP {
+						return true
+					}
+				}
+			}
+		}
 	}
 
-	// Host's own VPN TUN interface address (e.g. 172.19.0.1) is strictly the local
-	// device itself and must never be intercepted as a captive portal guest device.
+	// 2. Check configured TUN addresses
 	if cfg := m.config.Load(); cfg != nil {
 		for _, addr := range cfg.TUN.Address {
 			if tunIP, _, err := net.ParseCIDR(addr); err == nil {
@@ -212,7 +219,13 @@ func (m *Manager) isHostOrLoopback(normIP string) bool {
 			}
 		}
 	}
+
 	return false
+}
+
+// IsGatewayIP reports whether the given IP string corresponds to a local gateway/interface IP.
+func (m *Manager) IsGatewayIP(ipStr string) bool {
+	return m.isGatewayIP(normalizeIP(ipStr))
 }
 
 // IsAuthorized checks whether the client IP has an active authenticated session or is exempt.
@@ -226,9 +239,9 @@ func (m *Manager) IsAuthorized(clientIP string) bool {
 		return false
 	}
 
-	// Host's own loopback and local interface IPs are strictly the gateway machine
+	// Gateway's own loopback and local interface IPs are strictly the gateway machine
 	// itself and must never be intercepted as a captive portal guest device.
-	if m.isHostOrLoopback(normIP) {
+	if m.isGatewayIP(normIP) {
 		return true
 	}
 

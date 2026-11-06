@@ -335,8 +335,9 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 			if cfg := h.config.Load(); cfg != nil && cfg.Listen.AdminPort > 0 {
 				adminPort = cfg.Listen.AdminPort
 			}
-			if port == adminPort {
-				// Permitted: allow client to reach the captive portal web service
+			// 放行网关 IP 与管理/门户端口：访客访问网关自身的连接直接放行
+			if h.isGatewayDestination(host) || port == adminPort {
+				// Permitted: allow client to reach the gateway / captive portal web service
 			} else if port == 80 {
 				// HTTP port 80: 302 redirect to captive portal login page
 				h.servePortalRedirect(conn, clientIP, host, port, adminPort)
@@ -559,31 +560,84 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 	relay.TCPRelay(ctx, conn, remote, isProxy, prefix, relayOpts...)
 }
 
+func (h *TUNHandler) isGatewayDestination(host string) bool {
+	if host == "smartproxy.lan" || host == "localhost" {
+		return true
+	}
+	portalMgr := h.portalMgr.Load()
+	if portalMgr != nil && portalMgr.IsGatewayIP(host) {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() || ip.IsUnspecified() {
+		return true
+	}
+	if cfg := h.config.Load(); cfg != nil {
+		for _, addr := range cfg.TUN.Address {
+			if tunIP, _, err := net.ParseCIDR(addr); err == nil {
+				if tunIP.Equal(ip) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func portalRedirectHost(cfg *config.Config, clientIP string) string {
-	if cfg == nil {
+	ip := net.ParseIP(clientIP)
+	if ip == nil {
 		return "smartproxy.lan"
 	}
-	isV6 := strings.Contains(clientIP, ":")
-	// Check AdminHost for reachable non-loopback IP matching client IP family.
-	// In hotspot tethering, Shizuku sets AdminHost to the gateway IP (e.g. 192.0.2.2).
-	// Redirecting directly to this IP avoids DNS resolution failures (such as Android Private DNS / DoT).
-	if cfg.Listen.AdminHost != "" {
+	isV6 := ip.To4() == nil
+
+	// 1. 动态查找包含访客 IP 的局域网网关接口（如物理热点 10.140.12.1 或 192.168.43.1）
+	if ifaces, err := net.Interfaces(); err == nil {
+		for _, iface := range ifaces {
+			addrs, err := iface.Addrs()
+			if err != nil {
+				continue
+			}
+			for _, a := range addrs {
+				if ipNet, ok := a.(*net.IPNet); ok {
+					// 忽略回环与链路本地单播地址
+					if ipNet.IP.IsLoopback() || ipNet.IP.IsLinkLocalUnicast() {
+						continue
+					}
+					if ipNet.Contains(ip) {
+						gw := ipNet.IP.String()
+						if isV6 {
+							return "[" + gw + "]"
+						}
+						return gw
+					}
+				}
+			}
+		}
+	}
+
+	// 2. 检查 AdminHost 中显式配置的非回环网关 IP
+	if cfg != nil && cfg.Listen.AdminHost != "" {
 		for _, host := range strings.Split(cfg.Listen.AdminHost, ",") {
 			h := strings.TrimSpace(host)
 			if h == "" || h == "127.0.0.1" || h == "::1" || h == "localhost" {
 				continue
 			}
-			ip := net.ParseIP(h)
-			if ip != nil {
-				if isV6 && ip.To4() == nil {
+			parsed := net.ParseIP(h)
+			if parsed != nil && !parsed.IsLoopback() && !parsed.IsLinkLocalUnicast() {
+				if isV6 && parsed.To4() == nil {
 					return "[" + h + "]"
-				} else if !isV6 && ip.To4() != nil {
+				} else if !isV6 && parsed.To4() != nil {
 					return h
 				}
 			}
 		}
 	}
-	// Fallback to smartproxy.lan domain name
+
+	// 3. 默认回退至 smartproxy.lan 统一域名
 	return "smartproxy.lan"
 }
 
@@ -693,12 +747,15 @@ func (h *TUNHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketCon
 			isLocalApp = true
 		}
 		if !isLocalApp && !portalMgr.IsAuthorized(source.Addr.String()) {
-			ll.Debug("TUN dropping non-DNS UDP packet from unauthenticated portal client", "src", source.Addr.String(), "dst", destination)
-			conn.Close()
-			if onClose != nil {
-				onClose(nil)
+			// 放行发往网关自身的 UDP 包（如网关 DNS、NTP 等）
+			if !h.isGatewayDestination(host) {
+				ll.Debug("TUN dropping non-gateway UDP packet from unauthenticated portal client", "src", source.Addr.String(), "dst", destination)
+				conn.Close()
+				if onClose != nil {
+					onClose(nil)
+				}
+				return
 			}
-			return
 		}
 		if !isLocalApp {
 			conn = h.wrapPortalUDP(source.Addr.String(), conn, portalMgr)

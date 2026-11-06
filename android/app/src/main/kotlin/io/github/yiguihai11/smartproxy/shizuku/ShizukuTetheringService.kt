@@ -1241,9 +1241,12 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
     private fun getDownstreamGatewayIps(): List<String> {
         val ips = mutableListOf<String>()
         val ifaces = (upstreamMonitor?.currentInterfaces ?: runCatching { getTetheredInterfaces() }.getOrNull()).orEmpty()
-        for (iface in ifaces) {
+        val targetNames = ifaces.map { it.name }.toSet()
+        val nifs = runCatching { NetworkInterface.getNetworkInterfaces()?.toList() }.getOrNull().orEmpty()
+        for (nif in nifs) {
+            if (targetNames.isNotEmpty() && nif.name !in targetNames && !nif.name.startsWith("ap") && !nif.name.startsWith("wlan")) continue
+            if (nif.name.startsWith("rmnet") || nif.name.startsWith("tun") || nif.name.startsWith("dummy")) continue
             runCatching {
-                val nif = NetworkInterface.getByName(iface.name) ?: return@runCatching
                 for (addr in nif.inetAddresses) {
                     if (addr.isLoopbackAddress) continue
                     if (addr is Inet4Address && addr.isSiteLocalAddress) {

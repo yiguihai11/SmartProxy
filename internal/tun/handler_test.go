@@ -1333,7 +1333,7 @@ func TestPortalRedirectHost(t *testing.T) {
 	// IPv4 client gets 192.0.2.2 directly
 	assert.Equal(t, "192.0.2.2", portalRedirectHost(cfg, "10.140.12.152"))
 	// IPv6 client gets [2001:db8:9877::1]
-	assert.Equal(t, "[2001:db8:9877::1]", portalRedirectHost(cfg, "fe80::1785:5425:3d14:4b4"))
+	assert.Equal(t, "[2001:db8:9877::1]", portalRedirectHost(cfg, "240e:3b2:3cb9:9620:1234::1"))
 }
 
 func TestTUNHandler_PortalRedirectHotspotDirectIP(t *testing.T) {
@@ -1375,4 +1375,26 @@ func TestTUNHandler_PortalRedirectHotspotDirectIP(t *testing.T) {
 	// Must redirect directly to 192.0.2.2:9090 so client avoids Private DNS failure
 	assert.Contains(t, resp, "Location: http://192.0.2.2:9090/portal?ip=10.140.12.152")
 	<-done
+}
+
+func TestTUNHandler_IsGatewayDestination(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.TUN.Address = []string{"10.10.1.1/30"}
+
+	portalMgr := portal.NewManager(cfg)
+	defer portalMgr.Close()
+
+	handler := NewHandler(cfg, nil, nil, nil, nil)
+	handler.SetPortalManager(portalMgr)
+
+	// Gateway hostnames and IPs are recognized as gateway destinations (放行网关 IP)
+	assert.True(t, handler.isGatewayDestination("smartproxy.lan"))
+	assert.True(t, handler.isGatewayDestination("localhost"))
+	assert.True(t, handler.isGatewayDestination("127.0.0.1"))
+	assert.True(t, handler.isGatewayDestination("10.10.1.1"))
+
+	// External internet hosts are NOT gateway destinations
+	assert.False(t, handler.isGatewayDestination("example.com"))
+	assert.False(t, handler.isGatewayDestination("1.1.1.1"))
+	assert.False(t, handler.isGatewayDestination("8.8.8.8"))
 }
