@@ -338,6 +338,16 @@ body {
       </div>
     </div>
 
+    <div id="probeNotice" style="display: none; background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.25); border-radius: 0.75rem; padding: 0.75rem; margin-bottom: 1.25rem; text-align: center;">
+      <div style="font-size: 0.875rem; color: var(--text); font-weight: 600; margin-bottom: 0.25rem;">
+        认证成功！外网已畅通
+      </div>
+      <div style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.6rem;">
+        您可以直接关闭此窗口开始上网，或留在此页查看流量配额
+      </div>
+      <button type="button" class="btn btn-sm" onclick="handleFinish()" style="padding: 6px 16px; font-size: 0.8rem; height: auto; margin: 0 auto;">完成并开始上网</button>
+    </div>
+
     <button type="button" class="btn" id="continueBtn" onclick="handleContinue()" style="display: none;">继续访问原始网页</button>
     <button type="button" class="btn btn-secondary" onclick="handleLogout()">断开认证 (退出)</button>
   </div>
@@ -447,13 +457,29 @@ function showAuthenticated(data) {
     document.getElementById('trafficResetAtText').textContent = '';
   }
 
-  if (!data.quota_exceeded && redirectURL && redirectURL.startsWith('http')) {
-    const notice = document.getElementById('redirectNotice');
-    if (!notice || notice.style.display === 'none') {
-      const btn = document.getElementById('continueBtn');
-      if (btn) btn.style.display = 'flex';
+  if (!data.quota_exceeded) {
+    if (redirectURL && !isProbeURL(redirectURL)) {
+      const notice = document.getElementById('redirectNotice');
+      if (!notice || notice.style.display === 'none') {
+        const btn = document.getElementById('continueBtn');
+        if (btn) btn.style.display = 'flex';
+      }
+    } else {
+      const probeEl = document.getElementById('probeNotice');
+      if (probeEl) probeEl.style.display = 'block';
     }
   }
+}
+
+function isProbeURL(url) {
+  if (!url || typeof url !== 'string' || !url.startsWith('http')) return true;
+  const lower = url.toLowerCase();
+  const probePatterns = [
+    'generate_204', 'gen_204', 'hotspot-detect', 'connecttest',
+    'success.txt', 'success.html', 'ncsi.txt', 'connectivitycheck',
+    'msftconnecttest', 'msftncsi', 'detectportal', 'captive.apple.com'
+  ];
+  return probePatterns.some(p => lower.includes(p));
 }
 
 let redirectTimer = null;
@@ -477,6 +503,8 @@ function startRedirectCountdown(url) {
     if (redirectCount <= 0) {
       clearInterval(redirectTimer);
       redirectTimer = null;
+      countEl.textContent = '0';
+      notice.innerHTML = '<div style="font-size:0.875rem; color:var(--text); font-weight:600; text-align:center;">正在前往目标页面...</div>';
       window.location.href = url;
     } else {
       countEl.textContent = redirectCount;
@@ -491,9 +519,12 @@ function cancelRedirect() {
   }
   const notice = document.getElementById('redirectNotice');
   if (notice) notice.style.display = 'none';
-  const continueBtn = document.getElementById('continueBtn');
-  if (continueBtn && redirectURL && redirectURL.startsWith('http')) {
-    continueBtn.style.display = 'flex';
+  if (redirectURL && !isProbeURL(redirectURL)) {
+    const continueBtn = document.getElementById('continueBtn');
+    if (continueBtn) continueBtn.style.display = 'flex';
+  } else {
+    const probeEl = document.getElementById('probeNotice');
+    if (probeEl) probeEl.style.display = 'block';
   }
 }
 
@@ -502,9 +533,14 @@ function handleContinue() {
     clearInterval(redirectTimer);
     redirectTimer = null;
   }
-  if (redirectURL && redirectURL.startsWith('http')) {
+  if (redirectURL && !isProbeURL(redirectURL)) {
     window.location.href = redirectURL;
   }
+}
+
+function handleFinish() {
+  try { window.close(); } catch (_) {}
+  showAlert('认证已生效，外网已畅通！请直接关闭此窗口或点击右上角完成开始上网。', false);
 }
 
 async function handleLogin(e) {
@@ -548,7 +584,7 @@ async function handleLogin(e) {
     clearAlert();
     showAuthenticated(data);
 
-    if (redirectURL && redirectURL.startsWith('http') && !data.quota_exceeded) {
+    if (redirectURL && !isProbeURL(redirectURL) && !data.quota_exceeded) {
       startRedirectCountdown(redirectURL);
     }
   } catch (err) {

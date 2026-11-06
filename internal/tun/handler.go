@@ -641,6 +641,31 @@ func portalRedirectHost(cfg *config.Config, clientIP string) string {
 	return "smartproxy.lan"
 }
 
+func isCaptivePortalProbe(rawURL string) bool {
+	if rawURL == "" {
+		return true
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		lower := strings.ToLower(rawURL)
+		return strings.Contains(lower, "generate_204") || strings.Contains(lower, "gen_204")
+	}
+	h := strings.ToLower(u.Hostname())
+	p := strings.ToLower(u.Path)
+
+	if strings.Contains(p, "generate_204") || strings.Contains(p, "gen_204") ||
+		strings.Contains(p, "hotspot-detect") || strings.Contains(p, "connecttest") ||
+		strings.Contains(p, "success.txt") || strings.Contains(p, "ncsi.txt") {
+		return true
+	}
+	if strings.Contains(h, "connectivitycheck") || strings.Contains(h, "msftconnecttest") ||
+		strings.Contains(h, "msftncsi") || h == "captive.apple.com" ||
+		strings.Contains(h, "detectportal") {
+		return true
+	}
+	return false
+}
+
 func (h *TUNHandler) servePortalRedirect(conn net.Conn, clientIP, host string, port, adminPort int) {
 	_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
 	defer conn.Close()
@@ -659,9 +684,19 @@ func (h *TUNHandler) servePortalRedirect(conn net.Conn, clientIP, host string, p
 	_ = conn.SetDeadline(time.Now().Add(1 * time.Second))
 
 	redirectHost := portalRedirectHost(h.config.Load(), clientIP)
-	target := fmt.Sprintf("http://%s:%d/portal?ip=%s&url=%s", redirectHost, adminPort, url.QueryEscape(clientIP), url.QueryEscape(origURL))
-	if adminPort == 80 {
-		target = fmt.Sprintf("http://%s/portal?ip=%s&url=%s", redirectHost, url.QueryEscape(clientIP), url.QueryEscape(origURL))
+	var target string
+	if isCaptivePortalProbe(origURL) {
+		if adminPort == 80 {
+			target = fmt.Sprintf("http://%s/portal?ip=%s", redirectHost, url.QueryEscape(clientIP))
+		} else {
+			target = fmt.Sprintf("http://%s:%d/portal?ip=%s", redirectHost, adminPort, url.QueryEscape(clientIP))
+		}
+	} else {
+		if adminPort == 80 {
+			target = fmt.Sprintf("http://%s/portal?ip=%s&url=%s", redirectHost, url.QueryEscape(clientIP), url.QueryEscape(origURL))
+		} else {
+			target = fmt.Sprintf("http://%s:%d/portal?ip=%s&url=%s", redirectHost, adminPort, url.QueryEscape(clientIP), url.QueryEscape(origURL))
+		}
 	}
 	body := fmt.Sprintf(`<!DOCTYPE html>
 <html>
