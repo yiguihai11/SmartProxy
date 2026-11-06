@@ -183,6 +183,13 @@ func isIPv6Address(host string) bool {
 // latency and packet jitter without premature resets on domestic services.
 const defaultDirectTimeout = 3 * time.Second
 
+// EstablishDirectConnection connects directly to the destination without routing through upstreams or proxy rules.
+// Returned isProxy is always false.
+func (r *Router) EstablishDirectConnection(ctx context.Context, host string, port int, domain string) (net.Conn, bool, error) {
+	conn, err := dialDirectTCP(ctx, host, port, domain, defaultDirectTimeout)
+	return conn, false, err
+}
+
 func (r *Router) EstablishConnection(ctx context.Context, host string, port int,
 	domain string, engine *rules.Engine) (net.Conn, bool, error) {
 

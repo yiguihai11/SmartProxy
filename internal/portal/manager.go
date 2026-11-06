@@ -352,6 +352,51 @@ func (m *Manager) IsAuthorized(clientIP string) bool {
 	return false
 }
 
+// IsUserProxyAllowed returns true if the username is configured with proxy access allowed.
+// If username is empty, portal is disabled, or user is not found, defaults to true.
+func (m *Manager) IsUserProxyAllowed(username string) bool {
+	if m == nil || username == "" {
+		return true
+	}
+	auth := m.getAuthConf()
+	if auth == nil || len(auth.Users) == 0 {
+		return true
+	}
+	for _, u := range auth.Users {
+		if strings.EqualFold(u.Username, username) {
+			return u.IsProxyAllowed()
+		}
+	}
+	return true
+}
+
+// IsIPProxyAllowed checks if the client IP is allowed to use proxy nodes.
+// If captive portal is disabled, IP is loopback/TUN, or user is not found, defaults to true.
+// Returns false only if the client IP is authenticated as a user whose AllowProxy is explicitly false.
+func (m *Manager) IsIPProxyAllowed(clientIP string) bool {
+	if m == nil || !m.IsEnabled() {
+		return true
+	}
+	normIP := normalizeIP(clientIP)
+	if normIP == "" || m.isHostLoopbackOrTun(normIP) {
+		return true
+	}
+
+	var currentMAC string
+	m.mu.RLock()
+	resolver := m.macResolver
+	m.mu.RUnlock()
+	if resolver != nil {
+		currentMAC = strings.ToLower(resolver(normIP))
+	}
+
+	sess := m.GetSession(normIP, currentMAC)
+	if sess != nil && sess.Username != "" {
+		return m.IsUserProxyAllowed(sess.Username)
+	}
+	return true
+}
+
 // Authenticate verifies credentials and establishes an authenticated session.
 func (m *Manager) Authenticate(clientIP, mac, username, password, userAgent string) (*Session, string, error) {
 	if !m.IsEnabled() {

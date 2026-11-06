@@ -322,6 +322,7 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 
 	clientIP := source.Addr.String()
 	portalMgr := h.portalMgr.Load()
+	allowProxy := true
 	if portalMgr != nil && portalMgr.IsEnabled() {
 		// On Android: connections created by local apps on the host device have a valid app UID (>= 0).
 		// Forwarded/tethered hotspot packets have UID = -1 (unknown / no local owner).
@@ -357,6 +358,7 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 		} else {
 			if !isLocalApp {
 				conn = h.wrapPortalTCP(clientIP, conn, portalMgr)
+				allowProxy = portalMgr.IsIPProxyAllowed(clientIP)
 			}
 		}
 	}
@@ -431,6 +433,40 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 	hd.clientIP = clientIP
 
 	smartEnabled := h.config.Load().SmartProxy.Enabled && netutil.ContainsInt(h.config.Load().SmartProxy.Ports, port)
+
+	if !allowProxy {
+		ll.Info("TUN client has no proxy permission, forcing direct TCP connection", "client", clientIP, "host", host, "port", port)
+		if !smartEnabled {
+			remote, isProxy, err := h.router.EstablishDirectConnection(ctx, host, port, "")
+			if err != nil {
+				h.liveTCP.remove(hd)
+				netutil.ResetConn(conn)
+				if onClose != nil {
+					onClose(err)
+				}
+				return
+			}
+			safego.Go("tun.handleConnectDirect", func() {
+				hd.setRemote(remote)
+				defer h.liveTCP.remove(hd)
+				relay.TCPRelay(ctx, conn, remote, isProxy, nil)
+				conn.Close()
+				remote.Close()
+				if onClose != nil {
+					onClose(nil)
+				}
+			})
+			return
+		}
+
+		safego.Go("tun.handleSmartConnectDirect", func() {
+			h.handleSmartConnectDirect(ctx, conn, host, port, rec, hd)
+			if onClose != nil {
+				onClose(nil)
+			}
+		})
+		return
+	}
 
 	if !smartEnabled {
 		remote, isProxy, err := h.router.EstablishConnection(ctx, host, port, "", h.ruleEng)
@@ -558,6 +594,58 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 		}))
 	}
 	relay.TCPRelay(ctx, conn, remote, isProxy, prefix, relayOpts...)
+}
+
+func (h *TUNHandler) handleSmartConnectDirect(ctx context.Context, conn net.Conn, host string, port int, rec *connRecord, hd *tcpHandle) {
+	ll := trace.Log(ctx)
+	defer conn.Close()
+
+	firstPkt, err := ReadClientHello(conn, 3*time.Second)
+	if err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			firstPkt = nil
+		} else {
+			if err != io.EOF {
+				ll.Info("TUN error reading first packet", "error", err)
+			}
+			return
+		}
+	}
+
+	domain := ExtractDomain(firstPkt)
+	h.connStats.setHost(rec, domain)
+	hd.setHost(domain)
+	if domain != "" {
+		ll.Debug("extracted domain", "domain", domain)
+		if h.ruleEng.IsDomainBlocked(domain) {
+			ll.Info("TUN blocked domain (static rule)", "domain", domain)
+			netutil.SendEnhancedBlock(conn, port)
+			return
+		}
+	}
+
+	remote, isProxy, err := h.router.EstablishDirectConnection(ctx, host, port, domain)
+	if err != nil {
+		if isClientAbort(err) || errors.Is(ctx.Err(), context.Canceled) {
+			ll.Debug("TUN direct connection aborted", "host", host, "port", port, "domain", domain, "error", err)
+		} else {
+			ll.Warn("TUN failed to establish direct connection", "host", host, "port", port, "domain", domain, "error", err)
+		}
+		netutil.ResetConn(conn)
+		return
+	}
+	defer remote.Close()
+	hd.setRemote(remote)
+	if len(firstPkt) > 0 {
+		if _, err := remote.Write(firstPkt); err != nil {
+			ll.Debug("TUN error forwarding first packet", "error", err)
+			netutil.ResetConn(conn)
+			return
+		}
+	}
+	ll.Info("TUN forced direct connection established", "host", host, "port", port, "domain", domain)
+	relay.TCPRelay(ctx, conn, remote, isProxy, nil)
 }
 
 func (h *TUNHandler) isGatewayDestination(host string) bool {
@@ -766,8 +854,20 @@ func (h *TUNHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketCon
 	// DNS handler 启用时 53 端口走内置 DNS 管线;关闭时按普通 UDP 转发(passthrough),
 	// 与 SOCKS5 入口的 DNS 分流一致——不能无条件进 handleDNS(HandleDNS 返回 nil 会静默丢包)。
 	if port == 53 && h.dnsHandler != nil && h.dnsHandler.Enabled() {
+		clientIP := source.Addr.String()
+		allowProxy := true
+		portalMgr := h.portalMgr.Load()
+		if portalMgr != nil && portalMgr.IsEnabled() {
+			isLocalApp := false
+			if uid := h.resolveUID(17, source, destination); uid >= 0 {
+				isLocalApp = true
+			}
+			if !isLocalApp {
+				allowProxy = portalMgr.IsIPProxyAllowed(clientIP)
+			}
+		}
 		safego.Go("tun.handleDNS", func() {
-			h.handleDNS(ctx, conn, host, port)
+			h.handleDNS(ctx, conn, host, port, allowProxy)
 			if onClose != nil {
 				onClose(nil)
 			}
@@ -936,6 +1036,19 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 		return
 	}
 
+	clientIP := source.Addr.String()
+	allowProxy := true
+	portalMgr := h.portalMgr.Load()
+	if portalMgr != nil && portalMgr.IsEnabled() {
+		isLocalApp := false
+		if uid := h.resolveUID(17, source, destination); uid >= 0 {
+			isLocalApp = true
+		}
+		if !isLocalApp {
+			allowProxy = portalMgr.IsIPProxyAllowed(clientIP)
+		}
+	}
+
 	timeout := h.getUDPTimeout(int(destination.Port))
 	sess := &tunUdpSession{
 		ip:      destination.Addr.String(),
@@ -1053,6 +1166,10 @@ func (h *TUNHandler) handleGenericUDP(ctx context.Context, conn N.PacketConn, so
 	dialRemote := func(dst M.Socksaddr, firstDgram []byte) (*udpRemoteEntry, error) {
 		host := dst.Addr.String()
 		port := int(dst.Port)
+
+		if !allowProxy {
+			return startDirectRemote(dst, host, port, nil)
+		}
 
 		result, selected := h.upstreamMgr.SelectProxy(ctx, host, port, "", h.ruleEng)
 		switch {
@@ -1401,9 +1518,14 @@ func (h *TUNHandler) getUDPTimeout(port int) time.Duration {
 	}
 }
 
-func (h *TUNHandler) handleDNS(ctx context.Context, conn N.PacketConn, host string, port int) {
+func (h *TUNHandler) handleDNS(ctx context.Context, conn N.PacketConn, host string, port int, allowProxy ...bool) {
 	defer conn.Close()
 	ll := trace.Log(ctx)
+
+	proxyAllowed := true
+	if len(allowProxy) > 0 {
+		proxyAllowed = allowProxy[0]
+	}
 
 	if h.dnsHandler == nil || h.ruleEng == nil {
 		ll.Error("handleDNS: handler not fully initialized (dnsHandler or ruleEng is nil)")
@@ -1439,7 +1561,7 @@ func (h *TUNHandler) handleDNS(ctx context.Context, conn N.PacketConn, host stri
 		wg.Add(1)
 		safego.Go("tun.handleDNSQuery", func() {
 			defer wg.Done()
-			response := h.dnsHandler.HandleDNS(ctx, payloadCopy, host, port, h.ruleEng)
+			response := h.dnsHandler.HandleDNS(ctx, payloadCopy, host, port, h.ruleEng, proxyAllowed)
 			if response != nil {
 				if closed.Load() {
 					return

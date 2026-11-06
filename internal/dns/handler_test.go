@@ -1458,3 +1458,64 @@ func TestHandleDNS_DomesticSlowHedgeForeignFails_DomesticStillWins(t *testing.T)
 		t.Fatalf("expected 114.114.114.114, got %v", msg.Answer[0])
 	}
 }
+
+func TestHandleDNS_ProxyDisallowed(t *testing.T) {
+	srv, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen direct server: %v", err)
+	}
+	defer srv.Close()
+
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, addr, err := srv.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			req := new(dns.Msg)
+			if err := req.Unpack(buf[:n]); err != nil || len(req.Question) == 0 {
+				continue
+			}
+			resp := new(dns.Msg)
+			resp.SetReply(req)
+			resp.Answer = append(resp.Answer, &dns.A{
+				Hdr: dns.RR_Header{
+					Name:   req.Question[0].Name,
+					Rrtype: dns.TypeA,
+					Class:  dns.ClassINET,
+					Ttl:    60,
+				},
+				A: net.ParseIP("1.2.3.4").To4(),
+			})
+			w, _ := resp.Pack()
+			srv.WriteToUDP(w, addr)
+		}
+	}()
+
+	eng := makeEngine(t, "proxy domain direct-only.com dummy_proxy\n")
+
+	mgr, _ := upstream.NewManager(upstream.UpstreamConfig{Strategy: "failover"})
+	defer mgr.Stop()
+
+	h := NewHandler(100, 60, "8.8.8.8", "", chnroute.New(), mgr, 2, "0.0.0.0", "::", false, PreferNone, nil, true)
+	query := buildTestDNSQuery("direct-only.com", dns.TypeA)
+	udpAddr := srv.LocalAddr().(*net.UDPAddr)
+
+	// allowProxy = false -> strictly direct to srv
+	resp := h.HandleDNS(context.Background(), query, udpAddr.IP.String(), udpAddr.Port, eng, false)
+	if resp == nil {
+		t.Fatal("expected response, got nil")
+	}
+	msg := new(dns.Msg)
+	if err := msg.Unpack(resp); err != nil {
+		t.Fatalf("unpack: %v", err)
+	}
+	if len(msg.Answer) == 0 {
+		t.Fatal("expected answer from direct DNS query")
+	}
+	a, ok := msg.Answer[0].(*dns.A)
+	if !ok || a.A.String() != "1.2.3.4" {
+		t.Fatalf("expected direct answer 1.2.3.4, got %v", msg.Answer[0])
+	}
+}

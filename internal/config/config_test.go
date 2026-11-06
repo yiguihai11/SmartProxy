@@ -1462,3 +1462,41 @@ func TestAuthConf_Socks5Enabled(t *testing.T) {
 		t.Errorf("Clone did not isolate AuthConf")
 	}
 }
+
+func TestAuthUserConf_AllowProxy(t *testing.T) {
+	// 1. nil AllowProxy defaults to true
+	u1 := &AuthUserConf{Username: "user1"}
+	if !u1.IsProxyAllowed() {
+		t.Errorf("expected IsProxyAllowed() to be true by default for nil AllowProxy")
+	}
+
+	// 2. Explicit true
+	tVal := true
+	u2 := &AuthUserConf{Username: "user2", AllowProxy: &tVal}
+	if !u2.IsProxyAllowed() {
+		t.Errorf("expected IsProxyAllowed() to be true")
+	}
+
+	// 3. Explicit false
+	fVal := false
+	u3 := &AuthUserConf{Username: "user3", AllowProxy: &fVal}
+	if u3.IsProxyAllowed() {
+		t.Errorf("expected IsProxyAllowed() to be false")
+	}
+
+	// 4. Test Clone deep copying AllowProxy
+	cfg := DefaultConfig()
+	cfg.Listen.Auth = &AuthConf{
+		Enabled: true,
+		Users:   []AuthUserConf{*u3},
+	}
+	cloned := cfg.Clone()
+	if cloned.Listen.Auth.Users[0].IsProxyAllowed() != false {
+		t.Errorf("cloned user should have AllowProxy = false")
+	}
+	newVal := true
+	cloned.Listen.Auth.Users[0].AllowProxy = &newVal
+	if *cfg.Listen.Auth.Users[0].AllowProxy != false {
+		t.Errorf("original AllowProxy was mutated by cloned pointer modification")
+	}
+}

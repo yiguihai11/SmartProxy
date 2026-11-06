@@ -603,3 +603,41 @@ func BenchmarkIsAuthorized(b *testing.B) {
 		}
 	}
 }
+
+func TestManager_IsProxyAllowed(t *testing.T) {
+	cfg := makeTestConfig(2)
+	fVal := false
+	cfg.Listen.Auth.Users = append(cfg.Listen.Auth.Users, config.AuthUserConf{
+		Username:   "directuser",
+		Password:   "secret123",
+		AllowProxy: &fVal,
+	})
+
+	mgr := NewManager(cfg)
+	defer mgr.Close()
+
+	// 1. alice has AllowProxy = nil (defaults to true)
+	if !mgr.IsUserProxyAllowed("alice") {
+		t.Errorf("expected alice to have proxy allowed")
+	}
+
+	// 2. directuser has AllowProxy = false
+	if mgr.IsUserProxyAllowed("directuser") {
+		t.Errorf("expected directuser to have proxy disallowed")
+	}
+
+	// 3. Unauthenticated client IP defaults to true
+	if !mgr.IsIPProxyAllowed("192.168.43.200") {
+		t.Errorf("unauthenticated client should default to true")
+	}
+
+	// 4. Authenticate client as directuser
+	_, _, err := mgr.Authenticate("192.168.43.200", "aa:bb:cc:11:22:33", "directuser", "secret123", "UA")
+	if err != nil {
+		t.Fatalf("auth failed: %v", err)
+	}
+
+	if mgr.IsIPProxyAllowed("192.168.43.200") {
+		t.Errorf("expected 192.168.43.200 to have proxy disallowed after login as directuser")
+	}
+}

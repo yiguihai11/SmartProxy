@@ -168,6 +168,13 @@ type Handler struct {
 	createGroup   singleflight.Group // serializes session creation for the same target, avoiding duplicate dials on concurrent first packets
 	stopCh        chan struct{}
 	closed        atomic.Bool
+	allowProxy    bool
+}
+
+// SetAllowProxy configures whether this UDP handler is allowed to route traffic via upstream proxies.
+// When false, all outbound UDP and DNS traffic is strictly direct.
+func (h *Handler) SetAllowProxy(allowed bool) {
+	h.allowProxy = allowed
 }
 
 var udpBufPool = sync.Pool{
@@ -250,6 +257,7 @@ func NewHandler(cn *chnroute.Trie, router *route.Router, re *rules.Engine,
 		quicDummy:        q.Dummy,
 		quicTimeout:      time.Duration(q.TimeoutMs) * time.Millisecond,
 		stopCh:           make(chan struct{}),
+		allowProxy:       true,
 	}
 	h.initShards()
 	return h
@@ -422,40 +430,46 @@ func (h *Handler) createUDPSession(ctx context.Context, clientAddr net.Addr, ip 
 	framed := false
 	var wd *quic.Watchdog
 
-	isLAN := h.router != nil && h.router.BypassLAN() && netutil.IsLAN(ip) && port != 53
-	switch {
-	case result == "direct" || (result == "fallback" && (isLAN || h.isDomestic(ip))):
-		// 直连 UDP socket 选项(fwmark/缓冲/禁分片)与 TUN 路径共用 DirectUDPControl,
-		// 保证两端直连行为一致。
+	if !h.allowProxy {
 		d := net.Dialer{Timeout: 5 * time.Second, Control: DirectUDPControl}
 		remoteConn, err = d.DialContext(ctx, "udp", net.JoinHostPort(ip, strconv.Itoa(port)))
-	case strings.HasPrefix(result, "proxy_default"):
-		filter := upstream.ParseGeoFilter(strings.TrimPrefix(result, "proxy_default"))
-		if filter != nil {
-			trace.Log(ctx).Info("UDP proxy rule matched default with geo filter",
-				"target", net.JoinHostPort(ip, strconv.Itoa(port)), "domain", domain, "filter", filter.String())
-		} else {
-			trace.Log(ctx).Warn("UDP proxy rule matched but alias not found, forcing default proxy",
-				"target", net.JoinHostPort(ip, strconv.Itoa(port)), "domain", domain)
-		}
-		remoteConn, err = h.upstreamMgr.UDPAssociateFiltered(ctx, ip, port, domain, nil, filter)
-		framed = true
-	case result != "fallback":
-		remoteConn, err = h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, selected)
-		framed = true
-	default:
-		// fallback + 国外:先前已被动态黑名单(此前 TCP smart 超时 / QUIC 判死写入)的目标,
-		// 新会话直接走代理,不再重试 QUIC 直连判死观察(跨会话记忆,与 TUN seam 一致)。
-		// 仅 IP 型目标适用(域名型下方直接走代理、不需黑名单判断;ip==域名 时按 IP 查天然
-		// 不命中)。router 为 nil(SOCKS5 seam 未接路由时)退回历史行为。
-		if domain == "" && h.router != nil && h.router.IsIPBlacklisted(ip, port) {
-			trace.Log(ctx).Info("UDP target on dynamic blacklist, going proxy",
-				"target", net.JoinHostPort(ip, strconv.Itoa(port)))
-			remoteConn, err = h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, nil)
+		framed = false
+	} else {
+		isLAN := h.router != nil && h.router.BypassLAN() && netutil.IsLAN(ip) && port != 53
+		switch {
+		case result == "direct" || (result == "fallback" && (isLAN || h.isDomestic(ip))):
+			// 直连 UDP socket 选项(fwmark/缓冲/禁分片)与 TUN 路径共用 DirectUDPControl,
+			// 保证两端直连行为一致。
+			d := net.Dialer{Timeout: 5 * time.Second, Control: DirectUDPControl}
+			remoteConn, err = d.DialContext(ctx, "udp", net.JoinHostPort(ip, strconv.Itoa(port)))
+		case strings.HasPrefix(result, "proxy_default"):
+			filter := upstream.ParseGeoFilter(strings.TrimPrefix(result, "proxy_default"))
+			if filter != nil {
+				trace.Log(ctx).Info("UDP proxy rule matched default with geo filter",
+					"target", net.JoinHostPort(ip, strconv.Itoa(port)), "domain", domain, "filter", filter.String())
+			} else {
+				trace.Log(ctx).Warn("UDP proxy rule matched but alias not found, forcing default proxy",
+					"target", net.JoinHostPort(ip, strconv.Itoa(port)), "domain", domain)
+			}
+			remoteConn, err = h.upstreamMgr.UDPAssociateFiltered(ctx, ip, port, domain, nil, filter)
 			framed = true
-		} else {
-			// fallback + 国外:普通国外 UDP 走代理;QUIC 候选先进 routeForeignFallback 嗅探
-			remoteConn, framed, wd, err = h.routeForeignFallback(ctx, ip, port, domain, key, firstPayload, &sessHolder)
+		case result != "fallback":
+			remoteConn, err = h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, selected)
+			framed = true
+		default:
+			// fallback + 国外:先前已被动态黑名单(此前 TCP smart 超时 / QUIC 判死写入)的目标,
+			// 新会话直接走代理,不再重试 QUIC 直连判死观察(跨会话记忆,与 TUN seam 一致)。
+			// 仅 IP 型目标适用(域名型下方直接走代理、不需黑名单判断;ip==域名 时按 IP 查天然
+			// 不命中)。router 为 nil(SOCKS5 seam 未接路由时)退回历史行为。
+			if domain == "" && h.router != nil && h.router.IsIPBlacklisted(ip, port) {
+				trace.Log(ctx).Info("UDP target on dynamic blacklist, going proxy",
+					"target", net.JoinHostPort(ip, strconv.Itoa(port)))
+				remoteConn, err = h.upstreamMgr.UDPAssociateSelected(ctx, ip, port, nil)
+				framed = true
+			} else {
+				// fallback + 国外:普通国外 UDP 走代理;QUIC 候选先进 routeForeignFallback 嗅探
+				remoteConn, framed, wd, err = h.routeForeignFallback(ctx, ip, port, domain, key, firstPayload, &sessHolder)
+			}
 		}
 	}
 	if err != nil {
@@ -935,7 +949,7 @@ func (h *Handler) handleDNS(ctx context.Context, payload []byte, clientAddr net.
 	// dns.Handler.HandleDNS 内,与 TUN 路径共用同一条管线、行为一致。此前 SOCKS5 在
 	// 这里重复 static/block/cache/private 前置(HandleDNS 内部已做),已删除;
 	// private 目标的直连分支也移入 HandleDNS,避免两条路各自实现。
-	response := h.dnsHandler.HandleDNS(ctx, payload, realIP, realPort, h.ruleEngine)
+	response := h.dnsHandler.HandleDNS(ctx, payload, realIP, realPort, h.ruleEngine, h.allowProxy)
 	if response != nil {
 		h.sendDNSResponse(response, clientAddr, origIP, origPort)
 	} else {

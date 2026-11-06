@@ -107,6 +107,17 @@ func TestPortal_HTTPFlow(t *testing.T) {
 			t.Fatalf("expected 200 for valid login, got %d: %s", loginRec.Code, loginRec.Body.String())
 		}
 
+		var loginResp struct {
+			Ok         bool `json:"ok"`
+			AllowProxy bool `json:"allow_proxy"`
+		}
+		if err := json.Unmarshal(loginRec.Body.Bytes(), &loginResp); err != nil {
+			t.Fatalf("failed to decode login resp: %v", err)
+		}
+		if !loginResp.Ok || !loginResp.AllowProxy {
+			t.Errorf("expected loginResp.AllowProxy to be true for alice")
+		}
+
 		cookies := loginRec.Result().Cookies()
 		foundCookie := false
 		for _, c := range cookies {
@@ -137,11 +148,12 @@ func TestPortal_HTTPFlow(t *testing.T) {
 			Authenticated bool   `json:"authenticated"`
 			User          string `json:"user"`
 			IP            string `json:"ip"`
+			AllowProxy    bool   `json:"allow_proxy"`
 		}
 		if err := json.Unmarshal(statusRec.Body.Bytes(), &st); err != nil {
 			t.Fatalf("failed to decode status: %v", err)
 		}
-		if !st.Authenticated || st.User != "alice" || st.IP != clientIP {
+		if !st.Authenticated || st.User != "alice" || st.IP != clientIP || !st.AllowProxy {
 			t.Errorf("status mismatch: %+v", st)
 		}
 	}

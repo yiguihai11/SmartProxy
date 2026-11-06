@@ -46,6 +46,7 @@ type TetheredDevice struct {
 	TrafficResetCycle string       `json:"traffic_reset_cycle,omitempty"`
 	TrafficNextReset  int64        `json:"traffic_next_reset,omitempty"`
 	TrafficResetDesc  string       `json:"traffic_reset_desc,omitempty"`
+	AllowProxy        bool         `json:"allow_proxy"`
 	Conns             []DeviceConn `json:"conns,omitempty"`
 }
 
@@ -707,6 +708,11 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 
+					allowProxy := true
+					if authUser != "" && s.portalMgr != nil {
+						allowProxy = s.portalMgr.IsUserProxyAllowed(authUser)
+					}
+
 					devices = append(devices, TetheredDevice{
 						IP:                primaryIP,
 						MAC:               cleanMAC,
@@ -729,6 +735,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 						TrafficResetCycle: trafficResetCycle,
 						TrafficNextReset:  trafficNextReset,
 						TrafficResetDesc:  trafficResetDesc,
+						AllowProxy:        allowProxy,
 						Conns:             devConns,
 					})
 				}
@@ -871,6 +878,11 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			allowProxy := true
+			if authUser != "" && s.portalMgr != nil {
+				allowProxy = s.portalMgr.IsUserProxyAllowed(authUser)
+			}
+
 			devices = append(devices, TetheredDevice{
 				IP:                grp.primaryIP,
 				MAC:               grp.mac,
@@ -893,6 +905,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
 				TrafficResetCycle: trafficResetCycle,
 				TrafficNextReset:  trafficNextReset,
 				TrafficResetDesc:  trafficResetDesc,
+				AllowProxy:        allowProxy,
 				Conns:             devConns,
 			})
 		}
@@ -1048,6 +1061,7 @@ type DeviceUserUpdateRequest struct {
 	ResetCycle     string `json:"reset_cycle"`
 	ResetDay       int    `json:"reset_day"`
 	MaxDevices     int    `json:"max_devices"`
+	AllowProxy     *bool  `json:"allow_proxy,omitempty"`
 }
 
 // handleDevicesUserUpdate updates user policy (traffic limit, reset cycle, reset day, max devices) and saves config.
@@ -1100,6 +1114,10 @@ func (s *Server) handleDevicesUserUpdate(w http.ResponseWriter, r *http.Request)
 			if cycleKind != "" {
 				u.ResetCycle = cycleKind
 				u.ResetDay = day
+			}
+			if req.AllowProxy != nil {
+				val := *req.AllowProxy
+				u.AllowProxy = &val
 			}
 			break
 		}

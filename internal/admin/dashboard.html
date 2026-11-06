@@ -7300,6 +7300,11 @@ function renderDevices() {
           devLimitStr = ' (' + (d.auth_active_devices || 1) + '/' + d.auth_max_devices + ' ' + t('Devices') + ')';
         }
         badge += '<span class="tag blue" style="margin-left:4px" title="' + escAttr(t('Authenticated User') + devLimitStr) + '">👤 ' + escHtml(d.auth_user) + escHtml(devLimitStr) + '</span>';
+        if (d.allow_proxy !== false) {
+          badge += '<span class="tag green" style="margin-left:4px" title="' + escAttr(t('Allow Proxy Access')) + '">🌐 ' + t('Proxy') + '</span>';
+        } else {
+          badge += '<span class="tag yellow" style="margin-left:4px" title="' + escAttr(t('Direct Only (No Proxy Access)')) + '">⚡ ' + t('Direct Only') + '</span>';
+        }
       } else if (devicesData && devicesData.portal_enabled && !isCur && !isVirtual) {
         badge += '<span class="tag orange" style="margin-left:4px">' + t('Unauthenticated') + '</span>';
       }
@@ -7310,7 +7315,7 @@ function renderDevices() {
       } else {
         var portalActions = '';
         var quotaMb = d.traffic_limit_bytes ? Math.round(d.traffic_limit_bytes / (1024 * 1024)) : 0;
-        var editBtn = '<button class="btn btn-sm" onclick="openDeviceEditModal(\'' + escAttr(ip) + '\',\'' + escAttr(mac) + '\',\'' + escAttr(d.hostname || '') + '\',\'' + escAttr(d.auth_user || '') + '\',' + quotaMb + ',\'' + escAttr(d.traffic_reset_cycle || 'none') + '\',' + (d.auth_max_devices != null ? d.auth_max_devices : 1) + ')">' + t('Edit') + '</button>';
+        var editBtn = '<button class="btn btn-sm" onclick="openDeviceEditModal(\'' + escAttr(ip) + '\',\'' + escAttr(mac) + '\',\'' + escAttr(d.hostname || '') + '\',\'' + escAttr(d.auth_user || '') + '\',' + quotaMb + ',\'' + escAttr(d.traffic_reset_cycle || 'none') + '\',' + (d.auth_max_devices != null ? d.auth_max_devices : 1) + ',' + (d.allow_proxy !== false) + ')">' + t('Edit') + '</button>';
         if (devicesData && devicesData.portal_enabled) {
           if (d.auth_user) {
             if (d.traffic_limit_bytes > 0 || d.traffic_used_bytes > 0) {
@@ -7645,7 +7650,7 @@ function setDeviceAlias(key, alias) {
 }
 
 var _currEditingDev = null;
-function openDeviceEditModal(ip, mac, hostname, username, quotaMb, resetCycleStr, maxDevices) {
+function openDeviceEditModal(ip, mac, hostname, username, quotaMb, resetCycleStr, maxDevices, allowProxy) {
   _currEditingDev = {
     ip: ip || '',
     mac: mac || '',
@@ -7698,6 +7703,8 @@ function openDeviceEditModal(ip, mac, hostname, username, quotaMb, resetCycleStr
     onDevCycleChange();
 
     document.getElementById('dev-edit-max-devices').value = (maxDevices != null ? maxDevices : 1);
+    var allowProxyEl = document.getElementById('dev-edit-allow-proxy');
+    if (allowProxyEl) allowProxyEl.checked = (allowProxy !== false);
   } else {
     userSec.style.display = 'none';
   }
@@ -7752,6 +7759,8 @@ async function saveDeviceEditModal() {
       }
       var maxDev = parseInt(document.getElementById('dev-edit-max-devices').value, 10);
       if (isNaN(maxDev)) maxDev = 1;
+      var allowProxyEl = document.getElementById('dev-edit-allow-proxy');
+      var allowProxy = allowProxyEl ? allowProxyEl.checked : true;
 
       var res = await fetch('/api/devices/user/update', {
         method: 'POST',
@@ -7761,7 +7770,8 @@ async function saveDeviceEditModal() {
           traffic_limit_mb: quotaMb,
           reset_cycle: cycle,
           reset_day: day,
-          max_devices: maxDev
+          max_devices: maxDev,
+          allow_proxy: allowProxy
         })
       });
       if (!res.ok) {
@@ -7965,6 +7975,16 @@ document.addEventListener('visibilitychange',function(){
 
       <div class="dialog-label">Max Devices (-1 for unlimited)</div>
       <input type="number" class="dialog-input" id="dev-edit-max-devices" placeholder="1 for single device, -1 for unlimited" min="-1" />
+
+      <div style="margin-top:10px;margin-bottom:6px">
+        <label style="font-size:0.82rem;color:var(--text);display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="dev-edit-allow-proxy" checked />
+          <span>Allow Proxy Access</span>
+        </label>
+        <div style="font-size:0.75rem;color:var(--text2);margin-left:22px;margin-top:2px">
+          When unchecked, all traffic and DNS from this account will strictly connect direct.
+        </div>
+      </div>
     </div>
 
     <div class="dialog-actions">

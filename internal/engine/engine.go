@@ -610,6 +610,13 @@ func (e *Engine) handleClient(ctx context.Context, conn net.Conn) {
 		conn = e.wrapUserConn(conn, authUser)
 	}
 
+	allowProxy := true
+	if authUser != "" && e.portalMgr != nil {
+		allowProxy = e.portalMgr.IsUserProxyAllowed(authUser)
+	} else if clientIP != "" && e.portalMgr != nil {
+		allowProxy = e.portalMgr.IsIPProxyAllowed(clientIP)
+	}
+
 	req, err := socks5.ReceiveRequest(conn)
 	if err != nil {
 		ll.Error("failed to read request", "remote", remoteAddr, "error", err)
@@ -622,16 +629,20 @@ func (e *Engine) handleClient(ctx context.Context, conn net.Conn) {
 
 	switch req.Command {
 	case socks5.CommandConnect:
-		e.handleConnect(ctx, conn, req)
+		e.handleConnect(ctx, conn, req, allowProxy)
 	case socks5.CommandUDPAssociate:
-		e.handleUDPAssociate(ctx, conn, clientIP)
+		e.handleUDPAssociate(ctx, conn, clientIP, allowProxy)
 	default:
 		ll.Info("unsupported command", "cmd", req.Command.String())
 		socks5.SendReply(conn, socks5.ReplyCmdNotSupported, localIP, 0)
 	}
 }
 
-func (e *Engine) handleConnect(ctx context.Context, conn net.Conn, req *socks5.Request) {
+func (e *Engine) handleConnect(ctx context.Context, conn net.Conn, req *socks5.Request, allowProxy ...bool) {
+	proxyAllowed := true
+	if len(allowProxy) > 0 {
+		proxyAllowed = allowProxy[0]
+	}
 	ll := trace.Log(ctx)
 	host := req.Host
 	port := req.Port
@@ -669,6 +680,36 @@ func (e *Engine) handleConnect(ctx context.Context, conn net.Conn, req *socks5.R
 	}
 
 	ip := net.ParseIP(host)
+
+	if !proxyAllowed {
+		domain := ""
+		if ip == nil {
+			domain = host
+			if e.RuleEng.IsDomainBlocked(host) {
+				ll.Info("blocked domain by rule", "domain", host)
+				if port == 80 || port == 443 {
+					socks5.SendReply(conn, socks5.ReplySuccess, localIP, 0)
+					netutil.SendEnhancedBlock(conn, port)
+					return
+				}
+				socks5.SendReply(conn, socks5.ReplyNotAllowed, localIP, 0)
+				return
+			}
+		}
+		ll.Info("SOCKS5 client has no proxy permission, forcing direct connection", "host", host, "port", port)
+		remote, isProxy, err := e.Router.EstablishDirectConnection(ctx, host, port, domain)
+		if err != nil {
+			ll.Error("failed to establish direct connection", "host", host, "port", port, "domain", domain, "error", err)
+			socks5.SendReply(conn, replyForConnError(err), localIP, 0)
+			return
+		}
+		defer remote.Close()
+		if err := socks5.SendReply(conn, socks5.ReplySuccess, localIP, 0); err != nil {
+			return
+		}
+		e.relayTCP(ctx, conn, remote, isProxy, nil)
+		return
+	}
 	isLAN := e.Router.BypassLAN() && netutil.IsLAN(host)
 	isDomestic := isLAN
 	if !isDomestic && ip != nil {
@@ -838,7 +879,11 @@ type udpJob struct {
 	addr net.Addr
 }
 
-func (e *Engine) handleUDPAssociate(ctx context.Context, conn net.Conn, clientIP string) {
+func (e *Engine) handleUDPAssociate(ctx context.Context, conn net.Conn, clientIP string, allowProxy ...bool) {
+	proxyAllowed := true
+	if len(allowProxy) > 0 {
+		proxyAllowed = allowProxy[0]
+	}
 	// ctx 已带控制 TCP 连接的 flow id;UDP 数据会话在 HandlePacket 内分配自己的 id 遮蔽。
 	ll := trace.Log(ctx)
 	var udpConn net.PacketConn
@@ -908,6 +953,7 @@ func (e *Engine) handleUDPAssociate(ctx context.Context, conn net.Conn, clientIP
 		e.Config.Load().Listen.RelaxedUDPOriginCheck,
 		time.Duration(e.Config.Load().Listen.UDPAssociateIdleTimeout)*time.Second,
 		e.Config.Load().SmartProxy.Quic)
+	udpHandler.SetAllowProxy(proxyAllowed)
 	udpHandler.StartCleaner()
 	defer udpHandler.Close()
 

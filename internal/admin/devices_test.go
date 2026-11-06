@@ -635,7 +635,7 @@ func TestDevices_UserUpdate(t *testing.T) {
 		},
 	}
 
-	body := `{"username":"bob","traffic_limit_mb":500,"reset_cycle":"monthly","reset_day":15,"max_devices":3}`
+	body := `{"username":"bob","traffic_limit_mb":500,"reset_cycle":"monthly","reset_day":15,"max_devices":3,"allow_proxy":false}`
 	req := httptest.NewRequest(http.MethodPost, "/api/devices/user/update", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	s.handleDevicesUserUpdate(w, req)
@@ -654,5 +654,8 @@ func TestDevices_UserUpdate(t *testing.T) {
 	u := savedCfg.Listen.Auth.Users[0]
 	if u.TrafficLimitMB != 500 || u.ResetCycle != "monthly" || u.ResetDay != 15 || u.MaxDevices != 3 {
 		t.Fatalf("unexpected user policy on disk: %+v", u)
+	}
+	if u.AllowProxy == nil || *u.AllowProxy != false {
+		t.Fatalf("expected AllowProxy to be false on disk, got %v", u.AllowProxy)
 	}
 }

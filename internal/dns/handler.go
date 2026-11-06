@@ -187,10 +187,14 @@ func isPrivateIP(ipStr string) bool {
 // 只由 adblock.Manager 在订阅刷新 / 白名单变更 / 停用时调用。
 func (h *Handler) SetAdFilter(s *adblock.Set) { h.adFilter.Store(s) }
 
-func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP string, targetPort int, engine *rules.Engine) []byte {
+func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP string, targetPort int, engine *rules.Engine, allowProxy ...bool) []byte {
 	cfg := h.cfg.Load()
 	if !cfg.enabled {
 		return nil
+	}
+	proxyAllowed := true
+	if len(allowProxy) > 0 {
+		proxyAllowed = allowProxy[0]
 	}
 	// ctx 由入口(TUN UDP / SOCKS5-UDP)注入 flow id;查日志从这一条一直追到转发结束。
 	ll := trace.Log(ctx)
@@ -250,7 +254,7 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 	}
 
 	isProxyDomain := false
-	if engine != nil {
+	if proxyAllowed && engine != nil {
 		if pAlias, matched := engine.MatchProxyRule(targetIP, targetPort, qname); matched && !strings.EqualFold(pAlias, "direct") {
 			isProxyDomain = true
 		}
@@ -263,6 +267,9 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 	// client with the other server's result — and the private branch could even send a
 	// public-IP query direct (bypassing the proxy) or a private one via proxy.
 	key := qname + "|" + strconv.Itoa(int(qtype)) + "|" + targetIP + "|" + strconv.Itoa(targetPort)
+	if !proxyAllowed {
+		key += "|direct"
+	}
 	result, err, _ := h.group.Do(key, func() (interface{}, error) {
 		// P1#13: the merged query must not ride the first caller's connection ctx.
 		// singleflight fans this fn out to every concurrent requester for the same
@@ -277,6 +284,21 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 			fctx = trace.WithFlow(fctx, id)
 		}
 		fll := trace.Log(fctx)
+
+		if !proxyAllowed {
+			// Client account has proxy permission disabled: resolve strictly directly without upstream proxies.
+			fll.Debug("querying DNS directly (proxy disallowed for client)", "target", fmt.Sprintf("%s:%d", targetIP, targetPort), "qname", qname)
+			presp, perr := h.QueryUDPVerifyID(fctx, queryWire, targetIP, targetPort)
+			if perr != nil {
+				fll.Warn("direct DNS query failed for proxy-disallowed client", "target", fmt.Sprintf("%s:%d", targetIP, targetPort), "error", perr)
+				return nil, nil
+			}
+			presp = sanitizeResponse(presp, cfg.filterAAAA, !isPrivateIP(targetIP))
+			if h.isDNSClean(fll, presp) {
+				h.cache.Set(qname, qtype, presp, 0)
+			}
+			return presp, nil
+		}
 
 		// Private/local DNS servers (LAN router, self-hosted) must be queried directly:
 		// chnroute never classifies them as domestic, and the foreign/proxy branch

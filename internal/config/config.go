@@ -155,6 +155,16 @@ type AuthUserConf struct {
 	TrafficLimitMB    int64  `json:"traffic_limit_mb,omitempty"`    // Convenience field in JSON: Quota in Megabytes (1024 * 1024 bytes)
 	ResetCycle        string `json:"reset_cycle,omitempty"`        // "daily", "monthly" (or "monthly:15"), "weekly" (or "weekly:1"), "none"/""
 	ResetDay          int    `json:"reset_day,omitempty"`          // Day of cycle: 1-31 for monthly (e.g. 15 = 15th of month), 1-7 for weekly (1=Mon..7=Sun)
+	AllowProxy        *bool  `json:"allow_proxy,omitempty"`        // nil or true = allowed to use proxy; false = direct only (all traffic + DNS direct)
+}
+
+// IsProxyAllowed returns true if the user is permitted to use proxy nodes.
+// If AllowProxy is nil, it defaults to true.
+func (u *AuthUserConf) IsProxyAllowed() bool {
+	if u == nil || u.AllowProxy == nil {
+		return true
+	}
+	return *u.AllowProxy
 }
 
 // EffectiveTrafficLimit returns the effective traffic quota in bytes.
@@ -667,7 +677,13 @@ func (c *Config) Clone() *Config {
 		auth := *c.Listen.Auth
 		if c.Listen.Auth.Users != nil {
 			auth.Users = make([]AuthUserConf, len(c.Listen.Auth.Users))
-			copy(auth.Users, c.Listen.Auth.Users)
+			for i, u := range c.Listen.Auth.Users {
+				auth.Users[i] = u
+				if u.AllowProxy != nil {
+					val := *u.AllowProxy
+					auth.Users[i].AllowProxy = &val
+				}
+			}
 		}
 		cp.Listen.Auth = &auth
 	}

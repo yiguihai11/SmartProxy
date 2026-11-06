@@ -234,11 +234,12 @@ func (s *Server) handlePortalLogin(w http.ResponseWriter, r *http.Request) {
 	})
 
 	resp := map[string]interface{}{
-		"ok":         true,
-		"user":       sess.Username,
-		"mac":        sess.MAC,
-		"login_at":   sess.LoginAt.Unix(),
-		"expires_at": sess.ExpiresAt.Unix(),
+		"ok":          true,
+		"user":        sess.Username,
+		"mac":         sess.MAC,
+		"login_at":    sess.LoginAt.Unix(),
+		"expires_at":  sess.ExpiresAt.Unix(),
+		"allow_proxy": s.portalMgr.IsUserProxyAllowed(sess.Username),
 	}
 	traffic := s.portalMgr.GetUserTrafficInfo(sess.Username)
 	if traffic != nil {
@@ -325,6 +326,7 @@ func (s *Server) handlePortalStatus(w http.ResponseWriter, r *http.Request) {
 		resp["mac"] = sess.MAC
 		resp["login_at"] = sess.LoginAt.Unix()
 		resp["expires_at"] = sess.ExpiresAt.Unix()
+		resp["allow_proxy"] = s.portalMgr.IsUserProxyAllowed(sess.Username)
 
 		traffic := s.portalMgr.GetUserTrafficInfo(sess.Username)
 		if traffic != nil {

@@ -311,6 +311,10 @@ body {
         <span style="color: var(--text-muted)">在线设备数:</span>
         <span id="deviceLimitText" style="font-weight: 600;">--</span>
       </div>
+      <div style="display: flex; justify-content: space-between; margin-bottom: 0.4rem;">
+        <span style="color: var(--text-muted)">代理加速权限:</span>
+        <span id="authProxyPerm" style="font-weight: 600;">--</span>
+      </div>
       <div style="display: flex; justify-content: space-between;">
         <span style="color: var(--text-muted)">状态:</span>
         <span id="authStatusText" style="color: var(--success); font-weight: 600;">正常使用中</span>
@@ -416,6 +420,23 @@ function showAuthenticated(data) {
       const act = data.active_devices || 1;
       const max = data.max_devices;
       document.getElementById('deviceLimitText').textContent = max === -1 ? (act + ' 台 (不限设备数)') : (act + ' / ' + max + ' 台');
+    }
+  }
+
+  const proxyPerm = document.getElementById('authProxyPerm');
+  if (proxyPerm) {
+    if (data.allow_proxy !== false) {
+      proxyPerm.innerHTML = '<span style="color: var(--success); font-weight:600;">🌐 境外代理加速 + 国内直连</span>';
+    } else {
+      proxyPerm.innerHTML = '<span style="color: #f59e0b; font-weight:600;">⚡ 仅限国内直连 (未分配代理)</span>';
+    }
+  }
+  const authDesc = document.getElementById('authDesc');
+  if (authDesc) {
+    if (data.allow_proxy !== false) {
+      authDesc.textContent = '您已成功通过身份认证，网络畅通无阻。';
+    } else {
+      authDesc.textContent = '您已成功通过身份认证，当前账号权限仅限国内直连。';
     }
   }
 
