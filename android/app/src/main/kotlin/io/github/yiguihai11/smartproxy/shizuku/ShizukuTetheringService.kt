@@ -1283,7 +1283,7 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
     private fun startStagedFileObserver(stagedDir: String) {
         stopStagedFileObserver()
         val dir = File(stagedDir)
-        val monitoredFiles = setOf("config.json", "acl.txt", "chnroute.txt", "adblock_cache.txt")
+        val monitoredFiles = setOf("config.json", "acl.txt", "chnroute.txt", "adblock_cache.txt", "portal_traffic.json", "portal_sessions.json")
         val observer = object : FileObserver(dir, CLOSE_WRITE or MOVED_TO) {
             override fun onEvent(event: Int, path: String?) {
                 if (path == null || path !in monitoredFiles || isSyncingFromMaster) return
@@ -1406,6 +1406,9 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             }?.forEach { it.delete() }
             names.forEach { name ->
                 val target = File(directory, name)
+                if (name.startsWith("portal_") && target.isFile && target.length() > 0L) {
+                    return@forEach
+                }
                 val temporary = File(directory, ".$name.tmp")
                 runCatching {
                     ParcelFileDescriptor.AutoCloseInputStream(coreLease.openAssetFile(name)).use { input ->
@@ -1506,7 +1509,28 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             .onFailure { Log.w(TAG, "Unable to stop tethering router", it) }
     }
 
+    private fun syncStateFilesToMaster(stagedDir: String) {
+        val lease = coreLease ?: return
+        val dir = File(stagedDir)
+        if (!dir.isDirectory) return
+        listOf("portal_traffic.json", "portal_sessions.json").forEach { name ->
+            val file = File(dir, name)
+            if (file.isFile && file.length() > 0L) {
+                runCatching {
+                    ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                        val ok = lease.updateAssetFile(name, pfd)
+                        Log.i(TAG, "cleanupRouting synced $name back to master: $ok")
+                    }
+                }.onFailure { Log.e(TAG, "cleanupRouting failed to sync $name to master", it) }
+            }
+        }
+    }
+
     private fun cleanupRouting() {
+        val stagedDir = File(SHELL_RUNTIME_DIR, ASSET_DIRECTORY_NAME)
+        if (stagedDir.isDirectory) {
+            syncStateFilesToMaster(stagedDir.absolutePath)
+        }
         stopRoutingEngineLocked()
         runCatching { coreLease?.releaseTestNetwork() }
 
@@ -1526,8 +1550,13 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
         val directory = File(SHELL_RUNTIME_DIR, ASSET_DIRECTORY_NAME)
         if (!directory.exists()) return
         runCatching {
-            directory.listFiles()?.forEach { it.delete() }
-            directory.delete()
+            directory.listFiles()?.forEach { file ->
+                if (!file.name.startsWith("portal_") && !file.name.startsWith("warm_state") &&
+                    !file.name.startsWith("blocked_devices") && !file.name.startsWith("admin.") &&
+                    !file.name.startsWith("admin_ca.")) {
+                    file.delete()
+                }
+            }
         }.onFailure { Log.w(TAG, "Unable to clean up staged tethering assets", it) }
     }
 

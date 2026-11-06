@@ -305,13 +305,20 @@ internal class CoreTetheringLease : ICoreTetheringLease.Stub() {
     @Synchronized
     override fun updateAssetFile(name: String, pfd: ParcelFileDescriptor): Boolean {
         require(name.isNotBlank() && File(name).name == name) { "Invalid asset name" }
-        val allowed = setOf("config.json", "acl.txt", "chnroute.txt", "adblock_cache.txt")
+        val allowed = setOf(
+            "config.json",
+            "acl.txt",
+            "chnroute.txt",
+            "adblock_cache.txt",
+            "portal_traffic.json",
+            "portal_sessions.json",
+        )
         if (name !in allowed) {
             Log.w("CoreTetheringLease", "updateAssetFile rejected unapproved file: $name")
             return false
         }
         val targetDir = when (name) {
-            "config.json" -> assetDirectory ?: return false
+            "config.json", "portal_traffic.json", "portal_sessions.json" -> assetDirectory ?: return false
             "adblock_cache.txt" -> File(assetCacheDirectory ?: return false, "adblock").apply { mkdirs() }
             else -> assetCacheDirectory ?: return false
         }
