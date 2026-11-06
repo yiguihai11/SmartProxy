@@ -50,6 +50,7 @@ type dnsConfig struct {
 type Handler struct {
 	cfg         atomic.Pointer[dnsConfig]
 	cache       *Cache
+	directCache *Cache
 	chnroute    *chnroute.Trie
 	upstreamMgr *upstream.Manager
 	group       singleflight.Group
@@ -69,6 +70,7 @@ func NewHandler(cacheSize, cacheTTL int,
 
 	h := &Handler{
 		cache:       NewCache(cacheSize, time.Duration(cacheTTL)*time.Second),
+		directCache: NewCache(cacheSize, time.Duration(cacheTTL)*time.Second),
 		chnroute:    cn,
 		upstreamMgr: mgr,
 	}
@@ -99,6 +101,9 @@ func (h *Handler) storeConfig(
 	})
 	if filterAAAA {
 		h.cache.ClearType(dns.TypeAAAA)
+		if h.directCache != nil {
+			h.directCache.ClearType(dns.TypeAAAA)
+		}
 	}
 }
 
@@ -118,6 +123,9 @@ func (h *Handler) SetFilterAAAA(filter bool) {
 	h.cfg.Store(&next)
 	if filter {
 		h.cache.ClearType(dns.TypeAAAA)
+		if h.directCache != nil {
+			h.directCache.ClearType(dns.TypeAAAA)
+		}
 	}
 	slog.Info("DNS handler filter_aaaa updated", "filter_aaaa", filter)
 }
@@ -131,8 +139,13 @@ func (h *Handler) FilterAAAA() bool {
 // ClearCache purges all cached DNS entries, ensuring stale or failed lookups
 // from a previous network interface do not linger across network handovers.
 func (h *Handler) ClearCache() {
-	if h != nil && h.cache != nil {
-		h.cache.Clear()
+	if h != nil {
+		if h.cache != nil {
+			h.cache.Clear()
+		}
+		if h.directCache != nil {
+			h.directCache.Clear()
+		}
 		slog.Info("DNS handler cache cleared")
 	}
 }
@@ -157,7 +170,12 @@ func (h *Handler) UpdateConfig(
 // SetCacheConfig 热更 DNS 缓存容量与默认 TTL(dns.cache.size / dns.cache.ttl),
 // 配置 reload 时调用;此前这两个值只在 NewHandler 建缓存时读一次,改了不生效。
 func (h *Handler) SetCacheConfig(maxSize int, defaultTTL time.Duration) {
-	h.cache.UpdateConfig(maxSize, defaultTTL)
+	if h.cache != nil {
+		h.cache.UpdateConfig(maxSize, defaultTTL)
+	}
+	if h.directCache != nil {
+		h.directCache.UpdateConfig(maxSize, defaultTTL)
+	}
 }
 
 func (h *Handler) Enabled() bool {
@@ -242,8 +260,13 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 		return h.buildFakeResponse(queryWire)
 	}
 
-	if cached := h.cache.Get(qname, qtype); cached != nil {
-		ll.Debug("DNS cache hit", "qname", qname, "qtype", qtype, "responseLen", len(cached))
+	targetCache := h.cache
+	if !proxyAllowed && h.directCache != nil {
+		targetCache = h.directCache
+	}
+
+	if cached := targetCache.Get(qname, qtype); cached != nil {
+		ll.Debug("DNS cache hit", "qname", qname, "qtype", qtype, "responseLen", len(cached), "direct", !proxyAllowed)
 		if len(cached) >= 2 && (cached[0] != queryWire[0] || cached[1] != queryWire[1]) {
 			cachedCp := make([]byte, len(cached))
 			copy(cachedCp, cached)
@@ -295,7 +318,9 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 			}
 			presp = sanitizeResponse(presp, cfg.filterAAAA, !isPrivateIP(targetIP))
 			if h.isDNSClean(fll, presp) {
-				h.cache.Set(qname, qtype, presp, 0)
+				if h.directCache != nil {
+					h.directCache.Set(qname, qtype, presp, 0)
+				}
 			}
 			return presp, nil
 		}
@@ -1126,7 +1151,12 @@ func (h *Handler) BuildFakeResponse(queryWire []byte) []byte {
 }
 
 func (h *Handler) Close() {
-	h.cache.Close()
+	if h.cache != nil {
+		h.cache.Close()
+	}
+	if h.directCache != nil {
+		h.directCache.Close()
+	}
 }
 
 func (h *Handler) CacheGet(qname string, qtype uint16) []byte {
@@ -1142,7 +1172,12 @@ func (h *Handler) CacheLen() int {
 }
 
 func (h *Handler) CacheClear() {
-	h.cache.Clear()
+	if h.cache != nil {
+		h.cache.Clear()
+	}
+	if h.directCache != nil {
+		h.directCache.Clear()
+	}
 }
 
 func (h *Handler) CacheRemove(qname string, qtype uint16) {

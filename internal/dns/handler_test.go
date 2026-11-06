@@ -1518,4 +1518,47 @@ func TestHandleDNS_ProxyDisallowed(t *testing.T) {
 	if !ok || a.A.String() != "1.2.3.4" {
 		t.Fatalf("expected direct answer 1.2.3.4, got %v", msg.Answer[0])
 	}
+
+	// Verify DNS cache isolation:
+	// 1. directCache has the direct-only record, but proxy cache must NOT have it
+	if h.directCache.Get("direct-only.com", dns.TypeA) == nil {
+		t.Fatal("expected record in directCache")
+	}
+	if h.cache.Get("direct-only.com", dns.TypeA) != nil {
+		t.Fatal("proxy cache should NOT contain direct-only record")
+	}
+
+	// 2. Pre-populate proxy cache with a clean proxy IP for another domain
+	pMsg := new(dns.Msg)
+	pMsg.SetQuestion("isolated-domain.com.", dns.TypeA)
+	pMsg.Answer = append(pMsg.Answer, &dns.A{
+		Hdr: dns.RR_Header{Name: "isolated-domain.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+		A:   net.ParseIP("9.9.9.9").To4(),
+	})
+	pWire, _ := pMsg.Pack()
+	h.cache.Set("isolated-domain.com", dns.TypeA, pWire, 0)
+
+	// Direct user queries isolated-domain.com -> must NOT hit proxy cache (9.9.9.9),
+	// but must query srv directly and get 1.2.3.4
+	isoQuery := buildTestDNSQuery("isolated-domain.com", dns.TypeA)
+	dResp := h.HandleDNS(context.Background(), isoQuery, udpAddr.IP.String(), udpAddr.Port, eng, false)
+	if dResp == nil {
+		t.Fatal("expected direct response, got nil")
+	}
+	dMsg := new(dns.Msg)
+	_ = dMsg.Unpack(dResp)
+	if len(dMsg.Answer) == 0 || dMsg.Answer[0].(*dns.A).A.String() != "1.2.3.4" {
+		t.Fatalf("expected direct answer 1.2.3.4, got %v (proxy cache leaked to direct user)", dMsg.Answer)
+	}
+
+	// Proxy user queries isolated-domain.com -> hits proxy cache and gets 9.9.9.9
+	pResp := h.HandleDNS(context.Background(), isoQuery, udpAddr.IP.String(), udpAddr.Port, eng, true)
+	if pResp == nil {
+		t.Fatal("expected proxy response, got nil")
+	}
+	pMsgResp := new(dns.Msg)
+	_ = pMsgResp.Unpack(pResp)
+	if len(pMsgResp.Answer) == 0 || pMsgResp.Answer[0].(*dns.A).A.String() != "9.9.9.9" {
+		t.Fatalf("expected proxy cached answer 9.9.9.9, got %v", pMsgResp.Answer)
+	}
 }
