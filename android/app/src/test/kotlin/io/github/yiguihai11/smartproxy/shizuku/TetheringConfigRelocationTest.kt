@@ -33,7 +33,7 @@ class TetheringConfigRelocationTest {
 
         val listen = json.getJSONObject("listen")
         assertEquals(9090, listen.getInt("admin_port"))
-        assertEquals("192.168.43.1,2001:db8:9877::1", listen.getString("admin_host"))
+        assertEquals("192.168.43.1,2001:db8:9877::1,192.0.2.2", listen.getString("admin_host"))
         assertEquals("", listen.getString("admin_socket"))
         assertEquals(0, listen.getInt("port"))
 

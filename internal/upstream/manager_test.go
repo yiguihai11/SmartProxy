@@ -1480,18 +1480,23 @@ func TestManager_ResetAutoOpenedCircuits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer m.Stop()
 
 	a, b := m.defaultProxies[0], m.defaultProxies[1]
 
 	// a: TCP auto-opened by probe failures; UDP manually disabled (user pin).
+	a.health.mu.Lock()
 	a.health.state = StateOpen
 	a.health.consecutiveFailures = 2
 	a.health.openSince = time.Now()
+	a.health.mu.Unlock()
 	a.udpHealth.SetManualState(false)
 
 	// b: UDP auto-opened; TCP manually enabled (user pin).
+	b.udpHealth.mu.Lock()
 	b.udpHealth.state = StateOpen
 	b.udpHealth.openSince = time.Now()
+	b.udpHealth.mu.Unlock()
 	b.health.SetManualState(true)
 
 	n := m.ResetAutoOpenedCircuits()
