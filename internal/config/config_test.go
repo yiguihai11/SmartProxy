@@ -1349,6 +1349,27 @@ func TestAuthUser_TrafficLimit(t *testing.T) {
 				Password:   "pwcharlie",
 				ResetCycle: "none",
 			},
+			{
+				Username:   "dave",
+				Password:   "pwdave",
+				ResetCycle: "monthly:15",
+			},
+			{
+				Username:   "eve",
+				Password:   "pweve",
+				ResetCycle: "monthly",
+				ResetDay:   28,
+			},
+			{
+				Username:   "frank",
+				Password:   "pwfrank",
+				ResetCycle: "weekly:monday",
+			},
+			{
+				Username:   "grace",
+				Password:   "pwgrace",
+				ResetCycle: "10",
+			},
 		},
 	}
 
@@ -1369,6 +1390,18 @@ func TestAuthUser_TrafficLimit(t *testing.T) {
 	}
 	if auth.UserResetCycle("charlie") != "none" {
 		t.Errorf("expected charlie reset cycle 'none', got %q", auth.UserResetCycle("charlie"))
+	}
+	if auth.UserResetCycle("dave") != "monthly:15" {
+		t.Errorf("expected dave reset cycle 'monthly:15', got %q", auth.UserResetCycle("dave"))
+	}
+	if auth.UserResetCycle("eve") != "monthly:28" {
+		t.Errorf("expected eve reset cycle 'monthly:28', got %q", auth.UserResetCycle("eve"))
+	}
+	if auth.UserResetCycle("frank") != "weekly:1" {
+		t.Errorf("expected frank reset cycle 'weekly:1', got %q", auth.UserResetCycle("frank"))
+	}
+	if auth.UserResetCycle("grace") != "monthly:10" {
+		t.Errorf("expected grace reset cycle 'monthly:10', got %q", auth.UserResetCycle("grace"))
 	}
 
 	// Validation tests

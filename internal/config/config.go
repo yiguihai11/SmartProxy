@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -152,7 +153,8 @@ type AuthUserConf struct {
 	MaxDevices        int    `json:"max_devices,omitempty"`         // 0 or omitted = default 1 device; -1 = unlimited
 	TrafficLimitBytes int64  `json:"traffic_limit_bytes,omitempty"` // Quota in bytes. 0 = unlimited. e.g. 1073741824 = 1GB
 	TrafficLimitMB    int64  `json:"traffic_limit_mb,omitempty"`    // Convenience field in JSON: Quota in Megabytes (1024 * 1024 bytes)
-	ResetCycle        string `json:"reset_cycle,omitempty"`        // "daily" (resets daily at 00:00:00), "monthly" (resets on 1st of month at 00:00:00), "none"/"" (never automatically resets)
+	ResetCycle        string `json:"reset_cycle,omitempty"`        // "daily", "monthly" (or "monthly:15"), "weekly" (or "weekly:1"), "none"/""
+	ResetDay          int    `json:"reset_day,omitempty"`          // Day of cycle: 1-31 for monthly (e.g. 15 = 15th of month), 1-7 for weekly (1=Mon..7=Sun)
 }
 
 // EffectiveTrafficLimit returns the effective traffic quota in bytes.
@@ -217,22 +219,131 @@ func (a *AuthConf) UserTrafficLimit(user string) int64 {
 	return 0
 }
 
-// UserResetCycle returns the configured reset cycle ("daily", "monthly", "none", or "") for the specified user.
-// Defaults to "none" when empty or unset.
+// ParseResetCycle parses a reset_cycle string and optional resetDay into a normalized cycle kind
+// ("none", "daily", "monthly", "weekly") and the target day (1-31 for monthly, 1-7 for weekly).
+// Returns kind="" if the cycle string cannot be recognized.
+func ParseResetCycle(cycleStr string, resetDay int) (kind string, targetDay int) {
+	c := strings.ToLower(strings.TrimSpace(cycleStr))
+	if c == "" || c == "none" {
+		if resetDay >= 1 && resetDay <= 31 {
+			return "monthly", resetDay
+		}
+		return "none", 0
+	}
+	if c == "daily" || c == "day" {
+		return "daily", 0
+	}
+
+	// Pure numeric string e.g. "15" or "5" -> monthly on that day
+	if n, err := strconv.Atoi(c); err == nil {
+		if n >= 1 && n <= 31 {
+			return "monthly", n
+		}
+		return "", 0
+	}
+
+	// Weekly e.g. "weekly", "weekly:1", "weekly:monday", "weekly:mon"
+	if strings.HasPrefix(c, "weekly") || strings.HasPrefix(c, "week") {
+		sub := ""
+		if idx := strings.IndexAny(c, ":-_/"); idx != -1 {
+			sub = strings.TrimSpace(c[idx+1:])
+		}
+		day := resetDay
+		if sub != "" {
+			switch sub {
+			case "1", "mon", "monday", "一", "周一", "星期一":
+				day = 1
+			case "2", "tue", "tuesday", "二", "周二", "星期二":
+				day = 2
+			case "3", "wed", "wednesday", "三", "周三", "星期三":
+				day = 3
+			case "4", "thu", "thursday", "四", "周四", "星期四":
+				day = 4
+			case "5", "fri", "friday", "五", "周五", "星期五":
+				day = 5
+			case "6", "sat", "saturday", "六", "周六", "星期六":
+				day = 6
+			case "7", "0", "sun", "sunday", "日", "天", "周日", "星期日":
+				day = 7
+			default:
+				if n, err := strconv.Atoi(sub); err == nil && n >= 1 && n <= 7 {
+					day = n
+				} else {
+					return "", 0
+				}
+			}
+		}
+		if day < 1 || day > 7 {
+			day = 1
+		}
+		return "weekly", day
+	}
+
+	// Monthly e.g. "monthly", "monthly:15", "month:28", "monthly-5"
+	if strings.HasPrefix(c, "monthly") || strings.HasPrefix(c, "month") {
+		sub := ""
+		if idx := strings.IndexAny(c, ":-_/"); idx != -1 {
+			sub = strings.TrimSpace(c[idx+1:])
+		}
+		day := resetDay
+		if sub != "" {
+			if n, err := strconv.Atoi(sub); err == nil && n >= 1 && n <= 31 {
+				day = n
+			} else {
+				return "", 0
+			}
+		}
+		if day < 1 || day > 31 {
+			day = 1
+		}
+		return "monthly", day
+	}
+
+	return "", 0
+}
+
+// UserResetCycle returns the configured reset cycle string ("daily", "monthly", "monthly:15", "weekly:1", "none", or "")
+// for the specified user. Defaults to "none" when empty or unset.
 func (a *AuthConf) UserResetCycle(user string) string {
 	if a == nil {
 		return "none"
 	}
 	for _, u := range a.Users {
 		if u.Username == user {
-			c := strings.ToLower(strings.TrimSpace(u.ResetCycle))
-			if c == "" {
+			kind, day := ParseResetCycle(u.ResetCycle, u.ResetDay)
+			switch kind {
+			case "daily":
+				return "daily"
+			case "monthly":
+				if day > 1 {
+					return fmt.Sprintf("monthly:%d", day)
+				}
+				return "monthly"
+			case "weekly":
+				return fmt.Sprintf("weekly:%d", day)
+			default:
 				return "none"
 			}
-			return c
 		}
 	}
 	return "none"
+}
+
+// UserResetCycleInfo returns the cycle kind ("none", "daily", "monthly", "weekly") and target day for the specified user.
+func (a *AuthConf) UserResetCycleInfo(user string) (kind string, day int) {
+	if a == nil {
+		return "none", 0
+	}
+	for _, u := range a.Users {
+		if u.Username == user {
+			kind, day := ParseResetCycle(u.ResetCycle, u.ResetDay)
+			if kind == "" {
+				return "none", 0
+			}
+			return kind, day
+		}
+	}
+	return "none", 0
 }
 
 // HasCredentials reports whether any multi-user credentials are defined.
@@ -795,9 +906,14 @@ func (c *Config) Validate() error {
 			if u.TrafficLimitMB < 0 {
 				errs = append(errs, fmt.Sprintf("listen.auth.users[%d].traffic_limit_mb must not be negative", i))
 			}
-			cycle := strings.ToLower(strings.TrimSpace(u.ResetCycle))
-			if cycle != "" && cycle != "none" && cycle != "daily" && cycle != "monthly" {
-				errs = append(errs, fmt.Sprintf("listen.auth.users[%d].reset_cycle must be one of: daily, monthly, none, or empty", i))
+			if strings.TrimSpace(u.ResetCycle) != "" || u.ResetDay != 0 {
+				kind, _ := ParseResetCycle(u.ResetCycle, u.ResetDay)
+				if kind == "" && strings.TrimSpace(u.ResetCycle) != "" {
+					errs = append(errs, fmt.Sprintf("listen.auth.users[%d].reset_cycle %q is invalid (allowed: daily, monthly, monthly:<day 1-31>, weekly, weekly:<1-7>, none, or day number 1-31)", i, u.ResetCycle))
+				}
+				if u.ResetDay != 0 && (u.ResetDay < 1 || u.ResetDay > 31) {
+					errs = append(errs, fmt.Sprintf("listen.auth.users[%d].reset_day must be between 1 and 31, got %d", i, u.ResetDay))
+				}
 			}
 			if seenUsers[u.Username] {
 				errs = append(errs, fmt.Sprintf("listen.auth.users[%d] duplicate username %q", i, u.Username))

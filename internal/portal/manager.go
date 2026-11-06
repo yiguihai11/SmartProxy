@@ -1148,49 +1148,122 @@ func (m *Manager) saveSessionsIfDirty() {
 	}
 }
 
+func daysInMonth(year int, month time.Month, loc *time.Location) int {
+	return time.Date(year, month+1, 0, 0, 0, 0, 0, loc).Day()
+}
+
+func effectiveDayInMonth(year int, month time.Month, targetDay int, loc *time.Location) int {
+	maxDays := daysInMonth(year, month, loc)
+	if targetDay > maxDays {
+		return maxDays
+	}
+	if targetDay < 1 {
+		return 1
+	}
+	return targetDay
+}
+
+func monthlyResetDate(year int, month time.Month, targetDay int, loc *time.Location) time.Time {
+	effDay := effectiveDayInMonth(year, month, targetDay, loc)
+	return time.Date(year, month, effDay, 0, 0, 0, 0, loc)
+}
+
+func getMonthlyCycleBoundaries(now time.Time, targetDay int) (cycleStart time.Time, nextReset time.Time) {
+	loc := now.Location()
+	thisMonthReset := monthlyResetDate(now.Year(), now.Month(), targetDay, loc)
+	if now.Before(thisMonthReset) {
+		cycleStart = monthlyResetDate(now.Year(), now.Month()-1, targetDay, loc)
+		nextReset = thisMonthReset
+	} else {
+		cycleStart = thisMonthReset
+		nextReset = monthlyResetDate(now.Year(), now.Month()+1, targetDay, loc)
+	}
+	return cycleStart, nextReset
+}
+
+func getWeeklyCycleBoundaries(now time.Time, targetDay int) (cycleStart time.Time, nextReset time.Time) {
+	loc := now.Location()
+	isoWeekday := int(now.Weekday())
+	if isoWeekday == 0 {
+		isoWeekday = 7
+	}
+	if targetDay < 1 || targetDay > 7 {
+		targetDay = 1
+	}
+	daysSince := (isoWeekday - targetDay + 7) % 7
+	thisWeekReset := time.Date(now.Year(), now.Month(), now.Day()-daysSince, 0, 0, 0, 0, loc)
+	if now.Before(thisWeekReset) {
+		cycleStart = thisWeekReset.AddDate(0, 0, -7)
+		nextReset = thisWeekReset
+	} else {
+		cycleStart = thisWeekReset
+		nextReset = thisWeekReset.AddDate(0, 0, 7)
+	}
+	return cycleStart, nextReset
+}
+
 // checkResetCycleLocked checks if the traffic cycle for this user has rolled over,
 // and resets UsedBytes if due. Must be called with m.mu locked.
 func (m *Manager) checkResetCycleLocked(ut *UserTraffic, resetCycle string, now time.Time) bool {
 	if ut == nil {
 		return false
 	}
-	cycle := strings.ToLower(strings.TrimSpace(resetCycle))
-	switch cycle {
+	kind, day := config.ParseResetCycle(resetCycle, 0)
+	switch kind {
 	case "daily":
 		startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		nextReset := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
 		if ut.CycleStart.IsZero() {
 			ut.CycleStart = startOfToday
-			ut.nextResetUnix = time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location()).Unix()
+			ut.nextResetUnix = nextReset.Unix()
 			return false
 		}
 		if ut.CycleStart.Before(startOfToday) {
 			ut.UsedBytes = 0
 			ut.CycleStart = startOfToday
 			ut.LastUpdated = now
-			ut.nextResetUnix = time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location()).Unix()
+			ut.nextResetUnix = nextReset.Unix()
 			m.trafficDirty.Store(true)
 			return true
 		}
 		if ut.nextResetUnix == 0 {
-			ut.nextResetUnix = time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location()).Unix()
+			ut.nextResetUnix = nextReset.Unix()
 		}
 	case "monthly":
-		startOfMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		cycleStart, nextReset := getMonthlyCycleBoundaries(now, day)
 		if ut.CycleStart.IsZero() {
-			ut.CycleStart = startOfMonth
-			ut.nextResetUnix = time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location()).Unix()
+			ut.CycleStart = cycleStart
+			ut.nextResetUnix = nextReset.Unix()
 			return false
 		}
-		if ut.CycleStart.Before(startOfMonth) {
+		if ut.CycleStart.Before(cycleStart) {
 			ut.UsedBytes = 0
-			ut.CycleStart = startOfMonth
+			ut.CycleStart = cycleStart
 			ut.LastUpdated = now
-			ut.nextResetUnix = time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location()).Unix()
+			ut.nextResetUnix = nextReset.Unix()
 			m.trafficDirty.Store(true)
 			return true
 		}
 		if ut.nextResetUnix == 0 {
-			ut.nextResetUnix = time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location()).Unix()
+			ut.nextResetUnix = nextReset.Unix()
+		}
+	case "weekly":
+		cycleStart, nextReset := getWeeklyCycleBoundaries(now, day)
+		if ut.CycleStart.IsZero() {
+			ut.CycleStart = cycleStart
+			ut.nextResetUnix = nextReset.Unix()
+			return false
+		}
+		if ut.CycleStart.Before(cycleStart) {
+			ut.UsedBytes = 0
+			ut.CycleStart = cycleStart
+			ut.LastUpdated = now
+			ut.nextResetUnix = nextReset.Unix()
+			m.trafficDirty.Store(true)
+			return true
+		}
+		if ut.nextResetUnix == 0 {
+			ut.nextResetUnix = nextReset.Unix()
 		}
 	default:
 		if ut.CycleStart.IsZero() {
@@ -1384,22 +1457,35 @@ func (m *Manager) AllUsersTraffic() []*UserTrafficInfo {
 }
 
 func computeNextReset(cycle string, now time.Time) time.Time {
-	switch strings.ToLower(strings.TrimSpace(cycle)) {
+	kind, day := config.ParseResetCycle(cycle, 0)
+	switch kind {
 	case "daily":
 		return time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
 	case "monthly":
-		return time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location())
+		_, nextReset := getMonthlyCycleBoundaries(now, day)
+		return nextReset
+	case "weekly":
+		_, nextReset := getWeeklyCycleBoundaries(now, day)
+		return nextReset
 	default:
 		return time.Time{}
 	}
 }
 
 func formatResetDescription(cycle string, nextReset time.Time) string {
-	switch strings.ToLower(strings.TrimSpace(cycle)) {
+	kind, day := config.ParseResetCycle(cycle, 0)
+	switch kind {
 	case "daily":
 		return fmt.Sprintf("（将于每日 00:00 重置，下次重置: %s）", nextReset.Format("2006-01-02 15:04:05"))
 	case "monthly":
-		return fmt.Sprintf("（将于每月1日 00:00 重置，下次重置: %s）", nextReset.Format("2006-01-02 15:04:05"))
+		return fmt.Sprintf("（将于每月%d日 00:00 重置，下次重置: %s）", day, nextReset.Format("2006-01-02 15:04:05"))
+	case "weekly":
+		weekdayNames := []string{"", "周一", "周二", "周三", "周四", "周五", "周六", "周日"}
+		name := "周一"
+		if day >= 1 && day <= 7 {
+			name = weekdayNames[day]
+		}
+		return fmt.Sprintf("（将于每%s 00:00 重置，下次重置: %s）", name, nextReset.Format("2006-01-02 15:04:05"))
 	default:
 		return "（不自动重置）"
 	}

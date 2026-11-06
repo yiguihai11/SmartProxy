@@ -431,6 +431,67 @@ func TestPortal_ResetCycle_DailyAndMonthly(t *testing.T) {
 	if utNone.UsedBytes != 10000 {
 		t.Errorf("expected UsedBytes unchanged")
 	}
+
+	// 4. Custom monthly day (e.g. 15th)
+	// Suppose now is Nov 20, 2026. Cycle start was Oct 15, 2026.
+	// Reset day 15 has passed in current month, so cycle should reset!
+	nov20 := time.Date(2026, 11, 20, 10, 0, 0, 0, time.Local)
+	oct15 := time.Date(2026, 10, 15, 0, 0, 0, 0, time.Local)
+	ut15 := &UserTraffic{
+		Username:   "dave",
+		UsedBytes:  8888,
+		CycleStart: oct15,
+	}
+	if !mgr.checkResetCycleLocked(ut15, "monthly:15", nov20) {
+		t.Errorf("expected reset on day 15 when now is Nov 20 and cycle start was Oct 15")
+	}
+	if ut15.UsedBytes != 0 {
+		t.Errorf("expected UsedBytes 0 after reset, got %d", ut15.UsedBytes)
+	}
+	if ut15.CycleStart != time.Date(2026, 11, 15, 0, 0, 0, 0, time.Local) {
+		t.Errorf("expected CycleStart Nov 15, got %v", ut15.CycleStart)
+	}
+
+	// Now check if calling again on Nov 21 resets again: should NOT reset
+	nov21 := time.Date(2026, 11, 21, 10, 0, 0, 0, time.Local)
+	ut15.UsedBytes = 1234
+	if mgr.checkResetCycleLocked(ut15, "monthly:15", nov21) {
+		t.Errorf("expected no reset on Nov 21 when already reset on Nov 15")
+	}
+	if ut15.UsedBytes != 1234 {
+		t.Errorf("expected UsedBytes 1234 unchanged, got %d", ut15.UsedBytes)
+	}
+
+	// 5. Short month clamping (e.g. day 31 in Feb)
+	feb28 := time.Date(2027, 2, 28, 12, 0, 0, 0, time.Local)
+	jan31 := time.Date(2027, 1, 31, 0, 0, 0, 0, time.Local)
+	ut31 := &UserTraffic{
+		Username:   "eve",
+		UsedBytes:  9999,
+		CycleStart: jan31,
+	}
+	if !mgr.checkResetCycleLocked(ut31, "monthly:31", feb28) {
+		t.Errorf("expected reset on Feb 28 for day 31 config")
+	}
+	if ut31.CycleStart != time.Date(2027, 2, 28, 0, 0, 0, 0, time.Local) {
+		t.Errorf("expected CycleStart clamped to Feb 28, got %v", ut31.CycleStart)
+	}
+
+	// 6. Weekly cycle (Monday = 1)
+	// Nov 9, 2026 is Monday. Nov 2 was previous Monday.
+	prevMon := time.Date(2026, 11, 2, 0, 0, 0, 0, time.Local)
+	thisMon := time.Date(2026, 11, 9, 10, 0, 0, 0, time.Local)
+	utWeekly := &UserTraffic{
+		Username:   "frank",
+		UsedBytes:  5555,
+		CycleStart: prevMon,
+	}
+	if !mgr.checkResetCycleLocked(utWeekly, "weekly:1", thisMon) {
+		t.Errorf("expected weekly reset on Monday")
+	}
+	if utWeekly.UsedBytes != 0 {
+		t.Errorf("expected UsedBytes reset to 0, got %d", utWeekly.UsedBytes)
+	}
 }
 
 func TestPortal_TrafficPersistence(t *testing.T) {

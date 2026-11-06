@@ -418,8 +418,23 @@ function showAuthenticated(data) {
     bar.style.width = pct + '%';
 
     let cycleName = '不自动重置';
-    if (data.traffic_reset_cycle === 'daily') cycleName = '每日 00:00 重置';
-    else if (data.traffic_reset_cycle === 'monthly') cycleName = '每月1日 00:00 重置';
+    if (data.traffic_reset_cycle === 'daily') {
+      cycleName = '每日 00:00 重置';
+    } else if (data.traffic_reset_cycle) {
+      const c = data.traffic_reset_cycle.toLowerCase();
+      if (c === 'monthly' || c === 'monthly:1') {
+        cycleName = '每月1日 00:00 重置';
+      } else if (c.startsWith('monthly:')) {
+        const d = c.split(':')[1];
+        cycleName = '每月' + d + '日 00:00 重置';
+      } else if (c.startsWith('weekly')) {
+        const days = { '1': '周一', '2': '周二', '3': '周三', '4': '周四', '5': '周五', '6': '周六', '7': '周日' };
+        const d = c.includes(':') ? c.split(':')[1] : '1';
+        cycleName = '每' + (days[d] || '周一') + ' 00:00 重置';
+      } else if (!isNaN(parseInt(c, 10))) {
+        cycleName = '每月' + parseInt(c, 10) + '日 00:00 重置';
+      }
+    }
     document.getElementById('trafficCycleText').textContent = cycleName;
 
     if (data.traffic_next_reset) {
