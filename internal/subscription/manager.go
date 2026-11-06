@@ -511,7 +511,10 @@ func (m *Manager) RemoveNodes(aliases []string) int {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	if m.stopped {
+		m.mu.Unlock()
+		return 0
+	}
 
 	totalRemoved := 0
 	for _, item := range m.subs {
@@ -536,9 +539,12 @@ func (m *Manager) RemoveNodes(aliases []string) int {
 	if totalRemoved > 0 {
 		m.saveCacheLocked()
 		slog.Info("subscription nodes cleaned up", "removed", totalRemoved)
-		if m.upstreamMgr != nil {
-			m.upstreamMgr.RemoveNodes(aliases)
-		}
+	}
+	upMgr := m.upstreamMgr
+	m.mu.Unlock()
+
+	if totalRemoved > 0 && upMgr != nil {
+		upMgr.RemoveNodesWithoutNotify(aliases)
 	}
 	return totalRemoved
 }
@@ -553,8 +559,8 @@ func (m *Manager) SetChnroute(c upstream.ChnRouteChecker) {
 
 func (m *Manager) filterCNNodes() int {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.chnroute == nil || m.chnroute.IsEmpty() {
+		m.mu.Unlock()
 		return 0
 	}
 	totalRemoved := 0
@@ -583,9 +589,12 @@ func (m *Manager) filterCNNodes() int {
 	if totalRemoved > 0 {
 		m.saveCacheLocked()
 		slog.Info("subscription nodes filtered by chnroute", "removed", totalRemoved)
-		if m.upstreamMgr != nil {
-			m.upstreamMgr.RemoveNodes(removedAliases)
-		}
+	}
+	upMgr := m.upstreamMgr
+	m.mu.Unlock()
+
+	if totalRemoved > 0 && upMgr != nil {
+		upMgr.RemoveNodesWithoutNotify(removedAliases)
 	}
 	return totalRemoved
 }

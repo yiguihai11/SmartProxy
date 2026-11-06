@@ -748,9 +748,20 @@ func (m *Manager) RemoveProviderNodes(aliases []string) int {
 	return m.RemoveNodes(aliases)
 }
 
+// RemoveNodesWithoutNotify removes specific aliases from provider proxies and static proxies
+// without invoking the onNodeRemoved callback. Used when callers (like subscription.Manager)
+// have already removed the nodes from their own stores.
+func (m *Manager) RemoveNodesWithoutNotify(aliases []string) int {
+	return m.removeNodesInternal(aliases, false)
+}
+
 // RemoveNodes removes specific aliases from provider proxies and static proxies,
-// syncs sing-box outbounds, notifies listeners, and rebuilds the active pool.
+// syncs sing-box outbounds, notifies listeners asynchronously, and rebuilds the active pool.
 func (m *Manager) RemoveNodes(aliases []string) int {
+	return m.removeNodesInternal(aliases, true)
+}
+
+func (m *Manager) removeNodesInternal(aliases []string, notify bool) int {
 	if len(aliases) == 0 {
 		return 0
 	}
@@ -815,8 +826,10 @@ func (m *Manager) RemoveNodes(aliases []string) int {
 		if m.healthChecker != nil {
 			m.healthChecker.SyncProxies(healthCfg, newProxies, nil)
 		}
-		if onRemoved != nil {
-			onRemoved(aliases)
+		if notify && onRemoved != nil {
+			safego.Go("notifyNodeRemoved", func() {
+				onRemoved(aliases)
+			})
 		}
 		slog.Info("nodes removed", "removed", totalRemoved, "remaining", len(newProxies))
 		return totalRemoved

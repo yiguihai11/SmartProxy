@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"smartproxy/internal/config"
 	"smartproxy/internal/upstream"
@@ -356,5 +357,64 @@ func TestSubscriptionManager_ChnrouteFilter(t *testing.T) {
 	}
 	if it.Nodes[0].Alias != "hk-node" {
 		t.Fatalf("expected hk-node, got %s", it.Nodes[0].Alias)
+	}
+}
+
+func TestManager_RemoveNodes_NoDeadlockOnCallback(t *testing.T) {
+	tempDir := t.TempDir()
+	upMgr, err := upstream.NewManager(upstream.UpstreamConfig{
+		Strategy: "failover",
+	})
+	if err != nil {
+		t.Fatalf("failed to create upstream manager: %v", err)
+	}
+	defer upMgr.Stop()
+
+	subMgr := NewManager(tempDir, []config.SubscriptionConf{}, upMgr)
+	defer subMgr.Stop()
+
+	// Simulate engine wiring: upstream notifies subMgr on node removal
+	upMgr.SetOnNodeRemoved(func(aliases []string) {
+		subMgr.RemoveNodes(aliases)
+	})
+
+	subMgr.mu.Lock()
+	subMgr.subs["sub1"] = &ItemState{
+		Name:    "sub1",
+		Enabled: true,
+		Nodes: []upstream.ProxyEntry{
+			{Alias: "node-1", URL: "socks5://1.2.3.4:1080"},
+			{Alias: "node-2", URL: "socks5://1.2.3.5:1080"},
+		},
+		NodeCount: 2,
+	}
+	subMgr.subsOrder = []string{"sub1"}
+	subMgr.mu.Unlock()
+
+	upMgr.SetProviderProxies("sub:sub1", []upstream.ProxyEntry{
+		{Alias: "node-1", URL: "socks5://1.2.3.4:1080", Provider: "sub:sub1"},
+		{Alias: "node-2", URL: "socks5://1.2.3.5:1080", Provider: "sub:sub1"},
+	})
+
+	done := make(chan struct{})
+	go func() {
+		removed := subMgr.RemoveNodes([]string{"node-1"})
+		if removed != 1 {
+			t.Errorf("expected 1 removed, got %d", removed)
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Succeeded without deadlocking!
+	case <-time.After(2 * time.Second):
+		t.Fatal("deadlock detected: RemoveNodes did not complete within 2s")
+	}
+
+	// Verify status can be acquired without blocking
+	status := subMgr.Status()
+	if len(status) != 1 || status[0].NodeCount != 1 {
+		t.Fatalf("expected 1 node remaining, got %+v", status)
 	}
 }
