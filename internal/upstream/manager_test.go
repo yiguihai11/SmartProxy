@@ -2857,4 +2857,48 @@ func TestManager_ExportAndImportNodeStates(t *testing.T) {
 	}
 }
 
+func TestManager_RemoveNodes_DoesNotReprobeSurvivingNodes(t *testing.T) {
+	mgr, err := NewManager(UpstreamConfig{
+		Strategy: "failover",
+		HealthCheck: config.HealthCheckConf{
+			Enabled: true,
+		},
+		Proxies: []ProxyEntry{
+			{Alias: "node-1", URL: "socks5://127.0.0.1:1080"},
+			{Alias: "node-2", URL: "socks5://127.0.0.1:1081"},
+			{Alias: "node-dead", URL: "socks5://127.0.0.1:1082"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	defer mgr.Stop()
+
+	// Complete any initial progress
+	mgr.healthChecker.completeProgress()
+
+	// Remove node-dead
+	removed := mgr.RemoveNodes([]string{"node-dead"})
+	if removed != 1 {
+		t.Fatalf("expected 1 node removed, got %d", removed)
+	}
+
+	// Verify node-dead is removed
+	if mgr.FindProxy("node-dead") != nil {
+		t.Errorf("node-dead should have been removed")
+	}
+
+	// Verify surviving nodes exist
+	if mgr.FindProxy("node-1") == nil || mgr.FindProxy("node-2") == nil {
+		t.Errorf("surviving nodes should still exist")
+	}
+
+	// Verify health check progress was NOT restarted for surviving nodes
+	progress := mgr.healthChecker.Progress()
+	if progress.Testing {
+		t.Errorf("expected health check not to be testing after node removal: %+v", progress)
+	}
+}
+
+
 

@@ -368,6 +368,16 @@ func (hc *HealthChecker) IsIPv6Enabled() bool {
 	return hc.allowIPv6.Load()
 }
 
+// IsRunning reports whether the health checker is actively running.
+func (hc *HealthChecker) IsRunning() bool {
+	if hc == nil {
+		return false
+	}
+	hc.mu.RLock()
+	defer hc.mu.RUnlock()
+	return hc.running
+}
+
 func (hc *HealthChecker) Start() {
 	if hc == nil {
 		return

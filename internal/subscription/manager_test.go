@@ -124,6 +124,12 @@ func TestManager_LifecycleAndCache(t *testing.T) {
 	if st := subMgr2.Status(); len(st) != 1 || st[0].NodeCount != 1 {
 		t.Errorf("expected 1 node remaining, got %+v", st)
 	}
+	if _, exists := upMgr.ProxyInfo("HK 01"); exists {
+		t.Errorf("expected 'HK 01' to be removed from upstream manager")
+	}
+	if _, exists := upMgr.ProxyInfo("JP 01"); !exists {
+		t.Errorf("expected 'JP 01' to remain in upstream manager")
+	}
 
 	// 3. Test Reload: disable subscription
 	subsConf[0].Enabled = false

@@ -146,7 +146,7 @@ func NewManager(cfg UpstreamConfig) (*Manager, error) {
 	m.healthCfg = cfg.HealthCheck
 	m.strategy = cfg.Strategy
 	m.chnroute = cfg.Chnroute
-	activeSB := m.rebuildLocked()
+	activeSB, _ := m.rebuildLocked()
 	if err := singbox.GlobalEngine().SyncOutbounds(activeSB); err != nil {
 		slog.Warn("failed to sync sing-box outbounds on init", "error", err)
 	}
@@ -204,7 +204,7 @@ func (m *Manager) Reload(cfg UpstreamConfig) {
 	if cfg.Strategy != "" {
 		m.strategy = cfg.Strategy
 	}
-	activeSB := m.rebuildLocked()
+	activeSB, newlyCreated := m.rebuildLocked()
 	newProxies := m.defaultProxies
 	m.mu.Unlock()
 
@@ -242,9 +242,15 @@ func (m *Manager) Reload(cfg UpstreamConfig) {
 		m.healthChecker.SetOnNodeProbed(func(p *Proxy) {
 			m.checkAndRemoveCNNode(p)
 		})
-		m.healthChecker.Reload(cfg.HealthCheck, newProxies)
+		if m.healthChecker.IsRunning() {
+			m.healthChecker.SyncProxies(cfg.HealthCheck, newProxies, newlyCreated)
+		} else {
+			m.healthChecker.Reload(cfg.HealthCheck, newProxies)
+		}
 	}
-	m.probeInitialGeo()
+	if len(newlyCreated) > 0 {
+		m.probeInitialGeoFor(newlyCreated)
+	}
 	slog.Info("upstream manager reloaded", "aliases", len(m.aliasMap), "strategy", m.strategy)
 }
 
@@ -442,12 +448,13 @@ func (m *Manager) restoreManualPins(states map[string]savedNodeState) {
 }
 
 // rebuildLocked rebuilds aliasMap and defaultProxies from staticProxies + all providerProxies.
-// Caller must hold m.mu.Lock(). Returns the map of active sing-box outbounds to sync.
-func (m *Manager) rebuildLocked() map[string]json.RawMessage {
+// Caller must hold m.mu.Lock(). Returns the map of active sing-box outbounds to sync, and newly created proxies.
+func (m *Manager) rebuildLocked() (map[string]json.RawMessage, []*Proxy) {
 	aliasMap := make(map[string]*Proxy)
 	aliasMap["direct"] = nil
 	reservedAliases := map[string]bool{"direct": true}
 	var defaultProxies []*Proxy
+	var newlyCreated []*Proxy
 
 	existingByURL := make(map[string]*Proxy, len(m.aliasMap))
 	for _, p := range m.aliasMap {
@@ -516,6 +523,7 @@ func (m *Manager) rebuildLocked() map[string]json.RawMessage {
 					proxy.v6UDPHealth.SetInitialUnverified()
 				}
 			}
+			newlyCreated = append(newlyCreated, proxy)
 		}
 
 		if entry.IsDisabled() {
@@ -591,7 +599,7 @@ func (m *Manager) rebuildLocked() map[string]json.RawMessage {
 	}
 	m.aliasMap = aliasMap
 	m.defaultProxies = defaultProxies
-	return activeSB
+	return activeSB, newlyCreated
 }
 
 func (m *Manager) healthCheckEnabledForProxiesLocked(totalProxies int) bool {
@@ -628,7 +636,7 @@ func (m *Manager) SetProviderProxies(provider string, entries []ProxyEntry) {
 		m.providerProxies[provider] = copied
 	}
 	pins := m.captureManualPins()
-	activeSB := m.rebuildLocked()
+	activeSB, newlyCreated := m.rebuildLocked()
 	newProxies := m.defaultProxies
 	healthCfg := m.healthCfg
 	m.mu.Unlock()
@@ -638,19 +646,19 @@ func (m *Manager) SetProviderProxies(provider string, entries []ProxyEntry) {
 	}
 	m.restoreManualPins(pins)
 
-	// Collect only the nodes belonging to this provider to probe
-	var providerNodes []*Proxy
-	for _, p := range newProxies {
+	// Collect only the newly created nodes belonging to this provider to probe
+	var providerNewNodes []*Proxy
+	for _, p := range newlyCreated {
 		if p != nil && p.Provider == provider {
-			providerNodes = append(providerNodes, p)
+			providerNewNodes = append(providerNewNodes, p)
 		}
 	}
 
 	if m.healthChecker != nil {
-		m.healthChecker.SyncProxies(healthCfg, newProxies, providerNodes)
+		m.healthChecker.SyncProxies(healthCfg, newProxies, providerNewNodes)
 	}
-	if len(providerNodes) > 0 {
-		m.probeInitialGeoFor(providerNodes)
+	if len(providerNewNodes) > 0 {
+		m.probeInitialGeoFor(providerNewNodes)
 	}
 	slog.Info("provider proxies updated", "provider", provider, "count", len(entries), "totalProxies", len(newProxies))
 }
@@ -794,7 +802,7 @@ func (m *Manager) RemoveNodes(aliases []string) int {
 
 	if totalRemoved > 0 {
 		pins := m.captureManualPins()
-		activeSB := m.rebuildLocked()
+		activeSB, _ := m.rebuildLocked()
 		newProxies := m.defaultProxies
 		healthCfg := m.healthCfg
 		onRemoved := m.onNodeRemoved

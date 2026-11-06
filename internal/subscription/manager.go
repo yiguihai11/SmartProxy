@@ -531,14 +531,14 @@ func (m *Manager) RemoveNodes(aliases []string) int {
 			item.Nodes = kept
 			item.NodeCount = len(kept)
 			totalRemoved += removedHere
-			if item.Enabled && m.upstreamMgr != nil {
-				m.upstreamMgr.SetProviderProxies("sub:"+item.Name, item.Nodes)
-			}
 		}
 	}
 	if totalRemoved > 0 {
 		m.saveCacheLocked()
 		slog.Info("subscription nodes cleaned up", "removed", totalRemoved)
+		if m.upstreamMgr != nil {
+			m.upstreamMgr.RemoveNodes(aliases)
+		}
 	}
 	return totalRemoved
 }
@@ -558,6 +558,7 @@ func (m *Manager) filterCNNodes() int {
 		return 0
 	}
 	totalRemoved := 0
+	var removedAliases []string
 	for _, item := range m.subs {
 		if len(item.Nodes) == 0 {
 			continue
@@ -568,6 +569,7 @@ func (m *Manager) filterCNNodes() int {
 			if upstream.IsProxyInChnroute(node.URL, m.chnroute) {
 				slog.Warn("subscription node discarded: host IP in chnroute", "subscription", item.Name, "alias", node.Alias)
 				removedHere++
+				removedAliases = append(removedAliases, node.Alias)
 			} else {
 				kept = append(kept, node)
 			}
@@ -576,14 +578,14 @@ func (m *Manager) filterCNNodes() int {
 			item.Nodes = kept
 			item.NodeCount = len(kept)
 			totalRemoved += removedHere
-			if item.Enabled && m.upstreamMgr != nil {
-				m.upstreamMgr.SetProviderProxies("sub:"+item.Name, item.Nodes)
-			}
 		}
 	}
 	if totalRemoved > 0 {
 		m.saveCacheLocked()
 		slog.Info("subscription nodes filtered by chnroute", "removed", totalRemoved)
+		if m.upstreamMgr != nil {
+			m.upstreamMgr.RemoveNodes(removedAliases)
+		}
 	}
 	return totalRemoved
 }
