@@ -383,8 +383,10 @@ function showAuthenticated(data) {
     document.getElementById('trafficBlock').style.display = 'block';
     const used = data.traffic_used_bytes || 0;
     const limit = data.traffic_limit_bytes;
+    const remaining = Math.max(0, limit - used);
     const pct = Math.min(100, Math.round((used / limit) * 100));
-    document.getElementById('trafficUsageText').textContent = formatBytes(used) + ' / ' + formatBytes(limit) + ' (' + pct + '%)';
+    document.getElementById('trafficUsageText').innerHTML =
+      '<span style="color: var(--success); font-weight:700;">剩余 ' + formatBytes(remaining) + '</span> / 共 ' + formatBytes(limit) + ' <span style="font-size:0.75rem; color:var(--text-muted)">(' + pct + '% 已用)</span>';
     const bar = document.getElementById('trafficProgressBar');
     bar.style.width = pct + '%';
 
@@ -395,7 +397,8 @@ function showAuthenticated(data) {
 
     if (data.traffic_next_reset) {
       const nr = new Date(data.traffic_next_reset * 1000);
-      document.getElementById('trafficResetAtText').textContent = '下次重置: ' + nr.toLocaleDateString();
+      const timeStr = nr.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      document.getElementById('trafficResetAtText').textContent = '下次重置: ' + nr.toLocaleDateString() + ' ' + timeStr;
     }
 
     if (data.quota_exceeded) {
@@ -416,6 +419,15 @@ function showAuthenticated(data) {
         bar.style.background = 'var(--primary)';
       }
     }
+  } else if (data.user) {
+    document.getElementById('trafficBlock').style.display = 'block';
+    document.getElementById('trafficUsageText').innerHTML =
+      '<span style="color: var(--success); font-weight:600;">无限制</span> <span style="font-size:0.75rem; color:var(--text-muted)">(已用 ' + formatBytes(data.traffic_used_bytes || 0) + ')</span>';
+    const bar = document.getElementById('trafficProgressBar');
+    bar.style.width = '100%';
+    bar.style.background = 'var(--success)';
+    document.getElementById('trafficCycleText').textContent = '无需重置';
+    document.getElementById('trafficResetAtText').textContent = '';
   }
 
   if (!data.quota_exceeded && redirectURL && redirectURL.startsWith('http')) {
