@@ -559,6 +559,34 @@ func (h *TUNHandler) handleSmartConnect(ctx context.Context, conn net.Conn, host
 	relay.TCPRelay(ctx, conn, remote, isProxy, prefix, relayOpts...)
 }
 
+func portalRedirectHost(cfg *config.Config, clientIP string) string {
+	if cfg == nil {
+		return "smartproxy.lan"
+	}
+	isV6 := strings.Contains(clientIP, ":")
+	// Check AdminHost for reachable non-loopback IP matching client IP family.
+	// In hotspot tethering, Shizuku sets AdminHost to the gateway IP (e.g. 192.0.2.2).
+	// Redirecting directly to this IP avoids DNS resolution failures (such as Android Private DNS / DoT).
+	if cfg.Listen.AdminHost != "" {
+		for _, host := range strings.Split(cfg.Listen.AdminHost, ",") {
+			h := strings.TrimSpace(host)
+			if h == "" || h == "127.0.0.1" || h == "::1" || h == "localhost" {
+				continue
+			}
+			ip := net.ParseIP(h)
+			if ip != nil {
+				if isV6 && ip.To4() == nil {
+					return "[" + h + "]"
+				} else if !isV6 && ip.To4() != nil {
+					return h
+				}
+			}
+		}
+	}
+	// Fallback to smartproxy.lan domain name
+	return "smartproxy.lan"
+}
+
 func (h *TUNHandler) servePortalRedirect(conn net.Conn, clientIP, host string, port, adminPort int) {
 	_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
 	defer conn.Close()
@@ -576,9 +604,10 @@ func (h *TUNHandler) servePortalRedirect(conn net.Conn, clientIP, host string, p
 	// Reset deadline for writing response
 	_ = conn.SetDeadline(time.Now().Add(1 * time.Second))
 
-	target := fmt.Sprintf("http://smartproxy.lan:%d/portal?ip=%s&url=%s", adminPort, url.QueryEscape(clientIP), url.QueryEscape(origURL))
+	redirectHost := portalRedirectHost(h.config.Load(), clientIP)
+	target := fmt.Sprintf("http://%s:%d/portal?ip=%s&url=%s", redirectHost, adminPort, url.QueryEscape(clientIP), url.QueryEscape(origURL))
 	if adminPort == 80 {
-		target = fmt.Sprintf("http://smartproxy.lan/portal?ip=%s&url=%s", url.QueryEscape(clientIP), url.QueryEscape(origURL))
+		target = fmt.Sprintf("http://%s/portal?ip=%s&url=%s", redirectHost, url.QueryEscape(clientIP), url.QueryEscape(origURL))
 	}
 	body := fmt.Sprintf(`<!DOCTYPE html>
 <html>

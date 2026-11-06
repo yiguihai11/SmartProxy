@@ -501,6 +501,13 @@ func (s *Server) tlsDispatch(handler http.Handler) http.Handler {
 			handler.ServeHTTP(w, r)
 			return
 		}
+		// Allow captive portal page and login/logout APIs over plaintext HTTP so connecting hotspot
+		// devices can authenticate without facing self-signed TLS certificate errors in portal popups.
+		if r.URL.Path == "/portal" || r.URL.Path == "/api/portal/status" ||
+			r.URL.Path == "/api/portal/login" || r.URL.Path == "/api/portal/logout" {
+			handler.ServeHTTP(w, r)
+			return
+		}
 		host := ""
 		reqHost := r.Host
 		if h, _, err := net.SplitHostPort(reqHost); err == nil {

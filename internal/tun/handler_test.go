@@ -1318,3 +1318,61 @@ func TestTUNHandler_HostTUNAddressBypassesPortal(t *testing.T) {
 	assert.False(t, portalMgr.IsAuthorized("192.168.43.15"))
 	assert.False(t, portalMgr.IsAuthorized("192.0.2.2"))
 }
+
+func TestPortalRedirectHost(t *testing.T) {
+	// 1. Unset AdminHost -> defaults to smartproxy.lan
+	cfg := config.DefaultConfig()
+	assert.Equal(t, "smartproxy.lan", portalRedirectHost(cfg, "10.140.12.152"))
+
+	// 2. Loopback-only AdminHost -> defaults to smartproxy.lan
+	cfg.Listen.AdminHost = "127.0.0.1, ::1"
+	assert.Equal(t, "smartproxy.lan", portalRedirectHost(cfg, "10.140.12.152"))
+
+	// 3. Shizuku tethering core with virtual gateway IP (192.0.2.2 and 2001:db8:9877::1)
+	cfg.Listen.AdminHost = "192.0.2.2, 2001:db8:9877::1"
+	// IPv4 client gets 192.0.2.2 directly
+	assert.Equal(t, "192.0.2.2", portalRedirectHost(cfg, "10.140.12.152"))
+	// IPv6 client gets [2001:db8:9877::1]
+	assert.Equal(t, "[2001:db8:9877::1]", portalRedirectHost(cfg, "fe80::1785:5425:3d14:4b4"))
+}
+
+func TestTUNHandler_PortalRedirectHotspotDirectIP(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Listen.AdminHost = "192.0.2.2, 2001:db8:9877::1"
+	cfg.Listen.AdminPort = 9090
+	cfg.Listen.Portal = &config.PortalConf{
+		Enabled: true,
+	}
+
+	portalMgr := portal.NewManager(cfg)
+	defer portalMgr.Close()
+
+	handler := NewHandler(cfg, nil, nil, nil, nil)
+	handler.SetPortalManager(portalMgr)
+
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+
+	srcAddr := M.ParseSocksaddr("10.140.12.152:54321")
+	dstAddr := M.ParseSocksaddr("1.1.1.1:80")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handler.NewConnectionEx(context.Background(), serverConn, srcAddr, dstAddr, nil)
+	}()
+
+	go func() {
+		_, _ = clientConn.Write([]byte("GET /generate_204 HTTP/1.1\r\nHost: connectivitycheck.gstatic.com\r\n\r\n"))
+	}()
+
+	buf := make([]byte, 1024)
+	n, err := clientConn.Read(buf)
+	assert.NoError(t, err)
+	resp := string(buf[:n])
+
+	assert.Contains(t, resp, "302 Found")
+	// Must redirect directly to 192.0.2.2:9090 so client avoids Private DNS failure
+	assert.Contains(t, resp, "Location: http://192.0.2.2:9090/portal?ip=10.140.12.152")
+	<-done
+}

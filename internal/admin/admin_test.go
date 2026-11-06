@@ -2103,7 +2103,25 @@ func TestTLSDispatch_PlaintextAssetsAndHostPreservation(t *testing.T) {
 		t.Errorf("expected /admin.crt to pass through over plaintext, called=%v, code=%d", called, rec.Code)
 	}
 
-	// 2. Plaintext GET /dashboard with Host smartproxy.lan:9090 should redirect to https://smartproxy.lan:9090/dashboard
+	// 2. Plaintext GET /portal and POST /api/portal/login should pass through directly without HTTPS redirect
+	for _, path := range []string{"/portal", "/api/portal/status"} {
+		called = false
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, path, nil)
+		dispatch.ServeHTTP(rec, req)
+		if !called || rec.Code != http.StatusOK {
+			t.Errorf("expected %s to pass through over plaintext HTTP, called=%v, code=%d", path, called, rec.Code)
+		}
+	}
+	called = false
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/portal/login", nil)
+	dispatch.ServeHTTP(rec, req)
+	if !called || rec.Code != http.StatusOK {
+		t.Errorf("expected /api/portal/login to pass through over plaintext HTTP, called=%v, code=%d", called, rec.Code)
+	}
+
+	// 3. Plaintext GET /dashboard with Host smartproxy.lan:9090 should redirect to https://smartproxy.lan:9090/dashboard
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/dashboard", nil)
 	req.Host = "smartproxy.lan:9090"

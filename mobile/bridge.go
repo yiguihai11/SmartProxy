@@ -28,7 +28,18 @@ var (
 	routerWatcher   *config.Watcher
 	uidResolver     UIDResolver
 	tetheringBridge TetheringBridge
+	isTethering     bool
 )
+
+// SetIsTethering flags whether this engine instance is running as the privileged hotspot/tethering core.
+// For the host VPN (SmartProxyVpnService), isTethering is false, which forces portal.enabled to false
+// in-memory to ensure the local phone is never intercepted or subjected to guest captive portal authentication.
+func SetIsTethering(v bool) {
+	engineMu.Lock()
+	defer engineMu.Unlock()
+	isTethering = v
+	slog.Info("[Go-Bridge] SetIsTethering called", "isTethering", v)
+}
 
 // TetheringBridge 让 Go 管理面板与 Android Kotlin 层的热点/共享管理能力打通(AIDL 复用)。
 // gomobile 会把该接口绑定成 Java 接口,Kotlin 侧实现并注册:
@@ -166,6 +177,16 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 		cfg.Listen.Port = 1080
 	}
 
+	engineMu.Lock()
+	tethering := isTethering
+	engineMu.Unlock()
+
+	// 架构隔离：本机 VPN 隧道绝不开门户登录拦截(即使 config.json 中 portal.enabled=true)。
+	// 门户认证功能专属于 Shizuku 特权热点共享引擎，用于对下挂访客设备鉴权。
+	if !tethering && cfg.Listen.Portal != nil {
+		cfg.Listen.Portal.Enabled = false
+	}
+
 	cfgDir := filepath.Dir(configPath)
 	eng, err := engine.New(cfg, cfgDir)
 	if err != nil {
@@ -201,6 +222,12 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 		if err != nil {
 			slog.Error("failed to reload config", "path", configPath, "error", err)
 			return
+		}
+		engineMu.Lock()
+		tethering := isTethering
+		engineMu.Unlock()
+		if !tethering && newCfg.Listen.Portal != nil {
+			newCfg.Listen.Portal.Enabled = false
 		}
 		oldCfg := eng.Config.Load()
 		if err := eng.ReloadConfig(newCfg, cfgDir); err != nil {
@@ -283,6 +310,7 @@ func StopRouter() {
 	routerWatcher = nil
 	uidResolver = nil
 	tetheringBridge = nil
+	isTethering = false
 	engineMu.Unlock()
 
 	if cancel != nil {

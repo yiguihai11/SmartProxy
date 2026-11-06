@@ -701,6 +701,7 @@ class SmartProxyVpnService : VpnService() {
                 // 把 Kotlin 层配置的 DNS 注入给 Go 运行时，供标准库解析器与 sing-box 直连解析节点域名
                 smartproxy.mobile.Mobile.setSystemDNS(effectiveDnsV4, effectiveDnsV6)
                 smartproxy.mobile.Mobile.setUIDResolver(UIDResolver(applicationContext))
+                smartproxy.mobile.Mobile.setIsTethering(false)
                 bindTetheringServiceIfNeeded()
                 smartproxy.mobile.Mobile.setTetheringBridge(tetheringBridge)
                 smartproxy.mobile.Mobile.startRouter(configPath, goFd.toLong(), true)
@@ -743,6 +744,7 @@ class SmartProxyVpnService : VpnService() {
             val d4 = AppPrefs.dnsV4(this)
             val d6 = AppPrefs.dnsV6(this)
             smartproxy.mobile.Mobile.setSystemDNS(d4, d6)
+            smartproxy.mobile.Mobile.setIsTethering(false)
             bindTetheringServiceIfNeeded()
             smartproxy.mobile.Mobile.setTetheringBridge(tetheringBridge)
             smartproxy.mobile.Mobile.startRouter(configPath, 0L, false)

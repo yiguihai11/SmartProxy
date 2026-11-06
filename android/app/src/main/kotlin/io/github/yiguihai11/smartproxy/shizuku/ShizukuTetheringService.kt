@@ -1356,6 +1356,7 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
                 }
             }
             smartproxy.mobile.Mobile.setTetheringBridge(bridge)
+            smartproxy.mobile.Mobile.setIsTethering(true)
             smartproxy.mobile.Mobile.startRouter(configFile.absolutePath, goFd.toLong(), true)
             check(smartproxy.mobile.Mobile.isRunning()) { "SmartProxy tethering core did not start" }
             runCatching { smartproxy.mobile.Mobile.setConnStatsEnabled(true) }
@@ -1478,6 +1479,7 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
 
     private fun stopRoutingEngineLocked() {
         runCatching { smartproxy.mobile.Mobile.setTetheringBridge(null) }
+        runCatching { smartproxy.mobile.Mobile.setIsTethering(false) }
         stopStagedFileObserver()
         stopEngineHealthCheck()
         runCatching { smartproxy.mobile.Mobile.setConnStatsEnabled(false) }
@@ -1588,10 +1590,11 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
             listen.put("port", 0)
 
             // 共享热点路由引擎:绑定到热点网关 IP 与 TUN 虚拟 IP(主应用监听 127.0.0.1,::1,避免端口冲突)
-            val effectiveIps = if (gatewayIps.isNotEmpty()) gatewayIps else listOf(
-                HotspotRoutingConfig.SHIZUKU_TUN_IP_V4,
-                HotspotRoutingConfig.SHIZUKU_TUN_IP_V6
-            )
+            val effectiveIps = buildList {
+                addAll(gatewayIps)
+                if (none { it == HotspotRoutingConfig.SHIZUKU_TUN_IP_V4 }) add(HotspotRoutingConfig.SHIZUKU_TUN_IP_V4)
+                if (none { it == HotspotRoutingConfig.SHIZUKU_TUN_IP_V6 }) add(HotspotRoutingConfig.SHIZUKU_TUN_IP_V6)
+            }.distinct()
             listen.put("admin_host", effectiveIps.joinToString(","))
             val origAdminPort = listen.optInt("admin_port", 9090).let { if (it <= 0) 9090 else it }
             listen.put("admin_port", origAdminPort)
