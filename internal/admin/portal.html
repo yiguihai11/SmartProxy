@@ -102,11 +102,18 @@ body {
   margin-bottom: 1.5rem;
   font-size: 0.8125rem;
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 0.4rem;
   color: var(--text-muted);
 }
 
-.dev-info span {
+.dev-info .dev-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.dev-info span.dev-val {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   color: var(--text);
   font-weight: 600;
@@ -260,8 +267,8 @@ body {
   </div>
 
   <div class="dev-info">
-    <div>客户端 IP: <span id="clientIP">{{.ClientIP}}</span></div>
-    <div id="macBlock" style="display:none">MAC: <span id="clientMAC"></span></div>
+    <div class="dev-row"><span>客户端 IP</span><span id="clientIP" class="dev-val">{{.ClientIP}}</span></div>
+    <div class="dev-row" id="macBlock" style="display:none"><span>MAC 地址</span><span id="clientMAC" class="dev-val"></span></div>
   </div>
 
   <div id="alertBox" class="alert"></div>
@@ -380,7 +387,7 @@ function showAuthenticated(data) {
   document.getElementById('authView').style.display = 'block';
   document.getElementById('authUsername').textContent = data.user || '已登录设备';
   if (data.mac) {
-    document.getElementById('macBlock').style.display = 'block';
+    document.getElementById('macBlock').style.display = 'flex';
     document.getElementById('clientMAC').textContent = data.mac;
   }
   if (data.expires_at) {
@@ -441,8 +448,11 @@ function showAuthenticated(data) {
   }
 
   if (!data.quota_exceeded && redirectURL && redirectURL.startsWith('http')) {
-    const btn = document.getElementById('continueBtn');
-    btn.style.display = 'flex';
+    const notice = document.getElementById('redirectNotice');
+    if (!notice || notice.style.display === 'none') {
+      const btn = document.getElementById('continueBtn');
+      if (btn) btn.style.display = 'flex';
+    }
   }
 }
 
@@ -453,6 +463,9 @@ function startRedirectCountdown(url) {
   const notice = document.getElementById('redirectNotice');
   const countEl = document.getElementById('redirectCountdown');
   if (!notice || !countEl) return;
+
+  const continueBtn = document.getElementById('continueBtn');
+  if (continueBtn) continueBtn.style.display = 'none';
 
   redirectCount = 5;
   countEl.textContent = redirectCount;
