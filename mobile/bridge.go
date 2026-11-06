@@ -181,17 +181,17 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 	tethering := isTethering
 	engineMu.Unlock()
 
-	// 架构隔离：本机 VPN 隧道绝不开门户登录拦截(即使 config.json 中 portal.enabled=true)。
-	// 门户认证功能专属于 Shizuku 特权热点共享引擎，用于对下挂访客设备鉴权。
-	if !tethering && cfg.Listen.Portal != nil {
-		cfg.Listen.Portal.Enabled = false
-	}
-
 	cfgDir := filepath.Dir(configPath)
 	eng, err := engine.New(cfg, cfgDir)
 	if err != nil {
 		slog.Error("[Go-Bridge] StartRouter failed to create engine", "error", err)
 		return closeFdOnErr(err)
+	}
+
+	// 架构隔离：本机 VPN 隧道内存中忽略门户登录拦截(即使 config.json 中 portal.enabled=true，也决不修改配置对象与文件)。
+	// 门户认证功能专属于 Shizuku 特权热点共享引擎，用于对下挂访客设备鉴权。
+	if !tethering {
+		eng.SetPortalForcedDisabled(true)
 	}
 
 	// 注入 UID 反查回调(per-app「禁止联网」):Kotlin 侧 establish 前 setUIDResolver 注册,
@@ -226,13 +226,13 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 		engineMu.Lock()
 		tethering := isTethering
 		engineMu.Unlock()
-		if !tethering && newCfg.Listen.Portal != nil {
-			newCfg.Listen.Portal.Enabled = false
-		}
 		oldCfg := eng.Config.Load()
 		if err := eng.ReloadConfig(newCfg, cfgDir); err != nil {
 			slog.Error("failed to apply config reload", "error", err)
 			return
+		}
+		if !tethering {
+			eng.SetPortalForcedDisabled(true)
 		}
 		applyLogLevel(newCfg.LogLevel)
 		if oldCfg != nil {

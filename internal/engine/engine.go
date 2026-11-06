@@ -202,6 +202,14 @@ func (e *Engine) SetUIDResolver(f tun.UIDResolverFunc) {
 	e.TUNHandler.SetUIDResolver(f)
 }
 
+// SetPortalForcedDisabled ignores captive portal authentication in memory for this engine
+// without modifying the configuration struct or disk files.
+func (e *Engine) SetPortalForcedDisabled(disabled bool) {
+	if e.portalMgr != nil {
+		e.portalMgr.SetForcedDisabled(disabled)
+	}
+}
+
 // SetConnStatsEnabled 开关连接监控(「联网状态」页):页面打开采集、关闭即停。
 func (e *Engine) SetConnStatsEnabled(on bool) {
 	e.TUNHandler.SetConnStatsEnabled(on)

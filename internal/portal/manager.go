@@ -88,6 +88,7 @@ type Manager struct {
 	sessionDirty    atomic.Bool
 	csrfSecret      []byte
 	macResolver     func(ip string) string
+	forcedDisabled  atomic.Bool
 	stopCh          chan struct{}
 	cleanerDone     chan struct{}
 	stopOnce        sync.Once
@@ -174,8 +175,18 @@ func (m *Manager) getAuthConf() *config.AuthConf {
 	return cfg.Listen.Auth
 }
 
+// SetForcedDisabled forces IsEnabled() to return false without mutating the active Config struct.
+// This is used by the host VPN engine to ignore portal authentication in memory while
+// preserving the user's config file and web panel editor intact.
+func (m *Manager) SetForcedDisabled(disabled bool) {
+	m.forcedDisabled.Store(disabled)
+}
+
 // IsEnabled reports whether the Captive Portal is active.
 func (m *Manager) IsEnabled() bool {
+	if m.forcedDisabled.Load() {
+		return false
+	}
 	p := m.getPortalConf()
 	return p != nil && p.Enabled
 }
@@ -223,6 +234,29 @@ func (m *Manager) isGatewayIP(normIP string) bool {
 	return false
 }
 
+// isHostLoopbackOrTun reports whether a source address is the host machine's own loopback
+// or configured VPN TUN address. Local network interfaces (e.g. Wi-Fi downstream or tethering TUN)
+// must NOT be used to authorize a source IP, because guest traffic originates from or passes through them.
+func (m *Manager) isHostLoopbackOrTun(normIP string) bool {
+	ip := net.ParseIP(normIP)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() || ip.IsUnspecified() {
+		return true
+	}
+	if cfg := m.config.Load(); cfg != nil {
+		for _, addr := range cfg.TUN.Address {
+			if tunIP, _, err := net.ParseCIDR(addr); err == nil {
+				if normalizeIP(tunIP.String()) == normIP {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // IsGatewayIP reports whether the given IP string corresponds to a local gateway/interface IP.
 func (m *Manager) IsGatewayIP(ipStr string) bool {
 	return m.isGatewayIP(normalizeIP(ipStr))
@@ -239,9 +273,8 @@ func (m *Manager) IsAuthorized(clientIP string) bool {
 		return false
 	}
 
-	// Gateway's own loopback and local interface IPs are strictly the gateway machine
-	// itself and must never be intercepted as a captive portal guest device.
-	if m.isGatewayIP(normIP) {
+	// Host's own loopback and VPN TUN IPs are strictly the host machine itself and never intercepted.
+	if m.isHostLoopbackOrTun(normIP) {
 		return true
 	}
 
