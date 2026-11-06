@@ -1298,3 +1298,23 @@ func TestTUNHandler_PortalTrafficQuota(t *testing.T) {
 	assert.Contains(t, resp, "Location: http://smartproxy.lan:9090/portal?ip=192.168.43.50")
 	<-done
 }
+
+func TestTUNHandler_HostTUNAddressBypassesPortal(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Listen.Portal = &config.PortalConf{
+		Enabled: true,
+	}
+
+	portalMgr := portal.NewManager(cfg)
+	defer portalMgr.Close()
+
+	handler := NewHandler(cfg, nil, nil, nil, nil)
+	handler.SetPortalManager(portalMgr)
+
+	// Connections from host's own TUN IP (172.19.0.1) are exempt from captive portal
+	assert.True(t, portalMgr.IsAuthorized("172.19.0.1"))
+
+	// Non-host tethering client must NOT be exempt
+	assert.False(t, portalMgr.IsAuthorized("192.168.43.15"))
+	assert.False(t, portalMgr.IsAuthorized("192.0.2.2"))
+}

@@ -45,6 +45,21 @@ func TestPortal_Exemptions(t *testing.T) {
 		t.Errorf("expected IPv6 loopback ::1 to be authorized")
 	}
 
+	// Host's own VPN TUN IP (e.g. 172.19.0.1 in cfg.TUN.Address) is always authorized
+	if !mgr.IsAuthorized("172.19.0.1") {
+		t.Errorf("expected host TUN IP 172.19.0.1 to be authorized")
+	}
+
+	// Virtual tethering IP (192.0.2.2 / 2001:db8:9877::2) is a guest device NAT IP and must NOT be authorized by default
+	if mgr.IsAuthorized("192.0.2.2") {
+		t.Errorf("expected virtual tethering IP 192.0.2.2 to NOT be authorized initially")
+	}
+
+	// Hotspot guest client IP (e.g. 10.140.12.152) must NOT be authorized by default
+	if mgr.IsAuthorized("10.140.12.152") {
+		t.Errorf("expected hotspot client IP 10.140.12.152 to NOT be authorized initially")
+	}
+
 	// Non-exempt IP without session
 	if mgr.IsAuthorized("192.168.43.10") {
 		t.Errorf("expected unauthenticated IP 192.168.43.10 to NOT be authorized")

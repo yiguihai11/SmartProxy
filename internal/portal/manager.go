@@ -180,16 +180,39 @@ func (m *Manager) IsEnabled() bool {
 	return p != nil && p.Enabled
 }
 
-// isHostOrLoopback checks if the normalized IP belongs to the local machine loopback (127.0.0.1, ::1).
-// Note: We deliberately do NOT exempt local network interfaces or TUN IPs, because
-// tethering processes NAT client traffic to the TUN IP (e.g. 192.0.2.2). Only true
-// loopback traffic (127.0.0.1, ::1) is exempt from captive portal.
+func isVirtualTetheringIP(normIP string) bool {
+	clean := strings.TrimSpace(normIP)
+	return clean == "192.0.2.2" || clean == "192.0.2.1" || clean == "2001:db8:9877::1" || clean == "2001:db8:9877::2"
+}
+
+// isHostOrLoopback checks if the normalized IP belongs to the local machine loopback (127.0.0.1, ::1)
+// or the local Android device's own VPN TUN interface address (e.g. 172.19.0.1).
+// Virtual NAT IPs used by tethering (192.0.2.2 / 2001:db8:9877::2) belong to guest devices
+// and must NEVER be treated as host machine.
 func (m *Manager) isHostOrLoopback(normIP string) bool {
 	ip := net.ParseIP(normIP)
 	if ip == nil {
 		return false
 	}
-	return ip.IsLoopback() || ip.IsUnspecified()
+	if ip.IsLoopback() || ip.IsUnspecified() {
+		return true
+	}
+	if isVirtualTetheringIP(normIP) {
+		return false
+	}
+
+	// Host's own VPN TUN interface address (e.g. 172.19.0.1) is strictly the local
+	// device itself and must never be intercepted as a captive portal guest device.
+	if cfg := m.config.Load(); cfg != nil {
+		for _, addr := range cfg.TUN.Address {
+			if tunIP, _, err := net.ParseCIDR(addr); err == nil {
+				if normalizeIP(tunIP.String()) == normIP {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // IsAuthorized checks whether the client IP has an active authenticated session or is exempt.

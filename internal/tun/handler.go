@@ -323,7 +323,14 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 	clientIP := source.Addr.String()
 	portalMgr := h.portalMgr.Load()
 	if portalMgr != nil && portalMgr.IsEnabled() {
-		if !portalMgr.IsAuthorized(clientIP) {
+		// On Android: connections created by local apps on the host device have a valid app UID (>= 0).
+		// Forwarded/tethered hotspot packets have UID = -1 (unknown / no local owner).
+		// Local host apps must NEVER be intercepted by captive portal or counted against portal quotas.
+		isLocalApp := false
+		if uid := h.resolveUID(6, source, destination); uid >= 0 {
+			isLocalApp = true
+		}
+		if !isLocalApp && !portalMgr.IsAuthorized(clientIP) {
 			adminPort := 9090
 			if cfg := h.config.Load(); cfg != nil && cfg.Listen.AdminPort > 0 {
 				adminPort = cfg.Listen.AdminPort
@@ -347,7 +354,9 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 				return
 			}
 		} else {
-			conn = h.wrapPortalTCP(clientIP, conn, portalMgr)
+			if !isLocalApp {
+				conn = h.wrapPortalTCP(clientIP, conn, portalMgr)
+			}
 		}
 	}
 
@@ -650,7 +659,11 @@ func (h *TUNHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketCon
 
 	portalMgr := h.portalMgr.Load()
 	if portalMgr != nil && portalMgr.IsEnabled() {
-		if !portalMgr.IsAuthorized(source.Addr.String()) {
+		isLocalApp := false
+		if uid := h.resolveUID(17, source, destination); uid >= 0 {
+			isLocalApp = true
+		}
+		if !isLocalApp && !portalMgr.IsAuthorized(source.Addr.String()) {
 			ll.Debug("TUN dropping non-DNS UDP packet from unauthenticated portal client", "src", source.Addr.String(), "dst", destination)
 			conn.Close()
 			if onClose != nil {
@@ -658,7 +671,9 @@ func (h *TUNHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketCon
 			}
 			return
 		}
-		conn = h.wrapPortalUDP(source.Addr.String(), conn, portalMgr)
+		if !isLocalApp {
+			conn = h.wrapPortalUDP(source.Addr.String(), conn, portalMgr)
+		}
 	}
 
 	if h.IsClientIPBlocked(source.Addr.String()) {
