@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -84,9 +85,24 @@ func (s *Server) SetPortalManager(mgr *portal.Manager) {
 								}
 							}
 						}
-						// If exactly 1 physical client is connected to the tethering hotspot,
-						// map the virtual TUN NAT IP addresses to that client's physical MAC.
-						if len(clients) == 1 && clients[0].MAC != "" {
+						// Map virtual TUN NAT IP addresses (192.0.2.2 / 2001:db8:9877::2) to physical MAC.
+						// When multiple devices exist (or stale neighbor cache entries exist), check if any
+						// connected client has an active authenticated session.
+						var authMAC string
+						for _, c := range clients {
+							mac := strings.ToLower(c.MAC)
+							if mac == "" {
+								continue
+							}
+							if mgr.GetSession("", mac) != nil {
+								authMAC = mac
+								break
+							}
+						}
+						if authMAC != "" {
+							newTable["192.0.2.2"] = authMAC
+							newTable["2001:db8:9877::2"] = authMAC
+						} else if len(clients) == 1 && clients[0].MAC != "" {
 							singleMAC := strings.ToLower(clients[0].MAC)
 							newTable["192.0.2.2"] = singleMAC
 							newTable["2001:db8:9877::2"] = singleMAC
@@ -114,14 +130,18 @@ func (s *Server) handlePortal(w http.ResponseWriter, r *http.Request) {
 	// Check if already authenticated by cookie token
 	if cookie, err := r.Cookie("smartproxy_portal_token"); err == nil && cookie.Value != "" {
 		if _, err := s.portalMgr.AuthenticateByToken(clientIP, "", cookie.Value, r.UserAgent()); err == nil {
-			// Seamless auto-redirect if target URL specified
+			// Seamless auto-redirect if target URL specified (reject probes and portal loops)
 			target := r.URL.Query().Get("url")
 			if target == "" {
 				target = r.URL.Query().Get("redirect-url")
 			}
 			if target != "" && (strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://")) {
-				http.Redirect(w, r, target, http.StatusFound)
-				return
+				if !portal.IsCaptivePortalProbe(target) {
+					if u, err := url.Parse(target); err == nil && !portal.IsPortalPath(u.Path) {
+						http.Redirect(w, r, target, http.StatusFound)
+						return
+					}
+				}
 			}
 		}
 	}

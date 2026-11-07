@@ -524,6 +524,9 @@ func TestPortal_TrafficPersistence(t *testing.T) {
 
 func TestPortal_SessionPersistence(t *testing.T) {
 	dir := t.TempDir()
+	SetAndroidTetheringAssetsDirForTest(dir)
+	defer SetAndroidTetheringAssetsDirForTest("/data/local/tmp/smartproxy-tethering-assets")
+
 	trafficPath := dir + "/portal_traffic.json"
 
 	cfg := makeTestConfig(2)

@@ -731,28 +731,7 @@ func portalRedirectHost(cfg *config.Config, clientIP string) string {
 }
 
 func isCaptivePortalProbe(rawURL string) bool {
-	if rawURL == "" {
-		return true
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		lower := strings.ToLower(rawURL)
-		return strings.Contains(lower, "generate_204") || strings.Contains(lower, "gen_204")
-	}
-	h := strings.ToLower(u.Hostname())
-	p := strings.ToLower(u.Path)
-
-	if strings.Contains(p, "generate_204") || strings.Contains(p, "gen_204") ||
-		strings.Contains(p, "hotspot-detect") || strings.Contains(p, "connecttest") ||
-		strings.Contains(p, "success.txt") || strings.Contains(p, "ncsi.txt") {
-		return true
-	}
-	if strings.Contains(h, "connectivitycheck") || strings.Contains(h, "msftconnecttest") ||
-		strings.Contains(h, "msftncsi") || h == "captive.apple.com" ||
-		strings.Contains(h, "detectportal") {
-		return true
-	}
-	return false
+	return portal.IsCaptivePortalProbe(rawURL)
 }
 
 func (h *TUNHandler) servePortalRedirect(conn net.Conn, clientIP, host string, port, adminPort int) {

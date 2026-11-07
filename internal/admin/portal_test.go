@@ -26,6 +26,11 @@ func setupTestPortalAdmin(t *testing.T) (*Server, *portal.Manager) {
 		AutoReauthByCookie: true,
 	}
 
+	portal.SetAndroidTetheringAssetsDirForTest(t.TempDir())
+	t.Cleanup(func() {
+		portal.SetAndroidTetheringAssetsDirForTest("/data/local/tmp/smartproxy-tethering-assets")
+	})
+
 	pm := portal.NewManager(cfg)
 	t.Cleanup(func() { pm.Close() })
 
@@ -502,6 +507,102 @@ func TestPortal_CapportRFC8908(t *testing.T) {
 		}
 		if st.SecondsRemaining == nil || *st.SecondsRemaining <= 0 {
 			t.Errorf("expected positive seconds-remaining, got %v", st.SecondsRemaining)
+		}
+	}
+}
+
+func TestPortal_TetheringBridgeClient_MultiDeviceAuthResolution(t *testing.T) {
+	srv, pm := setupTestPortalAdmin(t)
+
+	// Simulate hotspot with 2 devices: one stale unauthenticated, one active authenticated
+	bridgeJSON := `[
+		{"ip":"10.209.84.152","mac":"d8:a4:91:21:a3:c7","hostname":"JER-AN20"},
+		{"ip":"10.209.84.6","mac":"90:e8:68:d6:97:b9","hostname":"DESKTOP-VUF2AE9"}
+	]`
+	bridge := &mockTetheringBridge{clients: bridgeJSON}
+	srv.SetTetheringBridge(bridge)
+
+	// 1. Initial state: neither device authenticated -> 192.0.2.2 must NOT be authorized
+	if pm.IsAuthorized("192.0.2.2") {
+		t.Fatalf("expected 192.0.2.2 to NOT be authorized when no devices are logged in")
+	}
+
+	// 2. Client on 10.209.84.6 authenticates
+	_, _, err := pm.Authenticate("10.209.84.6", "90:e8:68:d6:97:b9", "alice", "password123", "Windows")
+	if err != nil {
+		t.Fatalf("authenticate failed: %v", err)
+	}
+
+	// 3. Virtual TUN NAT address 192.0.2.2 must now be authorized for the authenticated client
+	if !pm.IsAuthorized("192.0.2.2") {
+		t.Fatalf("expected 192.0.2.2 to be authorized after DESKTOP-VUF2AE9 logged in")
+	}
+
+	// 4. Verify traffic attribution works for 192.0.2.2
+	exceeded := pm.AddTraffic("192.0.2.2", 1024)
+	if exceeded {
+		t.Errorf("expected quota not exceeded")
+	}
+	info := pm.GetUserTrafficInfo("alice")
+	if info == nil || info.UsedBytes != 1024 {
+		t.Errorf("expected 1024 bytes attributed to alice, got %v", info)
+	}
+}
+
+func TestPortal_ProbeAndLoopRedirectProtection(t *testing.T) {
+	srv, pm := setupTestPortalAdmin(t)
+
+	// Authenticate client and get token
+	_, token, err := pm.Authenticate("10.209.84.6", "90:e8:68:d6:97:b9", "alice", "password123", "Windows")
+	if err != nil {
+		t.Fatalf("authenticate failed: %v", err)
+	}
+
+	cookie := &http.Cookie{
+		Name:  "smartproxy_portal_token",
+		Value: token,
+	}
+
+	// 1. Probe URL (e.g. msftconnecttest) must NOT be redirected; should render portal page 200 OK
+	{
+		req := httptest.NewRequest(http.MethodGet, "/portal?url=http://www.msftconnecttest.com/connecttest.txt", nil)
+		req.RemoteAddr = "10.209.84.6:54321"
+		req.AddCookie(cookie)
+		rec := httptest.NewRecorder()
+
+		srv.handlePortal(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK without redirect loop for probe URL, got %d", rec.Code)
+		}
+	}
+
+	// 2. Self-referential /portal URL must NOT be redirected; should render portal page 200 OK
+	{
+		req := httptest.NewRequest(http.MethodGet, "/portal?url=http://192.168.2.226:9090/portal", nil)
+		req.RemoteAddr = "10.209.84.6:54321"
+		req.AddCookie(cookie)
+		rec := httptest.NewRecorder()
+
+		srv.handlePortal(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK without redirect loop for portal URL, got %d", rec.Code)
+		}
+	}
+
+	// 3. Legitimate external web URL SHOULD be redirected 302 Found
+	{
+		req := httptest.NewRequest(http.MethodGet, "/portal?url=http://example.com/welcome", nil)
+		req.RemoteAddr = "10.209.84.6:54321"
+		req.AddCookie(cookie)
+		rec := httptest.NewRecorder()
+
+		srv.handlePortal(rec, req)
+		if rec.Code != http.StatusFound {
+			t.Fatalf("expected 302 Found for legitimate external URL, got %d", rec.Code)
+		}
+		loc := rec.Header().Get("Location")
+		if loc != "http://example.com/welcome" {
+			t.Fatalf("expected Location http://example.com/welcome, got %s", loc)
 		}
 	}
 }

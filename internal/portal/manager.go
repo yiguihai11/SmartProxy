@@ -98,7 +98,12 @@ type Manager struct {
 }
 
 // Android tethering runtime directory where Shizuku tethering core stores persistent assets.
-const androidTetheringAssetsDir = "/data/local/tmp/smartproxy-tethering-assets"
+var androidTetheringAssetsDir = "/data/local/tmp/smartproxy-tethering-assets"
+
+// SetAndroidTetheringAssetsDirForTest allows unit tests to isolate tethering asset directories.
+func SetAndroidTetheringAssetsDirForTest(dir string) {
+	androidTetheringAssetsDir = dir
+}
 
 // NewManager creates a new portal Manager.
 func NewManager(cfg *config.Config) *Manager {
@@ -348,9 +353,27 @@ func (m *Manager) IsAuthorized(clientIP string) bool {
 				return true
 			}
 		}
+		return false
+	}
+
+	// 3. For virtual tethering NAT addresses (192.0.2.2 / 2001:db8:9877::2):
+	// Under Android Shizuku tethering, Android kernel NAT rewrites all forwarded guest IPv4
+	// packets to 192.0.2.2. If the resolver did not uniquely identify a MAC, check whether any active,
+	// unexpired session exists on the portal.
+	if isVirtualTetheringNATIP(normIP) {
+		for _, sess := range m.sessionsByToken {
+			if now.Before(sess.ExpiresAt) && !m.isUserQuotaExceededLocked(sess.Username, now) {
+				return true
+			}
+		}
 	}
 
 	return false
+}
+
+func isVirtualTetheringNATIP(ip string) bool {
+	clean := strings.TrimSpace(ip)
+	return clean == "192.0.2.2" || clean == "192.0.2.1" || clean == "2001:db8:9877::1" || clean == "2001:db8:9877::2"
 }
 
 // IsUserProxyAllowed returns true if the username is configured with proxy access allowed.
@@ -789,6 +812,14 @@ func (m *Manager) lookupSessionLocked(normIP, normMAC string, now time.Time) *Se
 	if normMAC != "" {
 		if s, ok := m.sessionsByMAC[normMAC]; ok && now.Before(s.ExpiresAt) {
 			return s
+		}
+		return nil
+	}
+	if isVirtualTetheringNATIP(normIP) {
+		for _, s := range m.sessionsByToken {
+			if now.Before(s.ExpiresAt) {
+				return s
+			}
 		}
 	}
 	return nil
@@ -1592,6 +1623,15 @@ func (m *Manager) AddTraffic(clientIP string, bytes int64) bool {
 		mac := strings.ToLower(m.macResolver(normIP))
 		if mac != "" {
 			sess = m.sessionsByMAC[mac]
+		}
+	}
+	if sess == nil && isVirtualTetheringNATIP(normIP) {
+		now := time.Now()
+		for _, s := range m.sessionsByToken {
+			if now.Before(s.ExpiresAt) {
+				sess = s
+				break
+			}
 		}
 	}
 	if sess == nil {
