@@ -59,6 +59,13 @@ type Handler struct {
 	// config reload so readers always see a consistent snapshot.
 	staticRecords atomic.Pointer[map[string][]net.IP]
 	adFilter      atomic.Pointer[adblock.Set]
+	isTethering   atomic.Bool
+	portalChecker atomic.Pointer[PortalChecker]
+}
+
+// PortalChecker reports whether the captive portal is currently enabled.
+type PortalChecker interface {
+	IsEnabled() bool
 }
 
 func NewHandler(cacheSize, cacheTTL int,
@@ -150,6 +157,32 @@ func (h *Handler) ClearCache() {
 	}
 }
 
+// SetIsTethering sets whether this handler runs in the privileged hotspot tethering core.
+func (h *Handler) SetIsTethering(v bool) {
+	h.isTethering.Store(v)
+}
+
+// SetPortalChecker registers the captive portal state checker.
+func (h *Handler) SetPortalChecker(checker PortalChecker) {
+	if checker == nil {
+		h.portalChecker.Store(nil)
+	} else {
+		h.portalChecker.Store(&checker)
+	}
+}
+
+// isTetheringPortalActive reports whether captive portal is enabled on the hotspot tethering side.
+func (h *Handler) isTetheringPortalActive() bool {
+	if !h.isTethering.Load() {
+		return false
+	}
+	ptr := h.portalChecker.Load()
+	if ptr == nil || *ptr == nil {
+		return false
+	}
+	return (*ptr).IsEnabled()
+}
+
 func (h *Handler) UpdateConfig(
 	foreignIPv4, foreignIPv6 string,
 	queryTimeout int, blockedIP, blockedIP6 string,
@@ -237,6 +270,29 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 		return buildNODATAResponse(msg)
 	}
 
+	// RFC 7050 IPv4-only prefix discovery (NAT64 WKP) for tethered clients when portal is active
+	if h.isTetheringPortalActive() && !cfg.filterAAAA && qname == "ipv4only.arpa" {
+		if qtype == dns.TypeAAAA {
+			resp := new(dns.Msg)
+			resp.SetReply(msg)
+			resp.Authoritative = true
+			resp.Answer = append(resp.Answer,
+				&dns.AAAA{
+					Hdr:  dns.RR_Header{Name: msg.Question[0].Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 300},
+					AAAA: net.ParseIP("64:ff9b::192.0.0.170"),
+				},
+				&dns.AAAA{
+					Hdr:  dns.RR_Header{Name: msg.Question[0].Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 300},
+					AAAA: net.ParseIP("64:ff9b::192.0.0.171"),
+				},
+			)
+			if wire, err := resp.Pack(); err == nil {
+				ll.Debug("answered RFC 7050 ipv4only.arpa query with NAT64 WKP")
+				return wire
+			}
+		}
+	}
+
 	// Static records are authoritative overrides: answer before block rules so an
 	// explicit hosts-style entry always wins over a blocklist or stale cache.
 	if m := h.staticRecords.Load(); m != nil && len(*m) > 0 {
@@ -266,6 +322,24 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 	}
 
 	if cached := targetCache.Get(qname, qtype); cached != nil {
+		if h.isTetheringPortalActive() && !cfg.filterAAAA && qtype == dns.TypeAAAA {
+			parsed := new(dns.Msg)
+			if err := parsed.Unpack(cached); err == nil {
+				hasAAAA := false
+				for _, ans := range parsed.Answer {
+					if ans.Header().Rrtype == dns.TypeAAAA {
+						hasAAAA = true
+						break
+					}
+				}
+				if !hasAAAA {
+					if synth := h.synthesizeDNS64(ctx, msg, qname, targetIP, targetPort, engine, proxyAllowed); len(synth) > 0 {
+						cached = synth
+						targetCache.Set(qname, qtype, cached, 0)
+					}
+				}
+			}
+		}
 		ll.Debug("DNS cache hit", "qname", qname, "qtype", qtype, "responseLen", len(cached), "direct", !proxyAllowed)
 		if len(cached) >= 2 && (cached[0] != queryWire[0] || cached[1] != queryWire[1]) {
 			cachedCp := make([]byte, len(cached))
@@ -497,6 +571,24 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 	// Share the result and fix the DNS transaction ID for the current caller
 	resp := result.([]byte)
 	resp = sanitizeResponse(resp, cfg.filterAAAA, !isPrivateIP(targetIP))
+	if h.isTetheringPortalActive() && !cfg.filterAAAA && qtype == dns.TypeAAAA && len(resp) > 0 {
+		parsed := new(dns.Msg)
+		if err := parsed.Unpack(resp); err == nil {
+			hasAAAA := false
+			for _, ans := range parsed.Answer {
+				if ans.Header().Rrtype == dns.TypeAAAA {
+					hasAAAA = true
+					break
+				}
+			}
+			if !hasAAAA {
+				if synth := h.synthesizeDNS64(ctx, msg, qname, targetIP, targetPort, engine, proxyAllowed); len(synth) > 0 {
+					resp = synth
+					targetCache.Set(qname, qtype, resp, 0)
+				}
+			}
+		}
+	}
 	if len(resp) >= 2 && (resp[0] != queryWire[0] || resp[1] != queryWire[1]) {
 		respCopy := make([]byte, len(resp))
 		copy(respCopy, resp)
@@ -504,6 +596,59 @@ func (h *Handler) HandleDNS(ctx context.Context, queryWire []byte, targetIP stri
 		return respCopy
 	}
 	return resp
+}
+
+// synthesizeDNS64 resolves the IPv4 (A) record for qname and synthesizes a standard RFC 6052
+// NAT64 well-known prefix (64:ff9b::/96) AAAA response for tethered clients when portal is active.
+func (h *Handler) synthesizeDNS64(ctx context.Context, msg *dns.Msg, qname, targetIP string, targetPort int, engine *rules.Engine, allowProxy bool) []byte {
+	aMsg := new(dns.Msg)
+	aMsg.SetQuestion(dns.Fqdn(qname), dns.TypeA)
+	aWire, err := aMsg.Pack()
+	if err != nil {
+		return nil
+	}
+	aResp := h.HandleDNS(ctx, aWire, targetIP, targetPort, engine, allowProxy)
+	if len(aResp) == 0 {
+		return nil
+	}
+	aParsed := new(dns.Msg)
+	if err := aParsed.Unpack(aResp); err != nil {
+		return nil
+	}
+	var synth []dns.RR
+	for _, rr := range aParsed.Answer {
+		if aRec, ok := rr.(*dns.A); ok && aRec.A != nil {
+			if v4 := aRec.A.To4(); v4 != nil && !v4.IsLoopback() && !v4.IsPrivate() {
+				v6 := make(net.IP, 16)
+				v6[0] = 0x00
+				v6[1] = 0x64
+				v6[2] = 0xff
+				v6[3] = 0x9b
+				copy(v6[12:], v4)
+				synth = append(synth, &dns.AAAA{
+					Hdr: dns.RR_Header{
+						Name:   msg.Question[0].Name,
+						Rrtype: dns.TypeAAAA,
+						Class:  dns.ClassINET,
+						Ttl:    aRec.Hdr.Ttl,
+					},
+					AAAA: v6,
+				})
+			}
+		}
+	}
+	if len(synth) == 0 {
+		return nil
+	}
+	respMsg := new(dns.Msg)
+	respMsg.SetReply(msg)
+	respMsg.Authoritative = aParsed.Authoritative
+	respMsg.Answer = synth
+	wire, err := respMsg.Pack()
+	if err != nil {
+		return nil
+	}
+	return wire
 }
 
 // QueryUDPVerifyID sends a UDP query directly to the DNS server and only returns when the

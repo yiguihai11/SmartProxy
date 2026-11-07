@@ -1562,3 +1562,154 @@ func TestHandleDNS_ProxyDisallowed(t *testing.T) {
 		t.Fatalf("expected proxy cached answer 9.9.9.9, got %v", pMsgResp.Answer)
 	}
 }
+
+type testPortalChecker struct {
+	enabled bool
+}
+
+func (c *testPortalChecker) IsEnabled() bool {
+	return c.enabled
+}
+
+func TestHandler_TetheringPortalDNS64(t *testing.T) {
+	srv, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("listen UDP: %v", err)
+	}
+	defer srv.Close()
+
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, addr, err := srv.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			req := new(dns.Msg)
+			if err := req.Unpack(buf[:n]); err != nil || len(req.Question) == 0 {
+				continue
+			}
+			q := req.Question[0]
+			resp := new(dns.Msg)
+			resp.SetReply(req)
+			if strings.EqualFold(q.Name, "ipv4-only.example.com.") {
+				if q.Qtype == dns.TypeA {
+					resp.Answer = append(resp.Answer, &dns.A{
+						Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+						A:   net.ParseIP("198.51.100.1").To4(),
+					})
+				}
+				// For TypeAAAA: returns NO answers (pure IPv4 site)
+			} else if strings.EqualFold(q.Name, "dual.example.com.") {
+				if q.Qtype == dns.TypeA {
+					resp.Answer = append(resp.Answer, &dns.A{
+						Hdr: dns.RR_Header{Name: q.Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+						A:   net.ParseIP("198.51.100.2").To4(),
+					})
+				} else if q.Qtype == dns.TypeAAAA {
+					resp.Answer = append(resp.Answer, &dns.AAAA{
+						Hdr:  dns.RR_Header{Name: q.Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 60},
+						AAAA: net.ParseIP("2001:db8::2"),
+					})
+				}
+			}
+			w, _ := resp.Pack()
+			srv.WriteToUDP(w, addr)
+		}
+	}()
+
+	udpAddr := srv.LocalAddr().(*net.UDPAddr)
+
+	h := NewHandler(100, 60, "", "", chnroute.New(), nil, 2, "0.0.0.0", "::", false, PreferNone, nil, true)
+	checker := &testPortalChecker{enabled: false}
+	h.SetPortalChecker(checker)
+	h.SetIsTethering(false)
+
+	ctx := context.Background()
+
+	// 1. Host side (not tethering): ipv4only.arpa should NOT return synthetic NAT64 WKP
+	qWire := buildTestDNSQuery("ipv4only.arpa", dns.TypeAAAA)
+	resp := h.HandleDNS(ctx, qWire, udpAddr.IP.String(), udpAddr.Port, nil, true)
+	if resp != nil {
+		msg := new(dns.Msg)
+		_ = msg.Unpack(resp)
+		for _, ans := range msg.Answer {
+			if aaaa, ok := ans.(*dns.AAAA); ok && aaaa.AAAA.String() == "64:ff9b::192.0.0.170" {
+				t.Fatalf("host side should not return synthetic NAT64 WKP, got %v", aaaa.AAAA)
+			}
+		}
+	}
+
+	// 2. Tethering side but portal disabled: should NOT synthesize DNS64
+	h.SetIsTethering(true)
+	checker.enabled = false
+	qWire = buildTestDNSQuery("ipv4-only.example.com", dns.TypeAAAA)
+	resp = h.HandleDNS(ctx, qWire, udpAddr.IP.String(), udpAddr.Port, nil, true)
+	if resp != nil {
+		msg := new(dns.Msg)
+		_ = msg.Unpack(resp)
+		for _, ans := range msg.Answer {
+			if aaaa, ok := ans.(*dns.AAAA); ok && strings.HasPrefix(aaaa.AAAA.String(), "64:ff9b::") {
+				t.Fatalf("portal disabled should not synthesize DNS64, got %v", aaaa.AAAA)
+			}
+		}
+	}
+
+	// 3. Tethering side AND portal enabled: MUST answer ipv4only.arpa with RFC 7050 WKP
+	checker.enabled = true
+	qWire = buildTestDNSQuery("ipv4only.arpa", dns.TypeAAAA)
+	resp = h.HandleDNS(ctx, qWire, udpAddr.IP.String(), udpAddr.Port, nil, true)
+	if resp == nil {
+		t.Fatal("expected response for ipv4only.arpa")
+	}
+	msg := new(dns.Msg)
+	if err := msg.Unpack(resp); err != nil {
+		t.Fatalf("failed to unpack response: %v", err)
+	}
+	if len(msg.Answer) < 2 {
+		t.Fatalf("expected 2 AAAA answers for ipv4only.arpa, got %d", len(msg.Answer))
+	}
+	ans1, ok1 := msg.Answer[0].(*dns.AAAA)
+	ans2, ok2 := msg.Answer[1].(*dns.AAAA)
+	if !ok1 || !ok2 || (ans1.AAAA.String() != "64:ff9b::c000:aa" && ans1.AAAA.String() != "64:ff9b::192.0.0.170") || (ans2.AAAA.String() != "64:ff9b::c000:ab" && ans2.AAAA.String() != "64:ff9b::192.0.0.171") {
+		t.Fatalf("unexpected ipv4only.arpa answer: %v, %v", msg.Answer[0], msg.Answer[1])
+	}
+
+	// 4. Tethering side AND portal enabled: MUST synthesize DNS64 for IPv4-only domain
+	h.ClearCache()
+	qWire = buildTestDNSQuery("ipv4-only.example.com", dns.TypeAAAA)
+	resp = h.HandleDNS(ctx, qWire, udpAddr.IP.String(), udpAddr.Port, nil, true)
+	if resp == nil {
+		t.Fatal("expected response for ipv4-only.example.com AAAA")
+	}
+	msg = new(dns.Msg)
+	if err := msg.Unpack(resp); err != nil {
+		t.Fatalf("failed to unpack synthesized response: %v", err)
+	}
+	if len(msg.Answer) == 0 {
+		t.Fatal("expected synthesized AAAA answer, got 0")
+	}
+	aaaa, ok := msg.Answer[0].(*dns.AAAA)
+	if !ok || (aaaa.AAAA.String() != "64:ff9b::c633:6401" && aaaa.AAAA.String() != "64:ff9b::198.51.100.1") {
+		t.Fatalf("expected synthesized AAAA 64:ff9b::198.51.100.1, got %v", msg.Answer[0])
+	}
+
+	// 5. Dual-stack domain with existing AAAA should preserve native AAAA without synthesizing
+	h.ClearCache()
+	qWire = buildTestDNSQuery("dual.example.com", dns.TypeAAAA)
+	resp = h.HandleDNS(ctx, qWire, udpAddr.IP.String(), udpAddr.Port, nil, true)
+	if resp == nil {
+		t.Fatal("expected response for dual.example.com AAAA")
+	}
+	msg = new(dns.Msg)
+	if err := msg.Unpack(resp); err != nil {
+		t.Fatalf("failed to unpack dual-stack response: %v", err)
+	}
+	if len(msg.Answer) == 0 {
+		t.Fatal("expected native AAAA answer, got 0")
+	}
+	nativeAAAA, ok := msg.Answer[0].(*dns.AAAA)
+	if !ok || nativeAAAA.AAAA.String() != "2001:db8::2" {
+		t.Fatalf("expected native AAAA 2001:db8::2, got %v", msg.Answer[0])
+	}
+}

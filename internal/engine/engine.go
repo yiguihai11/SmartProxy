@@ -175,6 +175,9 @@ func New(cfg *config.Config, cfgDir string) (*Engine, error) {
 	if cfgDir != "" {
 		portalMgr.SetStoragePath(filepath.Join(cfgDir, "portal_traffic.json"))
 	}
+	if dnsHandler != nil {
+		dnsHandler.SetPortalChecker(portalMgr)
+	}
 	tunHandler := tun.NewHandler(cfg, router, ruleEng, upstreamMgr, dnsHandler)
 	tunHandler.SetPortalManager(portalMgr)
 
@@ -207,6 +210,16 @@ func (e *Engine) SetUIDResolver(f tun.UIDResolverFunc) {
 func (e *Engine) SetPortalForcedDisabled(disabled bool) {
 	if e.portalMgr != nil {
 		e.portalMgr.SetForcedDisabled(disabled)
+	}
+}
+
+// SetIsTethering flags whether this engine runs as the privileged hotspot tethering core.
+func (e *Engine) SetIsTethering(isTethering bool) {
+	if e.TUNHandler != nil {
+		e.TUNHandler.SetIsTethering(isTethering)
+	}
+	if e.DNSHandler != nil {
+		e.DNSHandler.SetIsTethering(isTethering)
 	}
 }
 

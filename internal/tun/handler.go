@@ -49,6 +49,7 @@ type TUNHandler struct {
 	upstreamMgr *upstream.Manager
 	dnsHandler  *dns.Handler
 	portalMgr   atomic.Pointer[portal.Manager]
+	isTethering atomic.Bool
 
 	// uidResolver 反向回调(Android 侧实现):按连接反查所属 app UID,命中
 	// config.TUN.BlockedUIDs 即拦截。startRouter 时注入一次,之后只读。
@@ -263,6 +264,26 @@ func (h *TUNHandler) IsClientIPBlocked(ip string) bool {
 	return blocked
 }
 
+// SetIsTethering sets whether this handler runs in the privileged hotspot tethering core.
+func (h *TUNHandler) SetIsTethering(v bool) {
+	h.isTethering.Store(v)
+}
+
+func isNAT64WKP(addr netip.Addr) bool {
+	if !addr.Is6() {
+		return false
+	}
+	b := addr.As16()
+	return b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b &&
+		b[4] == 0 && b[5] == 0 && b[6] == 0 && b[7] == 0 &&
+		b[8] == 0 && b[9] == 0 && b[10] == 0 && b[11] == 0
+}
+
+func unwrapNAT64(addr netip.Addr) netip.Addr {
+	b := addr.As16()
+	return netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]})
+}
+
 // KillBySrcIP terminates all active TCP connections and UDP sessions originating from srcIP.
 func (h *TUNHandler) KillBySrcIP(srcIP string) int {
 	if srcIP == "" {
@@ -309,8 +330,36 @@ func (h *TUNHandler) NewConnectionEx(ctx context.Context, conn net.Conn, source 
 	host := destination.Addr.String()
 	port := int(destination.Port)
 
+	if isNAT64WKP(destination.Addr) {
+		destination.Addr = unwrapNAT64(destination.Addr)
+		host = destination.Addr.String()
+		ll.Debug("unwrapped NAT64 destination", "from", destination.Addr, "to", host)
+	}
+
 	// Logged once per connection; at tens of thousands of connections/second, INFO is pure overhead, so the hot path is demoted to Debug
 	ll.Debug("TUN new connection", "src", source, "dst", destination)
+
+	if port == 53 && h.dnsHandler != nil && h.dnsHandler.Enabled() {
+		clientIP := source.Addr.String()
+		allowProxy := true
+		portalMgr := h.portalMgr.Load()
+		if portalMgr != nil && portalMgr.IsEnabled() {
+			isLocalApp := false
+			if uid := h.resolveUID(6, source, destination); uid >= 0 {
+				isLocalApp = true
+			}
+			if !isLocalApp {
+				allowProxy = portalMgr.IsIPProxyAllowed(clientIP)
+			}
+		}
+		safego.Go("tun.handleTCPDNS", func() {
+			h.handleTCPDNS(ctx, conn, host, port, allowProxy)
+			if onClose != nil {
+				onClose(nil)
+			}
+		})
+		return
+	}
 
 	if h.IsClientIPBlocked(source.Addr.String()) {
 		ll.Info("TUN blocked connection from blocked client IP", "src", source.Addr.String())
@@ -823,6 +872,12 @@ func (h *TUNHandler) NewPacketConnectionEx(ctx context.Context, conn N.PacketCon
 	ll := trace.Log(ctx)
 	host := destination.Addr.String()
 	port := int(destination.Port)
+
+	if isNAT64WKP(destination.Addr) {
+		destination.Addr = unwrapNAT64(destination.Addr)
+		host = destination.Addr.String()
+		ll.Debug("unwrapped NAT64 UDP destination", "from", destination.Addr, "to", host)
+	}
 
 	ll.Debug("TUN new packet connection", "src", source, "dst", destination)
 
@@ -1589,6 +1644,37 @@ func (h *TUNHandler) handleDNS(ctx context.Context, conn N.PacketConn, host stri
 			}
 		})
 	}
+}
+
+func (h *TUNHandler) handleTCPDNS(ctx context.Context, conn net.Conn, targetIP string, targetPort int, allowProxy bool) {
+	defer conn.Close()
+	ll := trace.Log(ctx)
+	if h.dnsHandler == nil || h.ruleEng == nil {
+		ll.Error("handleTCPDNS: handler not fully initialized")
+		return
+	}
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	var lenBuf [2]byte
+	if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
+		return
+	}
+	reqLen := binary.BigEndian.Uint16(lenBuf[:])
+	if reqLen == 0 || reqLen > 4096 {
+		return
+	}
+	reqBuf := make([]byte, reqLen)
+	if _, err := io.ReadFull(conn, reqBuf); err != nil {
+		return
+	}
+	resp := h.dnsHandler.HandleDNS(ctx, reqBuf, targetIP, targetPort, h.ruleEng, allowProxy)
+	if len(resp) == 0 {
+		return
+	}
+	binary.BigEndian.PutUint16(lenBuf[:], uint16(len(resp)))
+	if _, err := conn.Write(lenBuf[:]); err != nil {
+		return
+	}
+	_, _ = conn.Write(resp)
 }
 
 // tunResponseHeadroom 是写入 TUN 的数据报(DNS 响应 / UDP 回包)必须预留的前导字节数:

@@ -198,6 +198,7 @@ func StartRouter(configPath string, tunFd int, tunEnabled bool) error {
 	if tetheringBridge != nil {
 		eng.SetTetheringBridge(tetheringBridge)
 	}
+	eng.SetIsTethering(isTethering)
 
 	// 纯 Go 面板机制(与 cmd/smartproxy/main.go L138-233 对齐):面板 PUT /config
 	// 写 configPath → fsnotify 监听目录 → configReload 热重载。此前移动端从未装配

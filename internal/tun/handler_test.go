@@ -9,12 +9,15 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	miekgdns "github.com/miekg/dns"
 	singtun "github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/buf"
 	M "github.com/sagernet/sing/common/metadata"
@@ -1448,4 +1451,77 @@ func TestTUNHandler_IsGatewayDestination(t *testing.T) {
 	assert.False(t, handler.isGatewayDestination("example.com"))
 	assert.False(t, handler.isGatewayDestination("1.1.1.1"))
 	assert.False(t, handler.isGatewayDestination("8.8.8.8"))
+}
+
+func TestTUNHandler_NAT64Unwrap(t *testing.T) {
+	addr := netip.MustParseAddr("64:ff9b::198.51.100.1")
+	assert.True(t, isNAT64WKP(addr))
+	unwrapped := unwrapNAT64(addr)
+	assert.Equal(t, "198.51.100.1", unwrapped.String())
+
+	// Native IPv6 should not be recognized as NAT64 WKP
+	v6Native := netip.MustParseAddr("2001:db8:9877::1")
+	assert.False(t, isNAT64WKP(v6Native))
+
+	// IPv4 should not be recognized as NAT64 WKP
+	v4 := netip.MustParseAddr("192.168.1.1")
+	assert.False(t, isNAT64WKP(v4))
+}
+
+func TestTUNHandler_HandleTCPDNS(t *testing.T) {
+	cfg := config.DefaultConfig()
+	dh := dns.NewHandler(100, 60, "", "", nil, nil, 2, "0.0.0.0", "::", false, dns.PreferNone, nil, true)
+	dh.SetStaticRecords(map[string][]net.IP{
+		"tcpdns.test": {net.ParseIP("192.0.2.123")},
+	})
+	tmpAcl := filepath.Join(t.TempDir(), "acl.txt")
+	assert.NoError(t, os.WriteFile(tmpAcl, []byte(""), 0644))
+	re, err := rules.New(tmpAcl)
+	assert.NoError(t, err)
+
+	h := NewHandler(cfg, nil, re, nil, dh)
+
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+
+	ctx := context.Background()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.handleTCPDNS(ctx, serverConn, "8.8.8.8", 53, true)
+	}()
+
+	// Build a DNS query for tcpdns.test
+	msg := new(miekgdns.Msg)
+	msg.SetQuestion("tcpdns.test.", miekgdns.TypeA)
+	wire, err := msg.Pack()
+	assert.NoError(t, err)
+
+	// Send length-prefixed TCP DNS query
+	var lenBuf [2]byte
+	binary.BigEndian.PutUint16(lenBuf[:], uint16(len(wire)))
+	_, err = clientConn.Write(lenBuf[:])
+	assert.NoError(t, err)
+	_, err = clientConn.Write(wire)
+	assert.NoError(t, err)
+
+	// Read 2-byte response length
+	_, err = io.ReadFull(clientConn, lenBuf[:])
+	assert.NoError(t, err)
+	respLen := binary.BigEndian.Uint16(lenBuf[:])
+	assert.Greater(t, respLen, uint16(0))
+
+	respBuf := make([]byte, respLen)
+	_, err = io.ReadFull(clientConn, respBuf)
+	assert.NoError(t, err)
+
+	respMsg := new(miekgdns.Msg)
+	err = respMsg.Unpack(respBuf)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(respMsg.Answer))
+	aRec, ok := respMsg.Answer[0].(*miekgdns.A)
+	assert.True(t, ok)
+	assert.Equal(t, "192.0.2.123", aRec.A.String())
+
+	<-done
 }

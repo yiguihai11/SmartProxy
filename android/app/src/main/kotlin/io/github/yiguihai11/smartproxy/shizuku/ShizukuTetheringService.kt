@@ -1374,6 +1374,9 @@ class ShizukuTetheringService : IShizukuTetheringService.Stub {
                     return arr.toString()
                 }
             }
+            val d4 = config.dnsServers.firstOrNull { !it.contains(':') } ?: "223.5.5.5"
+            val d6 = config.dnsServers.firstOrNull { it.contains(':') } ?: "2400:3200::1"
+            smartproxy.mobile.Mobile.setSystemDNS(d4, d6)
             smartproxy.mobile.Mobile.setTetheringBridge(bridge)
             smartproxy.mobile.Mobile.setIsTethering(true)
             smartproxy.mobile.Mobile.startRouter(configFile.absolutePath, goFd.toLong(), true)
