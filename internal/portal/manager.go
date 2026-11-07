@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -395,6 +396,118 @@ func (m *Manager) IsIPProxyAllowed(clientIP string) bool {
 		return m.IsUserProxyAllowed(sess.Username)
 	}
 	return true
+}
+
+// CapportStatus represents RFC 8908 Captive Portal API status payload.
+type CapportStatus struct {
+	Captive          bool   `json:"captive"`
+	UserPortalURL    string `json:"user-portal-url"`
+	VenueInfoURL     string `json:"venue-info-url,omitempty"`
+	SecondsRemaining *int   `json:"seconds-remaining,omitempty"`
+	BytesRemaining   *int64 `json:"bytes-remaining,omitempty"`
+	CanExtendSession bool   `json:"can-extend-session,omitempty"`
+}
+
+// GetCapportStatus generates the RFC 8908 Captive Portal API response structure
+// for a given client IP, redirect host, and admin port.
+func (m *Manager) GetCapportStatus(clientIP, redirectHost string, adminPort int) CapportStatus {
+	baseURL := fmt.Sprintf("http://%s", redirectHost)
+	if adminPort != 80 && adminPort > 0 {
+		baseURL = fmt.Sprintf("http://%s:%d", redirectHost, adminPort)
+	}
+
+	portalLoginURL := fmt.Sprintf("%s/portal", baseURL)
+	if clientIP != "" {
+		portalLoginURL = fmt.Sprintf("%s/portal?ip=%s", baseURL, url.QueryEscape(clientIP))
+	}
+
+	if m == nil || !m.IsEnabled() {
+		return CapportStatus{
+			Captive:       false,
+			UserPortalURL: fmt.Sprintf("%s/portal", baseURL),
+		}
+	}
+
+	normIP := normalizeIP(clientIP)
+	if normIP != "" && (m.isHostLoopbackOrTun(normIP) || m.IsGatewayIP(normIP)) {
+		return CapportStatus{
+			Captive:       false,
+			UserPortalURL: fmt.Sprintf("%s/portal", baseURL),
+		}
+	}
+
+	now := time.Now()
+	var currentMAC string
+	m.mu.RLock()
+	resolver := m.macResolver
+	m.mu.RUnlock()
+	if resolver != nil && normIP != "" {
+		currentMAC = strings.ToLower(resolver(normIP))
+	}
+
+	// Check exempt IP / MAC
+	p := m.getPortalConf()
+	if p != nil {
+		for _, ip := range p.ExemptIPs {
+			if normalizeIP(ip) == normIP {
+				return CapportStatus{
+					Captive:       false,
+					UserPortalURL: fmt.Sprintf("%s/portal", baseURL),
+				}
+			}
+		}
+		if currentMAC != "" {
+			for _, mac := range p.ExemptMACs {
+				if strings.EqualFold(mac, currentMAC) {
+					return CapportStatus{
+						Captive:       false,
+						UserPortalURL: fmt.Sprintf("%s/portal", baseURL),
+					}
+				}
+			}
+		}
+	}
+
+	sess := m.GetSession(normIP, currentMAC)
+	isAuthorized := m.IsAuthorized(normIP)
+
+	if !isAuthorized || sess == nil {
+		return CapportStatus{
+			Captive:          true,
+			UserPortalURL:    portalLoginURL,
+			CanExtendSession: true,
+		}
+	}
+
+	// Authorized
+	status := CapportStatus{
+		Captive:          false,
+		UserPortalURL:    fmt.Sprintf("%s/portal", baseURL),
+		CanExtendSession: true,
+	}
+
+	if !sess.ExpiresAt.IsZero() {
+		remSec := int(time.Until(sess.ExpiresAt).Seconds())
+		if remSec < 0 {
+			remSec = 0
+		}
+		status.SecondsRemaining = &remSec
+	}
+
+	if sess.Username != "" {
+		m.mu.Lock()
+		info := m.getUserTrafficInfoLocked(sess.Username, now)
+		m.mu.Unlock()
+		if info != nil && info.LimitBytes > 0 {
+			remBytes := info.LimitBytes - info.UsedBytes
+			if remBytes < 0 {
+				remBytes = 0
+			}
+			status.BytesRemaining = &remBytes
+		}
+	}
+
+	return status
 }
 
 // Authenticate verifies credentials and establishes an authenticated session.

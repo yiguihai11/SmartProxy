@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -760,7 +761,9 @@ func (h *TUNHandler) servePortalRedirect(conn net.Conn, clientIP, host string, p
 
 	origURL := fmt.Sprintf("http://%s:%d/", host, port)
 	br := bufio.NewReader(conn)
+	var incomingReq *http.Request
 	if req, err := http.ReadRequest(br); err == nil && req != nil {
+		incomingReq = req
 		reqHost := req.Host
 		if reqHost == "" {
 			reqHost = host
@@ -772,13 +775,39 @@ func (h *TUNHandler) servePortalRedirect(conn net.Conn, clientIP, host string, p
 	_ = conn.SetDeadline(time.Now().Add(1 * time.Second))
 
 	redirectHost := portalRedirectHost(h.config.Load(), clientIP)
+	capportAPIURL := fmt.Sprintf("http://%s:%d/api/capport", redirectHost, adminPort)
+	userPortalURL := fmt.Sprintf("http://%s:%d/portal?ip=%s", redirectHost, adminPort, url.QueryEscape(clientIP))
+	if adminPort == 80 {
+		capportAPIURL = fmt.Sprintf("http://%s/api/capport", redirectHost)
+		userPortalURL = fmt.Sprintf("http://%s/portal?ip=%s", redirectHost, url.QueryEscape(clientIP))
+	}
+
+	// RFC 8908 Content Negotiation: if client requests application/captive+json or queries well-known capport,
+	// respond directly with the standard JSON API response.
+	if incomingReq != nil {
+		accept := incomingReq.Header.Get("Accept")
+		reqPath := incomingReq.URL.Path
+		if strings.Contains(accept, "application/captive+json") ||
+			reqPath == "/.well-known/captive-portal" || reqPath == "/.well-known/capport" || reqPath == "/api/capport" {
+			status := portal.CapportStatus{
+				Captive:          true,
+				UserPortalURL:    userPortalURL,
+				CanExtendSession: true,
+			}
+			if pMgr := h.portalMgr.Load(); pMgr != nil {
+				status = pMgr.GetCapportStatus(clientIP, redirectHost, adminPort)
+			}
+			jsonBody, _ := json.Marshal(status)
+			resp := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: application/captive+json\r\nContent-Length: %d\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nCache-Control: private, no-cache, no-store, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\n\r\n%s",
+				len(jsonBody), jsonBody)
+			_, _ = conn.Write([]byte(resp))
+			return
+		}
+	}
+
 	var target string
 	if isCaptivePortalProbe(origURL) {
-		if adminPort == 80 {
-			target = fmt.Sprintf("http://%s/portal?ip=%s", redirectHost, url.QueryEscape(clientIP))
-		} else {
-			target = fmt.Sprintf("http://%s:%d/portal?ip=%s", redirectHost, adminPort, url.QueryEscape(clientIP))
-		}
+		target = userPortalURL
 	} else {
 		if adminPort == 80 {
 			target = fmt.Sprintf("http://%s/portal?ip=%s&url=%s", redirectHost, url.QueryEscape(clientIP), url.QueryEscape(origURL))
@@ -802,8 +831,8 @@ func (h *TUNHandler) servePortalRedirect(conn net.Conn, clientIP, host string, p
 </html>
 `, target, target)
 
-	resp := fmt.Sprintf("HTTP/1.1 302 Found\r\nLocation: %s\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\nCache-Control: no-cache, no-store, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\n\r\n%s",
-		target, len(body), body)
+	resp := fmt.Sprintf("HTTP/1.1 302 Found\r\nLocation: %s\r\nCap-Port-API: %s\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nConnection: close\r\nCache-Control: no-cache, no-store, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\n\r\n%s",
+		target, capportAPIURL, len(body), body)
 
 	_, _ = conn.Write([]byte(resp))
 }

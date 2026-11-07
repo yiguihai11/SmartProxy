@@ -3,7 +3,9 @@ package admin
 import (
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"html/template"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -462,4 +464,63 @@ func (s *Server) handlePortalKick(w http.ResponseWriter, r *http.Request) {
 		"revoked": revoked,
 		"target":  target,
 	})
+}
+
+func isCapportPath(p string) bool {
+	return p == "/.well-known/captive-portal" || p == "/.well-known/capport" ||
+		p == "/api/capport" || p == "/api/captive-portal"
+}
+
+// handleCapport implements the RFC 8908 Captive Portal API endpoint.
+// It returns application/captive+json conforming to RFC 8908 section 4.
+func (s *Server) handleCapport(w http.ResponseWriter, r *http.Request) {
+	// CORS support for modern captive portal web agents and preflight
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, X-Requested-With")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	clientIP := extractClientIP(r)
+
+	redirectHost := "smartproxy.lan"
+	if h := r.Host; h != "" {
+		if host, _, err := net.SplitHostPort(h); err == nil {
+			redirectHost = host
+		} else {
+			redirectHost = h
+		}
+	}
+
+	adminPort := s.tcpPort
+	if adminPort <= 0 {
+		adminPort = 9090
+	}
+
+	var status portal.CapportStatus
+	if s.portalMgr != nil {
+		status = s.portalMgr.GetCapportStatus(clientIP, redirectHost, adminPort)
+	} else {
+		status = portal.CapportStatus{
+			Captive:       false,
+			UserPortalURL: fmt.Sprintf("http://%s:%d/portal", redirectHost, adminPort),
+		}
+	}
+
+	// RFC 8908 Section 4.1 specifies Content-Type: application/captive+json
+	w.Header().Set("Content-Type", "application/captive+json")
+	w.Header().Set("Cache-Control", "private, no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+
+	if r.Method == http.MethodHead {
+		return
+	}
+	_ = json.NewEncoder(w).Encode(status)
 }

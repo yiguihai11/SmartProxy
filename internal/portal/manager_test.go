@@ -641,3 +641,57 @@ func TestManager_IsProxyAllowed(t *testing.T) {
 		t.Errorf("expected 192.168.43.200 to have proxy disallowed after login as directuser")
 	}
 }
+
+func TestManager_GetCapportStatus(t *testing.T) {
+	cfg := makeTestConfig(2)
+	cfg.Listen.Auth.Users = append(cfg.Listen.Auth.Users, config.AuthUserConf{
+		Username:          "quotauser",
+		Password:          "secret123",
+		TrafficLimitBytes: 10 * 1024 * 1024,
+	})
+
+	mgr := NewManager(cfg)
+	defer mgr.Close()
+
+	// 1. Unauthenticated client -> captive: true
+	stUnauth := mgr.GetCapportStatus("192.168.43.150", "smartproxy.lan", 9090)
+	if !stUnauth.Captive {
+		t.Errorf("expected captive: true for unauthenticated client")
+	}
+	if !strings.Contains(stUnauth.UserPortalURL, "smartproxy.lan:9090/portal?ip=192.168.43.150") {
+		t.Errorf("unexpected UserPortalURL: %s", stUnauth.UserPortalURL)
+	}
+	if !stUnauth.CanExtendSession {
+		t.Errorf("expected CanExtendSession: true")
+	}
+
+	// 2. Authenticate as quotauser -> captive: false, has seconds and bytes remaining
+	_, _, err := mgr.Authenticate("192.168.43.150", "aa:bb:cc:dd:ee:11", "quotauser", "secret123", "UA")
+	if err != nil {
+		t.Fatalf("auth failed: %v", err)
+	}
+
+	stAuth := mgr.GetCapportStatus("192.168.43.150", "smartproxy.lan", 9090)
+	if stAuth.Captive {
+		t.Errorf("expected captive: false for authenticated client")
+	}
+	if stAuth.SecondsRemaining == nil || *stAuth.SecondsRemaining <= 0 {
+		t.Errorf("expected non-nil positive seconds-remaining, got %v", stAuth.SecondsRemaining)
+	}
+	if stAuth.BytesRemaining == nil || *stAuth.BytesRemaining != 10*1024*1024 {
+		t.Errorf("expected 10MB bytes-remaining, got %v", stAuth.BytesRemaining)
+	}
+
+	// 3. Consume quota until exceeded -> captive: true
+	mgr.AddTraffic("192.168.43.150", 11*1024*1024)
+	stExceeded := mgr.GetCapportStatus("192.168.43.150", "smartproxy.lan", 9090)
+	if !stExceeded.Captive {
+		t.Errorf("expected captive: true when quota is exceeded")
+	}
+
+	// 4. Exempt IP / Gateway -> captive: false
+	stGW := mgr.GetCapportStatus("127.0.0.1", "smartproxy.lan", 9090)
+	if stGW.Captive {
+		t.Errorf("expected loopback to be non-captive")
+	}
+}

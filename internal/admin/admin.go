@@ -503,7 +503,7 @@ func (s *Server) tlsDispatch(handler http.Handler) http.Handler {
 		}
 		// Allow captive portal page and login/logout APIs over plaintext HTTP so connecting hotspot
 		// devices can authenticate without facing self-signed TLS certificate errors in portal popups.
-		if r.URL.Path == "/portal" || r.URL.Path == "/api/portal/status" ||
+		if isCapportPath(r.URL.Path) || r.URL.Path == "/portal" || r.URL.Path == "/api/portal/status" ||
 			r.URL.Path == "/api/portal/login" || r.URL.Path == "/api/portal/logout" {
 			handler.ServeHTTP(w, r)
 			return
@@ -641,6 +641,11 @@ func (s *Server) setupMux() http.Handler {
 	mux.HandleFunc("/api/portal/kick", s.handlePortalKick)
 	mux.HandleFunc("/api/portal/traffic", s.handlePortalTraffic)
 	mux.HandleFunc("/api/portal/traffic/reset", s.handlePortalTrafficReset)
+	// RFC 8908 (Captive Portal API) and IANA well-known paths
+	mux.HandleFunc("/.well-known/captive-portal", s.handleCapport)
+	mux.HandleFunc("/.well-known/capport", s.handleCapport)
+	mux.HandleFunc("/api/capport", s.handleCapport)
+	mux.HandleFunc("/api/captive-portal", s.handleCapport)
 
 	return mux
 }
@@ -687,7 +692,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 		// Captive portal login page and client authentication APIs must be accessible
 		// to connecting hotspot devices without admin Basic Auth.
-		if r.URL.Path == "/portal" || r.URL.Path == "/api/portal/status" || r.URL.Path == "/api/portal/login" || r.URL.Path == "/api/portal/logout" {
+		if isCapportPath(r.URL.Path) || r.URL.Path == "/portal" || r.URL.Path == "/api/portal/status" || r.URL.Path == "/api/portal/login" || r.URL.Path == "/api/portal/logout" {
 			next.ServeHTTP(w, r)
 			return
 		}

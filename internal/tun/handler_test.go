@@ -1239,6 +1239,57 @@ func TestTUNHandler_PortalInterception(t *testing.T) {
 	<-done
 }
 
+func TestTUNHandler_CapportContentNegotiation(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Listen.AdminPort = 9090
+	cfg.Listen.Auth = &config.AuthConf{
+		Enabled: true,
+		Users: []config.AuthUserConf{
+			{Username: "alice", Password: "password"},
+		},
+	}
+	cfg.Listen.Portal = &config.PortalConf{
+		Enabled: true,
+	}
+
+	portalMgr := portal.NewManager(cfg)
+	defer portalMgr.Close()
+
+	handler := NewHandler(cfg, nil, nil, nil, nil)
+	handler.SetPortalManager(portalMgr)
+
+	// Create pipe connection for client
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+
+	srcAddr := M.ParseSocksaddr("192.168.43.20:45678")
+	dstAddr := M.ParseSocksaddr("1.1.1.1:80")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handler.NewConnectionEx(context.Background(), serverConn, srcAddr, dstAddr, nil)
+	}()
+
+	// Send HTTP GET request with Accept: application/captive+json
+	go func() {
+		_, _ = clientConn.Write([]byte("GET /capport-probe HTTP/1.1\r\nHost: example.com\r\nAccept: application/captive+json\r\n\r\n"))
+	}()
+
+	// Read response on clientConn
+	buf := make([]byte, 1024)
+	n, err := clientConn.Read(buf)
+	assert.NoError(t, err)
+	resp := string(buf[:n])
+
+	assert.Contains(t, resp, "200 OK")
+	assert.Contains(t, resp, "Content-Type: application/captive+json")
+	assert.Contains(t, resp, `"captive":true`)
+	assert.Contains(t, resp, `"user-portal-url":"http://smartproxy.lan:9090/portal?ip=192.168.43.20"`)
+
+	<-done
+}
+
 func TestTUNHandler_PortalTrafficQuota(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Listen.Auth = &config.AuthConf{

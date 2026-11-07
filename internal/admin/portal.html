@@ -634,6 +634,9 @@ async function handleLogin(e) {
     clearAlert();
     showAuthenticated(data);
 
+    // RFC 8908 Active Signaling: Notify client OS / Webview that captive state is resolved
+    fetch('/api/capport', { headers: { 'Accept': 'application/captive+json' } }).catch(() => {});
+
     if (redirectURL && !isProbeURL(redirectURL) && !data.quota_exceeded) {
       startRedirectCountdown(redirectURL);
     }

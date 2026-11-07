@@ -422,3 +422,86 @@ func TestPortal_TetheringBridgeClient_NATResolution(t *testing.T) {
 		t.Fatalf("expected 192.0.2.2 to be authorized via MAC exemption")
 	}
 }
+
+func TestPortal_CapportRFC8908(t *testing.T) {
+	srv, pm := setupTestPortalAdmin(t)
+
+	paths := []string{
+		"/.well-known/captive-portal",
+		"/.well-known/capport",
+		"/api/capport",
+		"/api/captive-portal",
+	}
+
+	testIP := "192.168.43.160"
+
+	// 1. Unauthenticated client on each path
+	for _, p := range paths {
+		req := httptest.NewRequest(http.MethodGet, p, nil)
+		req.RemoteAddr = testIP + ":54321"
+		req.Header.Set("Accept", "application/captive+json")
+		rec := httptest.NewRecorder()
+
+		srv.handleCapport(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("[%s] expected 200, got %d", p, rec.Code)
+		}
+		ct := rec.Header().Get("Content-Type")
+		if !strings.Contains(ct, "application/captive+json") {
+			t.Fatalf("[%s] expected application/captive+json, got %s", p, ct)
+		}
+		if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+			t.Fatalf("[%s] expected Access-Control-Allow-Origin: *", p)
+		}
+
+		var st portal.CapportStatus
+		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+			t.Fatalf("[%s] json unmarshal: %v", p, err)
+		}
+		if !st.Captive {
+			t.Errorf("[%s] expected captive: true for unauthenticated", p)
+		}
+		if !strings.Contains(st.UserPortalURL, "ip=192.168.43.160") {
+			t.Errorf("[%s] expected UserPortalURL to have client IP: %s", p, st.UserPortalURL)
+		}
+	}
+
+	// 2. Preflight OPTIONS
+	{
+		req := httptest.NewRequest(http.MethodOptions, "/.well-known/captive-portal", nil)
+		rec := httptest.NewRecorder()
+		srv.handleCapport(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("expected 204 from OPTIONS, got %d", rec.Code)
+		}
+	}
+
+	// 3. Authenticate client
+	_, _, err := pm.Authenticate(testIP, "11:22:33:44:55:66", "alice", "password123", "Browser")
+	if err != nil {
+		t.Fatalf("auth failed: %v", err)
+	}
+
+	// 4. Authenticated client on /api/capport
+	{
+		req := httptest.NewRequest(http.MethodGet, "/api/capport", nil)
+		req.RemoteAddr = testIP + ":54321"
+		rec := httptest.NewRecorder()
+
+		srv.handleCapport(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+
+		var st portal.CapportStatus
+		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+			t.Fatalf("json unmarshal: %v", err)
+		}
+		if st.Captive {
+			t.Errorf("expected captive: false for authenticated client")
+		}
+		if st.SecondsRemaining == nil || *st.SecondsRemaining <= 0 {
+			t.Errorf("expected positive seconds-remaining, got %v", st.SecondsRemaining)
+		}
+	}
+}
