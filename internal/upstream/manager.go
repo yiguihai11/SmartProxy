@@ -2402,6 +2402,19 @@ func (m *Manager) ProbeAll() {
 	}
 }
 
+// SetScreenState notifies the upstream health checker whether the device screen is on.
+func (m *Manager) SetScreenState(screenOn bool) {
+	if m == nil {
+		return
+	}
+	m.mu.RLock()
+	hc := m.healthChecker
+	m.mu.RUnlock()
+	if hc != nil {
+		hc.SetScreenState(screenOn)
+	}
+}
+
 // ActiveNodeStatus returns the current primary nodes for IPv4 and IPv6 traffic.
 func (m *Manager) ActiveNodeStatus() UpstreamActiveNodeStatus {
 	if m == nil {

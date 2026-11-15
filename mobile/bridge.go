@@ -478,6 +478,21 @@ func TriggerNodeReprobe() {
 	}
 }
 
+// SetScreenInteractive notifies the engine whether the device screen is currently interactive/on.
+// When screen is off, background health probes are suspended to conserve battery, unless tethering is active.
+func SetScreenInteractive(screenOn bool) {
+	engineMu.Lock()
+	eng := globalEngine
+	tether := isTethering
+	engineMu.Unlock()
+	if eng != nil {
+		if tether {
+			screenOn = true
+		}
+		eng.SetScreenState(screenOn)
+	}
+}
+
 // BlockConnection 把某条连接的目标(域名/IP)加入 ACL 封锁列表并立即生效:写 acl.txt
 // → fsnotify → RuleEng.Reload → KillBlockedConnections 掐断现存匹配连接。
 // 「联网状态」页「封禁」按钮调用;error 走 gomobile 抛 Java 异常约定。

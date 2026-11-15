@@ -478,6 +478,7 @@ u32_t sys_now(void) {
 }
 
 void sp_lwip_timers(void) { sys_check_timeouts(); }
+uint32_t sp_lwip_sleeptime(void) { return (uint32_t)sys_timeouts_sleeptime(); }
 
 int sp_lwip_tcp_write(struct sp_lwip *lw, uint64_t conn_id, const void *data, uint32_t len) {
     if (!lw || !data || !len) return ERR_ARG;

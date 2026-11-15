@@ -91,6 +91,7 @@ void sp_lwip_set_mtu(struct sp_lwip *lw, uint16_t mtu);
 void sp_lwip_free(struct sp_lwip *lw);
 int sp_lwip_input(struct sp_lwip *lw, const void *data, uint32_t len);
 void sp_lwip_timers(void);
+uint32_t sp_lwip_sleeptime(void);
 
 int sp_lwip_tcp_write(struct sp_lwip *lw, uint64_t conn_id, const void *data, uint32_t len);
 int sp_lwip_tcp_recved(struct sp_lwip *lw, uint64_t conn_id, uint32_t len);

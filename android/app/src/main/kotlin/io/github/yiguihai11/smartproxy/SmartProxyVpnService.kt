@@ -207,9 +207,11 @@ class SmartProxyVpnService : VpnService() {
                 when (intent?.action) {
                     Intent.ACTION_SCREEN_OFF -> {
                         mainHandler.removeCallbacks(notificationRefreshRunnable)
+                        smartproxy.mobile.Mobile.setScreenInteractive(false)
                     }
                     Intent.ACTION_SCREEN_ON -> {
                         if (startedEngine) {
+                            smartproxy.mobile.Mobile.setScreenInteractive(true)
                             NotificationHelper.refresh(this@SmartProxyVpnService)
                             mainHandler.removeCallbacks(notificationRefreshRunnable)
                             mainHandler.postDelayed(notificationRefreshRunnable, 20_000L)
@@ -501,6 +503,7 @@ class SmartProxyVpnService : VpnService() {
             mainHandler.removeCallbacks(notificationRefreshRunnable)
             val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
             val isScreenOn = powerManager?.isInteractive ?: true
+            smartproxy.mobile.Mobile.setScreenInteractive(isScreenOn)
             if (isScreenOn) {
                 mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this@SmartProxyVpnService) }, 1500L)
                 mainHandler.postDelayed({ if (startedEngine) NotificationHelper.refresh(this@SmartProxyVpnService) }, 4000L)

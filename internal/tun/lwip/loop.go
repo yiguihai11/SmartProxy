@@ -86,11 +86,33 @@ func (e *Engine) loop() {
 		C.sp_lwip_destroy(e.lw)
 	}()
 
-	// sys_check_timeouts 驱动 lwIP 内部定时器 (TCP 快速重传定时器 250ms, 慢速重传 500ms)。
-	// 采样周期设为 100ms: 既比 lwIP 250ms 定时器精细 2.5 倍以上保证重传无延迟,
-	// 又能将空闲时的 Cgo 定时器中断从每秒 40 次骤降至 10 次, 显著减少 CPU 唤醒与待机耗电。
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
+	// 动态自适应定时器驱动 lwIP 内部定时器:
+	// 1. 当 lwIP 内部无待处理定时器 (0xFFFFFFFF) 时进入完全空闲态, 定时器退避至 10s 安全保底 (待机 0 唤醒)。
+	// 2. 一旦有数据包流入 (inputChan) 或控制指令 (cmdChan/udpCmdChan), 若此前处于空闲态, 立即唤醒定时器进入活跃态 (<= 100ms)。
+	// 3. 在活跃数据传输期间, 数据包批量流入时无需重置定时器 (零锁竞争开销); 定时器到期时执行 sys_check_timeouts() 并按 lwIP 下次到期时间 (sys_timeouts_sleeptime) 精准续期。
+	const (
+		idleTimerInterval   = 10 * time.Second
+		activeTimerInterval = 100 * time.Millisecond
+		maxActiveInterval   = 250 * time.Millisecond
+		minActiveInterval   = 10 * time.Millisecond
+	)
+
+	timer := time.NewTimer(idleTimerInterval)
+	defer timer.Stop()
+	isIdle := true
+
+	wakeTimerIfIdle := func() {
+		if isIdle {
+			isIdle = false
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(activeTimerInterval)
+		}
+	}
 
 	for {
 		select {
@@ -98,6 +120,7 @@ func (e *Engine) loop() {
 			return
 
 		case req := <-e.udpCmdChan:
+			wakeTimerIfIdle()
 			e.handleUDPSend(req)
 			// Drain ready UDP packets immediately for ultra-low latency gaming & DNS responses
 			drainMoreUDP := true
@@ -111,6 +134,7 @@ func (e *Engine) loop() {
 			}
 
 		case pkt := <-e.inputChan:
+			wakeTimerIfIdle()
 			e.handleInput(pkt)
 			// Drain ready packets
 			drainMorePkts := true
@@ -124,6 +148,7 @@ func (e *Engine) loop() {
 			}
 
 		case cmd := <-e.cmdChan:
+			wakeTimerIfIdle()
 			e.handleCmd(cmd)
 			// Drain ready commands
 			drainMoreCmds := true
@@ -136,8 +161,22 @@ func (e *Engine) loop() {
 				}
 			}
 
-		case <-ticker.C:
+		case <-timer.C:
 			C.sp_lwip_timers()
+			ms := C.sp_lwip_sleeptime()
+			if ms == 0xFFFFFFFF {
+				isIdle = true
+				timer.Reset(idleTimerInterval)
+			} else {
+				isIdle = false
+				d := time.Duration(ms) * time.Millisecond
+				if d < minActiveInterval {
+					d = minActiveInterval
+				} else if d > maxActiveInterval {
+					d = maxActiveInterval
+				}
+				timer.Reset(d)
+			}
 		}
 	}
 }

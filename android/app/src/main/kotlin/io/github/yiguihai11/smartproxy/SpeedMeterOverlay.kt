@@ -105,15 +105,17 @@ object SpeedMeterOverlay {
     private var bgHandler: Handler? = null
     private val mainHandler = Handler(android.os.Looper.getMainLooper())
 
-    /** 上一次轮询的各 UID 累计字节(算 δ);uid → (up, down)。bg 轮询线程读写,
+    class SpeedRecord(var up: Long = 0L, var down: Long = 0L)
+
+    /** 上一次轮询的各 UID 累计字节(算 δ);uid → SpeedRecord。bg 轮询线程读写,
      *  hideOnMain(主线程)也会 clear()——必须并发安全,否则快速关开 VPN 时 bg 还在
      *  put/removeAll、主线程已 clear,裸 HashMap 会 CME/结构损坏直接崩进程。 */
-    private val prevTotals = ConcurrentHashMap<Int, Pair<Long, Long>>()
+    private val prevTotals = ConcurrentHashMap<Int, SpeedRecord>()
     /** uid → (应用名, 图标)。同上:bg 写、主线程 hide 时 clear,用并发 Map。 */
     private val metaCache = ConcurrentHashMap<Int, Pair<String, Drawable?>>()
     /** 轮询线程专用的复用集合(避免每秒创建 HashSet/HashMap 产生 GC 抖动)。仅 bg 线程读写。 */
     private val reusableSeenUids = HashSet<Int>()
-    private val reusableSpeeds = HashMap<Int, Pair<Long, Long>>()
+    private val reusableSpeeds = HashMap<Int, SpeedRecord>()
     /** 当前前台应用 uid;-1 = 拿不到(未授权「使用情况访问权限」/无可判定)。仅 bg 线程访问。 */
     private var foregroundUid = -1
     private var lastForegroundQuery = 0L
@@ -306,20 +308,26 @@ object SpeedMeterOverlay {
             scaleType = ImageView.ScaleType.FIT_CENTER
             visibility = View.GONE // 无流量时隐藏,有最大流量 App 才显示
         }
+        val upLabel = AppPrefs.speedMeterUpLabel(app)
+        val downLabel = AppPrefs.speedMeterDownLabel(app)
         val up = TextView(app).apply {
             setTextColor(AppPrefs.speedMeterUpColor(app))
             // includeFontPadding=false 的行高 ≈ 字号 + 3dp;图标略高于字,
             // 容器 CENTER_VERTICAL 整体居中,观感协调。
             textSize = fontSize.toFloat()
             includeFontPadding = false
-            text = "${AppPrefs.speedMeterUpLabel(app)} --"
+            fontFeatureSettings = "tnum"
+            text = "$upLabel --"
+            minWidth = paint.measureText("$upLabel 99.9M/s").toInt()
         }
         val down = TextView(app).apply {
             setTextColor(AppPrefs.speedMeterDownColor(app))
             textSize = fontSize.toFloat()
             includeFontPadding = false
+            fontFeatureSettings = "tnum"
             setPadding(dp(app, 4), 0, 0, 0)
-            text = "${AppPrefs.speedMeterDownLabel(app)} --"
+            text = "$downLabel --"
+            minWidth = paint.measureText("$downLabel 99.9M/s").toInt() + dp(app, 4)
         }
         container.addView(icon)
         container.addView(up)
@@ -390,9 +398,17 @@ object SpeedMeterOverlay {
         }
         upView?.textSize = fontSize.toFloat()
         downView?.textSize = fontSize.toFloat()
+        upView?.fontFeatureSettings = "tnum"
+        downView?.fontFeatureSettings = "tnum"
         // ↑/↓ 颜色即时生效;有数据的文本由下一 poll tick 用新 label 刷新,占位 "--" 态这里直接换前缀。
         val upLabel = AppPrefs.speedMeterUpLabel(app)
         val downLabel = AppPrefs.speedMeterDownLabel(app)
+        upView?.let {
+            it.minWidth = it.paint.measureText("$upLabel 99.9M/s").toInt()
+        }
+        downView?.let {
+            it.minWidth = it.paint.measureText("$downLabel 99.9M/s").toInt() + dp(app, 4)
+        }
         upView?.setTextColor(AppPrefs.speedMeterUpColor(app))
         downView?.setTextColor(AppPrefs.speedMeterDownColor(app))
         upView?.let { if (it.text.toString().endsWith("--")) it.text = "$upLabel --" }
@@ -577,10 +593,21 @@ object SpeedMeterOverlay {
                     val down = a.optLong("down", 0L)
                     reusableSeenUids.add(uid)
                     val prev = prevTotals[uid]
-                    val upD = (up - (prev?.first ?: up)).coerceAtLeast(0L)
-                    val downD = (down - (prev?.second ?: down)).coerceAtLeast(0L)
-                    prevTotals[uid] = Pair(up, down)
-                    reusableSpeeds[uid] = Pair(upD, downD)
+                    val upD: Long
+                    val downD: Long
+                    if (prev != null) {
+                        upD = (up - prev.up).coerceAtLeast(0L)
+                        downD = (down - prev.down).coerceAtLeast(0L)
+                        prev.up = up
+                        prev.down = down
+                    } else {
+                        upD = 0L
+                        downD = 0L
+                        prevTotals[uid] = SpeedRecord(up, down)
+                    }
+                    val sp = reusableSpeeds.getOrPut(uid) { SpeedRecord() }
+                    sp.up = upD
+                    sp.down = downD
                     val sum = upD + downD
                     if (sum > maxSum) { maxSum = sum; maxUid = uid }
                 }
@@ -594,10 +621,13 @@ object SpeedMeterOverlay {
             var win = maxUid
             var winSum = maxSum
             if (fg >= 0) {
-                val fgSum = reusableSpeeds[fg]?.let { it.first + it.second } ?: 0L
+                val fgRec = reusableSpeeds[fg]
+                val fgSum = if (fgRec != null) fgRec.up + fgRec.down else 0L
                 if (fgSum >= winSum) { win = fg; winSum = fgSum }
             }
-            val (wUp, wDown) = reusableSpeeds[win] ?: Pair(0L, 0L)
+            val winRec = reusableSpeeds[win]
+            val wUp = winRec?.up ?: 0L
+            val wDown = winRec?.down ?: 0L
             Tick(win, wUp, wDown)
         }.getOrNull() ?: return // 引擎未启动等:本次跳过,视图保持原样
 

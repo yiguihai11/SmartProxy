@@ -273,6 +273,7 @@ type HealthChecker struct {
 	cfg       atomic.Pointer[config.HealthCheckConf]
 	allowIPv4 atomic.Bool
 	allowIPv6 atomic.Bool
+	screenOn  atomic.Bool
 	proxies   []*Proxy
 	stopCh    chan struct{}
 	wg        *sync.WaitGroup
@@ -311,8 +312,30 @@ func NewHealthChecker(cfg config.HealthCheckConf, proxies []*Proxy) *HealthCheck
 	}
 	hc.allowIPv4.Store(true)
 	hc.allowIPv6.Store(true)
+	hc.screenOn.Store(true)
 	hc.cfg.Store(&cfg)
 	return hc
+}
+
+// SetScreenState updates whether the screen is interactive/on.
+// When turning on from an off state, it triggers an immediate probe refresh across all nodes.
+func (hc *HealthChecker) SetScreenState(screenOn bool) {
+	if hc == nil {
+		return
+	}
+	wasOff := !hc.screenOn.Swap(screenOn)
+	if wasOff && screenOn {
+		slog.Debug("screen turned on: refreshing upstream health probes")
+		hc.ProbeAll()
+	}
+}
+
+// IsScreenOn reports whether the screen is currently interactive/on.
+func (hc *HealthChecker) IsScreenOn() bool {
+	if hc == nil {
+		return true
+	}
+	return hc.screenOn.Load()
 }
 
 // SetOnNodeProbed registers a callback invoked whenever geo/health probing discovers or updates a proxy node's state.
@@ -997,6 +1020,12 @@ func (hc *HealthChecker) checkLoop(ctx context.Context, stopCh <-chan struct{}, 
 		if interval <= 0 {
 			interval = 60 * time.Second
 		}
+		// 熄屏待机时自适应退避 (10 分钟): 避免在口袋休眠时频繁激活蜂窝/Wi-Fi 基带射频
+		if !hc.IsScreenOn() {
+			if interval < 10*time.Minute {
+				interval = 10 * time.Minute
+			}
+		}
 		intervalTimer.Reset(interval)
 
 		select {
@@ -1005,6 +1034,11 @@ func (hc *HealthChecker) checkLoop(ctx context.Context, stopCh <-chan struct{}, 
 			return
 		case <-ctx.Done():
 			return
+		}
+
+		// 熄屏期间跳过主动网络探测, 亮屏时通过 SetScreenState 触发 ProbeAll 全量补测
+		if !hc.IsScreenOn() {
+			continue
 		}
 
 		hc.checkProxyWithContext(ctx, stopCh, p)

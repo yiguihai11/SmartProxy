@@ -1482,6 +1482,13 @@ func (e *Engine) TriggerNodeReprobe() {
 	}
 }
 
+// SetScreenState propagates the device screen interactive state to upstream manager.
+func (e *Engine) SetScreenState(screenOn bool) {
+	if e != nil && e.UpstreamMgr != nil {
+		e.UpstreamMgr.SetScreenState(screenOn)
+	}
+}
+
 func (e *Engine) SetConfigPath(path string) {
 	e.configPath = path
 }
