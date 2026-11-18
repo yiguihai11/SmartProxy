@@ -61,6 +61,7 @@ type Engine struct {
 	adblockMgr      *adblock.Manager
 	portalMgr       *portal.Manager
 	tetheringBridge admin.TetheringBridge
+	isTethering     atomic.Bool
 }
 
 func New(cfg *config.Config, cfgDir string) (*Engine, error) {
@@ -215,6 +216,12 @@ func (e *Engine) SetPortalForcedDisabled(disabled bool) {
 
 // SetIsTethering flags whether this engine runs as the privileged hotspot tethering core.
 func (e *Engine) SetIsTethering(isTethering bool) {
+	e.isTethering.Store(isTethering)
+	if isTethering {
+		// Shizuku 特权热点共享模式下，由于 Android 内核 IPv4 NAT (MASQUERADE) 会将所有客户端改写为 192.0.2.2，
+		// 无法区分客户端来源 IP 和 MAC。因此在 Shizuku 模式下强制在内存中忽略/禁用门户登录认证，即使配置中 portal.enabled 为 true。
+		e.SetPortalForcedDisabled(true)
+	}
 	if e.TUNHandler != nil {
 		e.TUNHandler.SetIsTethering(isTethering)
 	}
@@ -1302,6 +1309,9 @@ func (e *Engine) ReloadConfig(newCfg *config.Config, cfgDir string) error {
 	}
 	if e.portalMgr != nil {
 		e.portalMgr.UpdateConfig(newCfg)
+		if e.isTethering.Load() {
+			e.SetPortalForcedDisabled(true)
+		}
 	}
 
 	if newCfg.Lantern.Enabled {

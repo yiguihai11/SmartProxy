@@ -451,4 +451,53 @@ func TestEngine_SOCKS5_AuthAndTrafficQuota(t *testing.T) {
 	}
 }
 
+func TestSetIsTethering_ForcesPortalDisabled(t *testing.T) {
+	dir := t.TempDir()
+	aclPath := filepath.Join(dir, "acl.txt")
+	chnPath := filepath.Join(dir, "chnroute.txt")
+	require.NoError(t, os.WriteFile(aclPath, []byte(""), 0o644))
+	require.NoError(t, os.WriteFile(chnPath, []byte("1.0.1.0/24\n"), 0o644))
+
+	cfg := config.DefaultConfig()
+	cfg.Routing.ACLFile = aclPath
+	cfg.Routing.ChnrouteFile = chnPath
+	cfg.Listen.Auth = &config.AuthConf{
+		Enabled: true,
+		Users: []config.AuthUserConf{
+			{Username: "alice", Password: "secret123"},
+		},
+	}
+	cfg.Listen.Portal = &config.PortalConf{
+		Enabled: true,
+	}
+
+	eng, err := New(cfg, dir)
+	require.NoError(t, err)
+	defer eng.Stop()
+
+	// 初始状态下 portal 处于启用状态
+	assert.True(t, eng.portalMgr.IsEnabled())
+
+	// 切换为 Tethering 模式（Shizuku 特权热点共享）
+	eng.SetIsTethering(true)
+
+	// 验证在 Shizuku 模式下强制忽略 portal 认证
+	assert.False(t, eng.portalMgr.IsEnabled())
+
+	// 模拟配置热重载（即使重载的配置仍带有 portal.enabled = true）
+	newCfg := config.DefaultConfig()
+	newCfg.Routing.ACLFile = aclPath
+	newCfg.Routing.ChnrouteFile = chnPath
+	newCfg.Listen.Auth = cfg.Listen.Auth
+	newCfg.Listen.Portal = &config.PortalConf{
+		Enabled: true,
+	}
+	err = eng.ReloadConfig(newCfg, dir)
+	require.NoError(t, err)
+
+	// 再次验证：在 Tethering 模式下重载后依然强制禁用
+	assert.False(t, eng.portalMgr.IsEnabled())
+}
+
+
 
